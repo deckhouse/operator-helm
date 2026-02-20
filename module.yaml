@@ -1,0 +1,25 @@
+name: operator-helm
+stage: Experimental
+# TODO: should we mark module as critical?
+# weight: 960
+requirements:
+  deckhouse: ">= 1.69"
+subsystems:
+  # TODO: confirm with TL
+  - delivery
+namespace: d8-operator-helm
+descriptions:
+  en: An operator to deploy helm applications declaratively.
+  ru: Оператор для декларативного развертывания helm-приложений.
+# TODO: confirm with TL
+tags: ["delivery"]
+disable:
+  confirmation: true
+  message: "Disabling of this module can cause disruptions in deployed applications operation."
+accessibility:
+  editions:
+    # TODO: confirm with TL
+    _default:
+      available: true
+      enabledInBundles:
+        - Minimal

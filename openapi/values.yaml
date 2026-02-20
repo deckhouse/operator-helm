@@ -1,0 +1,20 @@
+x-extend:
+  schema: config-values.yaml
+type: object
+properties:
+  internal:
+    type: object
+    default: {}
+    properties:
+      moduleConfig:
+        type: object
+        additionalProperties: true
+      moduleConfigValidation:
+        type: object
+        properties:
+          error:
+            type: string
+      moduleState:
+        type: object
+        default: {}
+        additionalProperties: true

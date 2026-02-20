@@ -1,0 +1,64 @@
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+final: false
+fromImage: builder/src
+git:
+  - add: {{ .ModuleDir }}/images/{{ .ImageName }}
+    to: /src/kube-api-rewriter
+    stageDependencies:
+      install:
+        - go.mod
+        - go.sum
+        - "**/*.go"
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-builder
+final: false
+fromImage: {{ eq $.SVACE_ENABLED "false" | ternary "builder/golang-bookworm-1.24" "builder/golang-alt-svace-1.24" }}
+import:
+  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+    add: /src
+    to: /src
+    before: install
+secrets:
+- id: GOPROXY
+  value: {{ .GOPROXY }}
+mount:
+  - fromPath: ~/go-pkg-cache
+    to: /go/pkg
+shell:
+  install:
+    - export GOPROXY=$(cat /run/secrets/GOPROXY)
+    - cd /src/kube-api-rewriter
+    - go mod download
+  setup:
+    - cd /src/kube-api-rewriter
+    - export GOOS=linux
+    - export CGO_ENABLED=0
+    - export GOARCH=amd64
+    - |
+    {{- $_ := set $ "ProjectName" (list $.ImageName "kube-api-rewriter" | join "/") }}
+    {{- include "image-build.build" (set $ "BuildCommand" `go build -v -a -o kube-api-rewriter ./cmd/kube-api-rewriter`) | nindent 6 }}
+
+---
+
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+fromImage: builder/scratch
+git:
+  {{- include "image mount points" . }}
+import:
+  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-builder
+    add: /src/kube-api-rewriter/kube-api-rewriter
+    to: /app/kube-api-rewriter
+    after: install
+  # Make containerd compatible directories structure.
+  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-builder
+    add: /var
+    to: /var
+    includePaths:
+      - run
+    after: install
+imageSpec:
+  config:
+    user: "64535:64535"
+    workingDir: "/app"
+    entrypoint: ["/app/kube-api-rewriter"]

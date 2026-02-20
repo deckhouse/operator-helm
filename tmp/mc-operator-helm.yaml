@@ -1,0 +1,8 @@
+apiVersion: deckhouse.io/v1alpha1
+kind: ModuleConfig
+metadata:
+  name: operator-helm
+spec:
+  enabled: false
+  source: operator-helm
+  version: 1

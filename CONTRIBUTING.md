@@ -1,0 +1,166 @@
+# Contributing
+
+## Feedback
+
+The first thing we recommend is to check the existing [issues](https://github.com/deckhouse/operator-helm/issues) — there may already be a discussion or solution on your topic. If not, choose the appropriate way to address the issue on [the new issue form](https://github.com/deckhouse/operator-helm/issues/new/choose).
+
+## Code contributions
+
+1. Prepare an environment. To build and run common workflows locally, you'll need to _at least_ have the following installed:
+
+   - [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
+   - [Go](https://golang.org/doc/install)
+   - [Docker](https://docs.docker.com/get-docker/)
+   - [go-task](https://taskfile.dev/installation/) (task runner)
+   - [ginkgo](https://onsi.github.io/ginkgo/#installing-ginkgo) (testing framework required to run tests)
+
+2. [Fork the project](https://github.com/deckhouse/operator-helm/fork).
+
+3. Clone the project:
+
+    ```shell
+    git clone https://github.com/[GITHUB_USERNAME]/operator-helm
+    ```
+
+4. Create branch following the [branch name convention](#branch-name):
+
+    ```shell
+    git checkout -b feat/core/add-new-feature
+    ```
+
+5. Make changes.
+
+6. Commit changes:
+
+   - Follow [the commit message convention](#commit-message).
+   - Sign off every commit you contributed as an acknowledgment of the [DCO](https://developercertificate.org/).
+
+7. Push commits.
+
+8. Create a pull request following the [pull request name convention](#pull-request-name).
+
+## Images
+
+The module images are located in the ./images directory.
+
+Images, such as build images or images with binary artifacts, should not be included in the module. To do so, they must be labeled as follows in the `werf.inc.yaml` file: `final: false`.
+
+## Conventions
+
+### Commit message
+
+<WIP>
+
+**Examples:**
+
+<WIP>
+
+#### Type
+
+Must be one of the following:
+
+* **feat**: new features or capabilities that enhance the user's experience.
+* **fix**: bug fixes that enhance the user's experience.
+* **refactor**: a code changes that neither fixes a bug nor adds a feature.
+* **docs**: updates or improvements to documentation.
+* **test**: additions or corrections to tests.
+* **chore**: updates that don't fit into other types.
+
+#### Scope
+
+Scope indicates the area of the project affected by the changes. The scope can consist of a top-level scope, which broadly categorizes the changes, and can optionally include nested scopes that provide further detail.
+
+Supported scopes are the following:
+
+<WIP>
+
+#### Subject
+
+The subject contains a succinct description of the change:
+
+  - use the imperative, present tense: "change" not "changed" nor "changes"
+  - don't capitalize the first letter
+  - no dot (.) at the end
+
+#### Body
+
+Just as in the **subject**, use the imperative, present tense: "change" not "changed" nor "changes".
+The body should include the motivation for the change and contrast this with previous behavior.
+
+### Branch name
+
+Each branch name consists of a [**type**](#type), [**scope**](#scope), and a [**short-description**](#short-description):
+
+```
+<type>/<scope>/<short-description>
+```
+
+When naming branches, only the top-level scope should be used. Multiple or nested scopes are not allowed in branch names, ensuring that each branch is clearly associated with a broad area of the project.
+
+**Examples:**
+
+<WIP>
+
+### Changes Block
+
+When submitting a pull request, include a **changes block** to document modifications for the changelog. This block helps automate the release changelog creation, tracks updates, and prepares release notes.
+
+#### Format
+
+The changes block consists of YAML documents, each detailing a specific change. Use the following structure:
+
+````
+```changes
+section: <affected-section>
+type: <feature|fix|chore>
+summary: <Concise description of the change.>
+impact_level: <low|high>  # Optional
+impact: |
+  <Detailed impact description if impact_level is high>
+```
+````
+
+#### Fields Description
+
+  - **section**: (Required) Specifies the affected scope of the project. Should be in kebab-case, choose one of [available scopes](#scope). If PR affects multiple scopes, add change block for each scope.
+    - Examples: `api`, `core`, `ci`
+
+  - **type**: (Required) Defines the nature of the change:
+    - `feature`: Adds new functionality.
+    - `fix`: Resolves user-facing issues.
+    - `chore`: Maintenance tasks without direct user impact.
+    - `docs`: Changes to documentation.
+
+  - **summary**: (Required) A concise explanation of the change, ending with a period.
+
+  - **impact_level**: (Optional) Indicates the significance of the change.
+    - `high`: Requires an **impact** description and will be included in "Know before update" sections.
+    - `low`: Minor changes, omitted from user-facing changelogs. If this level is specified, all other fields are not validated by GitHub workflow.
+
+  - **impact**: (Required if `impact_level` is high) Describes the change's effects, such as expected restarts or downtime.
+    - Examples:
+      - "Ingress controller will restart."
+      - "Expect slow downtime due to kube-apiserver restarts."
+
+#### Example
+
+<WIP>
+
+For full guidelines, refer to [here](https://github.com/deckhouse/deckhouse/wiki/Guidelines-for-working-with-PRs).
+
+#### Short description
+
+A concise, hyphen-separated phrase in kebab-case that clearly describes the main focus of the branch.
+
+### Pull request name
+
+Each pull request title should clearly reflect the changes introduced, adhering to [**the header format** of a commit message](#commit-message), typically mirroring the main commit's text in the PR.
+
+**Examples**
+
+<WIP>
+
+## Coding
+
+  - [Effective Go](https://golang.org/doc/effective_go.html).
+  - [Go's commenting conventions](http://blog.golang.org/godoc-documenting-go-code).

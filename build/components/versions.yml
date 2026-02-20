@@ -1,0 +1,4 @@
+core:
+  3p-helm-controller: v0.1.3
+  nelm-source-controller: v0.1.4
+package:
