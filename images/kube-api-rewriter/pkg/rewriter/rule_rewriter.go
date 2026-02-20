@@ -307,8 +307,13 @@ func (rw *RuleBasedRewriter) RewriteJSONPayload(_ *TargetRequest, obj []byte, ac
 	}
 
 	// Always rewrite metadata: labels, annotations, finalizers, ownerReferences.
+	// Also rewrite spec-level kind references (e.g. spec.sourceRef.kind in HelmChart).
 	// TODO: add rewriter for managedFields.
 	return RewriteResourceOrList2(rwrBytes, func(singleObj []byte) ([]byte, error) {
+		singleObj, err = RewriteSpecKindRefs(rw.Rules, singleObj, action)
+		if err != nil {
+			return nil, err
+		}
 		return TransformObject(singleObj, "metadata", func(metadataObj []byte) ([]byte, error) {
 			return RewriteMetadata(rw.Rules, metadataObj, action)
 		})

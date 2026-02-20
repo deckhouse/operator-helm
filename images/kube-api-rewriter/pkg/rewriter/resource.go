@@ -157,5 +157,9 @@ func RenameManagedFields(rules *RewriteRules, obj []byte) ([]byte, error) {
 }
 
 func RenameResourcePatch(rules *RewriteRules, patch []byte) ([]byte, error) {
+	patch, err := RewritePatchSourceRefs(rules, patch)
+	if err != nil {
+		return nil, err
+	}
 	return RenameMetadataPatch(rules, patch)
 }

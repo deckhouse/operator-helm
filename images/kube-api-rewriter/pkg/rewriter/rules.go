@@ -36,6 +36,11 @@ type RewriteRules struct {
 	Finalizers         MetadataReplace         `json:"finalizers"`
 	Excludes           []ExcludeRule           `json:"excludes"`
 
+	// KindRefPaths maps original Kind names to spec-level JSON paths that
+	// contain kind references (e.g. sourceRef). This drives data-driven
+	// rewriting of cross-resource kind fields instead of hardcoding them.
+	KindRefPaths map[string][]string `json:"kindRefPaths"`
+
 	// TODO move these indexed rewriters into the RuleBasedRewriter.
 	labelsRewriter      *PrefixedNameRewriter
 	annotationsRewriter *PrefixedNameRewriter
@@ -402,4 +407,32 @@ func mapContainsMap(obj, match map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// KindRefPathsFor returns the spec-level JSON paths containing kind references
+// for the given original Kind name. Returns nil if no paths are configured.
+func (rr *RewriteRules) KindRefPathsFor(origKind string) []string {
+	if rr.KindRefPaths == nil {
+		return nil
+	}
+	return rr.KindRefPaths[origKind]
+}
+
+// AllKindRefPaths returns a deduplicated union of all spec-level JSON paths
+// across all kinds. Returns nil if no paths are configured.
+func (rr *RewriteRules) AllKindRefPaths() []string {
+	if len(rr.KindRefPaths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var result []string
+	for _, paths := range rr.KindRefPaths {
+		for _, p := range paths {
+			if _, ok := seen[p]; !ok {
+				seen[p] = struct{}{}
+				result = append(result, p)
+			}
+		}
+	}
+	return result
 }

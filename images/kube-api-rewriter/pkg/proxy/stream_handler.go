@@ -122,7 +122,7 @@ func (s *streamRewriter) start(ctx context.Context) {
 		res, _, err := s.decoder.Decode(nil, &got)
 		s.metrics.FromTargetBytesAdd(CounterValue(s.bytesCounter))
 		if s.log.Enabled(ctx, slog.LevelDebug) {
-			s.log.Debug("Got decoded WatchEvent from stream: %d bytes received", CounterValue(s.bytesCounter))
+			s.log.Debug(fmt.Sprintf("Got decoded WatchEvent from stream: %d bytes received", CounterValue(s.bytesCounter)))
 		}
 		CounterReset(s.bytesCounter)
 

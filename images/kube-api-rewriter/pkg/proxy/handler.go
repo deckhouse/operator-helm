@@ -303,8 +303,10 @@ func (h *Handler) transformRequest(targetReq *rewriter.TargetRequest, req *http.
 
 	// Rewrite incoming payload, e.g. create, put, etc.
 	if targetReq.ShouldRewriteRequest() && hasPayload {
-		switch req.Method {
-		case http.MethodPatch:
+		switch {
+		case req.Method == http.MethodPatch && isServerSideApply(req):
+			rwrBodyBytes, err = h.Rewriter.RewriteJSONPayload(targetReq, origBodyBytes, ToTargetAction(h.ProxyMode))
+		case req.Method == http.MethodPatch:
 			rwrBodyBytes, err = h.Rewriter.RewritePatch(targetReq, origBodyBytes)
 		default:
 			rwrBodyBytes, err = h.Rewriter.RewriteJSONPayload(targetReq, origBodyBytes, ToTargetAction(h.ProxyMode))
@@ -329,32 +331,43 @@ func (h *Handler) transformRequest(targetReq *rewriter.TargetRequest, req *http.
 	if targetReq.ShouldRewriteResponse() {
 		newAccept := make([]string, 0)
 		for _, hdr := range req.Header.Values("Accept") {
-			// Rewriter doesn't work with protobuf, force JSON in Accept header.
-			// This workaround is suitable only for empty body requests: Get, List, etc.
-			// A client should be patched to send JSON requests.
-			if strings.Contains(hdr, "application/vnd.kubernetes.protobuf") {
-				newAccept = append(newAccept, "application/json")
-				continue
-			}
+			// Accept header may contain comma-separated media types
+			// (e.g. "application/vnd.kubernetes.protobuf;as=PartialObjectMetadata;...,application/json;as=PartialObjectMetadata;...,application/json").
+			// Process each media type individually to avoid discarding
+			// non-protobuf alternatives when a protobuf entry is present.
+			mediaTypes := strings.Split(hdr, ",")
+			filteredTypes := make([]string, 0, len(mediaTypes))
+			for _, mt := range mediaTypes {
+				mt = strings.TrimSpace(mt)
+				if mt == "" {
+					continue
+				}
 
-			// TODO Add rewriting support for Table format.
-			// Quickly support kubectl with simple hack
-			if strings.Contains(hdr, "application/json") && strings.Contains(hdr, "as=Table") {
-				newAccept = append(newAccept, "application/json")
-				continue
-			}
+				// Rewriter doesn't work with protobuf, drop protobuf media types.
+				if strings.Contains(mt, "application/vnd.kubernetes.protobuf") {
+					continue
+				}
 
-			newAccept = append(newAccept, hdr)
+				// TODO Add rewriting support for Table format.
+				// Quickly support kubectl with simple hack
+				if strings.Contains(mt, "application/json") && strings.Contains(mt, "as=Table") {
+					filteredTypes = append(filteredTypes, "application/json")
+					continue
+				}
+
+				filteredTypes = append(filteredTypes, mt)
+			}
+			if len(filteredTypes) > 0 {
+				newAccept = append(newAccept, strings.Join(filteredTypes, ","))
+			}
+		}
+
+		// Ensure Accept is not empty: fall back to application/json.
+		if len(newAccept) == 0 {
+			newAccept = append(newAccept, "application/json")
 		}
 
 		req.Header["Accept"] = newAccept
-
-		// Force JSON for watches of core resources and CRDs.
-		if targetReq.IsWatch() && (targetReq.IsCRD() || targetReq.IsCore()) {
-			if len(req.Header.Values("Accept")) == 0 {
-				req.Header["Accept"] = []string{"application/json"}
-			}
-		}
 	}
 
 	// Set new endpoint path and query.
@@ -527,6 +540,15 @@ func (iw *immediateWriter) Write(p []byte) (n int, err error) {
 	}
 
 	return
+}
+
+// isServerSideApply returns true if the request is a server-side apply patch.
+// Server-side apply uses Content-Type "application/apply-patch+yaml" and sends
+// a full resource manifest (including apiVersion and kind), unlike regular
+// merge/JSON patches that only contain partial updates.
+func isServerSideApply(req *http.Request) bool {
+	ct := req.Header.Get("Content-Type")
+	return strings.Contains(ct, "application/apply-patch")
 }
 
 // notFoundJSON constructs Status response of type NotFound

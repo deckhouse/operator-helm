@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package kubevirt
+package operatornelm
 
 import (
 	"fmt"
@@ -23,10 +23,10 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-func TestKubevirtRulesToYAML(t *testing.T) {
-	b, err := yaml.Marshal(KubevirtRewriteRules)
+func TestOperatorNelmRulesToYAML(t *testing.T) {
+	b, err := yaml.Marshal(OperatorNelmRewriteRules)
 	if err != nil {
-		t.Fatalf("should marshal kubevirt rules without error: %v", err)
+		t.Fatalf("should marshal operatornelm rules without error: %v", err)
 	}
 
 	fmt.Printf("%s\n", string(b))

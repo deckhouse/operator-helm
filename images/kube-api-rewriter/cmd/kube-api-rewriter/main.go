@@ -21,11 +21,11 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/deckhouse/kube-api-rewriter/pkg/kubevirt"
 	logutil "github.com/deckhouse/kube-api-rewriter/pkg/log"
 	"github.com/deckhouse/kube-api-rewriter/pkg/monitoring/healthz"
 	"github.com/deckhouse/kube-api-rewriter/pkg/monitoring/metrics"
 	"github.com/deckhouse/kube-api-rewriter/pkg/monitoring/profiler"
+	"github.com/deckhouse/kube-api-rewriter/pkg/operatornelm"
 	"github.com/deckhouse/kube-api-rewriter/pkg/proxy"
 	"github.com/deckhouse/kube-api-rewriter/pkg/rewriter"
 	"github.com/deckhouse/kube-api-rewriter/pkg/server"
@@ -80,7 +80,7 @@ func main() {
 	})
 
 	// Load rules from file or use default kubevirt rules.
-	rewriteRules := kubevirt.KubevirtRewriteRules
+	rewriteRules := operatornelm.OperatorNelmRewriteRules
 	if os.Getenv("RULES_PATH") != "" {
 		rulesFromFile, err := rewriter.LoadRules(os.Getenv("RULES_PATH"))
 		if err != nil {

@@ -28,13 +28,6 @@ tasks:
         vars:
           CTR_COMMAND: "['./kube-api-rewriter']"
 
-  dev:deploy-with-dlv:
-    desc: "apply manifest with kube-api-rewriter with dlv and test-controller"
-    cmds:
-      - task: dev:__deploy
-        vars:
-          CTR_COMMAND: "['./dlv', '--listen=:2345', '--headless=true', '--continue', '--log=true', '--log-output=debugger,debuglineerr,gdbwire,lldbout,rpc', '--accept-multiclient', '--api-version=2', 'exec', './kube-api-rewriter']"
-
   dev:__deploy:
     internal: true
     cmds:
