@@ -28,8 +28,8 @@ type Interface interface {
 	HelmClusterAddons() HelmClusterAddonInformer
 	// HelmClusterAddonCharts returns a HelmClusterAddonChartInformer.
 	HelmClusterAddonCharts() HelmClusterAddonChartInformer
-	// HelmClusterRepositories returns a HelmClusterRepositoryInformer.
-	HelmClusterRepositories() HelmClusterRepositoryInformer
+	// HelmClusterAddonRepositories returns a HelmClusterAddonRepositoryInformer.
+	HelmClusterAddonRepositories() HelmClusterAddonRepositoryInformer
 }
 
 type version struct {
@@ -45,15 +45,15 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 
 // HelmClusterAddons returns a HelmClusterAddonInformer.
 func (v *version) HelmClusterAddons() HelmClusterAddonInformer {
-	return &helmClusterAddonInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+	return &helmClusterAddonInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
 // HelmClusterAddonCharts returns a HelmClusterAddonChartInformer.
 func (v *version) HelmClusterAddonCharts() HelmClusterAddonChartInformer {
-	return &helmClusterAddonChartInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+	return &helmClusterAddonChartInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
-// HelmClusterRepositories returns a HelmClusterRepositoryInformer.
-func (v *version) HelmClusterRepositories() HelmClusterRepositoryInformer {
-	return &helmClusterRepositoryInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+// HelmClusterAddonRepositories returns a HelmClusterAddonRepositoryInformer.
+func (v *version) HelmClusterAddonRepositories() HelmClusterAddonRepositoryInformer {
+	return &helmClusterAddonRepositoryInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }

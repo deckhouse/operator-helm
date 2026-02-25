@@ -57,8 +57,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmClusterAddons().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("helmclusteraddoncharts"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmClusterAddonCharts().Informer()}, nil
-	case v1alpha1.SchemeGroupVersion.WithResource("helmclusterrepositories"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmClusterRepositories().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("helmclusteraddonrepositories"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmClusterAddonRepositories().Informer()}, nil
 
 	}
 

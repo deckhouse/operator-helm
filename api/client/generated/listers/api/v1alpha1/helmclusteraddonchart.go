@@ -31,8 +31,9 @@ type HelmClusterAddonChartLister interface {
 	// List lists all HelmClusterAddonCharts in the indexer.
 	// Objects returned here must be treated as read-only.
 	List(selector labels.Selector) (ret []*apiv1alpha1.HelmClusterAddonChart, err error)
-	// HelmClusterAddonCharts returns an object that can list and get HelmClusterAddonCharts.
-	HelmClusterAddonCharts(namespace string) HelmClusterAddonChartNamespaceLister
+	// Get retrieves the HelmClusterAddonChart from the index for a given name.
+	// Objects returned here must be treated as read-only.
+	Get(name string) (*apiv1alpha1.HelmClusterAddonChart, error)
 	HelmClusterAddonChartListerExpansion
 }
 
@@ -44,27 +45,4 @@ type helmClusterAddonChartLister struct {
 // NewHelmClusterAddonChartLister returns a new HelmClusterAddonChartLister.
 func NewHelmClusterAddonChartLister(indexer cache.Indexer) HelmClusterAddonChartLister {
 	return &helmClusterAddonChartLister{listers.New[*apiv1alpha1.HelmClusterAddonChart](indexer, apiv1alpha1.Resource("helmclusteraddonchart"))}
-}
-
-// HelmClusterAddonCharts returns an object that can list and get HelmClusterAddonCharts.
-func (s *helmClusterAddonChartLister) HelmClusterAddonCharts(namespace string) HelmClusterAddonChartNamespaceLister {
-	return helmClusterAddonChartNamespaceLister{listers.NewNamespaced[*apiv1alpha1.HelmClusterAddonChart](s.ResourceIndexer, namespace)}
-}
-
-// HelmClusterAddonChartNamespaceLister helps list and get HelmClusterAddonCharts.
-// All objects returned here must be treated as read-only.
-type HelmClusterAddonChartNamespaceLister interface {
-	// List lists all HelmClusterAddonCharts in the indexer for a given namespace.
-	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*apiv1alpha1.HelmClusterAddonChart, err error)
-	// Get retrieves the HelmClusterAddonChart from the indexer for a given namespace and name.
-	// Objects returned here must be treated as read-only.
-	Get(name string) (*apiv1alpha1.HelmClusterAddonChart, error)
-	HelmClusterAddonChartNamespaceListerExpansion
-}
-
-// helmClusterAddonChartNamespaceLister implements the HelmClusterAddonChartNamespaceLister
-// interface.
-type helmClusterAddonChartNamespaceLister struct {
-	listers.ResourceIndexer[*apiv1alpha1.HelmClusterAddonChart]
 }

@@ -7,17 +7,17 @@ metadata:
   labels:
     heritage: deckhouse
     module: operator-helm
-  name: helmclusterrepositories.helm.deckhouse.io
+  name: helmclusteraddonrepositories.helm.deckhouse.io
 spec:
   group: helm.deckhouse.io
   names:
     categories:
     - all
     - operator-helm
-    kind: HelmClusterRepository
-    listKind: HelmClusterRepositoryList
-    plural: helmclusterrepositories
-    singular: helmclusterrepository
+    kind: HelmClusterAddonRepository
+    listKind: HelmClusterAddonRepositoryList
+    plural: helmclusteraddonrepositories
+    singular: helmclusteraddonrepository
   scope: Cluster
   versions:
   - additionalPrinterColumns:
@@ -28,7 +28,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: HelmClusterRepository represens a Git, Helm or OCI complient
+        description: HelmClusterAddonRepository represens a Git, Helm or OCI complient
           repocitory with Helm charts.
         properties:
           apiVersion:
@@ -62,9 +62,9 @@ spec:
                 description: TLSVerify enables or disables TLS certificate verification.
                 type: boolean
               url:
-                description: URL of the Helm repository. Supports http(s)://, ssh://
-                  and oci:// protocols.
-                pattern: ^(https?|oci|ssh)://.*$
+                description: URL of the Helm repository. Supports http(s):// and oci://
+                  protocols.
+                pattern: ^(https?|oci)://.*$
                 type: string
             required:
             - url
@@ -142,4 +142,5 @@ spec:
         type: object
     served: true
     storage: true
-    subresources: {}
+    subresources:
+      status: {}

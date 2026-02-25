@@ -30,7 +30,7 @@ type HelmV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	HelmClusterAddonsGetter
 	HelmClusterAddonChartsGetter
-	HelmClusterRepositoriesGetter
+	HelmClusterAddonRepositoriesGetter
 }
 
 // HelmV1alpha1Client is used to interact with features provided by the helm.deckhouse.io group.
@@ -38,16 +38,16 @@ type HelmV1alpha1Client struct {
 	restClient rest.Interface
 }
 
-func (c *HelmV1alpha1Client) HelmClusterAddons(namespace string) HelmClusterAddonInterface {
-	return newHelmClusterAddons(c, namespace)
+func (c *HelmV1alpha1Client) HelmClusterAddons() HelmClusterAddonInterface {
+	return newHelmClusterAddons(c)
 }
 
-func (c *HelmV1alpha1Client) HelmClusterAddonCharts(namespace string) HelmClusterAddonChartInterface {
-	return newHelmClusterAddonCharts(c, namespace)
+func (c *HelmV1alpha1Client) HelmClusterAddonCharts() HelmClusterAddonChartInterface {
+	return newHelmClusterAddonCharts(c)
 }
 
-func (c *HelmV1alpha1Client) HelmClusterRepositories(namespace string) HelmClusterRepositoryInterface {
-	return newHelmClusterRepositories(c, namespace)
+func (c *HelmV1alpha1Client) HelmClusterAddonRepositories() HelmClusterAddonRepositoryInterface {
+	return newHelmClusterAddonRepositories(c)
 }
 
 // NewForConfig creates a new HelmV1alpha1Client for the given config.

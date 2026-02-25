@@ -30,11 +30,11 @@ type fakeHelmClusterAddonCharts struct {
 	Fake *FakeHelmV1alpha1
 }
 
-func newFakeHelmClusterAddonCharts(fake *FakeHelmV1alpha1, namespace string) apiv1alpha1.HelmClusterAddonChartInterface {
+func newFakeHelmClusterAddonCharts(fake *FakeHelmV1alpha1) apiv1alpha1.HelmClusterAddonChartInterface {
 	return &fakeHelmClusterAddonCharts{
 		gentype.NewFakeClientWithList[*v1alpha1.HelmClusterAddonChart, *v1alpha1.HelmClusterAddonChartList](
 			fake.Fake,
-			namespace,
+			"",
 			v1alpha1.SchemeGroupVersion.WithResource("helmclusteraddoncharts"),
 			v1alpha1.SchemeGroupVersion.WithKind("HelmClusterAddonChart"),
 			func() *v1alpha1.HelmClusterAddonChart { return &v1alpha1.HelmClusterAddonChart{} },

@@ -22,22 +22,10 @@ package v1alpha1
 // HelmClusterAddonLister.
 type HelmClusterAddonListerExpansion interface{}
 
-// HelmClusterAddonNamespaceListerExpansion allows custom methods to be added to
-// HelmClusterAddonNamespaceLister.
-type HelmClusterAddonNamespaceListerExpansion interface{}
-
 // HelmClusterAddonChartListerExpansion allows custom methods to be added to
 // HelmClusterAddonChartLister.
 type HelmClusterAddonChartListerExpansion interface{}
 
-// HelmClusterAddonChartNamespaceListerExpansion allows custom methods to be added to
-// HelmClusterAddonChartNamespaceLister.
-type HelmClusterAddonChartNamespaceListerExpansion interface{}
-
-// HelmClusterRepositoryListerExpansion allows custom methods to be added to
-// HelmClusterRepositoryLister.
-type HelmClusterRepositoryListerExpansion interface{}
-
-// HelmClusterRepositoryNamespaceListerExpansion allows custom methods to be added to
-// HelmClusterRepositoryNamespaceLister.
-type HelmClusterRepositoryNamespaceListerExpansion interface{}
+// HelmClusterAddonRepositoryListerExpansion allows custom methods to be added to
+// HelmClusterAddonRepositoryLister.
+type HelmClusterAddonRepositoryListerExpansion interface{}

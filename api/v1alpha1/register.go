@@ -30,17 +30,15 @@ const (
 var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: Version}
 
 var (
-	HelmClusterAddonGVK      = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
-	HelmClusterRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterRepostoryKind}
-	HelmCluserAddonChartGVK  = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
+	HelmClusterAddonGVK           = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
+	HelmClusterAddonRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonRepostoryKind}
+	HelmCluserAddonChartGVK       = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
 )
 
-// Kind takes an unqualified kind and returns back a Group qualified GroupKind
 func Kind(kind string) schema.GroupKind {
 	return SchemeGroupVersion.WithKind(kind).GroupKind()
 }
 
-// Resource takes an unqualified resource and returns a Group qualified GroupResource
 func Resource(resource string) schema.GroupResource {
 	return SchemeGroupVersion.WithResource(resource).GroupResource()
 }
@@ -50,19 +48,16 @@ func GroupVersionResource(resource string) schema.GroupVersionResource {
 }
 
 var (
-	// SchemeBuilder tbd
 	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)
-	// AddToScheme tbd
-	AddToScheme = SchemeBuilder.AddToScheme
+	AddToScheme   = SchemeBuilder.AddToScheme
 )
 
-// Adds the list of known types to Scheme.
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&HelmClusterAddon{},
 		&HelmClusterAddonList{},
-		&HelmClusterRepository{},
-		&HelmClusterRepositoryList{},
+		&HelmClusterAddonRepository{},
+		&HelmClusterAddonRepositoryList{},
 		&HelmClusterAddonChart{},
 		&HelmClusterAddonChartList{},
 	)

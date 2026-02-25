@@ -42,45 +42,44 @@ type HelmClusterAddonChartInformer interface {
 type helmClusterAddonChartInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
-	namespace        string
 }
 
 // NewHelmClusterAddonChartInformer constructs a new informer for HelmClusterAddonChart type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewHelmClusterAddonChartInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewFilteredHelmClusterAddonChartInformer(client, namespace, resyncPeriod, indexers, nil)
+func NewHelmClusterAddonChartInformer(client versioned.Interface, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
+	return NewFilteredHelmClusterAddonChartInformer(client, resyncPeriod, indexers, nil)
 }
 
 // NewFilteredHelmClusterAddonChartInformer constructs a new informer for HelmClusterAddonChart type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewFilteredHelmClusterAddonChartInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
+func NewFilteredHelmClusterAddonChartInformer(client versioned.Interface, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(
 		cache.ToListWatcherWithWatchListSemantics(&cache.ListWatch{
 			ListFunc: func(options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.HelmV1alpha1().HelmClusterAddonCharts(namespace).List(context.Background(), options)
+				return client.HelmV1alpha1().HelmClusterAddonCharts().List(context.Background(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.HelmV1alpha1().HelmClusterAddonCharts(namespace).Watch(context.Background(), options)
+				return client.HelmV1alpha1().HelmClusterAddonCharts().Watch(context.Background(), options)
 			},
 			ListWithContextFunc: func(ctx context.Context, options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.HelmV1alpha1().HelmClusterAddonCharts(namespace).List(ctx, options)
+				return client.HelmV1alpha1().HelmClusterAddonCharts().List(ctx, options)
 			},
 			WatchFuncWithContext: func(ctx context.Context, options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.HelmV1alpha1().HelmClusterAddonCharts(namespace).Watch(ctx, options)
+				return client.HelmV1alpha1().HelmClusterAddonCharts().Watch(ctx, options)
 			},
 		}, client),
 		&operatorhelmapiv1alpha1.HelmClusterAddonChart{},
@@ -90,7 +89,7 @@ func NewFilteredHelmClusterAddonChartInformer(client versioned.Interface, namesp
 }
 
 func (f *helmClusterAddonChartInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewFilteredHelmClusterAddonChartInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
+	return NewFilteredHelmClusterAddonChartInformer(client, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
 }
 
 func (f *helmClusterAddonChartInformer) Informer() cache.SharedIndexInformer {

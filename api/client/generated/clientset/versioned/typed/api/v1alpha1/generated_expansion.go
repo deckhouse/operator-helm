@@ -22,4 +22,4 @@ type HelmClusterAddonExpansion interface{}
 
 type HelmClusterAddonChartExpansion interface{}
 
-type HelmClusterRepositoryExpansion interface{}
+type HelmClusterAddonRepositoryExpansion interface{}

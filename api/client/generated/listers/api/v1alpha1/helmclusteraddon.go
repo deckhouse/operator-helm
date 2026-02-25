@@ -31,8 +31,9 @@ type HelmClusterAddonLister interface {
 	// List lists all HelmClusterAddons in the indexer.
 	// Objects returned here must be treated as read-only.
 	List(selector labels.Selector) (ret []*apiv1alpha1.HelmClusterAddon, err error)
-	// HelmClusterAddons returns an object that can list and get HelmClusterAddons.
-	HelmClusterAddons(namespace string) HelmClusterAddonNamespaceLister
+	// Get retrieves the HelmClusterAddon from the index for a given name.
+	// Objects returned here must be treated as read-only.
+	Get(name string) (*apiv1alpha1.HelmClusterAddon, error)
 	HelmClusterAddonListerExpansion
 }
 
@@ -44,27 +45,4 @@ type helmClusterAddonLister struct {
 // NewHelmClusterAddonLister returns a new HelmClusterAddonLister.
 func NewHelmClusterAddonLister(indexer cache.Indexer) HelmClusterAddonLister {
 	return &helmClusterAddonLister{listers.New[*apiv1alpha1.HelmClusterAddon](indexer, apiv1alpha1.Resource("helmclusteraddon"))}
-}
-
-// HelmClusterAddons returns an object that can list and get HelmClusterAddons.
-func (s *helmClusterAddonLister) HelmClusterAddons(namespace string) HelmClusterAddonNamespaceLister {
-	return helmClusterAddonNamespaceLister{listers.NewNamespaced[*apiv1alpha1.HelmClusterAddon](s.ResourceIndexer, namespace)}
-}
-
-// HelmClusterAddonNamespaceLister helps list and get HelmClusterAddons.
-// All objects returned here must be treated as read-only.
-type HelmClusterAddonNamespaceLister interface {
-	// List lists all HelmClusterAddons in the indexer for a given namespace.
-	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*apiv1alpha1.HelmClusterAddon, err error)
-	// Get retrieves the HelmClusterAddon from the indexer for a given namespace and name.
-	// Objects returned here must be treated as read-only.
-	Get(name string) (*apiv1alpha1.HelmClusterAddon, error)
-	HelmClusterAddonNamespaceListerExpansion
-}
-
-// helmClusterAddonNamespaceLister implements the HelmClusterAddonNamespaceLister
-// interface.
-type helmClusterAddonNamespaceLister struct {
-	listers.ResourceIndexer[*apiv1alpha1.HelmClusterAddon]
 }

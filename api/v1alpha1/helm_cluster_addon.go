@@ -29,12 +29,14 @@ const (
 // HelmClusterAddon represents a Helm addon that is installed across the whole cluster.
 //
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:categories={all,operator-helm},singular=helmclusteraddon,scope=Cluster
 // +kubebuilder:printcolumn:name="Chart Name",type="string",JSONPath=".spec.chart.helmClusterAddonChart",description="Helm release chart name."
 // +kubebuilder:printcolumn:name="Chart Version",type="string",JSONPath=".spec.chart.version",description="Helm release chart version."
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the repository"
 // +genclient
+// +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type HelmClusterAddon struct {
 	metav1.TypeMeta   `json:",inline"`

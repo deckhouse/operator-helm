@@ -32,7 +32,7 @@ import (
 // HelmClusterAddonChartsGetter has a method to return a HelmClusterAddonChartInterface.
 // A group's client should implement this interface.
 type HelmClusterAddonChartsGetter interface {
-	HelmClusterAddonCharts(namespace string) HelmClusterAddonChartInterface
+	HelmClusterAddonCharts() HelmClusterAddonChartInterface
 }
 
 // HelmClusterAddonChartInterface has methods to work with HelmClusterAddonChart resources.
@@ -56,13 +56,13 @@ type helmClusterAddonCharts struct {
 }
 
 // newHelmClusterAddonCharts returns a HelmClusterAddonCharts
-func newHelmClusterAddonCharts(c *HelmV1alpha1Client, namespace string) *helmClusterAddonCharts {
+func newHelmClusterAddonCharts(c *HelmV1alpha1Client) *helmClusterAddonCharts {
 	return &helmClusterAddonCharts{
 		gentype.NewClientWithList[*apiv1alpha1.HelmClusterAddonChart, *apiv1alpha1.HelmClusterAddonChartList](
 			"helmclusteraddoncharts",
 			c.RESTClient(),
 			scheme.ParameterCodec,
-			namespace,
+			"",
 			func() *apiv1alpha1.HelmClusterAddonChart { return &apiv1alpha1.HelmClusterAddonChart{} },
 			func() *apiv1alpha1.HelmClusterAddonChartList { return &apiv1alpha1.HelmClusterAddonChartList{} },
 		),

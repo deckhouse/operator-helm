@@ -30,71 +30,71 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddon":             schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddon(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChart":        schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChart(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartList":    schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartList(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartRef":     schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartRef(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartSpec":    schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartSpec(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartStatus":  schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartStatus(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartVersion": schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartVersion(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonList":         schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonList(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonSpec":         schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonSpec(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonStatus":       schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonStatus(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepository":        schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepository(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositoryAuth":    schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepositoryAuth(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositoryList":    schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepositoryList(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositorySpec":    schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepositorySpec(ref),
-		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositoryStatus":  schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepositoryStatus(ref),
-		v1.APIGroup{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_APIGroup(ref),
-		v1.APIGroupList{}.OpenAPIModelName():                                           schema_pkg_apis_meta_v1_APIGroupList(ref),
-		v1.APIResource{}.OpenAPIModelName():                                            schema_pkg_apis_meta_v1_APIResource(ref),
-		v1.APIResourceList{}.OpenAPIModelName():                                        schema_pkg_apis_meta_v1_APIResourceList(ref),
-		v1.APIVersions{}.OpenAPIModelName():                                            schema_pkg_apis_meta_v1_APIVersions(ref),
-		v1.ApplyOptions{}.OpenAPIModelName():                                           schema_pkg_apis_meta_v1_ApplyOptions(ref),
-		v1.Condition{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_Condition(ref),
-		v1.CreateOptions{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_CreateOptions(ref),
-		v1.DeleteOptions{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_DeleteOptions(ref),
-		v1.Duration{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_Duration(ref),
-		v1.FieldSelectorRequirement{}.OpenAPIModelName():                               schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
-		v1.FieldsV1{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_FieldsV1(ref),
-		v1.GetOptions{}.OpenAPIModelName():                                             schema_pkg_apis_meta_v1_GetOptions(ref),
-		v1.GroupKind{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_GroupKind(ref),
-		v1.GroupResource{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_GroupResource(ref),
-		v1.GroupVersion{}.OpenAPIModelName():                                           schema_pkg_apis_meta_v1_GroupVersion(ref),
-		v1.GroupVersionForDiscovery{}.OpenAPIModelName():                               schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
-		v1.GroupVersionKind{}.OpenAPIModelName():                                       schema_pkg_apis_meta_v1_GroupVersionKind(ref),
-		v1.GroupVersionResource{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_GroupVersionResource(ref),
-		v1.InternalEvent{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_InternalEvent(ref),
-		v1.LabelSelector{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_LabelSelector(ref),
-		v1.LabelSelectorRequirement{}.OpenAPIModelName():                               schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
-		v1.List{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_List(ref),
-		v1.ListMeta{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_ListMeta(ref),
-		v1.ListOptions{}.OpenAPIModelName():                                            schema_pkg_apis_meta_v1_ListOptions(ref),
-		v1.ManagedFieldsEntry{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
-		v1.MicroTime{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_MicroTime(ref),
-		v1.ObjectMeta{}.OpenAPIModelName():                                             schema_pkg_apis_meta_v1_ObjectMeta(ref),
-		v1.OwnerReference{}.OpenAPIModelName():                                         schema_pkg_apis_meta_v1_OwnerReference(ref),
-		v1.PartialObjectMetadata{}.OpenAPIModelName():                                  schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
-		v1.PartialObjectMetadataList{}.OpenAPIModelName():                              schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
-		v1.Patch{}.OpenAPIModelName():                                                  schema_pkg_apis_meta_v1_Patch(ref),
-		v1.PatchOptions{}.OpenAPIModelName():                                           schema_pkg_apis_meta_v1_PatchOptions(ref),
-		v1.Preconditions{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_Preconditions(ref),
-		v1.RootPaths{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_RootPaths(ref),
-		v1.ServerAddressByClientCIDR{}.OpenAPIModelName():                              schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
-		v1.Status{}.OpenAPIModelName():                                                 schema_pkg_apis_meta_v1_Status(ref),
-		v1.StatusCause{}.OpenAPIModelName():                                            schema_pkg_apis_meta_v1_StatusCause(ref),
-		v1.StatusDetails{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_StatusDetails(ref),
-		v1.Table{}.OpenAPIModelName():                                                  schema_pkg_apis_meta_v1_Table(ref),
-		v1.TableColumnDefinition{}.OpenAPIModelName():                                  schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
-		v1.TableOptions{}.OpenAPIModelName():                                           schema_pkg_apis_meta_v1_TableOptions(ref),
-		v1.TableRow{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_TableRow(ref),
-		v1.TableRowCondition{}.OpenAPIModelName():                                      schema_pkg_apis_meta_v1_TableRowCondition(ref),
-		v1.Time{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_Time(ref),
-		v1.Timestamp{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_Timestamp(ref),
-		v1.TypeMeta{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_TypeMeta(ref),
-		v1.UpdateOptions{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_UpdateOptions(ref),
-		v1.WatchEvent{}.OpenAPIModelName():                                             schema_pkg_apis_meta_v1_WatchEvent(ref),
-		version.Info{}.OpenAPIModelName():                                              schema_k8sio_apimachinery_pkg_version_Info(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddon":                 schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddon(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChart":            schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChart(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartList":        schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartList(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartRef":         schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartRef(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartSpec":        schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartSpec(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartStatus":      schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartStatus(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonChartVersion":     schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartVersion(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonList":             schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonList(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepository":       schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepository(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositoryAuth":   schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositoryAuth(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositoryList":   schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositoryList(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositorySpec":   schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositorySpec(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositoryStatus": schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositoryStatus(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonSpec":             schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonSpec(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonStatus":           schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonStatus(ref),
+		v1.APIGroup{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_APIGroup(ref),
+		v1.APIGroupList{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_APIGroupList(ref),
+		v1.APIResource{}.OpenAPIModelName():                                                schema_pkg_apis_meta_v1_APIResource(ref),
+		v1.APIResourceList{}.OpenAPIModelName():                                            schema_pkg_apis_meta_v1_APIResourceList(ref),
+		v1.APIVersions{}.OpenAPIModelName():                                                schema_pkg_apis_meta_v1_APIVersions(ref),
+		v1.ApplyOptions{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_ApplyOptions(ref),
+		v1.Condition{}.OpenAPIModelName():                                                  schema_pkg_apis_meta_v1_Condition(ref),
+		v1.CreateOptions{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_CreateOptions(ref),
+		v1.DeleteOptions{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_DeleteOptions(ref),
+		v1.Duration{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_Duration(ref),
+		v1.FieldSelectorRequirement{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
+		v1.FieldsV1{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_FieldsV1(ref),
+		v1.GetOptions{}.OpenAPIModelName():                                                 schema_pkg_apis_meta_v1_GetOptions(ref),
+		v1.GroupKind{}.OpenAPIModelName():                                                  schema_pkg_apis_meta_v1_GroupKind(ref),
+		v1.GroupResource{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_GroupResource(ref),
+		v1.GroupVersion{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_GroupVersion(ref),
+		v1.GroupVersionForDiscovery{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
+		v1.GroupVersionKind{}.OpenAPIModelName():                                           schema_pkg_apis_meta_v1_GroupVersionKind(ref),
+		v1.GroupVersionResource{}.OpenAPIModelName():                                       schema_pkg_apis_meta_v1_GroupVersionResource(ref),
+		v1.InternalEvent{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_InternalEvent(ref),
+		v1.LabelSelector{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_LabelSelector(ref),
+		v1.LabelSelectorRequirement{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
+		v1.List{}.OpenAPIModelName():                                                       schema_pkg_apis_meta_v1_List(ref),
+		v1.ListMeta{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_ListMeta(ref),
+		v1.ListOptions{}.OpenAPIModelName():                                                schema_pkg_apis_meta_v1_ListOptions(ref),
+		v1.ManagedFieldsEntry{}.OpenAPIModelName():                                         schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
+		v1.MicroTime{}.OpenAPIModelName():                                                  schema_pkg_apis_meta_v1_MicroTime(ref),
+		v1.ObjectMeta{}.OpenAPIModelName():                                                 schema_pkg_apis_meta_v1_ObjectMeta(ref),
+		v1.OwnerReference{}.OpenAPIModelName():                                             schema_pkg_apis_meta_v1_OwnerReference(ref),
+		v1.PartialObjectMetadata{}.OpenAPIModelName():                                      schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
+		v1.PartialObjectMetadataList{}.OpenAPIModelName():                                  schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
+		v1.Patch{}.OpenAPIModelName():                                                      schema_pkg_apis_meta_v1_Patch(ref),
+		v1.PatchOptions{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_PatchOptions(ref),
+		v1.Preconditions{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_Preconditions(ref),
+		v1.RootPaths{}.OpenAPIModelName():                                                  schema_pkg_apis_meta_v1_RootPaths(ref),
+		v1.ServerAddressByClientCIDR{}.OpenAPIModelName():                                  schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
+		v1.Status{}.OpenAPIModelName():                                                     schema_pkg_apis_meta_v1_Status(ref),
+		v1.StatusCause{}.OpenAPIModelName():                                                schema_pkg_apis_meta_v1_StatusCause(ref),
+		v1.StatusDetails{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_StatusDetails(ref),
+		v1.Table{}.OpenAPIModelName():                                                      schema_pkg_apis_meta_v1_Table(ref),
+		v1.TableColumnDefinition{}.OpenAPIModelName():                                      schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
+		v1.TableOptions{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_TableOptions(ref),
+		v1.TableRow{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_TableRow(ref),
+		v1.TableRowCondition{}.OpenAPIModelName():                                          schema_pkg_apis_meta_v1_TableRowCondition(ref),
+		v1.Time{}.OpenAPIModelName():                                                       schema_pkg_apis_meta_v1_Time(ref),
+		v1.Timestamp{}.OpenAPIModelName():                                                  schema_pkg_apis_meta_v1_Timestamp(ref),
+		v1.TypeMeta{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_TypeMeta(ref),
+		v1.UpdateOptions{}.OpenAPIModelName():                                              schema_pkg_apis_meta_v1_UpdateOptions(ref),
+		v1.WatchEvent{}.OpenAPIModelName():                                                 schema_pkg_apis_meta_v1_WatchEvent(ref),
+		version.Info{}.OpenAPIModelName():                                                  schema_k8sio_apimachinery_pkg_version_Info(ref),
 	}
 }
 
@@ -416,6 +416,192 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonList(ref common
 	}
 }
 
+func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepository(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "HelmClusterAddonRepository represens a Git, Helm or OCI complient repocitory with Helm charts.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(v1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositorySpec"),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositoryStatus"),
+						},
+					},
+				},
+				Required: []string{"spec"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositorySpec", "github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositoryStatus", v1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositoryAuth(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+			},
+		},
+	}
+}
+
+func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositoryList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "HelmClusterAddonRepositoryList contains a list of HelmClusterRepositories.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(v1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Items provides a list of HelmClusterRepositories.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepository"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"metadata", "items"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepository", v1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositorySpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"url": {
+						SchemaProps: spec.SchemaProps{
+							Description: "URL of the Helm repository. Supports http(s):// and oci:// protocols.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"auth": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Auth contains authentication credentials for the repository.",
+							Ref:         ref("github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositoryAuth"),
+						},
+					},
+					"caCertificate": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CACertificate is the PEM encoded CA certificate for TLS verification.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"tlsVerify": {
+						SchemaProps: spec.SchemaProps{
+							Description: "TLSVerify enables or disables TLS certificate verification.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"url"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositoryAuth"},
+	}
+}
+
+func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositoryStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"conditions": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions represent the latest available observations of the repository state.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(v1.Condition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"observedGeneration": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Generating a resource that was last processed by the controller.",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			v1.Condition{}.OpenAPIModelName()},
+	}
+}
+
 func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -457,192 +643,6 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonSpec(ref common
 }
 
 func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"conditions": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Conditions represent the latest available observations of the repository state.",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(v1.Condition{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-					"observedGeneration": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Generating a resource that was last processed by the controller.",
-							Type:        []string{"integer"},
-							Format:      "int64",
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			v1.Condition{}.OpenAPIModelName()},
-	}
-}
-
-func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepository(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "HelmClusterRepository represens a Git, Helm or OCI complient repocitory with Helm charts.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(v1.ObjectMeta{}.OpenAPIModelName()),
-						},
-					},
-					"spec": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositorySpec"),
-						},
-					},
-					"status": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositoryStatus"),
-						},
-					},
-				},
-				Required: []string{"spec"},
-			},
-		},
-		Dependencies: []string{
-			"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositorySpec", "github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositoryStatus", v1.ObjectMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepositoryAuth(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-			},
-		},
-	}
-}
-
-func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepositoryList(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "HelmClusterRepositoryList contains a list of HelmClusterRepositories.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(v1.ListMeta{}.OpenAPIModelName()),
-						},
-					},
-					"items": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Items provides a list of HelmClusterRepositories.",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepository"),
-									},
-								},
-							},
-						},
-					},
-				},
-				Required: []string{"metadata", "items"},
-			},
-		},
-		Dependencies: []string{
-			"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepository", v1.ListMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepositorySpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"url": {
-						SchemaProps: spec.SchemaProps{
-							Description: "URL of the Helm repository. Supports http(s)://, ssh:// and oci:// protocols.",
-							Default:     "",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"auth": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Auth contains authentication credentials for the repository.",
-							Ref:         ref("github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositoryAuth"),
-						},
-					},
-					"caCertificate": {
-						SchemaProps: spec.SchemaProps{
-							Description: "CACertificate is the PEM encoded CA certificate for TLS verification.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"tlsVerify": {
-						SchemaProps: spec.SchemaProps{
-							Description: "TLSVerify enables or disables TLS certificate verification.",
-							Type:        []string{"boolean"},
-							Format:      "",
-						},
-					},
-				},
-				Required: []string{"url"},
-			},
-		},
-		Dependencies: []string{
-			"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterRepositoryAuth"},
-	}
-}
-
-func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterRepositoryStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{

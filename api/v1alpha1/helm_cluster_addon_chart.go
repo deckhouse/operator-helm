@@ -28,9 +28,11 @@ const (
 // HelmClusterAddonChart represents a Helm chart from specific repository.
 //
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:categories={all,operator-helm},singular=helmclusteraddonchart,scope=Cluster
 // +genclient
+// +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type HelmClusterAddonChart struct {
 	metav1.TypeMeta   `json:",inline"`

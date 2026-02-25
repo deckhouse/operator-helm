@@ -21,36 +21,38 @@ import (
 )
 
 const (
-	HelmClusterRepostoryKind      = "HelmClusterRepository"
-	HelmClusterRepositoryResource = "helmclusterrepositories"
+	HelmClusterAddonRepostoryKind      = "HelmClusterAddonRepository"
+	HelmClusterAddonRepositoryResource = "helmclusteraddonrepositories"
 )
 
-// HelmClusterRepository represens a Git, Helm or OCI complient repocitory with Helm charts.
+// HelmClusterAddonRepository represens a Git, Helm or OCI complient repocitory with Helm charts.
 //
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
-// +kubebuilder:resource:categories={all,operator-helm},singular=helmclusterrepository,scope=Cluster
+// +kubebuilder:resource:categories={all,operator-helm},singular=helmclusteraddonrepository,scope=Cluster
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the repository"
 // +genclient
+// +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type HelmClusterRepository struct {
+type HelmClusterAddonRepository struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec HelmClusterRepositorySpec `json:"spec"`
+	Spec HelmClusterAddonRepositorySpec `json:"spec"`
 	// +kubebuilder:default:={"observedGeneration":-1}
-	Status HelmClusterRepositoryStatus `json:"status,omitempty"`
+	Status HelmClusterAddonRepositoryStatus `json:"status,omitempty"`
 }
 
-type HelmClusterRepositorySpec struct {
-	// URL of the Helm repository. Supports http(s)://, ssh:// and oci:// protocols.
+type HelmClusterAddonRepositorySpec struct {
+	// URL of the Helm repository. Supports http(s):// and oci:// protocols.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Pattern=`^(https?|oci|ssh)://.*$`
+	// +kubebuilder:validation:Pattern=`^(https?|oci)://.*$`
 	URL string `json:"url"`
 
 	// Auth contains authentication credentials for the repository.
 	// +optional
-	Auth *HelmClusterRepositoryAuth `json:"auth,omitempty"`
+	Auth *HelmClusterAddonRepositoryAuth `json:"auth,omitempty"`
 
 	// CACertificate is the PEM encoded CA certificate for TLS verification.
 	// +optional
@@ -64,9 +66,9 @@ type HelmClusterRepositorySpec struct {
 
 // TODO: define authentication requirements depeding on registry type
 
-type HelmClusterRepositoryAuth struct{}
+type HelmClusterAddonRepositoryAuth struct{}
 
-type HelmClusterRepositoryStatus struct {
+type HelmClusterAddonRepositoryStatus struct {
 	// Conditions represent the latest available observations of the repository state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
@@ -74,13 +76,13 @@ type HelmClusterRepositoryStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
-// HelmClusterRepositoryList contains a list of HelmClusterRepositories.
+// HelmClusterAddonRepositoryList contains a list of HelmClusterRepositories.
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type HelmClusterRepositoryList struct {
+type HelmClusterAddonRepositoryList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
 
 	// Items provides a list of HelmClusterRepositories.
-	Items []HelmClusterRepository `json:"items"`
+	Items []HelmClusterAddonRepository `json:"items"`
 }

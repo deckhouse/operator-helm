@@ -32,71 +32,70 @@ import (
 	cache "k8s.io/client-go/tools/cache"
 )
 
-// HelmClusterRepositoryInformer provides access to a shared informer and lister for
-// HelmClusterRepositories.
-type HelmClusterRepositoryInformer interface {
+// HelmClusterAddonRepositoryInformer provides access to a shared informer and lister for
+// HelmClusterAddonRepositories.
+type HelmClusterAddonRepositoryInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() apiv1alpha1.HelmClusterRepositoryLister
+	Lister() apiv1alpha1.HelmClusterAddonRepositoryLister
 }
 
-type helmClusterRepositoryInformer struct {
+type helmClusterAddonRepositoryInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
-	namespace        string
 }
 
-// NewHelmClusterRepositoryInformer constructs a new informer for HelmClusterRepository type.
+// NewHelmClusterAddonRepositoryInformer constructs a new informer for HelmClusterAddonRepository type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewHelmClusterRepositoryInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewFilteredHelmClusterRepositoryInformer(client, namespace, resyncPeriod, indexers, nil)
+func NewHelmClusterAddonRepositoryInformer(client versioned.Interface, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
+	return NewFilteredHelmClusterAddonRepositoryInformer(client, resyncPeriod, indexers, nil)
 }
 
-// NewFilteredHelmClusterRepositoryInformer constructs a new informer for HelmClusterRepository type.
+// NewFilteredHelmClusterAddonRepositoryInformer constructs a new informer for HelmClusterAddonRepository type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewFilteredHelmClusterRepositoryInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
+func NewFilteredHelmClusterAddonRepositoryInformer(client versioned.Interface, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(
 		cache.ToListWatcherWithWatchListSemantics(&cache.ListWatch{
 			ListFunc: func(options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.HelmV1alpha1().HelmClusterRepositories(namespace).List(context.Background(), options)
+				return client.HelmV1alpha1().HelmClusterAddonRepositories().List(context.Background(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.HelmV1alpha1().HelmClusterRepositories(namespace).Watch(context.Background(), options)
+				return client.HelmV1alpha1().HelmClusterAddonRepositories().Watch(context.Background(), options)
 			},
 			ListWithContextFunc: func(ctx context.Context, options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.HelmV1alpha1().HelmClusterRepositories(namespace).List(ctx, options)
+				return client.HelmV1alpha1().HelmClusterAddonRepositories().List(ctx, options)
 			},
 			WatchFuncWithContext: func(ctx context.Context, options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.HelmV1alpha1().HelmClusterRepositories(namespace).Watch(ctx, options)
+				return client.HelmV1alpha1().HelmClusterAddonRepositories().Watch(ctx, options)
 			},
 		}, client),
-		&operatorhelmapiv1alpha1.HelmClusterRepository{},
+		&operatorhelmapiv1alpha1.HelmClusterAddonRepository{},
 		resyncPeriod,
 		indexers,
 	)
 }
 
-func (f *helmClusterRepositoryInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewFilteredHelmClusterRepositoryInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
+func (f *helmClusterAddonRepositoryInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
+	return NewFilteredHelmClusterAddonRepositoryInformer(client, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
 }
 
-func (f *helmClusterRepositoryInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&operatorhelmapiv1alpha1.HelmClusterRepository{}, f.defaultInformer)
+func (f *helmClusterAddonRepositoryInformer) Informer() cache.SharedIndexInformer {
+	return f.factory.InformerFor(&operatorhelmapiv1alpha1.HelmClusterAddonRepository{}, f.defaultInformer)
 }
 
-func (f *helmClusterRepositoryInformer) Lister() apiv1alpha1.HelmClusterRepositoryLister {
-	return apiv1alpha1.NewHelmClusterRepositoryLister(f.Informer().GetIndexer())
+func (f *helmClusterAddonRepositoryInformer) Lister() apiv1alpha1.HelmClusterAddonRepositoryLister {
+	return apiv1alpha1.NewHelmClusterAddonRepositoryLister(f.Informer().GetIndexer())
 }
