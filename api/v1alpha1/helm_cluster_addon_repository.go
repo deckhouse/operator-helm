@@ -39,8 +39,7 @@ type HelmClusterAddonRepository struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec HelmClusterAddonRepositorySpec `json:"spec"`
-	// +kubebuilder:default:={"observedGeneration":-1}
+	Spec   HelmClusterAddonRepositorySpec   `json:"spec"`
 	Status HelmClusterAddonRepositoryStatus `json:"status,omitempty"`
 }
 

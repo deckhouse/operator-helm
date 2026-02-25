@@ -38,7 +38,6 @@ type HelmClusterAddonChart struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// +kubebuilder:default:={"observedGeneration":-1}
 	Status HelmClusterAddonChartStatus `json:"status,omitempty"`
 }
 

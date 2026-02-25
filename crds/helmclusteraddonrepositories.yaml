@@ -70,8 +70,6 @@ spec:
             - url
             type: object
           status:
-            default:
-              observedGeneration: -1
             properties:
               conditions:
                 description: Conditions represent the latest available observations
