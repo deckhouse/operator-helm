@@ -38,3 +38,8 @@ __pycache__/
 
 # opencode
 **/.opencode/
+
+# Go
+go.work
+go.work.sum
+

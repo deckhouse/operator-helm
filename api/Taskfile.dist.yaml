@@ -1,0 +1,41 @@
+version: "3"
+
+silent: false
+
+tasks:
+  generate:
+    desc: "Regenerate all"
+    cmds:
+      - ./scripts/update-codegen.sh all
+      - task: format:yaml
+
+  generate:v1alpha1:
+    desc: "Regenerate code for core components."
+    cmd: ./scripts/update-codegen.sh v1alpha1
+
+  ci:generate:
+    desc: "Run generations and check git diff to ensure all files are committed"
+    cmds:
+      - task: generate
+      - task: _ci:verify-gen
+
+  generate:crds:
+    desc: "Regenerate crds"
+    cmds:
+      - ./scripts/update-codegen.sh crds
+      # - task: format:yaml
+
+  format:yaml:
+    desc: "Format non-templated YAML files, e.g. CRDs"
+    cmds:
+      - |
+        cd ../ && docker run --rm \
+          -v ./:/tmp/virt ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
+          sh -c "cd /tmp/virt ; prettier -w \"crds/*.yaml\""
+
+  _ci:verify-gen:
+    desc: "Check generated files are up-to-date."
+    internal: true
+    cmds:
+      - |
+        git diff --exit-code || (echo "Please run task gen:api and commit changes" && exit 1)
