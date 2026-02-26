@@ -48,22 +48,38 @@ type HelmClusterAddon struct {
 
 type HelmClusterAddonSpec struct {
 	Chart HelmClusterAddonChartRef `json:"chart"`
-	// Values holds the values for this Helm release.
+	// Values holds the values for this HelmClusterAddon release.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	Values *apiextensionsv1.JSON `json:"values"`
+	// Namespace to deploy cluster addon release
 	// +kubebuilder:default:="default"
 	// +optional
+	// +kubebuilder:validation:MinLength=3
+	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`
+	// Maintenance specifies the reconciliation strategy for the resource.
+	// When set to "NoResourceReconciliation", the controller will stop updating the
+	// underlying resources, allowing for manual intervention or maintenance
+	// without the operator overwriting changes.
+	// When empty (""), standard reconciliation is active.
 	// +kubebuilder:validation:Enum="";NoResourceReconciliation
 	// +optional
 	Maintanace string `json:"maintanace,omitempty"`
 }
 
 type HelmClusterAddonChartRef struct {
+	// Specifies the name of the Helm chart to be installed
+	// from the defined repository (e.g., "ingress-nginx" or "redis").
+	// +kubebuilder:validation:MinLength=1
+	HelmClusterAddonChartName string `json:"helmClusterAddonChart"`
+	// Specifies the name of the HelmClusterAddonRepository custom resource that contains
+	// the connection details and credentials for the repository where
+	// the chart is located.
+	// +kubebuilder:validation:MinLength=3
+	// +kubebuilder:validation:MaxLength=63
 	HelmClusterAddonRepository string `json:"helmClusterAddonRepository"`
-	HelmClusterAddonChartName  string `json:"helmClusterAddonChart"`
-	// Versions holds the Chart version.
+	// Versions holds the HelmClusterAddon chart version.
 	// +optional
 	Version string `json:"version,omitempty"`
 }

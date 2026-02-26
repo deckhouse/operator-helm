@@ -243,29 +243,31 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartRef(ref co
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"helmClusterAddonRepository": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
-						},
-					},
 					"helmClusterAddonChart": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "Specifies the name of the Helm chart to be installed from the defined repository (e.g., \"ingress-nginx\" or \"redis\").",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"helmClusterAddonRepository": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Specifies the name of the HelmClusterAddonRepository custom resource that contains the connection details and credentials for the repository where the chart is located.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"version": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Versions holds the Chart version.",
+							Description: "Versions holds the HelmClusterAddon chart version.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
 				},
-				Required: []string{"helmClusterAddonRepository", "helmClusterAddonChart"},
+				Required: []string{"helmClusterAddonChart", "helmClusterAddonRepository"},
 			},
 		},
 	}
@@ -279,16 +281,18 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartSpec(ref c
 				Properties: map[string]spec.Schema{
 					"chartName": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "Helm chart name",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"repositoryName": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "Name of HelmClusterAddonRepository where respective helm chart resides.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 				},
@@ -320,7 +324,8 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartStatus(ref
 					},
 					"versions": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
+							Description: "Available helm chart versions",
+							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
@@ -347,16 +352,18 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartVersion(re
 				Properties: map[string]spec.Schema{
 					"version": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "Helm chart version",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"digest": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "Helm chart digest",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 				},
@@ -469,6 +476,25 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositoryAuth(
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"username": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Repository authentication username.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"password": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Repository authentication password.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"username", "password"},
 			},
 		},
 	}
@@ -616,21 +642,23 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonSpec(ref common
 					},
 					"values": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Values holds the values for this Helm release.",
+							Description: "Values holds the values for this HelmClusterAddon release.",
 							Ref:         ref("k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1.JSON"),
 						},
 					},
 					"namespace": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "Namespace to deploy cluster addon release",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"maintanace": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
+							Description: "Maintenance specifies the reconciliation strategy for the resource. When set to \"NoResourceReconciliation\", the controller will stop updating the underlying resources, allowing for manual intervention or maintenance without the operator overwriting changes. When empty (\"\"), standard reconciliation is active.",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 				},

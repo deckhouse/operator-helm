@@ -42,7 +42,12 @@ type HelmClusterAddonChart struct {
 }
 
 type HelmClusterAddonChartSpec struct {
-	ChartName      string `json:"chartName"`
+	// Helm chart name
+	// +kubebuilder:validation:MinLength=1
+	ChartName string `json:"chartName"`
+	// Name of HelmClusterAddonRepository where respective helm chart resides.
+	// +kubebuilder:validation:MinLength=3
+	// +kubebuilder:validation:MaxLength=63
 	RepositoryName string `json:"repositoryName"`
 }
 
@@ -50,16 +55,18 @@ type HelmClusterAddonChartStatus struct {
 	// Conditions represent the latest available observations of the repository state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// Available helm chart versions
 	// +optional
 	Versions []HelmClusterAddonChartVersion `json:"versions"`
 }
 
-// TODO: need to clarify what kind of information we need to render in UI for every available chart version.
-// It makes sense to create Internal chart only during the first application deploy.
-
 type HelmClusterAddonChartVersion struct {
+	// Helm chart version
+	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`
-	Digest  string `json:"digest"`
+	// Helm chart digest
+	// +kubebuilder:validation:MinLength=1
+	Digest string `json:"digest"`
 }
 
 // HelmClusterAddonChartList contains a list of HelmClusterAddonCharts.

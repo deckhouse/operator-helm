@@ -46,7 +46,7 @@ type HelmClusterAddonRepository struct {
 type HelmClusterAddonRepositorySpec struct {
 	// URL of the Helm repository. Supports http(s):// and oci:// protocols.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Pattern=`^(https?|oci)://.*$`
+	// +kubebuilder:validation:XValidation:rule="self.matches('^(https?|oci)://.+$')",message="URL must have a valid protocol (http, https, oci) and a non-empty path"
 	URL string `json:"url"`
 
 	// Auth contains authentication credentials for the repository.
@@ -65,7 +65,14 @@ type HelmClusterAddonRepositorySpec struct {
 
 // TODO: define authentication requirements depeding on registry type
 
-type HelmClusterAddonRepositoryAuth struct{}
+type HelmClusterAddonRepositoryAuth struct {
+	// Repository authentication username.
+	// +kubebuilder:validation:MinLength=1
+	Username string `json:"username"`
+	// Repository authentication password.
+	// +kubebuilder:validation:MinLength=1
+	Password string `json:"password"`
+}
 
 type HelmClusterAddonRepositoryStatus struct {
 	// Conditions represent the latest available observations of the repository state.

@@ -28,10 +28,11 @@ tasks:
   format:yaml:
     desc: "Format non-templated YAML files, e.g. CRDs"
     cmds:
+      # TODO: replace prettier image
       - |
         cd ../ && docker run --rm \
-          -v ./:/tmp/virt ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
-          sh -c "cd /tmp/virt ; prettier -w \"crds/*.yaml\""
+          -v "$(pwd):/tmp/operator-helm" ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
+          sh -c "cd /tmp/operator-helm ; prettier -w \"crds/*.yaml\""
 
   _ci:verify-gen:
     desc: "Check generated files are up-to-date."
