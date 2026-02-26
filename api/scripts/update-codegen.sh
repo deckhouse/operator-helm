@@ -26,6 +26,8 @@ EOF
 }
 
 function source::settings {
+  echo "Preparing variables and sourcing dependency scripts.."
+
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
   API_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
   ROOT="$(cd "${API_ROOT}/.." && pwd -P)"
@@ -33,9 +35,13 @@ function source::settings {
   THIS_PKG="github.com/deckhouse/operator-helm/api"
 
   source "${CODEGEN_PKG}/kube_codegen.sh"
+
+  echo "Completed!"
 }
 
 function generate::v1alpha1 {
+  echo "Generating v1alpha1 soruces.."
+
   kube::codegen::gen_helpers \
     --boilerplate "${SCRIPT_DIR}/boilerplate.go.txt" \
     "${API_ROOT}/v1alpha1"
@@ -54,9 +60,13 @@ function generate::v1alpha1 {
     --output-pkg "${THIS_PKG}/client/generated" \
     --boilerplate "${SCRIPT_DIR}/boilerplate.go.txt" \
     "${ROOT}"
+
+  echo "Completed!"
 }
 
 function generate::crds {
+  echo "Generating CRDs.."
+
   OUTPUT_BASE=$(mktemp -d)
   trap 'rm -rf "${OUTPUT_BASE}"' ERR EXIT
 
@@ -66,6 +76,8 @@ function generate::crds {
   for file in $(find "${OUTPUT_BASE}"/* -type f -iname "*.yaml"); do
     cp "$file" "${ROOT}/crds/$(echo $file | awk -Fio_ '{print $2}')"
   done
+
+  echo "Completed!"
 }
 
 WHAT=$1
