@@ -16,6 +16,15 @@ limitations under the License.
 
 package helmclusteraddonrepository
 
+import "time"
+
+type InternalRepositoryType string
+
+const (
+	InternalHelmRepository InternalRepositoryType = "helm"
+	InternalOCIRepository  InternalRepositoryType = "oci"
+)
+
 const (
 	// ControllerName is the name of this controller, used for leader election and logging.
 	ControllerName = "helmclusteraddonrepository-controller"
@@ -53,6 +62,6 @@ const (
 	// LabelSourceName stores the name of the source HelmClusterAddonRepository.
 	LabelSourceName = "helm.deckhouse.io/source-name"
 
-	// DefaultInterval is the default reconciliation interval for the internal HelmRepository.
-	DefaultInterval = "10m"
+	// DefaultInterval is the default reconciliation interval for the internal repository.
+	DefaultInterval = 5 * time.Second
 )

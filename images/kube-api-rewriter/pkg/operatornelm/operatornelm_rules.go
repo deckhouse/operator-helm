@@ -146,7 +146,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "HelmReleaseList",
 				Plural:           "helmreleases",
 				Singular:         "helmrelease",
-				Versions:         []string{"v2beta2", "v2"},
+				Versions:         []string{"v2beta1", "v2beta2", "v2"},
 				PreferredVersion: "v2",
 				Categories:       []string{},
 				ShortNames:       []string{"hr"},
