@@ -20,6 +20,7 @@ import (
 	"flag"
 	"os"
 
+	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -29,6 +30,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddon"
 	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonrepository"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 )
@@ -39,6 +41,7 @@ func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = helmv1alpha1.AddToScheme(scheme)
 	_ = sourcev1.AddToScheme(scheme)
+	_ = helmv2.AddToScheme(scheme)
 }
 
 func main() {
@@ -77,6 +80,11 @@ func main() {
 
 	if err := helmclusteraddonrepository.SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to setup HelmClusterAddonRepository controller")
+		os.Exit(1)
+	}
+
+	if err := helmclusteraddon.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmClusterAddon controller")
 		os.Exit(1)
 	}
 

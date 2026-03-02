@@ -14,13 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package helmclusteraddonrepository
-
-import "time"
+package helmclusteraddon
 
 const (
 	// ControllerName is the name of this controller, used for leader election and logging.
-	ControllerName = "helmclusteraddonrepository-controller"
+	ControllerName = "helmclusteraddon-controller"
 
 	// TargetNamespace is the namespace where internal customer resources are created.
 	TargetNamespace = "d8-operator-helm"
@@ -37,8 +35,6 @@ const (
 	// ReasonMirrorFailed indicates the internal HelmRepository create/update failed.
 	ReasonMirrorFailed = "MirrorFailed"
 
-	ReasonChartsSyncFailed = "ChartsSyncFailed"
-
 	// ReasonInternalNotReady indicates the internal HelmRepository is not yet ready.
 	ReasonInternalNotReady = "InternalNotReady"
 
@@ -48,15 +44,9 @@ const (
 	// ReasonCleanupFailed indicates deletion of the internal HelmRepository failed.
 	ReasonCleanupFailed = "CleanupFailed"
 
-	// LabelManagedBy marks an internal HelmRepository as managed by this controller.
-	LabelManagedBy = "helm.deckhouse.io/managed-by"
+	ReasonProcessing = "Processing"
 
-	// LabelManagedByValue is the value for the managed-by label.
+	LabelManagedBy      = "helm.deckhouse.io/managed-by"
 	LabelManagedByValue = "operator-helm"
-
-	// LabelSourceName stores the name of the source HelmClusterAddonRepository.
-	LabelSourceName = "helm.deckhouse.io/cluster-addon-repository-name"
-
-	// DefaultInterval is the default reconciliation interval for the internal repository.
-	DefaultInterval = 5 * time.Second
+	LabelSourceName     = "helm.deckhouse.io/cluster-addon-name"
 )

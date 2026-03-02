@@ -20,9 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"time"
 
+	"github.com/deckhouse/operator-helm/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,12 +60,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("getting HelmClusterAddonRepository: %w", err)
 	}
 
-	parsedURL, err := url.Parse(repo.Spec.URL)
-	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("cannot parse HelmClusterAddonRepository url: %w", err)
-	}
-
-	repoType, err := GetRepositoryType(parsedURL.Scheme)
+	repoType, err := utils.GetRepositoryType(repo.Spec.URL)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -85,9 +80,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	switch repoType {
-	case InternalHelmRepository:
+	case utils.InternalHelmRepository:
 		return r.reconcileInternalHelmRepository(ctx, &repo)
-	case InternalOCIRepository:
+	case utils.InternalOCIRepository:
 		return r.reconcileInternalOCIRepository(ctx, &repo)
 	default:
 		return reconcile.Result{}, nil
@@ -97,11 +92,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 func (r *Reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
-	if err := r.reconcileInternalRepositoryAuthSecret(ctx, repo, InternalHelmRepository); err != nil {
+	if err := r.reconcileInternalRepositoryAuthSecret(ctx, repo, utils.InternalHelmRepository); err != nil {
 		return reconcile.Result{}, err
 	}
 
-	if err := r.reconcileInternalRepositoryTLSSecret(ctx, repo, InternalHelmRepository); err != nil {
+	if err := r.reconcileInternalRepositoryTLSSecret(ctx, repo, utils.InternalHelmRepository); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -121,14 +116,14 @@ func (r *Reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *
 
 		if repo.Spec.Auth != nil {
 			existing.Spec.SecretRef = &meta.LocalObjectReference{
-				Name: GetRepositoryAuthSecretName(InternalHelmRepository, repo.Name),
+				Name: utils.GetInternalRepositoryAuthSecretName(utils.InternalHelmRepository, repo.Name),
 			}
 			existing.Spec.PassCredentials = true
 		}
 
 		if repo.Spec.CACertificate != "" {
 			existing.Spec.CertSecretRef = &meta.LocalObjectReference{
-				Name: GetRepositoryTLSSecretName(InternalHelmRepository, repo.Name),
+				Name: utils.GetInternalRepositoryTLSSecretName(utils.InternalHelmRepository, repo.Name),
 			}
 		}
 
@@ -165,7 +160,7 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 	for chart, versions := range charts {
 		existing := &helmv1alpha1.HelmClusterAddonChart{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: GetHelmClusterAddonChartName(repo.Name, chart),
+				Name: utils.GetHelmClusterAddonChartName(repo.Name, chart),
 			},
 		}
 
@@ -216,11 +211,11 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
-	if err := r.reconcileInternalRepositoryAuthSecret(ctx, repo, InternalOCIRepository); err != nil {
+	if err := r.reconcileInternalRepositoryAuthSecret(ctx, repo, utils.InternalOCIRepository); err != nil {
 		return reconcile.Result{}, err
 	}
 
-	if err := r.reconcileInternalRepositoryTLSSecret(ctx, repo, InternalOCIRepository); err != nil {
+	if err := r.reconcileInternalRepositoryTLSSecret(ctx, repo, utils.InternalOCIRepository); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -240,13 +235,13 @@ func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *h
 
 		if repo.Spec.Auth != nil {
 			existing.Spec.SecretRef = &meta.LocalObjectReference{
-				Name: GetRepositoryAuthSecretName(InternalOCIRepository, repo.Name),
+				Name: utils.GetInternalRepositoryAuthSecretName(utils.InternalOCIRepository, repo.Name),
 			}
 		}
 
 		if repo.Spec.CACertificate != "" {
 			existing.Spec.CertSecretRef = &meta.LocalObjectReference{
-				Name: GetRepositoryTLSSecretName(InternalOCIRepository, repo.Name),
+				Name: utils.GetInternalRepositoryTLSSecretName(utils.InternalOCIRepository, repo.Name),
 			}
 		}
 
@@ -268,8 +263,8 @@ func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *h
 	return r.updateSuccessStatus(ctx, repo, existing.Status.Conditions)
 }
 
-func (r *Reconciler) reconcileInternalRepositoryAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType InternalRepositoryType) error {
-	secretName := GetRepositoryAuthSecretName(repoType, repo.Name)
+func (r *Reconciler) reconcileInternalRepositoryAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) error {
+	secretName := utils.GetInternalRepositoryAuthSecretName(repoType, repo.Name)
 
 	if repo.Spec.Auth == nil {
 		if err := r.ensureResourceDeleted(ctx, secretName, TargetNamespace, &corev1.Secret{}); err != nil {
@@ -305,8 +300,8 @@ func (r *Reconciler) reconcileInternalRepositoryAuthSecret(ctx context.Context, 
 	return nil
 }
 
-func (r *Reconciler) reconcileInternalRepositoryTLSSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType InternalRepositoryType) error {
-	secretName := GetRepositoryTLSSecretName(repoType, repo.Name)
+func (r *Reconciler) reconcileInternalRepositoryTLSSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) error {
+	secretName := utils.GetInternalRepositoryTLSSecretName(repoType, repo.Name)
 
 	if repo.Spec.CACertificate == "" {
 		if err := r.ensureResourceDeleted(ctx, secretName, TargetNamespace, &corev1.Secret{}); err != nil {
@@ -361,7 +356,7 @@ func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace 
 }
 
 // reconcileDelete handles cleanup when the HelmClusterRepository is being deleted.
-func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType InternalRepositoryType) (reconcile.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("helmclusteraddonrepository", repo.Name)
 
 	if !controllerutil.ContainsFinalizer(repo, FinalizerName) {
@@ -370,7 +365,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 
 	if err := r.ensureResourceDeleted(
 		ctx,
-		GetRepositoryAuthSecretName(repoType, repo.Name),
+		utils.GetInternalRepositoryAuthSecretName(repoType, repo.Name),
 		TargetNamespace,
 		&corev1.Secret{},
 	); err != nil {
@@ -379,7 +374,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 
 	if err := r.ensureResourceDeleted(
 		ctx,
-		GetRepositoryTLSSecretName(repoType, repo.Name),
+		utils.GetInternalRepositoryTLSSecretName(repoType, repo.Name),
 		TargetNamespace,
 		&corev1.Secret{},
 	); err != nil {
@@ -389,9 +384,9 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 	var internalRepository client.Object
 
 	switch repoType {
-	case InternalHelmRepository:
+	case utils.InternalHelmRepository:
 		internalRepository = &sourcev1.HelmRepository{}
-	case InternalOCIRepository:
+	case utils.InternalOCIRepository:
 		internalRepository = &sourcev1.OCIRepository{}
 	default:
 		return reconcile.Result{}, r.patchStatusError(ctx, repo, fmt.Errorf("cannot remove unsupported repisotory type: %s", repoType), ReasonCleanupFailed)
