@@ -44,6 +44,8 @@ const (
 	// ReasonMirrorFailed indicates the internal HelmRepository create/update failed.
 	ReasonMirrorFailed = "MirrorFailed"
 
+	ReasonChartsSyncFailed = "ChartsSyncFailed"
+
 	// ReasonInternalNotReady indicates the internal HelmRepository is not yet ready.
 	ReasonInternalNotReady = "InternalNotReady"
 
@@ -60,7 +62,7 @@ const (
 	LabelManagedByValue = "operator-helm"
 
 	// LabelSourceName stores the name of the source HelmClusterAddonRepository.
-	LabelSourceName = "helm.deckhouse.io/source-name"
+	LabelSourceName = "helm.deckhouse.io/cluster-addon-repository-name"
 
 	// DefaultInterval is the default reconciliation interval for the internal repository.
 	DefaultInterval = 5 * time.Second

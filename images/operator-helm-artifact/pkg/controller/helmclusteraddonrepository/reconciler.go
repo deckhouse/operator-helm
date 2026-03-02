@@ -21,11 +21,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -141,11 +143,74 @@ func (r *Reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *
 		return reconcile.Result{}, r.patchStatusError(ctx, repo, fmt.Errorf("reconciling helm repository: %w", err), ReasonMirrorFailed)
 	}
 
+	if err := r.reconcileHelmRepositoryCharts(ctx, repo); err != nil {
+		return reconcile.Result{RequeueAfter: 30 * time.Second}, r.patchStatusError(ctx, repo, fmt.Errorf("reconciling helm repository charts: %w", err), ReasonChartsSyncFailed)
+	}
+
 	if op != controllerutil.OperationResultNone {
 		logger.Info("Successfully reconciled helm repository", "operation", op)
 	}
 
 	return r.updateSuccessStatus(ctx, repo, existing.Status.Conditions)
+}
+
+func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+	logger := log.FromContext(ctx)
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(ctx, repo.Spec.URL)
+	if err != nil {
+		return fmt.Errorf("cannot fetch chart info from repository: %w", err)
+	}
+
+	for chart, versions := range charts {
+		existing := &helmv1alpha1.HelmClusterAddonChart{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: GetHelmClusterAddonChartName(repo.Name, chart),
+			},
+		}
+
+		op, err := controllerutil.CreateOrPatch(ctx, r.Client, existing, func() error {
+			existing.OwnerReferences = []metav1.OwnerReference{
+				{
+					APIVersion:         repo.APIVersion,
+					Kind:               repo.Kind,
+					Name:               repo.Name,
+					UID:                repo.UID,
+					Controller:         ptr.To(true),
+					BlockOwnerDeletion: ptr.To(true),
+				},
+			}
+
+			existing.Labels = map[string]string{
+				LabelManagedBy:  LabelManagedByValue,
+				LabelSourceName: repo.Name,
+			}
+
+			existingVersionsMap := make(map[string]helmv1alpha1.HelmClusterAddonChartVersion)
+			for _, version := range existing.Status.Versions {
+				existingVersionsMap[version.Version] = version
+			}
+
+			for i, version := range versions {
+				if existingVersion, found := existingVersionsMap[version.Version]; found && version.Digest == existingVersion.Digest {
+					versions[i].Pulled = existingVersion.Pulled
+				}
+			}
+
+			existing.Status.Versions = versions
+
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("cannot create or update helm chart info: %w", err)
+		}
+
+		if op != controllerutil.OperationResultNone {
+			logger.Info("Successfully reconciled helm repository chart", "operation", op, "repository", repo.Name, "chart", chart)
+		}
+	}
+
+	return nil
 }
 
 func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {

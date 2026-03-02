@@ -112,12 +112,16 @@ spec:
                         description: Helm chart digest
                         minLength: 1
                         type: string
+                      pulled:
+                        description: Chart pulled from repository
+                        type: boolean
                       version:
                         description: Helm chart version
                         minLength: 1
                         type: string
                     required:
                       - digest
+                      - pulled
                       - version
                     type: object
                   type: array

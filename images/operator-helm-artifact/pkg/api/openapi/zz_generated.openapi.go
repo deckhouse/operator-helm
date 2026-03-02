@@ -366,8 +366,16 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartVersion(re
 							Format:      "",
 						},
 					},
+					"pulled": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Chart pulled from repository",
+							Default:     false,
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
 				},
-				Required: []string{"version", "digest"},
+				Required: []string{"version", "digest", "pulled"},
 			},
 		},
 	}

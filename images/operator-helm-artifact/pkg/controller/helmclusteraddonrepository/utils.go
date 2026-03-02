@@ -52,6 +52,10 @@ func GetRepositoryType(scheme string) (InternalRepositoryType, error) {
 	case "oci":
 		return InternalOCIRepository, nil
 	default:
-		return "", fmt.Errorf("unsuppored repository schema in use: %s", scheme)
+		return "", fmt.Errorf("unsupported repository schema in use: %s", scheme)
 	}
+}
+
+func GetHelmClusterAddonChartName(repoName, chartName string) string {
+	return GenerateSafeName(repoName+"-"+chartName, 63)
 }
