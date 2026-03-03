@@ -45,6 +45,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonRepositoryStatus": schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepositoryStatus(ref),
 		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonSpec":             schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonSpec(ref),
 		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonStatus":           schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonStatus(ref),
+		"github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonValidator":        schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonValidator(ref),
 		v1.APIGroup{}.OpenAPIModelName():                                                   schema_pkg_apis_meta_v1_APIGroup(ref),
 		v1.APIGroupList{}.OpenAPIModelName():                                               schema_pkg_apis_meta_v1_APIGroupList(ref),
 		v1.APIResource{}.OpenAPIModelName():                                                schema_pkg_apis_meta_v1_APIResource(ref),
@@ -710,6 +711,22 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonStatus(ref comm
 		},
 		Dependencies: []string{
 			v1.Condition{}.OpenAPIModelName()},
+	}
+}
+
+func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonValidator(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"Client": {
+						SchemaProps: spec.SchemaProps{},
+					},
+				},
+				Required: []string{"Client"},
+			},
+		},
 	}
 }
 

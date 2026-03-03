@@ -6,15 +6,33 @@ properties:
     type: object
     default: {}
     properties:
-      moduleConfig:
-        type: object
-        additionalProperties: true
-      moduleConfigValidation:
-        type: object
-        properties:
-          error:
-            type: string
-      moduleState:
+      controller:
         type: object
         default: {}
-        additionalProperties: true
+        properties:
+          cert:
+            type: object
+            default: {}
+            properties:
+              ca:
+                type: string
+                default: ""
+              crt:
+                type: string
+                default: ""
+              key:
+                type: string
+                default: ""
+      rootCA:
+        type: object
+        default: {}
+        properties:
+          ca:
+            type: string
+            default: ""
+          crt:
+            type: string
+            default: ""
+          key:
+            type: string
+            default: ""

@@ -77,10 +77,10 @@ import:
   after: setup
   includePaths:
     - images_digests.json
-# - image: go-hooks-artifact
-#   add: /go-hooks
-#   to: /prep-bundle/hooks/go
-#   after: setup
+- image: go-hooks-artifact
+  add: /go-hooks
+  to: /prep-bundle/hooks/go
+  after: setup
 git:
   - add: /
     to: /prep-bundle

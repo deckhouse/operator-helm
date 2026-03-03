@@ -1,0 +1,52 @@
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+final: false
+fromImage: builder/src
+git:
+  - add: {{ .ModuleDir }}/images/{{ .ImageName }}
+    to: /src/images/hooks
+    stageDependencies:
+      install:
+        - "**/*"
+  - add: {{ .ModuleDir }}/images/operator-helm-artifact
+    to: /src/images/operator-helm-artifact
+    stageDependencies:
+      install:
+        - "**/*"
+  - add: {{ .ModuleDir }}/api
+    to: /src/api
+    stageDependencies:
+      install:
+        - "**/*"
+shell:
+  install:
+    - cd /src
+---
+image: {{ .ModuleNamePrefix }}go-hooks-artifact
+final: false
+fromImage: {{ eq $.SVACE_ENABLED "false" | ternary "builder/golang-bookworm-1.25" "builder/golang-alt-svace-1.25" }}
+import:
+  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+    add: /src
+    to: /app
+    before: install
+mount:
+  - fromPath: ~/go-pkg-cache
+    to: /go/pkg
+secrets:
+  - id: GOPROXY
+    value: {{ .GOPROXY }}
+shell:
+  install:
+    - export GOPROXY=$(cat /run/secrets/GOPROXY)
+    - cd /app/images/hooks
+    - go mod download
+  setup:
+    - cd /app/images/hooks
+    - |
+      export GOOS=linux
+      export GOARCH=amd64
+      export CGO_ENABLED=0
+      export TAGS="{{ printf "-tags %s" .MODULE_EDITION }}"
+      {{- $_ := set $ "ProjectName" (list $.ImageName "hooks" | join "/") }}
+      {{- include "image-build.build" (set $ "BuildCommand" `go build -ldflags="-s -w" $TAGS -a -o /go-hooks/operator-helm-module-hooks ./cmd/operator-helm-module-hooks`) | nindent 6 }}

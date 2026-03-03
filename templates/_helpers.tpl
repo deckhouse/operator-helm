@@ -3,12 +3,6 @@
 {{- dig "logLevel" "" .Values.operatorHelm -}}
 {{- end }}
 
-{{- define "hasValidModuleConfig" -}}
-{{- if (hasKey .Values.operatorHelm.internal "moduleConfig" ) -}}
-true
-{{- end }}
-{{- end }}
-
 {{- define "priorityClassName" -}}
 system-cluster-critical
 {{- end }}

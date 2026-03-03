@@ -27,7 +27,7 @@ func GetHash(s string) string {
 
 	_, _ = h.Write([]byte(s))
 
-	return fmt.Sprintf("%x", h.Sum32())[:5]
+	return fmt.Sprintf("%x", h.Sum32())
 }
 
 func GetInternalRepositoryAuthSecretName(repoType InternalRepositoryType, internalRepoName string) string {
@@ -73,15 +73,15 @@ func GetHelmClusterAddonChartName(repoName, addonName string) string {
 
 	var result, postfix string
 
-	if len(repoName) > 25 {
-		result += repoName[:25]
+	if len(repoName) > 20 {
+		result += repoName[:20]
 		postfix = "-" + hash
 	} else {
 		result += repoName
 	}
 
-	if len(addonName) > 25 {
-		result += "-" + addonName[:25]
+	if len(addonName) > 20 {
+		result += "-" + addonName[:20]
 		postfix = "-" + hash
 	} else {
 		result += "-" + addonName
@@ -96,14 +96,14 @@ func GetInternalHelmChartName(repoName, chartName, chartVersion string) string {
 
 	result := prefix + "-"
 
-	if len(repoName) > 25 {
-		result += repoName[:25]
+	if len(repoName) > 20 {
+		result += repoName[:20]
 	} else {
 		result += repoName
 	}
 
-	if len(chartName) > 25 {
-		result += "-" + chartName[:25]
+	if len(chartName) > 20 {
+		result += "-" + chartName[:20]
 	} else {
 		result += "-" + chartName
 	}

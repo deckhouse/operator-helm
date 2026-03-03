@@ -88,6 +88,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&helmv1alpha1.HelmClusterAddon{}).SetupWebhookWithManager(mgr); err != nil {
+		logger.Error(err, "unable to create webhook", "webhook", "HelmClusterAddon")
+		os.Exit(1)
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		logger.Error(err, "unable to set up health check")
 		os.Exit(1)
