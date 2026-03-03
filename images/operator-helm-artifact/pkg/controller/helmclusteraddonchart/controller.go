@@ -14,12 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package helmclusteraddonrepository
+package helmclusteraddonchart
 
 import (
 	"context"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -40,19 +39,9 @@ func SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
-		For(&helmv1alpha1.HelmClusterAddonRepository{}).
+		For(&helmv1alpha1.HelmClusterAddonChart{}).
 		Watches(
-			&sourcev1.HelmRepository{},
-			handler.EnqueueRequestsFromMapFunc(mapInternalToCluster),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
-		).
-		Watches(
-			&sourcev1.OCIRepository{},
-			handler.EnqueueRequestsFromMapFunc(mapInternalToCluster),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
-		).
-		Watches(
-			&corev1.Secret{},
+			&sourcev1.HelmChart{},
 			handler.EnqueueRequestsFromMapFunc(mapInternalToCluster),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
@@ -73,7 +62,7 @@ func mapInternalToCluster(ctx context.Context, obj client.Object) []reconcile.Re
 
 	sourceName := labels[LabelSourceName]
 	if sourceName == "" {
-		logger.Info("Internal repository resource missing cluster-addon-repository label, skipping",
+		logger.Info("Internal repository resource missing cluster-addon-chart label, skipping",
 			"name", obj.GetName(), "namespace", obj.GetNamespace())
 
 		return nil

@@ -20,6 +20,7 @@ import (
 	"flag"
 	"os"
 
+	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonchart"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -90,6 +91,11 @@ func main() {
 
 	if err = (&helmv1alpha1.HelmClusterAddon{}).SetupWebhookWithManager(mgr); err != nil {
 		logger.Error(err, "unable to create webhook", "webhook", "HelmClusterAddon")
+		os.Exit(1)
+	}
+
+	if err := helmclusteraddonchart.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmClusterAddonChart controller")
 		os.Exit(1)
 	}
 

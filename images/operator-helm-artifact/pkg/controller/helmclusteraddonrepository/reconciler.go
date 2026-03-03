@@ -139,7 +139,10 @@ func (r *Reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *
 	}
 
 	if err := r.reconcileHelmRepositoryCharts(ctx, repo); err != nil {
-		return reconcile.Result{RequeueAfter: 30 * time.Second}, r.patchStatusError(ctx, repo, fmt.Errorf("reconciling helm repository charts: %w", err), ReasonChartsSyncFailed)
+		logger.Error(err, "failed to reconcile helm repository charts")
+
+		// TODO: magic number
+		return reconcile.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 
 	if op != controllerutil.OperationResultNone {
@@ -422,6 +425,8 @@ func (r *Reconciler) patchStatusError(ctx context.Context, repo *helmv1alpha1.He
 
 // updateSuccessStatus patches the status of the cluster resource after a successful reconciliation.
 func (r *Reconciler) updateSuccessStatus(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, internalConditions []metav1.Condition) (reconcile.Result, error) {
+	logger := log.FromContext(ctx).WithValues("helmclusteraddonrepository", repo.Name)
+
 	base := repo.DeepCopy()
 
 	repo.Status.Conditions = MapInternalStatusToClusterConditions(internalConditions)
@@ -431,7 +436,12 @@ func (r *Reconciler) updateSuccessStatus(ctx context.Context, repo *helmv1alpha1
 		return reconcile.Result{}, fmt.Errorf("patching internal custom resource status: %w", err)
 	}
 
-	return reconcile.Result{}, nil
+	// TODO: rework re-index logic based on last sync time attribute
+
+	logger.Info(fmt.Sprintf("Next repository re-scan will be in %s", 5*time.Minute))
+
+	// TODO: magic number
+	return reconcile.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
 // setCondition is a helper to set a single Ready condition on the cluster resource.

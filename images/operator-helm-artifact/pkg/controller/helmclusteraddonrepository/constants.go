@@ -55,7 +55,7 @@ const (
 	LabelManagedByValue = "operator-helm"
 
 	// LabelSourceName stores the name of the source HelmClusterAddonRepository.
-	LabelSourceName = "helm.deckhouse.io/cluster-addon-repository-name"
+	LabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 
 	// DefaultInterval is the default reconciliation interval for the internal repository.
 	DefaultInterval = 5 * time.Second

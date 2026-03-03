@@ -48,5 +48,5 @@ const (
 
 	LabelManagedBy      = "helm.deckhouse.io/managed-by"
 	LabelManagedByValue = "operator-helm"
-	LabelSourceName     = "helm.deckhouse.io/cluster-addon-name"
+	LabelSourceName     = "helm.deckhouse.io/cluster-addon"
 )

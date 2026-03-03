@@ -68,7 +68,7 @@ func mapInternalToCluster(ctx context.Context, obj client.Object) []reconcile.Re
 
 	sourceName := labels[LabelSourceName]
 	if sourceName == "" {
-		logger.Info("Internal repository resource missing source-name label, skipping",
+		logger.Info("Internal repository resource missing cluster-addon label, skipping",
 			"name", obj.GetName(), "namespace", obj.GetNamespace())
 
 		return nil

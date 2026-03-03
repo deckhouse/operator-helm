@@ -20,7 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonchart"
 	"github.com/deckhouse/operator-helm/pkg/utils"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
@@ -86,41 +88,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return r.reconcileInternalRelease(ctx, &release)
 }
 
-func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, release *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository) error {
 	logger := log.FromContext(ctx)
-
-	var addonChart helmv1alpha1.HelmClusterAddonChart
-
-	if err := r.Client.Get(
-		ctx,
-		types.NamespacedName{
-			Name: utils.GetHelmClusterAddonChartName(release.Spec.Chart.HelmClusterAddonRepository,
-				release.Spec.Chart.HelmClusterAddonRepository),
-		},
-		&addonChart,
-	); err != nil {
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("addon chart not found: %w", err)
-		}
-
-		return fmt.Errorf("getting HelmClusterAddonChart: %w", err)
-	}
-
-	// TODO: implement logic depending on pulled flag in the HelmClusterAddonChart
-	//for _, chartInfo := range addonChart.Status.Versions {
-	//	if chartInfo.Pulled && chartInfo.Version == release.Spec.Chart.Version {
-	//
-	//	}
-	//}
 
 	repoType, _ := utils.GetRepositoryType(repo.Spec.URL)
 
 	existing := &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: utils.GetInternalHelmChartName(
-				release.Name,
-				release.Spec.Chart.HelmClusterAddonChartName,
-				release.Spec.Chart.Version),
+				addon.Name,
+				addon.Spec.Chart.HelmClusterAddonChartName,
+				addon.Spec.Chart.Version),
 			Namespace: TargetNamespace,
 		},
 	}
@@ -131,21 +109,23 @@ func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, release *he
 		}
 
 		existing.Labels[LabelManagedBy] = LabelManagedByValue
-		existing.Labels[LabelSourceName] = release.Name
+		existing.Labels[LabelSourceName] = addon.Name
+		existing.Labels[helmclusteraddonchart.LabelSourceName] = utils.GetHelmClusterAddonChartName(
+			repo.Name, addon.Spec.Chart.HelmClusterAddonChartName)
 
-		existing.Spec.Chart = release.Spec.Chart.HelmClusterAddonChartName
-		existing.Spec.Version = release.Spec.Chart.Version
+		existing.Spec.Chart = addon.Spec.Chart.HelmClusterAddonChartName
+		existing.Spec.Version = addon.Spec.Chart.Version
 
 		switch repoType {
 		case utils.InternalHelmRepository:
 			existing.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
 				Kind: sourcev1.HelmRepositoryKind,
-				Name: release.Spec.Chart.HelmClusterAddonRepository,
+				Name: addon.Spec.Chart.HelmClusterAddonRepository,
 			}
 		case utils.InternalOCIRepository:
 			existing.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
 				Kind: sourcev1.OCIRepositoryKind,
-				Name: release.Spec.Chart.HelmClusterAddonRepository,
+				Name: addon.Spec.Chart.HelmClusterAddonRepository,
 			}
 		default:
 			return fmt.Errorf("invalid repository type: %s", repoType)
@@ -158,18 +138,47 @@ func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, release *he
 	}
 
 	if op != controllerutil.OperationResultNone {
-		logger.Info("Successfully reconciled internal helm chart", "operation", op, "repository", repo.Name, "chart", release.Spec.Chart.HelmClusterAddonChartName)
+		logger.Info("Successfully reconciled internal helm chart", "operation", op, "repository", repo.Name, "chart", addon.Spec.Chart.HelmClusterAddonChartName)
 	}
 
 	return nil
 }
 
-func (r *Reconciler) reconcileInternalRelease(ctx context.Context, release *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
+func (r *Reconciler) reconcileInternalRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
+
+	var addonChart helmv1alpha1.HelmClusterAddonChart
+
+	if err := r.Client.Get(
+		ctx,
+		types.NamespacedName{
+			Name: utils.GetHelmClusterAddonChartName(addon.Spec.Chart.HelmClusterAddonRepository,
+				addon.Spec.Chart.HelmClusterAddonRepository),
+		},
+		&addonChart,
+	); err != nil {
+		if apierrors.IsNotFound(err) {
+			return reconcile.Result{}, r.patchStatusError(ctx, addon, fmt.Errorf("addon chart not found: %w", err), ReasonMirrorFailed)
+		}
+
+		return reconcile.Result{}, r.patchStatusError(ctx, addon, fmt.Errorf("getting HelmClusterAddonChart: %w", err), ReasonMirrorFailed)
+	}
+
+	var chartPulled bool
+	for _, chartInfo := range addonChart.Status.Versions {
+		if addon.Spec.Chart.Version == chartInfo.Version {
+			chartPulled = chartInfo.Pulled
+		}
+	}
+
+	if !chartPulled {
+		// TODO: need to reflect the current state in the HelmClusterAddon status.
+		return reconcile.Result{RequeueAfter: 10 * time.Second}, nil
+	}
 
 	existing := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      release.Name,
+			Name:      addon.Name,
 			Namespace: TargetNamespace,
 		},
 	}
@@ -180,40 +189,40 @@ func (r *Reconciler) reconcileInternalRelease(ctx context.Context, release *helm
 		}
 
 		existing.Labels[LabelManagedBy] = LabelManagedByValue
-		existing.Labels[LabelSourceName] = release.Name
+		existing.Labels[LabelSourceName] = addon.Name
 
-		existing.Spec.ReleaseName = release.Name
-		existing.Spec.TargetNamespace = release.Spec.Namespace
-		existing.Spec.Values = release.Spec.Values
+		existing.Spec.ReleaseName = addon.Name
+		existing.Spec.TargetNamespace = addon.Spec.Namespace
+		existing.Spec.Values = addon.Spec.Values
 
 		existing.Spec.DriftDetection = &helmv2.DriftDetection{
 			Mode: helmv2.DriftDetectionWarn,
 		}
 
-		if release.Spec.Maintanace != "" {
+		if addon.Spec.Maintanace != "" {
 			existing.Spec.DriftDetection.Mode = helmv2.DriftDetectionEnabled
 		}
 
 		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
 			Kind: sourcev1.HelmChartKind,
 			Name: utils.GetInternalHelmChartName(
-				release.Name,
-				release.Spec.Chart.HelmClusterAddonChartName,
-				release.Spec.Chart.Version),
+				addon.Name,
+				addon.Spec.Chart.HelmClusterAddonChartName,
+				addon.Spec.Chart.Version),
 			Namespace: TargetNamespace,
 		}
 
 		return nil
 	})
 	if err != nil {
-		return reconcile.Result{}, r.patchStatusError(ctx, release, fmt.Errorf("reconcile internal helm release: %w", err), ReasonMirrorFailed)
+		return reconcile.Result{}, r.patchStatusError(ctx, addon, fmt.Errorf("reconcile internal helm release: %w", err), ReasonMirrorFailed)
 	}
 
 	if op != controllerutil.OperationResultNone {
-		logger.Info("Successfully reconciled internal helm release", "operation", op, "chart", release.Spec.Chart.HelmClusterAddonChartName)
+		logger.Info("Successfully reconciled internal helm release", "operation", op, "chart", addon.Spec.Chart.HelmClusterAddonChartName)
 	}
 
-	return r.updateSuccessStatus(ctx, release, existing.Status.Conditions)
+	return r.updateSuccessStatus(ctx, addon, existing.Status.Conditions)
 }
 
 // ensureResourceDeleted safely deletes an object if it exists.
@@ -234,24 +243,24 @@ func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace 
 }
 
 // reconcileDelete handles cleanup when the HelmClusterRepository is being deleted.
-func (r *Reconciler) reconcileDelete(ctx context.Context, release *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
-	logger := log.FromContext(ctx).WithValues("helmclusteraddon", release.Name)
+func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
+	logger := log.FromContext(ctx).WithValues("helmclusteraddon", addon.Name)
 
-	if !controllerutil.ContainsFinalizer(release, FinalizerName) {
+	if !controllerutil.ContainsFinalizer(addon, FinalizerName) {
 		return reconcile.Result{}, nil
 	}
 
-	if err := r.ensureResourceDeleted(ctx, release.Name, TargetNamespace, &helmv2.HelmRelease{}); err != nil {
-		return reconcile.Result{}, r.patchStatusError(ctx, release, fmt.Errorf("deleting internal helm release: %w", err), ReasonCleanupFailed)
+	if err := r.ensureResourceDeleted(ctx, addon.Name, TargetNamespace, &helmv2.HelmRelease{}); err != nil {
+		return reconcile.Result{}, r.patchStatusError(ctx, addon, fmt.Errorf("deleting internal helm release: %w", err), ReasonCleanupFailed)
 	}
 
-	if err := r.ensureResourceDeleted(ctx, utils.GetInternalHelmChartName(release.Spec.Chart.HelmClusterAddonRepository, release.Spec.Chart.HelmClusterAddonChartName, release.Spec.Chart.Version), TargetNamespace, &sourcev1.HelmChart{}); err != nil {
-		return reconcile.Result{}, r.patchStatusError(ctx, release, fmt.Errorf("deleting internal helm chart: %w", err), ReasonCleanupFailed)
+	if err := r.ensureResourceDeleted(ctx, utils.GetInternalHelmChartName(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName, addon.Spec.Chart.Version), TargetNamespace, &sourcev1.HelmChart{}); err != nil {
+		return reconcile.Result{}, r.patchStatusError(ctx, addon, fmt.Errorf("deleting internal helm chart: %w", err), ReasonCleanupFailed)
 	}
 
-	controllerutil.RemoveFinalizer(release, FinalizerName)
+	controllerutil.RemoveFinalizer(addon, FinalizerName)
 
-	if err := r.Client.Update(ctx, release); err != nil {
+	if err := r.Client.Update(ctx, addon); err != nil {
 		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 
@@ -261,12 +270,12 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, release *helmv1alpha1.
 }
 
 // patchStatusError is a helper to safely patch a failure condition onto the cluster resource.
-func (r *Reconciler) patchStatusError(ctx context.Context, release *helmv1alpha1.HelmClusterAddon, reconcileErr error, reason string) error {
-	base := release.DeepCopy()
+func (r *Reconciler) patchStatusError(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, reconcileErr error, reason string) error {
+	base := addon.DeepCopy()
 
-	r.setCondition(release, metav1.ConditionFalse, reason, reconcileErr.Error())
+	r.setCondition(addon, metav1.ConditionFalse, reason, reconcileErr.Error())
 
-	if patchErr := r.Client.Status().Patch(ctx, release, client.MergeFrom(base)); patchErr != nil {
+	if patchErr := r.Client.Status().Patch(ctx, addon, client.MergeFrom(base)); patchErr != nil {
 		return errors.Join(reconcileErr, fmt.Errorf("failed to patch status: %w", patchErr))
 	}
 
@@ -274,13 +283,13 @@ func (r *Reconciler) patchStatusError(ctx context.Context, release *helmv1alpha1
 }
 
 // updateSuccessStatus patches the status of the cluster resource after a successful reconciliation.
-func (r *Reconciler) updateSuccessStatus(ctx context.Context, release *helmv1alpha1.HelmClusterAddon, internalConditions []metav1.Condition) (reconcile.Result, error) {
-	base := release.DeepCopy()
+func (r *Reconciler) updateSuccessStatus(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, internalConditions []metav1.Condition) (reconcile.Result, error) {
+	base := addon.DeepCopy()
 
-	release.Status.Conditions = MapInternalStatusToClusterConditions(internalConditions)
-	release.Status.ObservedGeneration = release.Generation
+	addon.Status.Conditions = MapInternalStatusToClusterConditions(internalConditions)
+	addon.Status.ObservedGeneration = addon.Generation
 
-	if err := r.Client.Status().Patch(ctx, release, client.MergeFrom(base)); err != nil {
+	if err := r.Client.Status().Patch(ctx, addon, client.MergeFrom(base)); err != nil {
 		return reconcile.Result{}, fmt.Errorf("patching internal custom resource status: %w", err)
 	}
 
@@ -288,7 +297,7 @@ func (r *Reconciler) updateSuccessStatus(ctx context.Context, release *helmv1alp
 }
 
 // setCondition is a helper to set a single Ready condition on the cluster resource.
-func (r *Reconciler) setCondition(release *helmv1alpha1.HelmClusterAddon, status metav1.ConditionStatus, reason, message string) {
+func (r *Reconciler) setCondition(addon *helmv1alpha1.HelmClusterAddon, status metav1.ConditionStatus, reason, message string) {
 	now := metav1.Now()
 
 	newCond := metav1.Condition{
@@ -297,21 +306,21 @@ func (r *Reconciler) setCondition(release *helmv1alpha1.HelmClusterAddon, status
 		Reason:             reason,
 		Message:            message,
 		LastTransitionTime: now,
-		ObservedGeneration: release.Generation,
+		ObservedGeneration: addon.Generation,
 	}
 
-	for i, c := range release.Status.Conditions {
+	for i, c := range addon.Status.Conditions {
 		if c.Type == ConditionTypeReady {
 			// Only update LastTransitionTime if status actually changed.
 			if c.Status == status {
 				newCond.LastTransitionTime = c.LastTransitionTime
 			}
 
-			release.Status.Conditions[i] = newCond
+			addon.Status.Conditions[i] = newCond
 
 			return
 		}
 	}
 
-	release.Status.Conditions = append(release.Status.Conditions, newCond)
+	addon.Status.Conditions = append(addon.Status.Conditions, newCond)
 }
