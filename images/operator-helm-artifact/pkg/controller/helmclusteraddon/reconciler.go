@@ -95,10 +95,7 @@ func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, addon *helm
 
 	existing := &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: utils.GetInternalHelmChartName(
-				addon.Name,
-				addon.Spec.Chart.HelmClusterAddonChartName,
-				addon.Spec.Chart.Version),
+			Name:      utils.GetInternalHelmChartName(addon.Name),
 			Namespace: TargetNamespace,
 		},
 	}
@@ -178,7 +175,7 @@ func (r *Reconciler) reconcileInternalRelease(ctx context.Context, addon *helmv1
 
 	existing := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      addon.Name,
+			Name:      utils.GetInternalHelmReleaseName(addon.Name),
 			Namespace: TargetNamespace,
 		},
 	}
@@ -204,11 +201,8 @@ func (r *Reconciler) reconcileInternalRelease(ctx context.Context, addon *helmv1
 		}
 
 		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
-			Kind: sourcev1.HelmChartKind,
-			Name: utils.GetInternalHelmChartName(
-				addon.Name,
-				addon.Spec.Chart.HelmClusterAddonChartName,
-				addon.Spec.Chart.Version),
+			Kind:      sourcev1.HelmChartKind,
+			Name:      utils.GetInternalHelmChartName(addon.Name),
 			Namespace: TargetNamespace,
 		}
 
@@ -250,11 +244,11 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		return reconcile.Result{}, nil
 	}
 
-	if err := r.ensureResourceDeleted(ctx, addon.Name, TargetNamespace, &helmv2.HelmRelease{}); err != nil {
+	if err := r.ensureResourceDeleted(ctx, utils.GetInternalHelmReleaseName(addon.Name), TargetNamespace, &helmv2.HelmRelease{}); err != nil {
 		return reconcile.Result{}, r.patchStatusError(ctx, addon, fmt.Errorf("deleting internal helm release: %w", err), ReasonCleanupFailed)
 	}
 
-	if err := r.ensureResourceDeleted(ctx, utils.GetInternalHelmChartName(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName, addon.Spec.Chart.Version), TargetNamespace, &sourcev1.HelmChart{}); err != nil {
+	if err := r.ensureResourceDeleted(ctx, utils.GetInternalHelmChartName(addon.Name), TargetNamespace, &sourcev1.HelmChart{}); err != nil {
 		return reconcile.Result{}, r.patchStatusError(ctx, addon, fmt.Errorf("deleting internal helm chart: %w", err), ReasonCleanupFailed)
 	}
 

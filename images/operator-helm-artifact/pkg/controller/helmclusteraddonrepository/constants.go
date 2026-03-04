@@ -31,13 +31,15 @@ const (
 	// ConditionTypeReady is the condition type for readiness.
 	ConditionTypeReady = "Ready"
 
-	// ReasonMirrorSucceeded indicates the internal HelmRepository was created/updated successfully.
-	ReasonMirrorSucceeded = "MirrorSucceeded"
+	// ConditionTypeSynced is the condition type to track chart sync status
+	ConditionTypeSynced = "Synced"
 
 	// ReasonMirrorFailed indicates the internal HelmRepository create/update failed.
 	ReasonMirrorFailed = "MirrorFailed"
 
-	ReasonChartsSyncFailed = "ChartsSyncFailed"
+	ReasonSyncSucceeded = "SyncSucceeded"
+
+	ReasonSyncFailed = "SyncFailed"
 
 	// ReasonInternalNotReady indicates the internal HelmRepository is not yet ready.
 	ReasonInternalNotReady = "InternalNotReady"
@@ -58,5 +60,7 @@ const (
 	LabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 
 	// DefaultInterval is the default reconciliation interval for the internal repository.
-	DefaultInterval = 5 * time.Second
+	DefaultInterval = 5 * time.Minute
+
+	DefaultSyncInterval = 5 * time.Minute
 )

@@ -37,8 +37,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	logger := log.FromContext(ctx).WithValues("helmclusteraddonchart", req.Name)
 
 	chart := &helmv1alpha1.HelmClusterAddonChart{}
-	if err := r.Client.Get(ctx, req.NamespacedName, chart); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get HelmClusterAddonChart: %w", client.IgnoreNotFound(err))
+	if err := r.Client.Get(ctx, req.NamespacedName, chart); client.IgnoreNotFound(err) != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to get HelmClusterAddonChart: %w", err)
 	}
 
 	internalCharts := &sourcev1.HelmChartList{}
@@ -63,10 +63,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if needsUpdate {
-		if err := r.Client.Status().Update(ctx, chart); err != nil {
-			if client.IgnoreNotFound(err) != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update HelmClusterAddonChart status: %w", err)
-			}
+		if err := r.Client.Status().Update(ctx, chart); client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update HelmClusterAddonChart status: %w", err)
 		}
 
 		logger.Info("HelmClusterAddonChart successfully reconciled")

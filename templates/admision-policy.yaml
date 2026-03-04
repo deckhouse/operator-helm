@@ -27,6 +27,15 @@ spec:
           - "UPDATE"
           - "DELETE"
         resources: ["*"]
+      - apiGroups:
+          - "helm.deckhouse.io"
+        apiVersions: ["*"]
+        operations:
+          - "CREATE"
+          - "UPDATE"
+          - "DELETE"
+        resources:
+          - "helmclusteraddoncharts"
   validations:
     - expression: |
         request.userInfo.username.startsWith("system:serviceaccount:kube-system:") ||

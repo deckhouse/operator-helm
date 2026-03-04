@@ -90,23 +90,23 @@ func GetHelmClusterAddonChartName(repoName, addonName string) string {
 	return strings.TrimRight(result, "-") + postfix
 }
 
-func GetInternalHelmChartName(repoName, chartName, chartVersion string) string {
+func GetInternalHelmReleaseName(addonName string) string {
 	prefix := "addon"
-	hash := GetHash(fmt.Sprintf("%s-%s-%s-%s", prefix, repoName, chartName, chartVersion))
+	hash := GetHash(fmt.Sprintf("%s-%s", prefix, addonName))
 
 	result := prefix + "-"
+	postfix := ""
 
-	if len(repoName) > 20 {
-		result += repoName[:20]
+	if len(addonName) > 40 {
+		result += addonName[:40]
+		postfix = "-" + hash
 	} else {
-		result += repoName
+		result += addonName
 	}
 
-	if len(chartName) > 20 {
-		result += "-" + chartName[:20]
-	} else {
-		result += "-" + chartName
-	}
+	return strings.TrimRight(result, "-") + postfix
+}
 
-	return strings.TrimRight(result, "-") + "-" + hash
+func GetInternalHelmChartName(addonName string) string {
+	return GetInternalHelmReleaseName(addonName)
 }
