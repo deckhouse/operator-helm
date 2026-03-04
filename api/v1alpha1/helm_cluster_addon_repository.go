@@ -63,8 +63,6 @@ type HelmClusterAddonRepositorySpec struct {
 	TLSVerify bool `json:"tlsVerify,omitempty"`
 }
 
-// TODO: define authentication requirements depeding on registry type
-
 type HelmClusterAddonRepositoryAuth struct {
 	// Repository authentication username.
 	// +kubebuilder:validation:MinLength=1
