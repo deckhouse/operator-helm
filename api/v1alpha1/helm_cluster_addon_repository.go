@@ -21,11 +21,11 @@ import (
 )
 
 const (
-	HelmClusterAddonRepostoryKind      = "HelmClusterAddonRepository"
+	HelmClusterAddonRepositoryKind     = "HelmClusterAddonRepository"
 	HelmClusterAddonRepositoryResource = "helmclusteraddonrepositories"
 )
 
-// HelmClusterAddonRepository represens a Git, Helm or OCI complient repocitory with Helm charts.
+// HelmClusterAddonRepository represents a Git, Helm or OCI compliant repository with Helm charts.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

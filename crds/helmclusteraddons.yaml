@@ -82,7 +82,7 @@ spec:
                     - helmClusterAddonChart
                     - helmClusterAddonRepository
                   type: object
-                maintanace:
+                maintenance:
                   description: |-
                     Maintenance specifies the reconciliation strategy for the resource.
                     When set to "NoResourceReconciliation", the controller will stop updating the

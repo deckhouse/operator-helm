@@ -80,7 +80,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	managedCond := meta.FindStatusCondition(addon.Status.Conditions, ConditionTypeManaged)
 	if managedCond == nil {
 		return reconcile.Result{}, fmt.Errorf("managed condition is not initialized")
-	} else if managedCond.Status == metav1.ConditionTrue && addon.Spec.Maintanace != "" {
+	} else if managedCond.Status == metav1.ConditionTrue && addon.Spec.Maintenance != "" {
 		return reconcile.Result{}, nil
 	}
 
@@ -207,7 +207,7 @@ func (r *Reconciler) reconcileInternalRelease(ctx context.Context, addon *helmv1
 
 		existing.Spec.Suspend = false
 
-		if addon.Spec.Maintanace != "" {
+		if addon.Spec.Maintenance != "" {
 			existing.Spec.Suspend = true
 		}
 
@@ -325,7 +325,7 @@ func (r *Reconciler) updateSuccessStatus(ctx context.Context, addon *helmv1alpha
 
 	addon.Status.ObservedGeneration = addon.Generation
 
-	if addon.Spec.Maintanace == "" {
+	if addon.Spec.Maintenance == "" {
 		r.setCondition(addon, ConditionTypeManaged, metav1.ConditionTrue, ReasonManagedModeActivated, "")
 	} else {
 		r.setCondition(addon, ConditionTypeManaged, metav1.ConditionFalse, ReasonUnmanagedModeActivated, "")

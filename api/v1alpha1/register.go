@@ -31,7 +31,7 @@ var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: Version}
 
 var (
 	HelmClusterAddonGVK           = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
-	HelmClusterAddonRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonRepostoryKind}
+	HelmClusterAddonRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonRepositoryKind}
 	HelmClusterAddonChartGVK      = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
 )
 

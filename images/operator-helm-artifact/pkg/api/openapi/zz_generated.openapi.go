@@ -436,7 +436,7 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonRepository(ref 
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "HelmClusterAddonRepository represens a Git, Helm or OCI complient repocitory with Helm charts.",
+				Description: "HelmClusterAddonRepository represents a Git, Helm or OCI compliant repository with Helm charts.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -663,7 +663,7 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonSpec(ref common
 							Format:      "",
 						},
 					},
-					"maintanace": {
+					"maintenance": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Maintenance specifies the reconciliation strategy for the resource. When set to \"NoResourceReconciliation\", the controller will stop updating the underlying resources, allowing for manual intervention or maintenance without the operator overwriting changes. When empty (\"\"), standard reconciliation is active.",
 							Type:        []string{"string"},

@@ -77,7 +77,7 @@ type HelmClusterAddonSpec struct {
 	// When empty (""), standard reconciliation is active.
 	// +kubebuilder:validation:Enum="";NoResourceReconciliation
 	// +optional
-	Maintanace string `json:"maintanace,omitempty"`
+	Maintenance string `json:"maintenance,omitempty"`
 }
 
 type HelmClusterAddonChartRef struct {
@@ -115,12 +115,12 @@ type HelmClusterAddonList struct {
 	Items []HelmClusterAddon `json:"items"`
 }
 
-// HelmClusterAddonMaintanace describe HelmClusterAddon maintanance operation mode.
+// HelmClusterAddonMaintenance describe HelmClusterAddon maintanance operation mode.
 // +kubebuilder:validation:Enum={"",NoResourceReconciliation}
-type HelmClusterAddonMaintanace string
+type HelmClusterAddonMaintenance string
 
 const (
-	NoResourceReconciliation HelmClusterAddonMaintanace = "NoResourceReconciliation"
+	NoResourceReconciliation HelmClusterAddonMaintenance = "NoResourceReconciliation"
 )
 
 // +k8s:deepcopy-gen=false
