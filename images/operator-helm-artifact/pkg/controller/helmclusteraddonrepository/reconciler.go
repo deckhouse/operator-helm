@@ -77,7 +77,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
 
-		return reconcile.Result{}, nil
+		return r.requeueAtSyncInterval(&repo)
 	}
 
 	switch repoType {
@@ -86,7 +86,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	case utils.InternalOCIRepository:
 		return r.reconcileInternalOCIRepository(ctx, &repo)
 	default:
-		return reconcile.Result{}, nil
+		return r.requeueAtSyncInterval(&repo)
 	}
 }
 
@@ -141,22 +141,33 @@ func (r *Reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *
 
 	if op != controllerutil.OperationResultNone {
 		logger.Info("Successfully reconciled helm repository", "operation", op)
-	} else {
-		readyCond := apimeta.FindStatusCondition(repo.Status.Conditions, ConditionTypeReady)
-		if readyCond != nil && readyCond.Status == metav1.ConditionTrue {
-			return r.reconcileHelmRepositoryCharts(ctx, repo)
-		}
 	}
 
-	return r.updateSuccessStatus(ctx, repo, existing.Status.Conditions)
+	if changed, err := r.updateSuccessStatus(ctx, repo, existing.Status.Conditions); err != nil {
+		return reconcile.Result{}, fmt.Errorf("updating status after repository reconcile: %w", err)
+	} else if changed {
+		return r.requeueAtSyncInterval(repo)
+	}
+
+	if apimeta.IsStatusConditionPresentAndEqual(repo.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) {
+		return r.reconcileHelmRepositoryCharts(ctx, repo)
+	}
+
+	return r.requeueAtSyncInterval(repo)
 }
 
 func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	syncCond := apimeta.FindStatusCondition(repo.Status.Conditions, ConditionTypeSynced)
-	if syncCond != nil && syncCond.Status == metav1.ConditionTrue && syncCond.LastTransitionTime.Add(DefaultSyncInterval).After(time.Now().UTC()) {
-		return reconcile.Result{}, nil
+	if syncCond != nil && syncCond.Status == metav1.ConditionTrue && syncCond.LastTransitionTime.UTC().Add(DefaultSyncInterval).After(time.Now().UTC()) {
+		return r.requeueAtSyncInterval(repo)
+	} else if syncCond == nil || syncCond.Reason != ReasonSyncInProgress {
+		if err := r.updateSyncCondition(ctx, repo, metav1.ConditionFalse, ReasonSyncInProgress, ""); err != nil {
+			return reconcile.Result{}, fmt.Errorf("updating sync condition: %w", err)
+		}
+
+		return r.requeueAtSyncInterval(repo)
 	}
 
 	charts, err := HelmRepositoryDefaultClient.FetchCharts(ctx, repo.Spec.URL)
@@ -191,7 +202,11 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 			return nil
 		})
 		if err != nil {
-			return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeSynced, fmt.Errorf("cannot create or update helm chart info: %w", err), ReasonSyncFailed)
+			if statusUpdateErr := r.updateSyncCondition(ctx, repo, metav1.ConditionFalse, ReasonSyncFailed, ""); statusUpdateErr != nil {
+				return reconcile.Result{}, fmt.Errorf("failed to update sync condition: %w", err)
+			}
+
+			return reconcile.Result{}, fmt.Errorf("cannot create or update HelmClusterAddonChart: %w", err)
 		}
 
 		existingVersionsMap := make(map[string]helmv1alpha1.HelmClusterAddonChartVersion)
@@ -213,23 +228,41 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 		existing.Status.Versions = versions
 
 		if err := r.Client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
+			if statusUpdateErr := r.updateSyncCondition(ctx, repo, metav1.ConditionFalse, ReasonSyncFailed, ""); statusUpdateErr != nil {
+				return reconcile.Result{}, fmt.Errorf("failed to update sync condition: %w", err)
+			}
+
 			return reconcile.Result{}, fmt.Errorf("failed to update chart status: %w", err)
 		}
 
 		logger.Info("Successfully sync HelmClusterAddonChart versions", "operation", op, "repository", repo.Name, "chart", chart)
 	}
 
-	base := repo.DeepCopy()
-
-	r.setCondition(repo, ConditionTypeSynced, metav1.ConditionTrue, ReasonSyncSucceeded, "Chart sync succeeded")
-
-	if err := r.Client.Status().Patch(ctx, repo, client.MergeFrom(base)); err != nil {
-		return reconcile.Result{}, fmt.Errorf("patching internal custom resource status: %w", err)
-	}
-
 	logger.Info(fmt.Sprintf("Scheduling next helm charts sync in %s", DefaultSyncInterval))
 
+	if err := r.updateSyncCondition(ctx, repo, metav1.ConditionTrue, ReasonSyncSucceeded, ""); err != nil {
+		return reconcile.Result{}, fmt.Errorf("updating sync condition: %w", err)
+	}
+
 	return reconcile.Result{RequeueAfter: DefaultSyncInterval}, nil
+}
+
+func (r *Reconciler) updateSyncCondition(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, status metav1.ConditionStatus, reason, message string) error {
+	base := repo.DeepCopy()
+
+	apimeta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+		Type:               ConditionTypeSynced,
+		Status:             status,
+		ObservedGeneration: repo.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
+
+	if err := r.Client.Status().Patch(ctx, repo, client.MergeFrom(base)); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
@@ -286,7 +319,11 @@ func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *h
 		//	TODO: implement chats sync for OCI repository
 	}
 
-	return r.updateSuccessStatus(ctx, repo, existing.Status.Conditions)
+	if _, err := r.updateSuccessStatus(ctx, repo, existing.Status.Conditions); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	return r.requeueAtSyncInterval(repo)
 }
 
 func (r *Reconciler) reconcileInternalRepositoryAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) error {
@@ -446,18 +483,38 @@ func (r *Reconciler) patchStatusError(ctx context.Context, repo *helmv1alpha1.He
 	return reconcileErr
 }
 
-// updateSuccessStatus patches the status of the cluster resource after a successful reconciliation.
-func (r *Reconciler) updateSuccessStatus(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, internalConditions []metav1.Condition) (reconcile.Result, error) {
-	base := repo.DeepCopy()
-
-	repo.Status.Conditions = MapInternalStatusToClusterConditions(internalConditions)
-	repo.Status.ObservedGeneration = repo.Generation
-
-	if err := r.Client.Status().Patch(ctx, repo, client.MergeFrom(base)); err != nil {
-		return reconcile.Result{}, fmt.Errorf("patching internal custom resource status: %w", err)
+func (r *Reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
+	repoSyncCond := apimeta.FindStatusCondition(repo.Status.Conditions, ConditionTypeSynced)
+	if repoSyncCond != nil {
+		remaining := time.Until(repoSyncCond.LastTransitionTime.Add(DefaultSyncInterval))
+		if remaining > 0 {
+			return reconcile.Result{RequeueAfter: remaining}, nil
+		}
 	}
 
-	return reconcile.Result{}, nil
+	return reconcile.Result{RequeueAfter: DefaultSyncInterval}, nil
+}
+
+// updateSuccessStatus patches the status of the cluster resource after a successful reconciliation.
+func (r *Reconciler) updateSuccessStatus(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, internalConditions []metav1.Condition) (bool, error) {
+	var changed bool
+
+	base := repo.DeepCopy()
+
+	internalReadyCond := apimeta.FindStatusCondition(internalConditions, meta.ReadyCondition)
+	if internalReadyCond != nil {
+		changed = apimeta.SetStatusCondition(&repo.Status.Conditions, *internalReadyCond)
+	}
+
+	if changed {
+		repo.Status.ObservedGeneration = repo.Generation
+
+		if err := r.Client.Status().Patch(ctx, repo, client.MergeFrom(base)); err != nil {
+			return false, fmt.Errorf("patching status: %w", err)
+		}
+	}
+
+	return changed, nil
 }
 
 // setCondition is a helper to set a single Ready condition on the cluster resource.

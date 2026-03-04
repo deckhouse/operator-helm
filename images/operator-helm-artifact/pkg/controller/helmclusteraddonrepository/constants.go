@@ -37,9 +37,9 @@ const (
 	// ReasonMirrorFailed indicates the internal HelmRepository create/update failed.
 	ReasonMirrorFailed = "MirrorFailed"
 
-	ReasonSyncSucceeded = "SyncSucceeded"
-
-	ReasonSyncFailed = "SyncFailed"
+	ReasonSyncSucceeded  = "SyncSucceeded"
+	ReasonSyncInProgress = "ReasonSyncInProgress"
+	ReasonSyncFailed     = "SyncFailed"
 
 	// ReasonInternalNotReady indicates the internal HelmRepository is not yet ready.
 	ReasonInternalNotReady = "InternalNotReady"
