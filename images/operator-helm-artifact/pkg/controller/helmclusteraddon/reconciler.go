@@ -80,7 +80,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	managedCond := meta.FindStatusCondition(addon.Status.Conditions, ConditionTypeManaged)
 	if managedCond == nil {
 		return reconcile.Result{}, fmt.Errorf("managed condition is not initialized")
-	} else if managedCond.Status == metav1.ConditionTrue && addon.Spec.Maintenance != "" {
+	} else if managedCond.Status == metav1.ConditionFalse && addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
 		return reconcile.Result{}, nil
 	}
 
@@ -207,7 +207,7 @@ func (r *Reconciler) reconcileInternalRelease(ctx context.Context, addon *helmv1
 
 		existing.Spec.Suspend = false
 
-		if addon.Spec.Maintenance != "" {
+		if addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
 			existing.Spec.Suspend = true
 		}
 
@@ -325,10 +325,10 @@ func (r *Reconciler) updateSuccessStatus(ctx context.Context, addon *helmv1alpha
 
 	addon.Status.ObservedGeneration = addon.Generation
 
-	if addon.Spec.Maintenance == "" {
-		r.setCondition(addon, ConditionTypeManaged, metav1.ConditionTrue, ReasonManagedModeActivated, "")
-	} else {
+	if addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
 		r.setCondition(addon, ConditionTypeManaged, metav1.ConditionFalse, ReasonUnmanagedModeActivated, "")
+	} else {
+		r.setCondition(addon, ConditionTypeManaged, metav1.ConditionTrue, ReasonManagedModeActivated, "")
 	}
 
 	if err := r.Client.Status().Patch(ctx, addon, client.MergeFrom(base)); err != nil {
