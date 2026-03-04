@@ -27,6 +27,7 @@ import (
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,9 +45,9 @@ type Reconciler struct {
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("helmclusteraddon", req.Name)
 
-	var release helmv1alpha1.HelmClusterAddon
+	var addon helmv1alpha1.HelmClusterAddon
 
-	if err := r.Client.Get(ctx, req.NamespacedName, &release); err != nil {
+	if err := r.Client.Get(ctx, req.NamespacedName, &addon); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("HelmClusterAddon not found, skipping")
 
@@ -56,36 +57,48 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("getting HelmClusterAddon: %w", err)
 	}
 
-	if !release.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &release)
+	// Initialize conditions
+	if meta.FindStatusCondition(addon.Status.Conditions, ConditionTypeReady) == nil {
+		return r.initializeConditions(ctx, &addon)
 	}
 
-	if !controllerutil.ContainsFinalizer(&release, FinalizerName) {
-		controllerutil.AddFinalizer(&release, FinalizerName)
+	if !addon.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, &addon)
+	}
 
-		if err := r.Client.Update(ctx, &release); err != nil {
+	if !controllerutil.ContainsFinalizer(&addon, FinalizerName) {
+		controllerutil.AddFinalizer(&addon, FinalizerName)
+
+		if err := r.Client.Update(ctx, &addon); err != nil {
 			return reconcile.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
 
 		return reconcile.Result{}, nil
 	}
 
+	// Check if maintenance mode is set
+	managedCond := meta.FindStatusCondition(addon.Status.Conditions, ConditionTypeManaged)
+	if managedCond == nil {
+		return reconcile.Result{}, fmt.Errorf("managed condition is not initialized")
+	} else if managedCond.Status == metav1.ConditionTrue && addon.Spec.Maintanace != "" {
+		return reconcile.Result{}, nil
+	}
+
 	var repo helmv1alpha1.HelmClusterAddonRepository
 
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: release.Spec.Chart.HelmClusterAddonRepository}, &repo); err != nil {
-		// TODO: rework this condition
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: addon.Spec.Chart.HelmClusterAddonRepository}, &repo); err != nil {
 		if apierrors.IsNotFound(err) {
-			return reconcile.Result{RequeueAfter: 0}, r.patchStatusError(ctx, &release, fmt.Errorf("repository not found: %w", err), ReasonMirrorFailed)
+			return reconcile.Result{}, r.patchStatusError(ctx, &addon, fmt.Errorf("repository not found: %w", err), ReasonMirrorFailed)
 		}
 
 		return reconcile.Result{}, fmt.Errorf("getting HelmClusterAddonRepository: %w", err)
 	}
 
-	if err := r.reconcileInternalHelmChart(ctx, &release, &repo); err != nil {
-		return reconcile.Result{}, r.patchStatusError(ctx, &release, fmt.Errorf("internal helm chart reconcile failed: %w", err), ReasonMirrorFailed)
+	if err := r.reconcileInternalHelmChart(ctx, &addon, &repo); err != nil {
+		return reconcile.Result{}, r.patchStatusError(ctx, &addon, fmt.Errorf("internal helm chart reconcile failed: %w", err), ReasonMirrorFailed)
 	}
 
-	return r.reconcileInternalRelease(ctx, &release)
+	return r.reconcileInternalRelease(ctx, &addon)
 }
 
 func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository) error {
@@ -169,7 +182,7 @@ func (r *Reconciler) reconcileInternalRelease(ctx context.Context, addon *helmv1
 	}
 
 	if !chartPulled {
-		// TODO: need to reflect the current state in the HelmClusterAddon status.
+		// TODO: magic number
 		return reconcile.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -192,12 +205,10 @@ func (r *Reconciler) reconcileInternalRelease(ctx context.Context, addon *helmv1
 		existing.Spec.TargetNamespace = addon.Spec.Namespace
 		existing.Spec.Values = addon.Spec.Values
 
-		existing.Spec.DriftDetection = &helmv2.DriftDetection{
-			Mode: helmv2.DriftDetectionWarn,
-		}
+		existing.Spec.Suspend = false
 
 		if addon.Spec.Maintanace != "" {
-			existing.Spec.DriftDetection.Mode = helmv2.DriftDetectionEnabled
+			existing.Spec.Suspend = true
 		}
 
 		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
@@ -263,11 +274,38 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 	return reconcile.Result{}, nil
 }
 
+func (r *Reconciler) initializeConditions(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
+	conditionTypes := []string{
+		ConditionTypeReady,
+		ConditionTypeManaged,
+		ConditionTypeConfigurationApplied,
+		ConditionTypeInstalled,
+		ConditionTypeUpdateInstalled,
+		ConditionTypeInstalled,
+	}
+
+	for _, t := range conditionTypes {
+		if meta.FindStatusCondition(addon.Status.Conditions, t) == nil {
+			meta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+				Type:   t,
+				Status: metav1.ConditionUnknown,
+				Reason: ReasonInitializing,
+			})
+		}
+	}
+
+	if err := r.Client.Status().Update(ctx, addon); err != nil {
+		return reconcile.Result{}, fmt.Errorf("updating HelmClusterAddon status conditions: %w", err)
+	}
+
+	return reconcile.Result{}, nil
+}
+
 // patchStatusError is a helper to safely patch a failure condition onto the cluster resource.
 func (r *Reconciler) patchStatusError(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, reconcileErr error, reason string) error {
 	base := addon.DeepCopy()
 
-	r.setCondition(addon, metav1.ConditionFalse, reason, reconcileErr.Error())
+	r.setCondition(addon, ConditionTypeReady, metav1.ConditionFalse, reason, reconcileErr.Error())
 
 	if patchErr := r.Client.Status().Patch(ctx, addon, client.MergeFrom(base)); patchErr != nil {
 		return errors.Join(reconcileErr, fmt.Errorf("failed to patch status: %w", patchErr))
@@ -280,22 +318,32 @@ func (r *Reconciler) patchStatusError(ctx context.Context, addon *helmv1alpha1.H
 func (r *Reconciler) updateSuccessStatus(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, internalConditions []metav1.Condition) (reconcile.Result, error) {
 	base := addon.DeepCopy()
 
-	addon.Status.Conditions = MapInternalStatusToClusterConditions(internalConditions)
+	internalReadyCond := meta.FindStatusCondition(internalConditions, ConditionTypeReady)
+	if internalReadyCond != nil {
+		r.setCondition(addon, ConditionTypeReady, internalReadyCond.Status, internalReadyCond.Reason, internalReadyCond.Message)
+	}
+
 	addon.Status.ObservedGeneration = addon.Generation
 
+	if addon.Spec.Maintanace == "" {
+		r.setCondition(addon, ConditionTypeManaged, metav1.ConditionTrue, ReasonManagedModeActivated, "")
+	} else {
+		r.setCondition(addon, ConditionTypeManaged, metav1.ConditionFalse, ReasonUnmanagedModeActivated, "")
+	}
+
 	if err := r.Client.Status().Patch(ctx, addon, client.MergeFrom(base)); err != nil {
-		return reconcile.Result{}, fmt.Errorf("patching internal custom resource status: %w", err)
+		return reconcile.Result{}, fmt.Errorf("updating HelmClusterAddon status on success: %w", err)
 	}
 
 	return reconcile.Result{}, nil
 }
 
 // setCondition is a helper to set a single Ready condition on the cluster resource.
-func (r *Reconciler) setCondition(addon *helmv1alpha1.HelmClusterAddon, status metav1.ConditionStatus, reason, message string) {
+func (r *Reconciler) setCondition(addon *helmv1alpha1.HelmClusterAddon, conditionType string, status metav1.ConditionStatus, reason, message string) {
 	now := metav1.Now()
 
 	newCond := metav1.Condition{
-		Type:               ConditionTypeReady,
+		Type:               conditionType,
 		Status:             status,
 		Reason:             reason,
 		Message:            message,
@@ -304,8 +352,7 @@ func (r *Reconciler) setCondition(addon *helmv1alpha1.HelmClusterAddon, status m
 	}
 
 	for i, c := range addon.Status.Conditions {
-		if c.Type == ConditionTypeReady {
-			// Only update LastTransitionTime if status actually changed.
+		if c.Type == conditionType {
 			if c.Status == status {
 				newCond.LastTransitionTime = c.LastTransitionTime
 			}

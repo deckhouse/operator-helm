@@ -32,7 +32,7 @@ var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: Version}
 var (
 	HelmClusterAddonGVK           = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
 	HelmClusterAddonRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonRepostoryKind}
-	HelmCluserAddonChartGVK       = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
+	HelmClusterAddonChartGVK      = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
 )
 
 func Kind(kind string) schema.GroupKind {

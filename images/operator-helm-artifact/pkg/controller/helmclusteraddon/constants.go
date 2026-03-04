@@ -26,8 +26,21 @@ const (
 	// FinalizerName is the finalizer added to HelmClusterRepository to ensure cleanup.
 	FinalizerName = "helm.deckhouse.io/cleanup"
 
-	// ConditionTypeReady is the condition type for readiness.
-	ConditionTypeReady = "Ready"
+	ConditionTypeReady                = "Ready"
+	ConditionTypeManaged              = "Managed"
+	ConditionTypeInstalled            = "Installed"
+	ConditionTypeUpdateInstalled      = "UpdateInstalled"
+	ConditionTypeConfigurationApplied = "ConfigurationApplied"
+	ConditionTypePartiallyDegraded    = "PartiallyDegraded"
+
+	ReasonInitializing           = "Initializing"
+	ReasonUnmanagedModeActivated = "UnmanagedModeActivated"
+	ReasonManagedModeActivated   = "ManagedModeActivated"
+	ReasonInstallationInProgress = "InstallationInProgress"
+	ReasonDownloading            = "Downloading"
+	ReasonDownloadWasFailed      = "DownloadWasFailed"
+	ReasonUpdateInProgress       = "UpdateInProgress"
+	ReasonUpdateFailed           = "UpdateFailed"
 
 	// ReasonMirrorSucceeded indicates the internal HelmRepository was created/updated successfully.
 	ReasonMirrorSucceeded = "MirrorSucceeded"
