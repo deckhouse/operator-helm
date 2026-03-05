@@ -167,6 +167,31 @@ spec:
                       - type
                     type: object
                   type: array
+                lastAppliedChart:
+                  description:
+                    LastAppliedChart represents the latest chart that triggered
+                    addon install or update.
+                  properties:
+                    helmClusterAddonChart:
+                      description: |-
+                        Specifies the name of the Helm chart to be installed
+                        from the defined repository (e.g., "ingress-nginx" or "redis").
+                      type: string
+                    helmClusterAddonRepository:
+                      description: |-
+                        Specifies the name of the HelmClusterAddonRepository custom resource that contains
+                        the connection details and credentials for the repository where
+                        the chart is located.
+                      type: string
+                    version:
+                      description: Versions holds the HelmClusterAddon chart version.
+                      type: string
+                  type: object
+                lastAppliedValues:
+                  description:
+                    LastAppliedValues represents the latest values that triggered
+                    addon install or update.
+                  x-kubernetes-preserve-unknown-fields: true
                 observedGeneration:
                   description:
                     Generating a resource that was last processed by the

@@ -24,8 +24,11 @@ import (
 
 	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonchart"
 	"github.com/deckhouse/operator-helm/pkg/utils"
+	"github.com/opencontainers/go-digest"
+	"github.com/werf/3p-fluxcd-pkg/chartutil"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	helmchartutil "helm.sh/helm/v3/pkg/chartutil"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -333,6 +336,8 @@ func (r *Reconciler) patchStatusError(ctx context.Context, addon *helmv1alpha1.H
 }
 
 func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, internalHelmRelease *helmv2.HelmRelease) (reconcile.Result, error) {
+	logger := log.FromContext(ctx)
+
 	base := addon.DeepCopy()
 
 	internalReadyCond := meta.FindStatusCondition(internalHelmRelease.Status.Conditions, ConditionTypeReady)
@@ -358,6 +363,12 @@ func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmC
 				Reason:  ReasonInstallSucceeded,
 				Message: "",
 			})
+			addon.Status.LastAppliedChart = helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+				HelmClusterAddonChartName:  base.Spec.Chart.HelmClusterAddonChartName,
+				HelmClusterAddonRepository: base.Spec.Chart.HelmClusterAddonRepository,
+				Version:                    base.Spec.Chart.Version,
+			}
+			addon.Status.LastAppliedValues = base.Spec.Values
 		case helmv2.UpgradeSucceededReason:
 			if r.isUpdateInstalled(internalHelmRelease) {
 				apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
@@ -367,12 +378,22 @@ func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmC
 					Message: "",
 				})
 			} else {
-				apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
-					Type:    ConditionTypeConfigurationApplied,
-					Status:  metav1.ConditionTrue,
-					Reason:  ReasonUpdateSucceeded,
-					Message: "",
-				})
+				if addonValues, err := helmchartutil.ReadValues(addon.Spec.Values.Raw); err != nil {
+					logger.Error(err, "failed to decode values on LastAppliedValues update: %w", err)
+				} else {
+					apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+						Type:    ConditionTypeConfigurationApplied,
+						Status:  metav1.ConditionTrue,
+						Reason:  ReasonUpdateSucceeded,
+						Message: "Applied configuration with values digest " + internalHelmRelease.Status.History.Latest().ConfigDigest,
+					})
+
+					latestRelease := internalHelmRelease.Status.History.Latest()
+
+					if latestRelease != nil && latestRelease.Status == "deployed" && latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, addonValues).String() {
+						addon.Status.LastAppliedValues = addon.Spec.Values
+					}
+				}
 			}
 		case helmv2.InstallFailedReason:
 			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{

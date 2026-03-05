@@ -97,11 +97,32 @@ type HelmClusterAddonChartRef struct {
 }
 
 type HelmClusterAddonStatus struct {
+	// LastAppliedChart represents the latest chart that triggered addon install or update.
+	// +optional
+	LastAppliedChart HelmClusterAddonLastAppliedChartRef `json:"lastAppliedChart,omitempty"`
+	// LastAppliedValues represents the latest values that triggered addon install or update.
+	// +optional
+	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
 	// Conditions represent the latest available observations of the repository state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generating a resource that was last processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+type HelmClusterAddonLastAppliedChartRef struct {
+	// Specifies the name of the Helm chart to be installed
+	// from the defined repository (e.g., "ingress-nginx" or "redis").
+	// +optional
+	HelmClusterAddonChartName string `json:"helmClusterAddonChart,omitempty"`
+	// Specifies the name of the HelmClusterAddonRepository custom resource that contains
+	// the connection details and credentials for the repository where
+	// the chart is located.
+	// +optional
+	HelmClusterAddonRepository string `json:"helmClusterAddonRepository,omitempty"`
+	// Versions holds the HelmClusterAddon chart version.
+	// +optional
+	Version string `json:"version,omitempty"`
 }
 
 // HelmClusterAddonList contains a list of HelmClusterAddons.
