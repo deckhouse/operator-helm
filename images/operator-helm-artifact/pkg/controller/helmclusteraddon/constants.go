@@ -36,10 +36,13 @@ const (
 	ReasonInitializing           = "Initializing"
 	ReasonUnmanagedModeActivated = "UnmanagedModeActivated"
 	ReasonManagedModeActivated   = "ManagedModeActivated"
+	ReasonUpdateSucceeded        = "UpdateSucceeded"
+	ReasonInstallSucceeded       = "InstallSucceeded"
 	ReasonInstallationInProgress = "InstallationInProgress"
 	ReasonDownloading            = "Downloading"
 	ReasonDownloadWasFailed      = "DownloadWasFailed"
 	ReasonUpdateInProgress       = "UpdateInProgress"
+	ReasonInstallFailed          = "InstallFailed"
 	ReasonUpdateFailed           = "UpdateFailed"
 
 	// ReasonMirrorSucceeded indicates the internal HelmRepository was created/updated successfully.

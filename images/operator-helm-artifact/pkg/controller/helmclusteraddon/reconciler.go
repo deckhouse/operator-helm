@@ -28,6 +28,7 @@ import (
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -98,7 +99,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, r.patchStatusError(ctx, &addon, fmt.Errorf("internal helm chart reconcile failed: %w", err), ReasonMirrorFailed)
 	}
 
-	return r.reconcileInternalRelease(ctx, &addon)
+	return r.reconcileInternalHelmRelease(ctx, &addon)
 }
 
 func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository) error {
@@ -154,7 +155,7 @@ func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, addon *helm
 	return nil
 }
 
-func (r *Reconciler) reconcileInternalRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
+func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	var addonChart helmv1alpha1.HelmClusterAddonChart
@@ -227,7 +228,7 @@ func (r *Reconciler) reconcileInternalRelease(ctx context.Context, addon *helmv1
 		logger.Info("Successfully reconciled internal helm release", "operation", op, "chart", addon.Spec.Chart.HelmClusterAddonChartName)
 	}
 
-	return r.updateSuccessStatus(ctx, addon, existing.Status.Conditions)
+	return r.updateStatus(ctx, addon, existing)
 }
 
 // ensureResourceDeleted safely deletes an object if it exists.
@@ -278,10 +279,6 @@ func (r *Reconciler) initializeConditions(ctx context.Context, addon *helmv1alph
 	conditionTypes := []string{
 		ConditionTypeReady,
 		ConditionTypeManaged,
-		ConditionTypeConfigurationApplied,
-		ConditionTypeInstalled,
-		ConditionTypeUpdateInstalled,
-		ConditionTypeInstalled,
 	}
 
 	for _, t := range conditionTypes {
@@ -301,11 +298,32 @@ func (r *Reconciler) initializeConditions(ctx context.Context, addon *helmv1alph
 	return reconcile.Result{}, nil
 }
 
-// patchStatusError is a helper to safely patch a failure condition onto the cluster resource.
 func (r *Reconciler) patchStatusError(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, reconcileErr error, reason string) error {
 	base := addon.DeepCopy()
 
-	r.setCondition(addon, ConditionTypeReady, metav1.ConditionFalse, reason, reconcileErr.Error())
+	apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+		Type:    ConditionTypeReady,
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: reconcileErr.Error(),
+	})
+
+	updateInstalledCond := meta.FindStatusCondition(base.Status.Conditions, ConditionTypeUpdateInstalled)
+	if updateInstalledCond != nil {
+		apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+			Type:    ConditionTypeUpdateInstalled,
+			Status:  metav1.ConditionFalse,
+			Reason:  ReasonUpdateFailed,
+			Message: reconcileErr.Error(),
+		})
+	} else {
+		apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+			Type:    ConditionTypeInstalled,
+			Status:  metav1.ConditionFalse,
+			Reason:  ReasonInstallFailed,
+			Message: reconcileErr.Error(),
+		})
+	}
 
 	if patchErr := r.Client.Status().Patch(ctx, addon, client.MergeFrom(base)); patchErr != nil {
 		return errors.Join(reconcileErr, fmt.Errorf("failed to patch status: %w", patchErr))
@@ -314,21 +332,96 @@ func (r *Reconciler) patchStatusError(ctx context.Context, addon *helmv1alpha1.H
 	return reconcileErr
 }
 
-// updateSuccessStatus patches the status of the cluster resource after a successful reconciliation.
-func (r *Reconciler) updateSuccessStatus(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, internalConditions []metav1.Condition) (reconcile.Result, error) {
+func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, internalHelmRelease *helmv2.HelmRelease) (reconcile.Result, error) {
 	base := addon.DeepCopy()
 
-	internalReadyCond := meta.FindStatusCondition(internalConditions, ConditionTypeReady)
+	internalReadyCond := meta.FindStatusCondition(internalHelmRelease.Status.Conditions, ConditionTypeReady)
 	if internalReadyCond != nil {
-		r.setCondition(addon, ConditionTypeReady, internalReadyCond.Status, internalReadyCond.Reason, internalReadyCond.Message)
+		apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+			Type:    ConditionTypeReady,
+			Status:  internalReadyCond.Status,
+			Reason:  internalReadyCond.Reason,
+			Message: internalReadyCond.Message,
+		})
+
+		switch internalReadyCond.Reason {
+		case helmv2.InstallSucceededReason:
+			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+				Type:    ConditionTypeInstalled,
+				Status:  metav1.ConditionTrue,
+				Reason:  ReasonInstallSucceeded,
+				Message: "",
+			})
+			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+				Type:    ConditionTypeConfigurationApplied,
+				Status:  metav1.ConditionTrue,
+				Reason:  ReasonInstallSucceeded,
+				Message: "",
+			})
+		case helmv2.UpgradeSucceededReason:
+			if r.isUpdateInstalled(internalHelmRelease) {
+				apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+					Type:    ConditionTypeUpdateInstalled,
+					Status:  metav1.ConditionTrue,
+					Reason:  ReasonUpdateSucceeded,
+					Message: "",
+				})
+			} else {
+				apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+					Type:    ConditionTypeConfigurationApplied,
+					Status:  metav1.ConditionTrue,
+					Reason:  ReasonUpdateSucceeded,
+					Message: "",
+				})
+			}
+		case helmv2.InstallFailedReason:
+			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+				Type:    ConditionTypeInstalled,
+				Status:  metav1.ConditionFalse,
+				Reason:  ReasonInstallFailed,
+				Message: internalReadyCond.Message,
+			})
+			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+				Type:    ConditionTypeConfigurationApplied,
+				Status:  metav1.ConditionFalse,
+				Reason:  ReasonInstallFailed,
+				Message: internalReadyCond.Message,
+			})
+		case helmv2.UpgradeFailedReason:
+			if r.isUpdateInstalled(internalHelmRelease) {
+				apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+					Type:    ConditionTypeUpdateInstalled,
+					Status:  metav1.ConditionFalse,
+					Reason:  ReasonUpdateFailed,
+					Message: internalReadyCond.Message,
+				})
+			} else {
+				apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+					Type:    ConditionTypeConfigurationApplied,
+					Status:  metav1.ConditionFalse,
+					Reason:  ReasonUpdateFailed,
+					Message: internalReadyCond.Message,
+				})
+			}
+		}
 	}
 
 	addon.Status.ObservedGeneration = addon.Generation
 
 	if addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
-		r.setCondition(addon, ConditionTypeManaged, metav1.ConditionFalse, ReasonUnmanagedModeActivated, "")
+		apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+			Type:    ConditionTypeManaged,
+			Status:  metav1.ConditionFalse,
+			Reason:  ReasonUnmanagedModeActivated,
+			Message: "",
+		})
 	} else {
-		r.setCondition(addon, ConditionTypeManaged, metav1.ConditionTrue, ReasonManagedModeActivated, "")
+		apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+			Type:    ConditionTypeManaged,
+			Status:  metav1.ConditionTrue,
+			Reason:  ReasonManagedModeActivated,
+			Message: "",
+		})
 	}
 
 	if err := r.Client.Status().Patch(ctx, addon, client.MergeFrom(base)); err != nil {
@@ -338,30 +431,20 @@ func (r *Reconciler) updateSuccessStatus(ctx context.Context, addon *helmv1alpha
 	return reconcile.Result{}, nil
 }
 
-// setCondition is a helper to set a single Ready condition on the cluster resource.
-func (r *Reconciler) setCondition(addon *helmv1alpha1.HelmClusterAddon, conditionType string, status metav1.ConditionStatus, reason, message string) {
-	now := metav1.Now()
-
-	newCond := metav1.Condition{
-		Type:               conditionType,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: now,
-		ObservedGeneration: addon.Generation,
+func (r *Reconciler) isUpdateInstalled(internalHelmRelease *helmv2.HelmRelease) bool {
+	internalReadyCond := meta.FindStatusCondition(internalHelmRelease.Status.Conditions, ConditionTypeReady)
+	if internalReadyCond == nil {
+		return false
 	}
 
-	for i, c := range addon.Status.Conditions {
-		if c.Type == conditionType {
-			if c.Status == status {
-				newCond.LastTransitionTime = c.LastTransitionTime
-			}
+	if internalReadyCond.Status == metav1.ConditionTrue && internalHelmRelease.Status.History.Len() > 1 {
+		latest := internalHelmRelease.Status.History.Latest()
+		previous := internalHelmRelease.Status.History.Previous(true)
 
-			addon.Status.Conditions[i] = newCond
-
-			return
+		if previous != nil && previous.Status == "superseded" && latest != nil && latest.VersionedChartName() != previous.VersionedChartName() {
+			return true
 		}
 	}
 
-	addon.Status.Conditions = append(addon.Status.Conditions, newCond)
+	return false
 }
