@@ -99,7 +99,7 @@ type HelmClusterAddonChartRef struct {
 type HelmClusterAddonStatus struct {
 	// LastAppliedChart represents the latest chart that triggered addon install or update.
 	// +optional
-	LastAppliedChart HelmClusterAddonLastAppliedChartRef `json:"lastAppliedChart,omitempty"`
+	LastAppliedChart *HelmClusterAddonLastAppliedChartRef `json:"lastAppliedChart,omitempty"`
 	// LastAppliedValues represents the latest values that triggered addon install or update.
 	// +optional
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`

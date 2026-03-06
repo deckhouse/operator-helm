@@ -23,7 +23,12 @@ const (
 	// TargetNamespace is the namespace where internal customer resources are created.
 	TargetNamespace = "d8-operator-helm"
 
-	LabelManagedBy      = "helm.deckhouse.io/managed-by"
+	// LabelManagedBy marks resources as managed by this controller.
+	LabelManagedBy = "helm.deckhouse.io/managed-by"
+
+	// LabelManagedByValue is the value for the managed-by label.
 	LabelManagedByValue = "operator-helm"
-	LabelSourceName     = "helm.deckhouse.io/cluster-addon-chart"
+
+	// LabelSourceName stores the name of the source facade resource.
+	LabelSourceName = "helm.deckhouse.io/cluster-addon-chart"
 )

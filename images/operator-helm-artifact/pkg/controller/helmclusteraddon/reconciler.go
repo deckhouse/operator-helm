@@ -61,7 +61,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("getting HelmClusterAddon: %w", err)
 	}
 
-	// Initialize conditions
 	if meta.FindStatusCondition(addon.Status.Conditions, ConditionTypeReady) == nil {
 		return r.initializeConditions(ctx, &addon)
 	}
@@ -80,7 +79,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	// Check if maintenance mode is set
 	managedCond := meta.FindStatusCondition(addon.Status.Conditions, ConditionTypeManaged)
 	if managedCond == nil {
 		return reconcile.Result{}, fmt.Errorf("managed condition is not initialized")
@@ -186,8 +184,7 @@ func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, addon *he
 	}
 
 	if !chartPulled {
-		// TODO: magic number
-		return reconcile.Result{RequeueAfter: 10 * time.Second}, nil
+		return reconcile.Result{RequeueAfter: ChartPullInterval}, nil
 	}
 
 	existing := &helmv2.HelmRelease{
@@ -234,7 +231,6 @@ func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, addon *he
 	return r.updateStatus(ctx, addon, existing)
 }
 
-// ensureResourceDeleted safely deletes an object if it exists.
 func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace string, obj client.Object) error {
 	if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -251,7 +247,6 @@ func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace 
 	return nil
 }
 
-// reconcileDelete handles cleanup when the HelmClusterRepository is being deleted.
 func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("helmclusteraddon", addon.Name)
 
@@ -363,7 +358,7 @@ func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmC
 				Reason:  ReasonInstallSucceeded,
 				Message: "",
 			})
-			addon.Status.LastAppliedChart = helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+			addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
 				HelmClusterAddonChartName:  base.Spec.Chart.HelmClusterAddonChartName,
 				HelmClusterAddonRepository: base.Spec.Chart.HelmClusterAddonRepository,
 				Version:                    base.Spec.Chart.Version,
@@ -381,17 +376,19 @@ func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmC
 				if addonValues, err := helmchartutil.ReadValues(addon.Spec.Values.Raw); err != nil {
 					logger.Error(err, "failed to decode values on LastAppliedValues update: %w", err)
 				} else {
-					apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
-						Type:    ConditionTypeConfigurationApplied,
-						Status:  metav1.ConditionTrue,
-						Reason:  ReasonUpdateSucceeded,
-						Message: "Applied configuration with values digest " + internalHelmRelease.Status.History.Latest().ConfigDigest,
-					})
-
 					latestRelease := internalHelmRelease.Status.History.Latest()
 
-					if latestRelease != nil && latestRelease.Status == "deployed" && latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, addonValues).String() {
+					if latestRelease != nil && latestRelease.Status == InternalReleaseDeployed &&
+						latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, addonValues).String() {
 						addon.Status.LastAppliedValues = addon.Spec.Values
+
+						apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+							Type:               ConditionTypeConfigurationApplied,
+							Status:             metav1.ConditionTrue,
+							Reason:             ReasonUpdateSucceeded,
+							LastTransitionTime: metav1.NewTime(time.Now()),
+							Message:            "Applied configuration with values digest " + internalHelmRelease.Status.History.Latest().ConfigDigest,
+						})
 					}
 				}
 			}
@@ -452,6 +449,7 @@ func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmC
 	return reconcile.Result{}, nil
 }
 
+// isUpdateInstalled return true if new release was initiated due to chart name/version change, otherwise returns false.
 func (r *Reconciler) isUpdateInstalled(internalHelmRelease *helmv2.HelmRelease) bool {
 	internalReadyCond := meta.FindStatusCondition(internalHelmRelease.Status.Conditions, ConditionTypeReady)
 	if internalReadyCond == nil {

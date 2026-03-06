@@ -17,19 +17,13 @@ limitations under the License.
 package helmclusteraddonchart
 
 import (
-	"context"
-
-	"k8s.io/apimachinery/pkg/types"
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/pkg/utils"
+	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 )
 
 func SetupWithManager(mgr ctrl.Manager) error {
@@ -42,38 +36,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		For(&helmv1alpha1.HelmClusterAddonChart{}).
 		Watches(
 			&sourcev1.HelmChart{},
-			handler.EnqueueRequestsFromMapFunc(mapInternalToCluster),
+			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)
-}
-
-func mapInternalToCluster(ctx context.Context, obj client.Object) []reconcile.Request {
-	logger := log.FromContext(ctx)
-
-	if obj.GetNamespace() != TargetNamespace {
-		return nil
-	}
-
-	labels := obj.GetLabels()
-	if labels[LabelManagedBy] != LabelManagedByValue {
-		return nil
-	}
-
-	sourceName := labels[LabelSourceName]
-	if sourceName == "" {
-		logger.Info("Internal repository resource missing cluster-addon-chart label, skipping",
-			"name", obj.GetName(), "namespace", obj.GetNamespace())
-
-		return nil
-	}
-
-	return []reconcile.Request{
-		{
-			NamespacedName: types.NamespacedName{
-				Name:      sourceName,
-				Namespace: "",
-			},
-		},
-	}
 }

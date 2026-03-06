@@ -37,30 +37,30 @@ const (
 	// ReasonMirrorFailed indicates the internal HelmRepository create/update failed.
 	ReasonMirrorFailed = "MirrorFailed"
 
-	ReasonSyncSucceeded  = "SyncSucceeded"
+	// ReasonSyncSucceeded indicates that chart sync was successfully completed.
+	ReasonSyncSucceeded = "SyncSucceeded"
+
+	// ReasonSyncInProgress indicates that chart sync is in progress.
 	ReasonSyncInProgress = "ReasonSyncInProgress"
-	ReasonSyncFailed     = "SyncFailed"
 
-	// ReasonInternalNotReady indicates the internal HelmRepository is not yet ready.
-	ReasonInternalNotReady = "InternalNotReady"
-
-	// ReasonInternalReady indicates the internal HelmRepository has reported Ready.
-	ReasonInternalReady = "InternalReady"
+	// ReasonSyncFailed indicates that charts sync was failed.
+	ReasonSyncFailed = "SyncFailed"
 
 	// ReasonCleanupFailed indicates deletion of the internal HelmRepository failed.
 	ReasonCleanupFailed = "CleanupFailed"
 
-	// LabelManagedBy marks an internal HelmRepository as managed by this controller.
+	// LabelManagedBy marks resources as managed by this controller.
 	LabelManagedBy = "helm.deckhouse.io/managed-by"
 
 	// LabelManagedByValue is the value for the managed-by label.
 	LabelManagedByValue = "operator-helm"
 
-	// LabelSourceName stores the name of the source HelmClusterAddonRepository.
+	// LabelSourceName stores the name of the source facade resource.
 	LabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 
 	// DefaultInterval is the default reconciliation interval for the internal repository.
 	DefaultInterval = 5 * time.Minute
 
+	// DefaultSyncInterval is the default repository charts sync interval.
 	DefaultSyncInterval = 5 * time.Minute
 )

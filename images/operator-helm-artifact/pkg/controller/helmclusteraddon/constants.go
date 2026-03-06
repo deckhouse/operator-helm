@@ -16,6 +16,8 @@ limitations under the License.
 
 package helmclusteraddon
 
+import "time"
+
 const (
 	// ControllerName is the name of this controller, used for leader election and logging.
 	ControllerName = "helmclusteraddon-controller"
@@ -45,24 +47,27 @@ const (
 	ReasonInstallFailed          = "InstallFailed"
 	ReasonUpdateFailed           = "UpdateFailed"
 
-	// ReasonMirrorSucceeded indicates the internal HelmRepository was created/updated successfully.
-	ReasonMirrorSucceeded = "MirrorSucceeded"
-
 	// ReasonMirrorFailed indicates the internal HelmRepository create/update failed.
 	ReasonMirrorFailed = "MirrorFailed"
-
-	// ReasonInternalNotReady indicates the internal HelmRepository is not yet ready.
-	ReasonInternalNotReady = "InternalNotReady"
-
-	// ReasonInternalReady indicates the internal HelmRepository has reported Ready.
-	ReasonInternalReady = "InternalReady"
 
 	// ReasonCleanupFailed indicates deletion of the internal HelmRepository failed.
 	ReasonCleanupFailed = "CleanupFailed"
 
+	// ReasonProcessing indicates that facade resource is processing.
 	ReasonProcessing = "Processing"
 
-	LabelManagedBy      = "helm.deckhouse.io/managed-by"
+	// LabelManagedBy marks resources as managed by this controller.
+	LabelManagedBy = "helm.deckhouse.io/managed-by"
+
+	// LabelManagedByValue is the value for the managed-by label.
 	LabelManagedByValue = "operator-helm"
-	LabelSourceName     = "helm.deckhouse.io/cluster-addon"
+
+	// LabelSourceName stores the name of the source facade resource.
+	LabelSourceName = "helm.deckhouse.io/cluster-addon"
+
+	// InternalReleaseDeployed indicates that specific release fon internal chart release history was deployed
+	InternalReleaseDeployed = "deployed"
+
+	// ChartPullInterval how ofter to check if specific version of facade chart was pulled.
+	ChartPullInterval = 2 * time.Second
 )

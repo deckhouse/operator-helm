@@ -722,7 +722,6 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonStatus(ref comm
 					"lastAppliedChart": {
 						SchemaProps: spec.SchemaProps{
 							Description: "LastAppliedChart represents the latest chart that triggered addon install or update.",
-							Default:     map[string]interface{}{},
 							Ref:         ref("github.com/deckhouse/operator-helm/api/v1alpha1.HelmClusterAddonLastAppliedChartRef"),
 						},
 					},

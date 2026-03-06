@@ -401,7 +401,6 @@ func (r *Reconciler) reconcileInternalRepositoryTLSSecret(ctx context.Context, r
 	return nil
 }
 
-// ensureResourceDeleted safely deletes an object if it exists.
 func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace string, obj client.Object) error {
 	if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -418,7 +417,6 @@ func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace 
 	return nil
 }
 
-// reconcileDelete handles cleanup when the HelmClusterRepository is being deleted.
 func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("helmclusteraddonrepository", repo.Name)
 
@@ -470,11 +468,15 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 	return reconcile.Result{}, nil
 }
 
-// patchStatusError is a helper to safely patch a failure condition onto the cluster resource.
 func (r *Reconciler) patchStatusError(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, conditionType string, reconcileErr error, reason string) error {
 	base := repo.DeepCopy()
 
-	r.setCondition(repo, conditionType, metav1.ConditionFalse, reason, reconcileErr.Error())
+	apimeta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+		Type:    conditionType,
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: reconcileErr.Error(),
+	})
 
 	if patchErr := r.Client.Status().Patch(ctx, repo, client.MergeFrom(base)); patchErr != nil {
 		return errors.Join(reconcileErr, fmt.Errorf("failed to patch status: %w", patchErr))
@@ -495,7 +497,6 @@ func (r *Reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRe
 	return reconcile.Result{RequeueAfter: DefaultSyncInterval}, nil
 }
 
-// updateSuccessStatus patches the status of the cluster resource after a successful reconciliation.
 func (r *Reconciler) updateSuccessStatus(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, internalConditions []metav1.Condition) (bool, error) {
 	var changed bool
 
@@ -515,33 +516,4 @@ func (r *Reconciler) updateSuccessStatus(ctx context.Context, repo *helmv1alpha1
 	}
 
 	return changed, nil
-}
-
-// setCondition is a helper to set a single Ready condition on the cluster resource.
-func (r *Reconciler) setCondition(repo *helmv1alpha1.HelmClusterAddonRepository, conditionType string, status metav1.ConditionStatus, reason, message string) {
-	now := metav1.Now()
-
-	newCond := metav1.Condition{
-		Type:               conditionType,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: now,
-		ObservedGeneration: repo.Generation,
-	}
-
-	for i, c := range repo.Status.Conditions {
-		if c.Type == conditionType {
-			// Only update LastTransitionTime if status actually changed.
-			if c.Status == status {
-				newCond.LastTransitionTime = c.LastTransitionTime
-			}
-
-			repo.Status.Conditions[i] = newCond
-
-			return
-		}
-	}
-
-	repo.Status.Conditions = append(repo.Status.Conditions, newCond)
 }
