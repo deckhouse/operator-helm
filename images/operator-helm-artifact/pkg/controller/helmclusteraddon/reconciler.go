@@ -153,6 +153,67 @@ func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, addon *helm
 		logger.Info("Successfully reconciled internal helm chart", "operation", op, "repository", repo.Name, "chart", addon.Spec.Chart.HelmClusterAddonChartName)
 	}
 
+	reconcileCond := meta.FindStatusCondition(existing.Status.Conditions, "Reconciling")
+	if reconcileCond != nil {
+		if err := r.updateStatusOnInternalHelmChart(ctx, addon, metav1.ConditionFalse, reconcileCond.Reason, reconcileCond.Message, true); err != nil {
+			return fmt.Errorf("cannot update HelmClusterAddon status: %w", err)
+		}
+
+		return reconcile.TerminalError(fmt.Errorf("internal helm chart %s is processing", existing.Name))
+	}
+
+	readyCond := meta.FindStatusCondition(existing.Status.Conditions, ConditionTypeReady)
+	if readyCond != nil && readyCond.Status == metav1.ConditionFalse {
+		if err := r.updateStatusOnInternalHelmChart(ctx, addon, metav1.ConditionFalse, readyCond.Reason, readyCond.Message, false); err != nil {
+			return fmt.Errorf("cannot update HelmClusterAddon status: %w", err)
+		}
+
+		return reconcile.TerminalError(fmt.Errorf("internal helm chart %s is not ready", existing.Name))
+	}
+
+	return nil
+}
+
+func (r *Reconciler) updateStatusOnInternalHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, status metav1.ConditionStatus, reason, message string, inProgress bool) error {
+	base := addon.DeepCopy()
+
+	installedCond := meta.FindStatusCondition(base.Status.Conditions, ConditionTypeInstalled)
+	updateInstalledCond := meta.FindStatusCondition(addon.Status.Conditions, ConditionTypeUpdateInstalled)
+	if updateInstalledCond != nil || (installedCond != nil && installedCond.Status == metav1.ConditionTrue) {
+		if inProgress {
+			reason = ReasonUpdateInProgress
+			message = ""
+		}
+		apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+			Type:    ConditionTypeUpdateInstalled,
+			Status:  status,
+			Reason:  reason,
+			Message: message,
+		})
+	} else {
+		if inProgress {
+			reason = ReasonInstallationInProgress
+			message = ""
+		}
+		apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+			Type:    ConditionTypeInstalled,
+			Status:  status,
+			Reason:  reason,
+			Message: message,
+		})
+	}
+
+	apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+		Type:    ConditionTypeReady,
+		Status:  status,
+		Reason:  reason,
+		Message: message,
+	})
+
+	if err := r.Client.Status().Patch(ctx, addon, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("updating HelmClusterAddon status on success: %w", err)
+	}
+
 	return nil
 }
 
@@ -165,7 +226,7 @@ func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, addon *he
 		ctx,
 		types.NamespacedName{
 			Name: utils.GetHelmClusterAddonChartName(addon.Spec.Chart.HelmClusterAddonRepository,
-				addon.Spec.Chart.HelmClusterAddonRepository),
+				addon.Spec.Chart.HelmClusterAddonChartName),
 		},
 		&addonChart,
 	); err != nil {
@@ -228,7 +289,7 @@ func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, addon *he
 		logger.Info("Successfully reconciled internal helm release", "operation", op, "chart", addon.Spec.Chart.HelmClusterAddonChartName)
 	}
 
-	return r.updateStatus(ctx, addon, existing)
+	return r.updateStatusOnInternalRelease(ctx, addon, existing)
 }
 
 func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace string, obj client.Object) error {
@@ -330,10 +391,12 @@ func (r *Reconciler) patchStatusError(ctx context.Context, addon *helmv1alpha1.H
 	return reconcileErr
 }
 
-func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, internalHelmRelease *helmv2.HelmRelease) (reconcile.Result, error) {
+func (r *Reconciler) updateStatusOnInternalRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, internalHelmRelease *helmv2.HelmRelease) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	base := addon.DeepCopy()
+
+	addonReadyCond := meta.FindStatusCondition(addon.Status.Conditions, ConditionTypeReady)
 
 	internalReadyCond := meta.FindStatusCondition(internalHelmRelease.Status.Conditions, ConditionTypeReady)
 	if internalReadyCond != nil {
@@ -358,20 +421,33 @@ func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmC
 				Reason:  ReasonInstallSucceeded,
 				Message: "",
 			})
-			addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
-				HelmClusterAddonChartName:  base.Spec.Chart.HelmClusterAddonChartName,
-				HelmClusterAddonRepository: base.Spec.Chart.HelmClusterAddonRepository,
-				Version:                    base.Spec.Chart.Version,
+
+			// Required if chart or repository was changed and there was an existing chart.
+			apimeta.RemoveStatusCondition(&addon.Status.Conditions, ConditionTypeUpdateInstalled)
+
+			if addonReadyCond != nil && addonReadyCond.Status == metav1.ConditionTrue {
+				addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+					HelmClusterAddonChartName:  base.Spec.Chart.HelmClusterAddonChartName,
+					HelmClusterAddonRepository: base.Spec.Chart.HelmClusterAddonRepository,
+					Version:                    base.Spec.Chart.Version,
+				}
+				addon.Status.LastAppliedValues = base.Spec.Values
 			}
-			addon.Status.LastAppliedValues = base.Spec.Values
 		case helmv2.UpgradeSucceededReason:
-			if r.isUpdateInstalled(internalHelmRelease) {
+			if r.isUpdateInstalled(addon, internalHelmRelease) {
 				apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
 					Type:    ConditionTypeUpdateInstalled,
 					Status:  metav1.ConditionTrue,
 					Reason:  ReasonUpdateSucceeded,
 					Message: "",
 				})
+				if addonReadyCond != nil && addonReadyCond.Status == metav1.ConditionTrue {
+					addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+						HelmClusterAddonChartName:  base.Spec.Chart.HelmClusterAddonChartName,
+						HelmClusterAddonRepository: base.Spec.Chart.HelmClusterAddonRepository,
+						Version:                    base.Spec.Chart.Version,
+					}
+				}
 			} else {
 				if addonValues, err := helmchartutil.ReadValues(addon.Spec.Values.Raw); err != nil {
 					logger.Error(err, "failed to decode values on LastAppliedValues update: %w", err)
@@ -406,7 +482,7 @@ func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmC
 				Message: internalReadyCond.Message,
 			})
 		case helmv2.UpgradeFailedReason:
-			if r.isUpdateInstalled(internalHelmRelease) {
+			if r.isUpdateInstalled(addon, internalHelmRelease) {
 				apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
 					Type:    ConditionTypeUpdateInstalled,
 					Status:  metav1.ConditionFalse,
@@ -450,7 +526,7 @@ func (r *Reconciler) updateStatus(ctx context.Context, addon *helmv1alpha1.HelmC
 }
 
 // isUpdateInstalled return true if new release was initiated due to chart name/version change, otherwise returns false.
-func (r *Reconciler) isUpdateInstalled(internalHelmRelease *helmv2.HelmRelease) bool {
+func (r *Reconciler) isUpdateInstalled(addon *helmv1alpha1.HelmClusterAddon, internalHelmRelease *helmv2.HelmRelease) bool {
 	internalReadyCond := meta.FindStatusCondition(internalHelmRelease.Status.Conditions, ConditionTypeReady)
 	if internalReadyCond == nil {
 		return false
@@ -460,7 +536,10 @@ func (r *Reconciler) isUpdateInstalled(internalHelmRelease *helmv2.HelmRelease) 
 		latest := internalHelmRelease.Status.History.Latest()
 		previous := internalHelmRelease.Status.History.Previous(true)
 
-		if previous != nil && previous.Status == "superseded" && latest != nil && latest.VersionedChartName() != previous.VersionedChartName() {
+		if previous != nil && previous.Status == "superseded" &&
+			latest != nil &&
+			(latest.VersionedChartName() != previous.VersionedChartName() ||
+				addon.Spec.Chart.HelmClusterAddonRepository != addon.Status.LastAppliedChart.HelmClusterAddonRepository) {
 			return true
 		}
 	}
