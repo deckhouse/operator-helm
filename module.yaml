@@ -1,7 +1,5 @@
 name: operator-helm
 stage: Experimental
-# TODO: should we mark module as critical?
-# weight: 960
 requirements:
   deckhouse: ">= 1.69"
 subsystems:

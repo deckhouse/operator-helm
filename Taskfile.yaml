@@ -52,7 +52,7 @@ tasks:
   dev:format:yaml:
     desc: "Format non-templated YAML files, e.g. CRDs"
     cmds:
-      # TODO: update image referecne
+      # TODO: update image reference
       - |
         docker run --rm \
           -v ./:/tmp/operator-helm ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
@@ -103,11 +103,3 @@ tasks:
     desc: "Doc-changes"
     cmds:
       - go run {{ .VALIDATION_FILES }} --type doc-changes
-
-  # TODO: implement for operator-helm
-  # validation:helm-templates:
-  #   desc: "Check Helm templates"
-  #   cmds:
-  #     - |
-  #       cd tools/kubeconform
-  #       ./kubeconform.sh
