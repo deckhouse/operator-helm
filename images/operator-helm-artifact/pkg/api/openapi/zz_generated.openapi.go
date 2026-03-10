@@ -363,7 +363,6 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartVersion(re
 					"digest": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Helm chart digest",
-							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -377,7 +376,7 @@ func schema_deckhouse_operator_helm_api_v1alpha1_HelmClusterAddonChartVersion(re
 						},
 					},
 				},
-				Required: []string{"version", "digest", "pulled"},
+				Required: []string{"version", "pulled"},
 			},
 		},
 	}

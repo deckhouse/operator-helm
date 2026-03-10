@@ -65,8 +65,7 @@ type HelmClusterAddonChartVersion struct {
 	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`
 	// Helm chart digest
-	// +kubebuilder:validation:MinLength=1
-	Digest string `json:"digest"`
+	Digest string `json:"digest,omitempty"`
 	// Chart pulled from repository
 	Pulled bool `json:"pulled"`
 }

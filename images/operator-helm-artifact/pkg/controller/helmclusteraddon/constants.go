@@ -41,20 +41,15 @@ const (
 	ReasonUpdateSucceeded        = "UpdateSucceeded"
 	ReasonInstallSucceeded       = "InstallSucceeded"
 	ReasonInstallationInProgress = "InstallationInProgress"
-	ReasonDownloading            = "Downloading"
-	ReasonDownloadWasFailed      = "DownloadWasFailed"
 	ReasonUpdateInProgress       = "UpdateInProgress"
 	ReasonInstallFailed          = "InstallFailed"
 	ReasonUpdateFailed           = "UpdateFailed"
 
-	// ReasonMirrorFailed indicates the internal HelmRepository create/update failed.
-	ReasonMirrorFailed = "MirrorFailed"
-
-	// ReasonCleanupFailed indicates deletion of the internal HelmRepository failed.
-	ReasonCleanupFailed = "CleanupFailed"
-
 	// ReasonProcessing indicates that facade resource is processing.
 	ReasonProcessing = "Processing"
+
+	// ReasonReconcileFailed indicates a terminal error occurred during the reconcile pipeline.
+	ReasonReconcileFailed = "ReconcileFailed"
 
 	// LabelManagedBy marks resources as managed by this controller.
 	LabelManagedBy = "helm.deckhouse.io/managed-by"
@@ -65,9 +60,10 @@ const (
 	// LabelSourceName stores the name of the source facade resource.
 	LabelSourceName = "helm.deckhouse.io/cluster-addon"
 
-	// InternalReleaseDeployed indicates that specific release fon internal chart release history was deployed
-	InternalReleaseDeployed = "deployed"
+	// InternalHelmReleaseDeployed indicates that specific release fon internal chart release history was deployed
+	InternalHelmReleaseDeployed = "deployed"
 
-	// ChartPullInterval how ofter to check if specific version of facade chart was pulled.
-	ChartPullInterval = 2 * time.Second
+	// ReconcileRetryInterval is the default requeue interval when waiting for non-terminal
+	// states such as HelmRelease reaching a final condition.
+	ReconcileRetryInterval = 5 * time.Second
 )
