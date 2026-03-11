@@ -33,7 +33,7 @@ jobs:
 
       - uses: deckhouse/modules-actions/deploy@main
         with:
-          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules/${{ vars.MODULES_MODULE_NAME }}
+          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules
           module_name: ${{ vars.MODULES_MODULE_NAME }}
           module_tag: ${{ github.event.inputs.tag }}
           release_channel: ${{ github.event.inputs.release_channel }}

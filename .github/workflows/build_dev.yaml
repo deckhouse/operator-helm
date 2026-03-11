@@ -68,7 +68,7 @@ jobs:
 
       - uses: deckhouse/modules-actions/build@main
         with:
-          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules/${{ vars.MODULES_MODULE_NAME }}
+          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules
           module_name: ${{ vars.MODULES_MODULE_NAME }}
           module_tag: ${{ steps.modules_module_tag.outputs.MODULES_MODULE_TAG }}
           svace_enabled: false
