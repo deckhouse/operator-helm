@@ -17,4 +17,4 @@ Management of the module's resources is unified and accessible via:
 * Command Line Interface (CLI): using the `d8` or `kubectl` utility.
 * Web Interface: through the Deckhouse Kubernetes Platform graphical console.
 
-See module usage examples in [Usage examples](examples.html) section.
+See module usage examples in [Usage examples](example.html) section.

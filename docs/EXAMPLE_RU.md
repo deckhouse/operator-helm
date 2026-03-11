@@ -1,5 +1,5 @@
 ---
-title: "Примеры использования"
+title: "Примеры"
 description: "Deckhouse Kubernetes Platform — примеры использования модуля operator-helm."
 weight: 30
 ---
