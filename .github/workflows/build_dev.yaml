@@ -19,6 +19,8 @@ on:
     branches:
       - main
       - release-*
+    tags:
+      - 'v*'
 
 jobs:
   lint:
@@ -37,7 +39,6 @@ jobs:
     name: Build and Push images
     outputs:
       MODULES_MODULE_TAG: ${{ steps.modules_module_tag.outputs.MODULES_MODULE_TAG }}
-      MODULES_MODULE_NAME: ${{ steps.modules_module_name.outputs.MODULES_MODULE_NAME }}
     steps:
       - name: Set vars
         id: modules_module_tag
@@ -65,17 +66,10 @@ jobs:
           registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
           registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
 
-      - name: Get the repository name
-        id: modules_module_name
-        run: |
-          FULL_REPO="${{ github.repository }}"
-          REPO_NAME="${FULL_REPO#*/}"
-          echo "MODULES_MODULE_NAME=$REPO_NAME" >> "$GITHUB_OUTPUT"
-
       - uses: deckhouse/modules-actions/build@main
         with:
-          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules/${{ steps.modules_module_name.outputs.MODULES_MODULE_NAME }}
-          module_name: ${{ steps.modules_module_name.outputs.MODULES_MODULE_NAME }}
+          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules/${{ vars.MODULES_MODULE_NAME }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
           module_tag: ${{ steps.modules_module_tag.outputs.MODULES_MODULE_TAG }}
           svace_enabled: false
 
@@ -94,7 +88,7 @@ jobs:
           apiVersion: deckhouse.io/v1alpha1
           kind: ModulePullOverride
           metadata:
-            name: ${{ needs.build_dev.outputs.MODULES_MODULE_NAME }}
+            name: ${{ vars.MODULES_MODULE_NAME }}
           spec:
             imageTag: ${{ needs.build_dev.outputs.MODULES_MODULE_TAG }}
             source: deckhouse
@@ -103,13 +97,13 @@ jobs:
           apiVersion: deckhouse.io/v1alpha1
           kind: ModuleConfig
           metadata:
-            name: ${{ needs.build_dev.outputs.MODULES_MODULE_NAME }}
+            name: ${{ vars.MODULES_MODULE_NAME }}
           spec:
             enabled: true
           EOF
 
           Or patch an existing ModulePullOverride:
 
-          kubectl patch mpo ${{ needs.build_dev.outputs.MODULES_MODULE_NAME }} --type merge -p '{"spec":{"imageTag":"${{ needs.build_dev.outputs.MODULES_MODULE_TAG }}"}}'
+          kubectl patch mpo ${{ vars.MODULES_MODULE_NAME }} --type merge -p '{"spec":{"imageTag":"${{ needs.build_dev.outputs.MODULES_MODULE_TAG }}"}}'
 
           OUTER

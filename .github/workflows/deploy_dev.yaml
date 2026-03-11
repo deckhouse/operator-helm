@@ -31,13 +31,9 @@ jobs:
           registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
           registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
 
-      - name: Get the repository name
-        id: repo_name
-        run: echo "REPO_NAME=$(echo '${{ github.repository }}' | cut -d'/' -f2)" >> $GITHUB_OUTPUT
-
       - uses: deckhouse/modules-actions/deploy@main
         with:
-          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules/${{ steps.repo_name.outputs.REPO_NAME }}
-          module_name: ${{ steps.repo_name.outputs.REPO_NAME }}
+          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules/${{ vars.MODULES_MODULE_NAME }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
           module_tag: ${{ github.event.inputs.tag }}
           release_channel: ${{ github.event.inputs.release_channel }}
