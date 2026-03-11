@@ -1,4 +1,4 @@
 ---
-title: "Модуль operator-helm: настройки"
-weight: 30
+title: "Настройки"
+weight: 20
 ---

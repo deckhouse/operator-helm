@@ -1,6 +1,7 @@
 ---
 title: "Usage"
 description: Usage of the operator-helm Deckhouse module.
+weight: 15
 ---
 
 ## Enabling the module

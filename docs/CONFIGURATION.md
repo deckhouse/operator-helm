@@ -1,4 +1,4 @@
 ---
-title: "The operator-helm module: configuration"
-weight: 30
+title: "Configuration"
+weight: 20
 ---

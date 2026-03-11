@@ -1,6 +1,7 @@
 ---
-title: "The operator-helm module: usage examples"
+title: "Examples"
 description: "Deckhouse Kubernetes Platform — usage examples for the operator-helm module."
+weight: 30
 ---
 
 ## Adding a Helm Repository

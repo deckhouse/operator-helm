@@ -1,6 +1,7 @@
 ---
 title: "Использование"
 description: Использование модуля operator-helm.
+weight: 15
 ---
 
 ## Включение модуля

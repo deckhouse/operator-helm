@@ -1,6 +1,7 @@
 ---
-title: "Модуль operator-helm: примеры использования"
+title: "Примеры использования"
 description: "Deckhouse Kubernetes Platform — примеры использования модуля operator-helm."
+weight: 30
 ---
 
 ## Добавление Helm репозитория
