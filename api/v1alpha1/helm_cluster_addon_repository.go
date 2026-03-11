@@ -25,7 +25,7 @@ const (
 	HelmClusterAddonRepositoryResource = "helmclusteraddonrepositories"
 )
 
-// HelmClusterAddonRepository represents a Git, Helm or OCI compliant repository with Helm charts.
+// HelmClusterAddonRepository represents a Helm or an OCI compliant repository with Helm charts.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

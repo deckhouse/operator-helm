@@ -23,7 +23,9 @@ spec:
     - name: v1alpha1
       schema:
         openAPIV3Schema:
-          description: HelmClusterAddonChart represents a Helm chart from specific repository.
+          description:
+            HelmClusterAddonChart represents a Helm chart and its versions
+            from specific repository.
           properties:
             apiVersion:
               description: |-

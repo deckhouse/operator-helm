@@ -25,7 +25,7 @@ const (
 	HelmClusterAddonChartResource = "helmclusteraddoncharts"
 )
 
-// HelmClusterAddonChart represents a Helm chart from specific repository.
+// HelmClusterAddonChart represents a Helm chart and its versions from specific repository.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

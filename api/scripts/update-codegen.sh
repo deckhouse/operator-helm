@@ -46,13 +46,13 @@ function generate::v1alpha1 {
     --boilerplate "${SCRIPT_DIR}/boilerplate.go.txt" \
     "${API_ROOT}/v1alpha1"
 
-  go tool openapi-gen \
-    --output-pkg "openapi" \
-    --output-dir "${ROOT}/images/operator-helm-artifact/pkg/api/openapi" \
-    --output-file "zz_generated.openapi.go" \
-    --go-header-file "${SCRIPT_DIR}/boilerplate.go.txt" \
-    -r /dev/null \
-    "${THIS_PKG}/v1alpha1" "k8s.io/apimachinery/pkg/apis/meta/v1" "k8s.io/apimachinery/pkg/version"
+#  go tool openapi-gen \
+#    --output-pkg "openapi" \
+#    --output-dir "${ROOT}/images/operator-helm-artifact/pkg/api/openapi" \
+#    --output-file "zz_generated.openapi.go" \
+#    --go-header-file "${SCRIPT_DIR}/boilerplate.go.txt" \
+#    -r /dev/null \
+#    "${THIS_PKG}/v1alpha1" "k8s.io/apimachinery/pkg/apis/meta/v1" "k8s.io/apimachinery/pkg/version"
 
   kube::codegen::gen_client \
     --with-watch \
