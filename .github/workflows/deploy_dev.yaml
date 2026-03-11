@@ -28,7 +28,7 @@ jobs:
       - uses: deckhouse/modules-actions/setup@main
         with:
           registry: ${{ vars.DEV_REGISTRY }}
-          registry_login: ${{ secrets.DEV_MODULES_REGISTRY_LOGIN }}
+          registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
           registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
 
       - name: Get the repository name
