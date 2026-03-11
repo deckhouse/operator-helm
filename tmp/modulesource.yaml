@@ -1,0 +1,8 @@
+apiVersion: deckhouse.io/v1alpha1
+kind: ModuleSource
+metadata:
+  name: operator-helm
+spec:
+  registry:
+    repo: ghcr.io/deckhouse/operator-helm
+    scheme: HTTPS

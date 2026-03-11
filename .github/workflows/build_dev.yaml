@@ -1,0 +1,115 @@
+name: Build and Push for Dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: |
+          Pull request number, like 563, or leave empty and choose a branch
+          For branches main, release-*, tag will be generated as branch name
+        required: false
+        type: number
+      svace_enabled:
+        description: "Enable svace build"
+        type: boolean
+        required: false
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+  push:
+    branches:
+      - main
+      - release-*
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    name: Lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: deckhouse/modules-actions/lint@main
+        env:
+         DMT_METRICS_URL: ${{ secrets.DMT_METRICS_URL }}
+         DMT_METRICS_TOKEN: ${{ secrets.DMT_METRICS_TOKEN }}
+
+  build_dev:
+    runs-on: ubuntu-latest
+    name: Build and Push images
+    outputs:
+      MODULES_MODULE_TAG: ${{ steps.modules_module_tag.outputs.MODULES_MODULE_TAG }}
+      MODULES_MODULE_NAME: ${{ steps.modules_module_name.outputs.MODULES_MODULE_NAME }}
+    steps:
+      - name: Set vars
+        id: modules_module_tag
+        run: |
+          if [[ "${{ github.ref_name }}" == 'main' ]]; then
+            MODULES_MODULE_TAG="${{ github.ref_name }}"
+          elif [[ "${{ github.ref_name }}" =~ ^release-[0-9]+\.[0-9]+ ]]; then
+            MODULES_MODULE_TAG="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.pull_request.number }}" ]]; then
+            MODULES_MODULE_TAG="pr${{ github.event.pull_request.number }}"
+          elif [[ -n "${{ github.event.inputs.pr_number }}" ]]; then
+            MODULES_MODULE_TAG="pr${{ github.event.inputs.pr_number }}"
+          else
+            echo "::error title=Module image tag is required::Can't detect module tag from workflow context. Dev build uses branch name as tag for main and release branches, and PR number for builds from pull requests. Check workflow for correctness."
+            exit 1
+          fi
+          
+          echo "MODULES_MODULE_TAG=$MODULES_MODULE_TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - uses: deckhouse/modules-actions/setup@main
+        with:
+          registry: ${{ vars.DEV_REGISTRY }}
+          registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
+
+      - name: Get the repository name
+        id: modules_module_name
+        run: |
+          FULL_REPO="${{ github.repository }}"
+          REPO_NAME="${FULL_REPO#*/}"
+          echo "MODULES_MODULE_NAME=$REPO_NAME" >> "$GITHUB_OUTPUT"
+
+      - uses: deckhouse/modules-actions/build@main
+        with:
+          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules/${{ steps.modules_module_name.outputs.MODULES_MODULE_NAME }}
+          module_name: ${{ steps.modules_module_name.outputs.MODULES_MODULE_NAME }}
+          module_tag: ${{ steps.modules_module_tag.outputs.MODULES_MODULE_TAG }}
+          svace_enabled: false
+
+  show_dev_manifest:
+    runs-on: ubuntu-latest
+    name: Show manifest
+    needs: build_dev
+    steps:
+      - name: Show dev config
+        run: |
+          cat << OUTER
+          Create ModuleConfig and ModulePullOverride resources to test this MR:
+          
+          cat <<EOF | kubectl apply -f -
+          ---
+          apiVersion: deckhouse.io/v1alpha1
+          kind: ModulePullOverride
+          metadata:
+            name: ${{ needs.build_dev.outputs.MODULES_MODULE_NAME }}
+          spec:
+            imageTag: ${{ needs.build_dev.outputs.MODULES_MODULE_TAG }}
+            source: deckhouse
+
+          ---
+          apiVersion: deckhouse.io/v1alpha1
+          kind: ModuleConfig
+          metadata:
+            name: ${{ needs.build_dev.outputs.MODULES_MODULE_NAME }}
+          spec:
+            enabled: true
+          EOF
+
+          Or patch an existing ModulePullOverride:
+
+          kubectl patch mpo ${{ needs.build_dev.outputs.MODULES_MODULE_NAME }} --type merge -p '{"spec":{"imageTag":"${{ needs.build_dev.outputs.MODULES_MODULE_TAG }}"}}'
+
+          OUTER

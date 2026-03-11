@@ -1,0 +1,3 @@
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+from: registry.werf.io/nelm/source-controller:v0.1.4

@@ -1,0 +1,43 @@
+name: Deploy Dev
+
+on:
+  workflow_dispatch:
+   inputs:
+      release_channel:
+        description: "Select the release channel"
+        type: choice
+        default: alpha
+        options:
+          - "alpha"
+          - "beta"
+          - "early-access"
+          - "stable"
+          - "rock-solid"
+      tag:
+        description: "Tag of the module, e.g., v1.21.1"
+        type: string
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy the module
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: deckhouse/modules-actions/setup@main
+        with:
+          registry: ${{ vars.DEV_REGISTRY }}
+          registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
+
+      - name: Get the repository name
+        id: repo_name
+        run: echo "REPO_NAME=$(echo '${{ github.repository }}' | cut -d'/' -f2)" >> $GITHUB_OUTPUT
+
+      - uses: deckhouse/modules-actions/deploy@main
+        with:
+          module_source: dev-registry.deckhouse.io/sys/deckhouse-oss/modules/${{ steps.repo_name.outputs.REPO_NAME }}
+          module_name: ${{ steps.repo_name.outputs.REPO_NAME }}
+          module_tag: ${{ github.event.inputs.tag }}
+          release_channel: ${{ github.event.inputs.release_channel }}

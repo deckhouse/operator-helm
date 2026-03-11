@@ -1,0 +1,114 @@
+project: operator-helm
+configVersion: 1
+build:
+  imageSpec:
+    author: "Deckhouse Kubernetes Platform <contact@deckhouse.io>"
+    clearHistory: true
+    config:
+      keepEssentialWerfLabels: true
+      removeLabels:
+        - /.*/
+---
+# Base Images
+{{- include "parse_base_images_map" . }}
+---
+# Source repo settings
+{{- $_ := set . "SOURCE_REPO" (env "SOURCE_REPO" "https://github.com") }}
+
+{{- $_ := set . "SOURCE_REPO_GIT" (env "SOURCE_REPO_GIT" "https://github.com") }}
+
+# Define packages proxy settings
+{{- $_ := set . "DistroPackagesProxy" (env "DISTRO_PACKAGES_PROXY" "") }}
+
+
+# svace analyze toggler
+{{- $_ := set . "SVACE_ENABLED" (env "SVACE_ENABLED" "false") }}
+{{- $_ := set . "SVACE_ANALYZE_HOST" (env "SVACE_ANALYZE_HOST" "example.host") }}
+{{- $_ := set . "SVACE_ANALYZE_SSH_USER" (env "SVACE_ANALYZE_SSH_USER" "user") }}
+
+{{- $_ := set . "ImagesIDList" list }}
+
+{{- range $path, $content := .Files.Glob ".werf/*.yaml" }}
+  {{- tpl $content $ }}
+{{- end }}
+---
+image: images-digests
+fromImage: builder/alpine
+dependencies:
+  {{- range $ImageID := $.ImagesIDList }}
+  {{- $ImageNameCamel  := $ImageID | splitList "/" | last  | camelcase | untitle }}
+- image: {{ $ImageID }}
+  before: setup
+  imports:
+    - type: ImageDigest
+      targetEnv: MODULE_IMAGE_DIGEST_{{ $ImageNameCamel }}
+  {{- end }}
+shell:
+  beforeInstall:
+    - apk add --no-cache jq
+  setup:
+    - |
+      env | grep MODULE_IMAGE_DIGEST | jq -Rn '
+        reduce inputs as $i (
+          {};
+          . * (
+            $i | ltrimstr("MODULE_IMAGE_DIGEST_") | sub("=";"_") |
+            split("_") as [$imageName, $digest] |
+            {($imageName): $digest}
+          )
+        )
+      ' > /images_digests.json
+      cat images_digests.json
+---
+image: bundle
+fromImage: builder/scratch
+import:
+- image: prepare-bundle
+  add: /prep-bundle
+  to: /
+  after: setup
+---
+image: prepare-bundle
+fromImage: builder/alpine
+import:
+- image: images-digests
+  add: /
+  to: /prep-bundle
+  after: setup
+  includePaths:
+    - images_digests.json
+- image: go-hooks-artifact
+  add: /go-hooks
+  to: /prep-bundle/hooks/go
+  after: setup
+git:
+  - add: /
+    to: /prep-bundle
+    stageDependencies:
+      install:
+      - '**/*'
+    includePaths:
+      - charts
+      - crds
+      - build/components
+      - docs
+      - openapi
+      - monitoring
+      - templates
+      - Chart.yaml
+      - module.yaml
+      - .helmignore
+    excludePaths:
+      - build/components/README.md
+      - docs/images/*.drawio
+      - docs/images/*.sh
+      - docs/internal
+shell:
+  install:
+    - ls -la /prep-bundle
+---
+image: release-channel-version
+fromImage: builder/scratch
+shell:
+  install:
+    - echo  '{"version":"{{ env "MODULES_MODULE_TAG" "dev" }}"}' > version.json

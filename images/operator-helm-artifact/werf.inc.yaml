@@ -1,0 +1,57 @@
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+final: false
+fromImage: builder/src
+git:
+- add: {{ .ModuleDir }}/api
+  to: /src/api
+  stageDependencies:
+    install:
+      - go.mod
+      - go.sum
+    setup:
+      - "**/*.go"
+- add: {{ .ModuleDir }}/images/{{ .ImageName }}
+  to: /src/images/operator-helm-artifact
+  stageDependencies:
+    install:
+    - go.mod
+    - go.sum
+    setup:
+    - "**/*.go"
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+final: false
+fromImage: {{ eq $.SVACE_ENABLED "false" | ternary "builder/golang-bookworm-1.25" "builder/golang-alt-svace-1.25" }}
+import:
+- image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+  add: /src
+  to: /src
+  before: install
+# TODO: uncomment as soon as CI will be ready
+# secrets:
+# - id: GOPROXY
+#   value: {{ .GOPROXY }}
+# mount:
+# - fromPath: ~/go-pkg-cache
+#   to: /go/pkg
+shell:
+  install:
+  # TODO: uncomment as soon as CI will be ready
+  # - export GOPROXY=$(cat /run/secrets/GOPROXY)
+  - cd /src/images/operator-helm-artifact
+  - go mod download
+  setup:
+  - cd /src/images/operator-helm-artifact
+  - mkdir /out
+  - export GOOS=linux
+  - export GOARCH=amd64
+  - export CGO_ENABLED=0
+
+  - |
+    echo "Build operator-helm-controller binary"
+    {{- $_ := set $ "ProjectName" (list $.ImageName "operator-helm-controller" | join "/") }}
+
+    {{-   $buildCommand := printf "go build -ldflags=\"-s -w\" -tags %s -v -a -o /out/operator-helm-controller ./cmd/operator-helm-controller" .MODULE_EDITION -}}
+    {{-   include "image-build.build" (set $ "BuildCommand" $buildCommand) | nindent 4 }}
+

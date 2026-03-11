@@ -1,0 +1,24 @@
+type: object
+properties:
+  highAvailability:
+    description: |
+      Ручное управление режимом отказоустойчивости.
+
+      По умолчанию режим отказоустойчивости определяется автоматически.
+      Подробнее про режим отказоустойчивости можно прочитать в разделе [Высокая надежность и доступность](/products/kubernetes-platform/documentation/v1/admin/configuration/high-reliability-and-availability/enable.html#включение-режима-ha-для-отдельных-компонентов).
+  logLevel:
+    type: string
+    default: info
+    description: |
+      Устанавливает уровень логирования.
+
+      Работает для следующих компонентов:
+      - `helm-controller`
+      - `nelm-source-controller`
+      - `kube-api-rewriter`
+      - `deckhouse-helm-controller`
+    enum:
+      - "debug"
+      - "info"
+      - "warn"
+      - "error"

@@ -1,0 +1,16 @@
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+fromImage: {{ .ModuleNamePrefix }}distroless
+git:
+  {{- include "image mount points" . }}
+import:
+- image: {{ .ModuleNamePrefix }}operator-helm-artifact
+  add: /out/operator-helm-controller
+  to: /app/operator-helm-controller
+  after: install
+imageSpec:
+  config:
+    user: 64535
+    workingDir: "/app"
+    entrypoint: ["/app/operator-helm-controller"]
+

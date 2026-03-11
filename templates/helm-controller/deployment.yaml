@@ -1,0 +1,137 @@
+{{- $priorityClassName := include "priorityClassName" . }}
+
+{{- define "helm_controller_resources" }}
+cpu: 100m
+memory: 64Mi
+{{- end }}
+
+{{- if (.Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: helm-controller
+  namespace: d8-{{ .Chart.Name }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "helm-controller" "workload-resource-policy.deckhouse.io" "master")) | nindent 2 }}
+spec:
+  targetRef:
+    apiVersion: "apps/v1"
+    kind: Deployment
+    name: helm-controller
+  updatePolicy:
+    updateMode: {{ include "vpa.policyUpdateMode" . }}
+  resourcePolicy:
+    containerPolicies:
+    {{- include "kube_api_rewriter.vpa_container_policy" . | nindent 4 }}
+    {{- include "kube_rbac_proxy.vpa_container_policy" . | nindent 4 }}
+    - containerName: helm-controller
+      minAllowed:
+        {{- include "helm_controller_resources" . | nindent 8 }}
+      maxAllowed:
+        cpu: 1000m
+        memory: 1Gi
+{{- end }}
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: helm-controller
+  namespace: d8-{{ .Chart.Name }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "helm-controller" )) | nindent 2 }}
+spec:
+  minAvailable: {{ include "helm_lib_is_ha_to_value" (list . 1 0) }}
+  selector:
+    matchLabels:
+      app: helm-controller
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: helm-controller
+  namespace: d8-{{ .Chart.Name }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "helm-controller")) | nindent 2 }}
+spec:
+  replicas: {{ include "helm_lib_is_ha_to_value" (list . 3 1) }}
+  {{- if (include "helm_lib_ha_enabled" .) }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  {{- end }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: helm-controller
+  template:
+    metadata:
+      labels:
+        app: helm-controller
+      annotations:
+        kubectl.kubernetes.io/default-container: helm-controller
+    spec:
+      containers:
+        {{- include "kube_api_rewriter.sidecar_container" . | nindent 8 }}
+        - name: helm-controller
+          {{- include "helm_lib_module_container_security_context_read_only_root_filesystem_capabilities_drop_all_pss_restricted" . | nindent 10 }}
+          image: {{ include "helm_lib_module_image" (list . "helmController") }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --watch-all-namespaces
+            - --log-level={{ include "moduleLogLevel" . }}
+            - --log-encoding=json
+            - --enable-leader-election
+          volumeMounts:
+            - mountPath: /tmp
+              name: temp
+            {{- include "kube_api_rewriter.kubeconfig_volume_mount" . | nindent 12 }}
+          ports:
+            - containerPort: 8080
+              name: metrics
+              protocol: TCP
+            - containerPort: 9440
+              name: healthz
+          resources:
+            requests:
+              {{- include "helm_lib_module_ephemeral_storage_only_logs" . | nindent 14 }}
+              {{- if not ( .Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
+              {{- include "helm_controller_resources" . | nindent 14 }}
+              {{- end }}
+          env:
+            {{- include "kube_api_rewriter.kubeconfig_env" . | nindent 12 }}
+            {{- include "helm-controller.envs" . | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+              scheme: HTTP
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: healthz
+              scheme: HTTP
+            initialDelaySeconds: 10
+        {{- $kubeRbacProxySettings := dict }}
+        {{- $_ := set $kubeRbacProxySettings "runAsUserNobody" false }}
+        {{- $_ := set $kubeRbacProxySettings "ignorePaths" "/proxy/healthz,/proxy/readyz" }}
+        {{- $_ := set $kubeRbacProxySettings "upstreams" (list
+            (dict "upstream" "http://127.0.0.1:8080/metrics" "path" "/metrics" "name" "helm-controller")
+            (dict "upstream" "http://127.0.0.1:9090/metrics" "path" "/proxy/metrics" "name" "kube-api-rewriter")
+            (dict "upstream" "http://127.0.0.1:9090/healthz" "path" "/proxy/healthz" "name" "kube-api-rewriter")
+            (dict "upstream" "http://127.0.0.1:9090/readyz" "path" "/proxy/readyz" "name" "kube-api-rewriter")
+        ) }}
+        {{- include "kube_rbac_proxy.sidecar_container" (tuple . $kubeRbacProxySettings) | nindent 8 }}
+      dnsPolicy: ClusterFirst
+      serviceAccountName: helm-controller
+      {{- include "helm_lib_module_pod_security_context_run_as_user_deckhouse" . | nindent 6 }}
+      {{- include "helm_lib_priority_class" (tuple . $priorityClassName) | nindent 6 }}
+      {{- include "helm_lib_node_selector" (tuple . "system") | nindent 6 }}
+      {{- include "helm_lib_tolerations" (tuple . "system") | nindent 6 }}
+      {{- include "helm_lib_pod_anti_affinity_for_ha" (list . (dict "app" "helm-controller")) | nindent 6 }}
+      volumes:
+        - emptyDir: {}
+          name: temp
+        {{- include "kube_api_rewriter.kubeconfig_volume" . | nindent 8 }}

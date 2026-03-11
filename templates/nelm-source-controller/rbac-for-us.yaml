@@ -1,0 +1,169 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nelm-source-controller
+  namespace: d8-{{ .Chart.Name }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "nelm-source-controller")) | nindent 2 }}
+imagePullSecrets:
+- name: operator-helm-module-registry
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: d8:{{ .Chart.Name }}:nelm-source-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: d8:{{ .Chart.Name }}:nelm-source-controller
+subjects:
+- kind: ServiceAccount
+  name: nelm-source-controller
+  namespace: d8-{{ .Chart.Name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: d8:{{ .Chart.Name }}:nelm-source-controller
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - services
+  - secrets
+  - configmaps
+  verbs:
+  - get
+  - create
+  - update
+  - delete
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  - serviceaccounts
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
+- apiGroups:
+  - source.internal.operator-helm.deckhouse.io
+  resources:
+  - internalnelmoperatorbuckets
+  - internalnelmoperatorgitrepositories
+  - internalnelmoperatorhelmcharts
+  - internalnelmoperatorhelmrepositories
+  - internalnelmoperatorocirepositories
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - source.internal.operator-helm.deckhouse.io
+  resources:
+  - internalnelmoperatorbuckets/finalizers
+  - internalnelmoperatorgitrepositories/finalizers
+  - internalnelmoperatorhelmcharts/finalizers
+  - internalnelmoperatorhelmrepositories/finalizers
+  - internalnelmoperatorocirepositories/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+  - update
+- apiGroups:
+  - source.internal.operator-helm.deckhouse.io
+  resources:
+  - internalnelmoperatorbuckets/status
+  - internalnelmoperatorgitrepositories/status
+  - internalnelmoperatorhelmcharts/status
+  - internalnelmoperatorhelmrepositories/status
+  - internalnelmoperatorocirepositories/status
+  verbs:
+  - get
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: nelm-source-controller
+  namespace: d8-{{ .Chart.Name }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - configmaps/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+- apiGroups:
+  - "coordination.k8s.io"
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: nelm-source-controller
+  namespace: d8-{{ .Chart.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nelm-source-controller
+subjects:
+- kind: ServiceAccount
+  name: nelm-source-controller

@@ -1,0 +1,31 @@
+global:
+  linters-settings:
+    documentation:
+      impact: error
+linters-settings:
+  openapi:
+    exclude-rules:
+      enum:
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.sts.properties.provider"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.provider"
+        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.provider"
+        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.sts.properties.provider"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.upgrade.properties.remediation.properties.strategy.properties"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.uninstall.properties.deletionPropagation"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.driftDetection.properties.mode"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.upgrade.properties.remediation.properties.strategy"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.chart.properties.spec.properties.verify.properties.provider"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.status.properties.lastAttemptedReleaseAction"
+        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.chart.properties.spec.properties.verify.properties.provider"
+        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.driftDetection.properties.mode"
+        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.postRenderers.items.properties.kustomize.properties.patchesJson6902.items.properties.patch.items.properties.op"
+        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.uninstall.properties.deletionPropagation"
+        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.upgrade.properties.remediation.properties.strategy"
+        - "spec.versions[1].schema.openAPIV3Schema.properties.status.properties.lastAttemptedReleaseAction"
+        - "properties.logLevel"
+        - "properties.logFormat"
+  rbac:
+    exclude-rules:
+      wildcards:
+        - kind: ClusterRole
+          name: d8:operator-helm:helm-controller

@@ -1,0 +1,8 @@
+apiVersion: deckhouse.io/v1alpha2
+kind: ModulePullOverride
+metadata:
+  name: operator-helm
+spec:
+  imageTag: mvp
+  rollback: true
+  scanInterval: 15s

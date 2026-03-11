@@ -1,0 +1,62 @@
+{{- $kubeVersion := .Values.global.discovery.kubernetesVersion }}
+{{- $apiVersion := "" }}
+{{- if semverCompare ">=1.30.0" $kubeVersion }}
+{{- $apiVersion = "admissionregistration.k8s.io/v1" }}
+{{- else if semverCompare ">=1.28.0" $kubeVersion }}
+{{- $apiVersion = "admissionregistration.k8s.io/v1beta1" }}
+{{- else if semverCompare ">=1.26.0" $kubeVersion }}
+{{- $apiVersion = "admissionregistration.k8s.io/v1alpha1" }}
+{{- end }}
+
+{{- if $apiVersion }}
+apiVersion: {{ $apiVersion }}
+kind: ValidatingAdmissionPolicy
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: operator-helm-restricted-access-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - "helm.internal.operator-helm.deckhouse.io"
+          - "source.internal.operator-helm.deckhouse.io"
+        apiVersions: ["*"]
+        operations:
+          - "CREATE"
+          - "UPDATE"
+          - "DELETE"
+        resources: ["*"]
+      - apiGroups:
+          - "helm.deckhouse.io"
+        apiVersions: ["*"]
+        operations:
+          - "CREATE"
+          - "UPDATE"
+          - "DELETE"
+        resources:
+          - "helmclusteraddoncharts"
+  validations:
+    - expression: |
+        request.userInfo.username.startsWith("system:serviceaccount:kube-system:") ||
+        request.userInfo.username.startsWith("system:serviceaccount:d8-system:") ||
+        request.userInfo.username in [
+          "system:serviceaccount:d8-operator-helm:operator-helm-controller",
+          "system:serviceaccount:d8-operator-helm:nelm-source-controller",
+          "system:serviceaccount:d8-operator-helm:helm-controller",
+        ]
+      message: "Operation forbidden for this user."
+---
+apiVersion: {{ $apiVersion }}
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: operator-helm-restricted-access-policy-binding
+spec:
+  policyName: operator-helm-restricted-access-policy
+  validationActions:
+    - "Deny"
+  matchResources:
+    namespaceSelector: {}
+    objectSelector: {}
+{{- end }}
