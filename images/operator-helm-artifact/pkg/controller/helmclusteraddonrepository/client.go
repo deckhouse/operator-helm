@@ -23,12 +23,17 @@ import (
 	"strings"
 	"time"
 
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"go.yaml.in/yaml/v3"
 	"k8s.io/apimachinery/pkg/util/wait"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-var HelmRepositoryDefaultClient HelmRepositoryClient
+type HelmRepositoryClientInterface interface {
+	FetchCharts(ctx context.Context, url string) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error)
+}
+
+var HelmRepositoryDefaultClient HelmRepositoryClientInterface = &HelmRepositoryClient{}
 
 type HelmRepositoryClient struct{}
 

@@ -18,8 +18,8 @@ package helmclusteraddon
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/opencontainers/go-digest"
 	"github.com/werf/3p-fluxcd-pkg/chartutil"
@@ -44,363 +44,283 @@ type Reconciler struct {
 	Client client.Client
 }
 
-type ReconcileContext struct {
-	addon                  *helmv1alpha1.HelmClusterAddon
-	addonBase              *helmv1alpha1.HelmClusterAddon
-	addonChart             *helmv1alpha1.HelmClusterAddonChart
-	addonRepository        *helmv1alpha1.HelmClusterAddonRepository
-	internalHelmRelease    *helmv2.HelmRelease
-	internalHelmChart      *sourcev1.HelmChart
-	maintenanceModeEnabled bool
-	err                    []error
-}
-
-func (r *ReconcileContext) AddonDeepCopy() *helmv1alpha1.HelmClusterAddon {
-	if r.addonBase == nil {
-		r.addonBase = r.addon.DeepCopy()
-	}
-
-	return r.addonBase
-}
-
-func (r *ReconcileContext) GetRepositoryType() (utils.InternalRepositoryType, error) {
-	return utils.GetRepositoryType(r.addonRepository.Spec.URL)
-}
-
-type pipelineStep struct {
-	Name          string
-	RunIf         func(rctx *ReconcileContext) bool
-	Action        func(ctx context.Context, rctx *ReconcileContext) (pipelineStepResult, error)
-	StopOnFailure bool
-	SkipOnError   bool
-}
-
-type pipelineStepResult struct {
-	Requeue bool
-}
-
-func (s *pipelineStepResult) Reconcile() reconcile.Result {
-	if s.Requeue {
-		return reconcile.Result{RequeueAfter: ReconcileRetryInterval}
-	}
-
-	return reconcile.Result{}
+type addonState struct {
+	addon               *helmv1alpha1.HelmClusterAddon
+	base                *helmv1alpha1.HelmClusterAddon
+	addonRepository     *helmv1alpha1.HelmClusterAddonRepository
+	internalHelmRelease *helmv2.HelmRelease
+	internalHelmChart   *sourcev1.HelmChart
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("helmclusteraddon", req.Name)
+	ctx = log.IntoContext(ctx, logger)
 
-	rctx := &ReconcileContext{addon: &helmv1alpha1.HelmClusterAddon{}}
+	state := &addonState{addon: &helmv1alpha1.HelmClusterAddon{}}
 
-	if err := r.Client.Get(ctx, req.NamespacedName, rctx.addon); err != nil {
+	if err := r.Client.Get(ctx, req.NamespacedName, state.addon); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("HelmClusterAddon not found, skipping")
-
 			return reconcile.Result{}, nil
 		}
-
 		return reconcile.Result{}, fmt.Errorf("getting HelmClusterAddon: %w", err)
 	}
 
-	rctx.AddonDeepCopy()
+	state.base = state.addon.DeepCopy()
 
-	pipeline := []pipelineStep{
-		{
-			Name: "Ensure that conditions initialized",
-			RunIf: func(rctx *ReconcileContext) bool {
-				return apimeta.FindStatusCondition(rctx.addon.Status.Conditions, ConditionTypeReady) == nil
-			},
-			Action:        r.initializeConditions,
-			StopOnFailure: true,
-		},
-		{
-			Name: "Delete resources if deletion timestamp present",
-			RunIf: func(rctx *ReconcileContext) bool {
-				return !rctx.addon.DeletionTimestamp.IsZero()
-			},
-			Action:        r.reconcileDelete,
-			StopOnFailure: true,
-		},
-		{
-			Name: "Add finalizer if it is absent",
-			RunIf: func(rctx *ReconcileContext) bool {
-				return !controllerutil.ContainsFinalizer(rctx.addon, FinalizerName)
-			},
-			Action:        r.addFinalizer,
-			StopOnFailure: true,
-		},
-		{
-			Name:          "Stop if maintenance mode is enabled",
-			RunIf:         func(rctx *ReconcileContext) bool { return true },
-			Action:        r.checkIfMaintenanceModeEnabled,
-			StopOnFailure: true,
-		},
-		{
-			Name:          "Set status to Processing if needed",
-			RunIf:         func(rctx *ReconcileContext) bool { return !rctx.maintenanceModeEnabled },
-			Action:        r.setStatusToProcessing,
-			StopOnFailure: true,
-		},
-		{
-			Name:          "Get HelmClusterAddonRepository",
-			RunIf:         func(rctx *ReconcileContext) bool { return !rctx.maintenanceModeEnabled },
-			Action:        r.getHelmClusterAddonRepository,
-			StopOnFailure: true,
-		},
-		{
-			Name:        "Reconcile InternalNelmOperatorHelmChart",
-			RunIf:       func(rctx *ReconcileContext) bool { return !rctx.maintenanceModeEnabled },
-			Action:      r.reconcileInternalHelmChart,
-			SkipOnError: true,
-		},
-		{
-			Name: "Reconcile InternalNelmOperatorHelmRelease",
-			RunIf: func(rctx *ReconcileContext) bool {
-				return !rctx.maintenanceModeEnabled && rctx.internalHelmChart != nil && rctx.internalHelmChart.Status.Artifact != nil
-			},
-			Action:      r.reconcileInternalHelmRelease,
-			SkipOnError: true,
-		},
-		{
-			Name:   "Update HelmClusterAddon status",
-			RunIf:  func(rctx *ReconcileContext) bool { return true },
-			Action: r.updateStatus,
-		},
+	if done, err := r.phaseDelete(ctx, state); done || err != nil {
+		return reconcile.Result{}, err
 	}
-
-	for _, step := range pipeline {
-		if step.RunIf(rctx) {
-			logger.Info("Running step", "step", step.Name)
-
-			if len(rctx.err) > 0 && step.SkipOnError {
-				logger.Info("Step skipped due to error on the previous step", "step", step.Name)
-
-				continue
-			}
-
-			if result, err := step.Action(ctx, rctx); err != nil {
-				if step.StopOnFailure {
-					return reconcile.Result{}, err
-				}
-
-				rctx.err = append(rctx.err, err)
-			} else if result.Requeue {
-				return result.Reconcile(), nil
-			}
-
-			logger.Info("Step completed", "step", step.Name)
-
-			continue
-		}
-
-		logger.Info("Skipping optional step", "step", step.Name)
+	if done, result, err := r.phaseBootstrap(ctx, state); done || err != nil {
+		return result, err
 	}
-
-	return reconcile.Result{}, nil
+	if done, err := r.phaseMaintenance(ctx, state); done || err != nil {
+		return reconcile.Result{}, err
+	}
+	return r.phaseSync(ctx, state)
 }
 
-func (r *Reconciler) initializeConditions(ctx context.Context, rctx *ReconcileContext) (pipelineStepResult, error) {
+func (r *Reconciler) phaseDelete(ctx context.Context, state *addonState) (bool, error) {
+	logger := log.FromContext(ctx)
 
-	conditionTypes := []string{
-		ConditionTypeReady,
-		ConditionTypeManaged,
+	if state.addon.DeletionTimestamp.IsZero() {
+		return false, nil
 	}
 
-	for _, t := range conditionTypes {
-		if apimeta.FindStatusCondition(rctx.addon.Status.Conditions, t) == nil {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:   t,
-				Status: metav1.ConditionUnknown,
-				Reason: ReasonInitializing,
-			})
-		}
+	if !controllerutil.ContainsFinalizer(state.addon, FinalizerName) {
+		return true, nil
 	}
 
-	if err := r.Client.Status().Update(ctx, rctx.addon); err != nil {
-		return pipelineStepResult{}, fmt.Errorf("failed to update helmclusteraddon status conditions: %w", err)
+	if err := r.ensureResourceDeleted(ctx, utils.GetInternalHelmReleaseName(state.addon.Name), TargetNamespace, &helmv2.HelmRelease{}); err != nil {
+		return true, fmt.Errorf("deleting internal helm release: %w", err)
 	}
 
-	return pipelineStepResult{Requeue: true}, nil
-}
-
-func (r *Reconciler) reconcileDelete(ctx context.Context, rctx *ReconcileContext) (pipelineStepResult, error) {
-	logger := log.FromContext(ctx).WithValues("helmclusteraddon", rctx.addon.Name)
-
-	if !controllerutil.ContainsFinalizer(rctx.addon, FinalizerName) {
-		return pipelineStepResult{}, nil
+	if err := r.ensureResourceDeleted(ctx, utils.GetInternalHelmChartName(state.addon.Name), TargetNamespace, &sourcev1.HelmChart{}); err != nil {
+		return true, fmt.Errorf("deleting internal helm chart: %w", err)
 	}
 
-	if err := r.ensureResourceDeleted(ctx, utils.GetInternalHelmReleaseName(rctx.addon.Name), TargetNamespace, &helmv2.HelmRelease{}); err != nil {
-		return pipelineStepResult{}, fmt.Errorf("deleting internal helm release: %w", err)
-	}
+	controllerutil.RemoveFinalizer(state.addon, FinalizerName)
 
-	if err := r.ensureResourceDeleted(ctx, utils.GetInternalHelmChartName(rctx.addon.Name), TargetNamespace, &sourcev1.HelmChart{}); err != nil {
-		return pipelineStepResult{}, fmt.Errorf("deleting internal helm chart: %w", err)
-	}
-
-	controllerutil.RemoveFinalizer(rctx.addon, FinalizerName)
-
-	if err := r.Client.Update(ctx, rctx.addon); err != nil {
-		return pipelineStepResult{}, fmt.Errorf("removing finalizer: %w", err)
+	if err := r.Client.Update(ctx, state.addon); err != nil {
+		return true, fmt.Errorf("removing finalizer: %w", err)
 	}
 
 	logger.Info("Cleanup complete")
 
-	return pipelineStepResult{}, nil
+	return true, nil
 }
 
-func (r *Reconciler) addFinalizer(ctx context.Context, rctx *ReconcileContext) (pipelineStepResult, error) {
-	controllerutil.AddFinalizer(rctx.addon, FinalizerName)
+func (r *Reconciler) phaseBootstrap(ctx context.Context, state *addonState) (bool, reconcile.Result, error) {
+	conditionsInitialized := apimeta.FindStatusCondition(state.addon.Status.Conditions, ConditionTypeReady) != nil
+	finalizerPresent := controllerutil.ContainsFinalizer(state.addon, FinalizerName)
 
-	if err := r.Client.Update(ctx, rctx.addon); err != nil {
-		return pipelineStepResult{}, fmt.Errorf("failed to add finalizer to helm cluster addon: %w", err)
+	if conditionsInitialized && finalizerPresent {
+		return false, reconcile.Result{}, nil
 	}
 
-	return pipelineStepResult{Requeue: true}, nil
+	if !conditionsInitialized {
+		for _, t := range []string{ConditionTypeReady, ConditionTypeManaged} {
+			if apimeta.FindStatusCondition(state.addon.Status.Conditions, t) == nil {
+				apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+					Type:   t,
+					Status: metav1.ConditionUnknown,
+					Reason: ReasonInitializing,
+				})
+			}
+		}
+
+		if err := r.Client.Status().Update(ctx, state.addon); err != nil {
+			return true, reconcile.Result{}, fmt.Errorf("updating helm cluster addon status conditions: %w", err)
+		}
+
+		return true, reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
+	}
+
+	controllerutil.AddFinalizer(state.addon, FinalizerName)
+
+	if err := r.Client.Update(ctx, state.addon); err != nil {
+		return true, reconcile.Result{}, fmt.Errorf("adding finalizer to helm cluster addon: %w", err)
+	}
+
+	return true, reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
 }
 
-func (r *Reconciler) checkIfMaintenanceModeEnabled(_ context.Context, rctx *ReconcileContext) (pipelineStepResult, error) {
-	managedCond := apimeta.FindStatusCondition(rctx.addon.Status.Conditions, ConditionTypeManaged)
+func (r *Reconciler) ensureInternalHelmReleaseSuspended(ctx context.Context, addonName string) (*helmv2.HelmRelease, error) {
+	helmRelease := &helmv2.HelmRelease{}
+	if err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      utils.GetInternalHelmReleaseName(addonName),
+		Namespace: TargetNamespace,
+	}, helmRelease); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
 
+		return nil, fmt.Errorf("getting internal helm release: %w", err)
+	}
+
+	if helmRelease.Spec.Suspend {
+		return helmRelease, nil
+	}
+
+	base := helmRelease.DeepCopy()
+
+	helmRelease.Spec.Suspend = true
+
+	if err := r.Client.Patch(ctx, helmRelease, client.MergeFrom(base)); err != nil {
+		return nil, fmt.Errorf("suspending internal helm release: %w", err)
+	}
+
+	return helmRelease, nil
+}
+
+func (r *Reconciler) phaseMaintenance(ctx context.Context, state *addonState) (bool, error) {
+	managedCond := apimeta.FindStatusCondition(state.addon.Status.Conditions, ConditionTypeManaged)
 	if managedCond == nil {
-		return pipelineStepResult{}, fmt.Errorf("managed condition is not initialized")
-	} else if managedCond.Status == metav1.ConditionFalse && rctx.addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
-		rctx.maintenanceModeEnabled = true
+		return true, fmt.Errorf("reading managed condition: not initialized")
 	}
 
-	return pipelineStepResult{}, nil
-}
-
-func (r *Reconciler) setStatusToProcessing(ctx context.Context, rctx *ReconcileContext) (pipelineStepResult, error) {
-	readyCond := apimeta.FindStatusCondition(rctx.addon.Status.Conditions, ConditionTypeReady)
-
-	if rctx.addon.Generation == rctx.addon.Status.ObservedGeneration ||
-		(readyCond != nil && readyCond.Status == metav1.ConditionFalse && readyCond.Reason == ReasonProcessing) {
-		return pipelineStepResult{}, nil
+	if state.addon.Spec.Maintenance != string(helmv1alpha1.NoResourceReconciliation) {
+		return false, nil
 	}
 
-	chartChanged := isChartSpecChanged(rctx.addon)
-
-	valuesChanged := false
-	specRaw := ""
-	if rctx.addon.Spec.Values != nil {
-		specRaw = string(rctx.addon.Spec.Values.Raw)
-	}
-	lastRaw := ""
-	if rctx.addon.Status.LastAppliedValues != nil {
-		lastRaw = string(rctx.addon.Status.LastAppliedValues.Raw)
-	}
-	if specRaw != lastRaw {
-		valuesChanged = true
+	helmRelease, err := r.ensureInternalHelmReleaseSuspended(ctx, state.addon.Name)
+	if err != nil {
+		return true, err
 	}
 
-	if rctx.addon.Status.LastAppliedChart == nil {
-		apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-			Type:               ConditionTypeInstalled,
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: rctx.addon.Generation,
-			Reason:             ReasonInstallationInProgress,
-			Message:            "",
-		})
-	} else {
-		if chartChanged {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:               ConditionTypeUpdateInstalled,
-				Status:             metav1.ConditionFalse,
-				ObservedGeneration: rctx.addon.Generation,
-				Reason:             ReasonUpdateInProgress,
-				Message:            "",
-			})
-		}
-		if valuesChanged {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:               ConditionTypeConfigurationApplied,
-				Status:             metav1.ConditionFalse,
-				ObservedGeneration: rctx.addon.Generation,
-				Reason:             ReasonUpdateInProgress,
-				Message:            "",
-			})
-		}
-
-		// Neither chart nor values changed (e.g. annotation bump) — treat as values-only change.
-		if !chartChanged && !valuesChanged {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:               ConditionTypeConfigurationApplied,
-				Status:             metav1.ConditionFalse,
-				ObservedGeneration: rctx.addon.Generation,
-				Reason:             ReasonUpdateInProgress,
-				Message:            "",
-			})
-		}
+	if helmRelease != nil && !helmRelease.Spec.Suspend {
+		return true, fmt.Errorf("internal helm release suspend not confirmed")
 	}
 
-	apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-		Type:               ConditionTypeReady,
+	if managedCond.Status == metav1.ConditionFalse {
+		return true, nil
+	}
+
+	apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+		Type:               ConditionTypeManaged,
 		Status:             metav1.ConditionFalse,
-		ObservedGeneration: rctx.addon.Generation,
-		Reason:             ReasonProcessing,
-		Message:            "",
+		Reason:             ReasonUnmanagedModeActivated,
+		ObservedGeneration: state.addon.Generation,
 	})
 
-	if err := r.Client.Status().Patch(ctx, rctx.addon, client.MergeFrom(rctx.AddonDeepCopy())); err != nil {
-		return pipelineStepResult{}, fmt.Errorf("updating helm cluster addon status: %w", err)
+	apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+		Type:               ConditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             ReasonUnmanagedModeActivated,
+		ObservedGeneration: state.addon.Generation,
+	})
+
+	state.addon.Status.ObservedGeneration = state.addon.Generation
+
+	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+		return true, fmt.Errorf("patching status for maintenance mode: %w", err)
 	}
 
-	return pipelineStepResult{Requeue: true}, nil
+	return true, nil
 }
 
-func (r *Reconciler) getHelmClusterAddonRepository(ctx context.Context, rctx *ReconcileContext) (pipelineStepResult, error) {
-	rctx.addonRepository = &helmv1alpha1.HelmClusterAddonRepository{}
+func (r *Reconciler) phaseSync(ctx context.Context, state *addonState) (reconcile.Result, error) {
+	requeue, err := r.setStatusToProcessing(ctx, state)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if requeue {
+		return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
+	}
 
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: rctx.addon.Spec.Chart.HelmClusterAddonRepository}, rctx.addonRepository); err != nil {
-		if apierrors.IsNotFound(err) {
-			return pipelineStepResult{}, fmt.Errorf("helm cluster addon repository not found: %w", err)
+	var syncErr error
+
+	if err := r.getRepository(ctx, state); err != nil {
+		syncErr = err
+	}
+
+	if syncErr == nil {
+		if err := r.reconcileInternalHelmChart(ctx, state); err != nil {
+			syncErr = err
 		}
-
-		return pipelineStepResult{}, fmt.Errorf("getting helm cluster addon repository: %w", err)
 	}
 
-	return pipelineStepResult{}, nil
+	if syncErr == nil && state.internalHelmChart != nil && state.internalHelmChart.Status.Artifact != nil {
+		if err := r.reconcileInternalHelmRelease(ctx, state); err != nil {
+			syncErr = err
+		}
+	}
+
+	return r.updateStatus(ctx, state, syncErr)
 }
 
-func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, rctx *ReconcileContext) (pipelineStepResult, error) {
+func (r *Reconciler) getRepository(ctx context.Context, state *addonState) error {
+	state.addonRepository = &helmv1alpha1.HelmClusterAddonRepository{}
+
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: state.addon.Spec.Chart.HelmClusterAddonRepository}, state.addonRepository); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("helm cluster addon repository not found: %w", err)
+		}
+		return fmt.Errorf("getting helm cluster addon repository: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Reconciler) setStatusToProcessing(ctx context.Context, state *addonState) (bool, error) {
+	readyCond := apimeta.FindStatusCondition(state.addon.Status.Conditions, ConditionTypeReady)
+
+	if state.addon.Generation == state.addon.Status.ObservedGeneration ||
+		(readyCond != nil && readyCond.Status == metav1.ConditionFalse && readyCond.Reason == ReasonProcessing) {
+		return false, nil
+	}
+
+	apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+		Type:    ConditionTypeReady,
+		Status:  metav1.ConditionFalse,
+		Reason:  ReasonProcessing,
+		Message: "",
+	})
+
+	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+		return false, fmt.Errorf("updating helm cluster addon status: %w", err)
+	}
+
+	return true, nil
+}
+
+func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, state *addonState) error {
 	logger := log.FromContext(ctx)
 
-	repoType, err := rctx.GetRepositoryType()
+	repoType, err := utils.GetRepositoryType(state.addonRepository.Spec.URL)
 	if err != nil {
-		return pipelineStepResult{}, fmt.Errorf("getting repository type: %w", err)
+		return fmt.Errorf("getting repository type: %w", err)
 	}
 
-	rctx.internalHelmChart = &sourcev1.HelmChart{
+	state.internalHelmChart = &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.GetInternalHelmChartName(rctx.addon.Name),
+			Name:      utils.GetInternalHelmChartName(state.addon.Name),
 			Namespace: TargetNamespace,
 		},
 	}
 
-	op, err := controllerutil.CreateOrPatch(ctx, r.Client, rctx.internalHelmChart, func() error {
-		if rctx.internalHelmChart.Labels == nil {
-			rctx.internalHelmChart.Labels = map[string]string{}
+	op, err := controllerutil.CreateOrPatch(ctx, r.Client, state.internalHelmChart, func() error {
+		if state.internalHelmChart.Labels == nil {
+			state.internalHelmChart.Labels = map[string]string{}
 		}
 
-		rctx.internalHelmChart.Labels[LabelManagedBy] = LabelManagedByValue
-		rctx.internalHelmChart.Labels[LabelSourceName] = rctx.addon.Name
-		rctx.internalHelmChart.Labels[helmclusteraddonchart.LabelSourceName] = utils.GetHelmClusterAddonChartName(
-			rctx.addon.Spec.Chart.HelmClusterAddonRepository, rctx.addon.Spec.Chart.HelmClusterAddonChartName)
+		state.internalHelmChart.Labels[LabelManagedBy] = LabelManagedByValue
+		state.internalHelmChart.Labels[LabelSourceName] = state.addon.Name
+		state.internalHelmChart.Labels[helmclusteraddonchart.LabelSourceName] = utils.GetHelmClusterAddonChartName(
+			state.addon.Spec.Chart.HelmClusterAddonRepository, state.addon.Spec.Chart.HelmClusterAddonChartName)
 
-		rctx.internalHelmChart.Spec.Chart = rctx.addon.Spec.Chart.HelmClusterAddonChartName
-		rctx.internalHelmChart.Spec.Version = rctx.addon.Spec.Chart.Version
+		state.internalHelmChart.Spec.Chart = state.addon.Spec.Chart.HelmClusterAddonChartName
+		state.internalHelmChart.Spec.Version = state.addon.Spec.Chart.Version
 
 		switch repoType {
 		case utils.InternalHelmRepository:
-			rctx.internalHelmChart.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
+			state.internalHelmChart.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
 				Kind: sourcev1.HelmRepositoryKind,
-				Name: rctx.addon.Spec.Chart.HelmClusterAddonRepository,
+				Name: state.addon.Spec.Chart.HelmClusterAddonRepository,
 			}
 		case utils.InternalOCIRepository:
-			rctx.internalHelmChart.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
+			state.internalHelmChart.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
 				Kind: sourcev1.OCIRepositoryKind,
-				Name: rctx.addon.Spec.Chart.HelmClusterAddonRepository,
+				Name: state.addon.Spec.Chart.HelmClusterAddonRepository,
 			}
 		default:
 			return fmt.Errorf("invalid repository type: %s", repoType)
@@ -409,268 +329,306 @@ func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, rctx *Recon
 		return nil
 	})
 	if err != nil {
-		return pipelineStepResult{}, fmt.Errorf("cannot create or update internal nelm operator helm chart: %w", err)
+		return fmt.Errorf("creating or updating internal helm chart: %w", err)
 	}
 
-	if rctx.addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
-		apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-			Type:    ConditionTypeManaged,
-			Status:  metav1.ConditionFalse,
-			Reason:  ReasonUnmanagedModeActivated,
-			Message: "",
-		})
-	} else {
-		apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-			Type:    ConditionTypeManaged,
-			Status:  metav1.ConditionTrue,
-			Reason:  ReasonManagedModeActivated,
-			Message: "",
-		})
+	if utils.IsConditionObserved(state.internalHelmChart.GetConditions(), ConditionTypeReady, state.internalHelmChart.Generation) {
+		logger.Info("Successfully reconciled internal helm chart", "operation", op, "repository", state.addon.Spec.Chart.HelmClusterAddonRepository, "chart", state.addon.Spec.Chart.HelmClusterAddonChartName)
 	}
 
-	if op != controllerutil.OperationResultNone {
-		logger.Info("Successfully reconciled internal nelm operator helm chart", "operation", op, "repository", rctx.addon.Spec.Chart.HelmClusterAddonRepository, "chart", rctx.addon.Spec.Chart.HelmClusterAddonChartName)
-	}
-
-	return pipelineStepResult{}, nil
+	return nil
 }
 
-func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, rctx *ReconcileContext) (pipelineStepResult, error) {
+func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, state *addonState) error {
 	logger := log.FromContext(ctx)
 
-	rctx.internalHelmRelease = &helmv2.HelmRelease{
+	state.internalHelmRelease = &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.GetInternalHelmReleaseName(rctx.addon.Name),
+			Name:      utils.GetInternalHelmReleaseName(state.addon.Name),
 			Namespace: TargetNamespace,
 		},
 	}
 
-	op, err := controllerutil.CreateOrPatch(ctx, r.Client, rctx.internalHelmRelease, func() error {
-		if rctx.internalHelmRelease.Labels == nil {
-			rctx.internalHelmRelease.Labels = map[string]string{}
+	op, err := controllerutil.CreateOrPatch(ctx, r.Client, state.internalHelmRelease, func() error {
+		if state.internalHelmRelease.Labels == nil {
+			state.internalHelmRelease.Labels = map[string]string{}
 		}
 
-		rctx.internalHelmRelease.Labels[LabelManagedBy] = LabelManagedByValue
-		rctx.internalHelmRelease.Labels[LabelSourceName] = rctx.addon.Name
+		state.internalHelmRelease.Labels[LabelManagedBy] = LabelManagedByValue
+		state.internalHelmRelease.Labels[LabelSourceName] = state.addon.Name
 
-		rctx.internalHelmRelease.Spec.ReleaseName = rctx.addon.Name
-		rctx.internalHelmRelease.Spec.TargetNamespace = rctx.addon.Spec.Namespace
-		rctx.internalHelmRelease.Spec.Values = rctx.addon.Spec.Values
+		state.internalHelmRelease.Spec.ReleaseName = state.addon.Name
+		state.internalHelmRelease.Spec.TargetNamespace = state.addon.Spec.Namespace
+		state.internalHelmRelease.Spec.Values = state.addon.Spec.Values
 
-		rctx.internalHelmRelease.Spec.Suspend = false
+		state.internalHelmRelease.Spec.Suspend = false
 
-		if rctx.addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
-			rctx.internalHelmRelease.Spec.Suspend = true
-		}
-
-		rctx.internalHelmRelease.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
+		state.internalHelmRelease.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
 			Kind:      sourcev1.HelmChartKind,
-			Name:      utils.GetInternalHelmChartName(rctx.addon.Name),
+			Name:      utils.GetInternalHelmChartName(state.addon.Name),
 			Namespace: TargetNamespace,
 		}
 
 		return nil
 	})
 	if err != nil {
-		return pipelineStepResult{}, fmt.Errorf("reconcile internal nelm operator helm release: %w", err)
+		return fmt.Errorf("reconciling internal helm release: %w", err)
 	}
 
-	if op != controllerutil.OperationResultNone {
-		logger.Info("Successfully reconciled internal nelm operator helm release", "operation", op, "chart", rctx.addon.Spec.Chart.HelmClusterAddonChartName)
+	if utils.IsConditionObserved(state.internalHelmRelease.GetConditions(), ConditionTypeReady, state.internalHelmRelease.Generation) {
+		logger.Info("Successfully reconciled internal helm release", "operation", op, "chart", state.addon.Spec.Chart.HelmClusterAddonChartName)
 	}
 
-	return pipelineStepResult{}, nil
+	return nil
 }
 
-func (r *Reconciler) updateStatus(ctx context.Context, rctx *ReconcileContext) (pipelineStepResult, error) {
+func (r *Reconciler) updateStatus(ctx context.Context, state *addonState, syncErr error) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
-	if rctx.maintenanceModeEnabled {
-		return pipelineStepResult{}, nil
+	if syncErr != nil {
+		logger.Error(syncErr, "sync phase failed")
+
+		return r.updateStatusOnSyncError(ctx, state, syncErr)
 	}
 
-	addonReadyCond := apimeta.FindStatusCondition(rctx.addon.Status.Conditions, ConditionTypeReady)
-	if addonReadyCond == nil {
-		return pipelineStepResult{Requeue: true}, nil
-	}
-
-	joinedErr := errors.Join(rctx.err...)
-
-	if joinedErr != nil {
-		apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-			Type:    ConditionTypeReady,
-			Status:  metav1.ConditionFalse,
-			Reason:  ReasonReconcileFailed,
-			Message: joinedErr.Error(),
+	if state.addon.Spec.Maintenance != string(helmv1alpha1.NoResourceReconciliation) {
+		apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeManaged,
+			Status:             metav1.ConditionTrue,
+			Reason:             ReasonManagedModeActivated,
+			ObservedGeneration: state.addon.Generation,
 		})
-		rctx.addon.Status.ObservedGeneration = rctx.addon.Generation
-
-		if err := r.Client.Status().Patch(ctx, rctx.addon, client.MergeFrom(rctx.AddonDeepCopy())); err != nil {
-			return pipelineStepResult{}, fmt.Errorf("updating HelmClusterAddon status on error: %w", err)
-		}
-
-		return pipelineStepResult{}, nil
 	}
 
-	if rctx.internalHelmRelease == nil {
-		return pipelineStepResult{Requeue: true}, nil
+	helmChartReadyCond := apimeta.FindStatusCondition(state.internalHelmChart.Status.Conditions, ConditionTypeReady)
+	if helmChartReadyCond == nil || helmChartReadyCond.ObservedGeneration != state.internalHelmChart.Generation {
+		logger.Info("Internal helm chart is not observed yet")
+		return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
 	}
 
-	if rctx.internalHelmRelease.Status.ObservedGeneration != rctx.internalHelmRelease.Generation {
-		return pipelineStepResult{Requeue: true}, nil
+	if state.internalHelmChart.Status.Artifact == nil {
+		logger.Info("Internal helm chart has no artifact")
+		return r.updateStatusChartNotReady(ctx, state, helmChartReadyCond)
 	}
 
-	helmReleaseReadyCond := apimeta.FindStatusCondition(rctx.internalHelmRelease.Status.Conditions, ConditionTypeReady)
-	if helmReleaseReadyCond == nil {
-		return pipelineStepResult{Requeue: true}, nil
+	if state.internalHelmRelease == nil {
+		logger.Info("Internal helm release is not created yet")
+		return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
 	}
 
-	apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-		Type:    ConditionTypeReady,
-		Status:  helmReleaseReadyCond.Status,
-		Reason:  helmReleaseReadyCond.Reason,
-		Message: helmReleaseReadyCond.Message,
+	helmReleaseReadyCond := apimeta.FindStatusCondition(state.internalHelmRelease.Status.Conditions, ConditionTypeReady)
+	if helmReleaseReadyCond == nil || helmReleaseReadyCond.ObservedGeneration != state.internalHelmRelease.Generation {
+		logger.Info("Internal helm release is observed yet")
+		return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
+	}
+
+	apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+		Type:               ConditionTypeReady,
+		Status:             helmReleaseReadyCond.Status,
+		Reason:             helmReleaseReadyCond.Reason,
+		ObservedGeneration: state.addon.Generation,
+		Message:            helmReleaseReadyCond.Message,
 	})
 
-	terminal := false
-
-	helmChartReadyCond := apimeta.FindStatusCondition(rctx.internalHelmChart.Status.Conditions, ConditionTypeReady)
-	if helmChartReadyCond != nil {
-		if helmChartReadyCond.Status == metav1.ConditionTrue {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:    ConditionTypePartiallyDegraded,
-				Status:  metav1.ConditionFalse,
-				Reason:  helmReleaseReadyCond.Reason,
-				Message: "",
-			})
-		} else {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:    ConditionTypePartiallyDegraded,
-				Status:  metav1.ConditionTrue,
-				Reason:  helmChartReadyCond.Reason,
-				Message: "",
+	if helmReleaseReadyCond.Status == metav1.ConditionTrue {
+		if helmChartReadyCond.Status != metav1.ConditionTrue {
+			apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+				Type:               ConditionTypePartiallyDegraded,
+				Status:             metav1.ConditionTrue,
+				Reason:             helmChartReadyCond.Reason,
+				ObservedGeneration: state.addon.Generation,
+				Message:            "",
 			})
 		}
+		r.updateStatusHelmReleaseReady(ctx, state)
+	} else {
+		apimeta.RemoveStatusCondition(&state.addon.Status.Conditions, ConditionTypePartiallyDegraded)
+		r.updateStatusHelmReleaseFailed(state, helmReleaseReadyCond)
 	}
 
-	switch helmReleaseReadyCond.Reason {
-	case helmv2.InstallSucceededReason:
-		terminal = true
-		apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-			Type:    ConditionTypeInstalled,
-			Status:  metav1.ConditionTrue,
-			Reason:  ReasonInstallSucceeded,
-			Message: "",
+	state.addon.Status.ObservedGeneration = state.addon.Generation
+
+	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+		return reconcile.Result{}, fmt.Errorf("updating helm cluster addon status: %w", err)
+	}
+
+	return reconcile.Result{}, nil
+}
+
+func (r *Reconciler) updateStatusHelmReleaseReady(_ context.Context, state *addonState) {
+	firstInstallCompleted := apimeta.IsStatusConditionPresentAndEqual(state.addon.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue)
+
+	if !firstInstallCompleted {
+		apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeInstalled,
+			Status:             metav1.ConditionTrue,
+			Reason:             ReasonInstallSucceeded,
+			ObservedGeneration: state.addon.Generation,
+			Message:            "",
 		})
 
-		// Remove UpdateInstalled if present from a prior chart-change cycle.
-		apimeta.RemoveStatusCondition(&rctx.addon.Status.Conditions, ConditionTypeUpdateInstalled)
+		apimeta.RemoveStatusCondition(&state.addon.Status.Conditions, ConditionTypeConfigurationApplied)
+		apimeta.RemoveStatusCondition(&state.addon.Status.Conditions, ConditionTypeUpdateInstalled)
 
-		if apimeta.IsStatusConditionPresentAndEqual(rctx.internalHelmChart.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) &&
-			rctx.internalHelmChart.Generation == rctx.internalHelmChart.Generation {
-			rctx.addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
-				HelmClusterAddonChartName:  rctx.addon.Spec.Chart.HelmClusterAddonChartName,
-				HelmClusterAddonRepository: rctx.addon.Spec.Chart.HelmClusterAddonRepository,
-				Version:                    rctx.addon.Spec.Chart.Version,
+		if apimeta.IsStatusConditionPresentAndEqual(state.internalHelmChart.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) &&
+			state.internalHelmChart.Generation == state.internalHelmChart.Status.ObservedGeneration {
+			state.addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+				HelmClusterAddonChartName:  state.addon.Spec.Chart.HelmClusterAddonChartName,
+				HelmClusterAddonRepository: state.addon.Spec.Chart.HelmClusterAddonRepository,
+				Version:                    state.addon.Spec.Chart.Version,
 			}
 		}
 
-		rctx.addon.Status.LastAppliedValues = rctx.addon.Spec.Values
-	case helmv2.UpgradeSucceededReason:
-		terminal = true
-		lastAppliedChartUpdateRequired := isLastAppliedChartUpdateRequired(rctx.addon, rctx.internalHelmChart, rctx.internalHelmRelease)
+		state.addon.Status.LastAppliedValues = state.addon.Spec.Values
+	} else {
+		lastAppliedChartUpdateRequired := isLastAppliedChartUpdateRequired(state.addon, state.internalHelmChart, state.internalHelmRelease)
 
 		if lastAppliedChartUpdateRequired {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:    ConditionTypeUpdateInstalled,
-				Status:  metav1.ConditionTrue,
-				Reason:  ReasonUpdateSucceeded,
-				Message: "",
+			apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+				Type:               ConditionTypeUpdateInstalled,
+				Status:             metav1.ConditionTrue,
+				Reason:             ReasonUpdateSucceeded,
+				ObservedGeneration: state.addon.Generation,
+				Message:            "",
 			})
-			rctx.addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
-				HelmClusterAddonChartName:  rctx.addon.Spec.Chart.HelmClusterAddonChartName,
-				HelmClusterAddonRepository: rctx.addon.Spec.Chart.HelmClusterAddonRepository,
-				Version:                    rctx.addon.Spec.Chart.Version,
+			state.addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+				HelmClusterAddonChartName:  state.addon.Spec.Chart.HelmClusterAddonChartName,
+				HelmClusterAddonRepository: state.addon.Spec.Chart.HelmClusterAddonRepository,
+				Version:                    state.addon.Spec.Chart.Version,
 			}
+
+			return
 		}
 
-		if rctx.addon.Spec.Values != nil {
-			if addonValues, err := helmchartutil.ReadValues(rctx.addon.Spec.Values.Raw); err != nil {
-				logger.Error(err, "failed to decode helm cluster addon values; marking ConfigurationApplied without digest verification")
-				apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-					Type:    ConditionTypeConfigurationApplied,
-					Status:  metav1.ConditionTrue,
-					Reason:  ReasonUpdateSucceeded,
-					Message: "",
+		// Prevent from unnecessary status update if values already match.
+		if reflect.DeepEqual(state.addon.Status.LastAppliedValues, state.addon.Spec.Values) {
+			return
+		}
+
+		if state.addon.Spec.Values != nil {
+			addonValues, _ := helmchartutil.ReadValues(state.addon.Spec.Values.Raw)
+
+			latestRelease := state.internalHelmRelease.Status.History.Latest()
+			if latestRelease != nil && latestRelease.Status == InternalHelmReleaseDeployed &&
+				latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, addonValues).String() {
+				apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+					Type:               ConditionTypeConfigurationApplied,
+					Status:             metav1.ConditionTrue,
+					Reason:             ReasonUpdateSucceeded,
+					ObservedGeneration: state.addon.Generation,
+					Message:            "Applied configuration with values digest " + latestRelease.ConfigDigest,
 				})
-				rctx.addon.Status.LastAppliedValues = rctx.addon.Spec.Values
-			} else {
-				latestRelease := rctx.internalHelmRelease.Status.History.Latest()
-				if latestRelease != nil && latestRelease.Status == InternalHelmReleaseDeployed &&
-					latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, addonValues).String() {
-					apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-						Type:    ConditionTypeConfigurationApplied,
-						Status:  metav1.ConditionTrue,
-						Reason:  ReasonUpdateSucceeded,
-						Message: "Applied configuration with values digest " + latestRelease.ConfigDigest,
-					})
-					rctx.addon.Status.LastAppliedValues = rctx.addon.Spec.Values
-				}
+				state.addon.Status.LastAppliedValues = state.addon.Spec.Values
 			}
 		} else {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:    ConditionTypeConfigurationApplied,
-				Status:  metav1.ConditionTrue,
-				Reason:  ReasonUpdateSucceeded,
-				Message: "",
+			apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+				Type:               ConditionTypeConfigurationApplied,
+				Status:             metav1.ConditionTrue,
+				Reason:             ReasonUpdateSucceeded,
+				ObservedGeneration: state.addon.Generation,
+				Message:            "",
 			})
-			rctx.addon.Status.LastAppliedValues = nil
+			state.addon.Status.LastAppliedValues = nil
 		}
+	}
+}
 
-	case helmv2.InstallFailedReason:
-		terminal = true
-		apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-			Type:    ConditionTypeInstalled,
-			Status:  metav1.ConditionFalse,
-			Reason:  ReasonInstallFailed,
-			Message: helmReleaseReadyCond.Message,
+func (r *Reconciler) updateStatusHelmReleaseFailed(state *addonState, helmReleaseReadyCond *metav1.Condition) {
+	firstInstallCompleted := apimeta.IsStatusConditionPresentAndEqual(state.addon.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue)
+
+	if !firstInstallCompleted {
+		apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeInstalled,
+			Status:             metav1.ConditionFalse,
+			Reason:             helmReleaseReadyCond.Reason,
+			ObservedGeneration: state.addon.Generation,
+			Message:            helmReleaseReadyCond.Message,
 		})
 
-	case helmv2.UpgradeFailedReason:
-		terminal = true
-		if isChartSpecChanged(rctx.addon) {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:    ConditionTypeUpdateInstalled,
-				Status:  metav1.ConditionFalse,
-				Reason:  ReasonUpdateFailed,
-				Message: helmReleaseReadyCond.Message,
+		apimeta.RemoveStatusCondition(&state.addon.Status.Conditions, ConditionTypeConfigurationApplied)
+		apimeta.RemoveStatusCondition(&state.addon.Status.Conditions, ConditionTypeUpdateInstalled)
+	} else {
+		if !reflect.DeepEqual(state.addon.Status.LastAppliedValues, state.addon.Spec.Values) {
+			apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+				Type:               ConditionTypeConfigurationApplied,
+				Status:             metav1.ConditionFalse,
+				Reason:             helmReleaseReadyCond.Reason,
+				ObservedGeneration: state.addon.Generation,
+				Message:            helmReleaseReadyCond.Message,
 			})
 		} else {
-			apimeta.SetStatusCondition(&rctx.addon.Status.Conditions, metav1.Condition{
-				Type:    ConditionTypeConfigurationApplied,
-				Status:  metav1.ConditionFalse,
-				Reason:  ReasonUpdateFailed,
-				Message: helmReleaseReadyCond.Message,
+			apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+				Type:               ConditionTypeUpdateInstalled,
+				Status:             metav1.ConditionFalse,
+				Reason:             helmReleaseReadyCond.Reason,
+				ObservedGeneration: state.addon.Generation,
+				Message:            helmReleaseReadyCond.Message,
 			})
 		}
+	}
+}
 
-	case helmv2.ArtifactFailedReason, helmv2.RollbackFailedReason, helmv2.UninstallFailedReason:
-		terminal = true
+func (r *Reconciler) updateStatusOnSyncError(ctx context.Context, state *addonState, syncErr error) (reconcile.Result, error) {
+	apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+		Type:               ConditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             ReasonReconcileFailed,
+		ObservedGeneration: state.addon.Generation,
+		Message:            syncErr.Error(),
+	})
+
+	state.addon.Status.ObservedGeneration = state.addon.Generation
+
+	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+		return reconcile.Result{}, fmt.Errorf("patching status on error: %w", err)
 	}
 
-	if terminal {
-		rctx.addon.Status.ObservedGeneration = rctx.addon.Generation
+	return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
+}
+
+func (r *Reconciler) updateStatusChartNotReady(ctx context.Context, state *addonState, helmChartReadyCond *metav1.Condition) (reconcile.Result, error) {
+	apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+		Type:               ConditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             helmChartReadyCond.Reason,
+		ObservedGeneration: state.addon.Generation,
+		Message:            helmChartReadyCond.Message,
+	})
+
+	switch {
+	case state.addon.Status.LastAppliedChart == nil:
+		apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeInstalled,
+			Status:             metav1.ConditionFalse,
+			Reason:             helmChartReadyCond.Reason,
+			ObservedGeneration: state.addon.Generation,
+			Message:            helmChartReadyCond.Message,
+		})
+	case !reflect.DeepEqual(state.addon.Status.LastAppliedValues, state.addon.Spec.Values):
+		apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeConfigurationApplied,
+			Status:             metav1.ConditionFalse,
+			Reason:             helmChartReadyCond.Reason,
+			ObservedGeneration: state.addon.Generation,
+			Message:            helmChartReadyCond.Message,
+		})
+	default:
+		apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
+			Type:               ConditionTypeUpdateInstalled,
+			Status:             metav1.ConditionFalse,
+			Reason:             helmChartReadyCond.Reason,
+			ObservedGeneration: state.addon.Generation,
+			Message:            helmChartReadyCond.Message,
+		})
 	}
 
-	if err := r.Client.Status().Patch(ctx, rctx.addon, client.MergeFrom(rctx.AddonDeepCopy())); err != nil {
-		return pipelineStepResult{}, fmt.Errorf("updating helm cluster addon status: %w", err)
+	state.addon.Status.ObservedGeneration = state.addon.Generation
+
+	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+		return reconcile.Result{}, fmt.Errorf("patching status on error: %w", err)
 	}
 
-	if !terminal {
-		return pipelineStepResult{Requeue: true}, nil
-	}
-
-	return pipelineStepResult{}, nil
+	return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
 }
 
 func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace string, obj client.Object) error {
@@ -713,14 +671,4 @@ func isLastAppliedChartUpdateRequired(addon *helmv1alpha1.HelmClusterAddon, inte
 	}
 
 	return false
-}
-
-func isChartSpecChanged(addon *helmv1alpha1.HelmClusterAddon) bool {
-	if addon.Status.LastAppliedChart == nil {
-		return true
-	}
-
-	return addon.Spec.Chart.HelmClusterAddonChartName != addon.Status.LastAppliedChart.HelmClusterAddonChartName ||
-		addon.Spec.Chart.HelmClusterAddonRepository != addon.Status.LastAppliedChart.HelmClusterAddonRepository ||
-		addon.Spec.Chart.Version != addon.Status.LastAppliedChart.Version
 }

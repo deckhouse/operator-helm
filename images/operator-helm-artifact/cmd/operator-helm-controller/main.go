@@ -20,8 +20,8 @@ import (
 	"flag"
 	"os"
 
-	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonchart"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
+	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -32,8 +32,8 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddon"
+	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonchart"
 	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonrepository"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 )
 
 var scheme = runtime.NewScheme()

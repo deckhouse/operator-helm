@@ -1,6 +1,6 @@
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
-fromImage: {{ .ModuleNamePrefix }}distroless
+fromImage: base/distroless
 git:
   {{- include "image mount points" . }}
 import:
@@ -10,7 +10,5 @@ import:
   after: install
 imageSpec:
   config:
-    user: 64535
     workingDir: "/app"
     entrypoint: ["/app/operator-helm-controller"]
-

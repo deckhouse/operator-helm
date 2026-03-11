@@ -22,7 +22,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/deckhouse/operator-helm/pkg/utils"
+	"github.com/werf/3p-fluxcd-pkg/apis/meta"
+	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -35,8 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/werf/3p-fluxcd-pkg/apis/meta"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	"github.com/deckhouse/operator-helm/pkg/utils"
 )
 
 // Reconciler reconciles HelmClusterRepository objects by mirroring them
@@ -175,12 +175,16 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeSynced, fmt.Errorf("cannot fetch chart info from repository: %w", err), ReasonSyncFailed)
 	}
 
+	desiredCharts := make(map[string]struct{}, len(charts))
+
 	for chart, versions := range charts {
 		existing := &helmv1alpha1.HelmClusterAddonChart{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: utils.GetHelmClusterAddonChartName(repo.Name, chart),
 			},
 		}
+
+		desiredCharts[existing.Name] = struct{}{}
 
 		op, err := controllerutil.CreateOrPatch(ctx, r.Client, existing, func() error {
 			existing.OwnerReferences = []metav1.OwnerReference{
@@ -195,14 +199,15 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 			}
 
 			existing.Labels = map[string]string{
-				LabelManagedBy:  LabelManagedByValue,
-				LabelSourceName: repo.Name,
+				LabelDeckhouseHeritage: LabelDeckhouseHeritageValue,
+				LabelRepositoryName:    repo.Name,
+				LabelChartName:         chart,
 			}
 
 			return nil
 		})
 		if err != nil {
-			if statusUpdateErr := r.updateSyncCondition(ctx, repo, metav1.ConditionFalse, ReasonSyncFailed, ""); statusUpdateErr != nil {
+			if statusUpdateErr := r.updateSyncCondition(ctx, repo, metav1.ConditionFalse, ReasonSyncFailed, fmt.Sprintf("failed to create helm cluster addon chart: %s", err)); statusUpdateErr != nil {
 				return reconcile.Result{}, fmt.Errorf("failed to update sync condition: %w", err)
 			}
 
@@ -228,7 +233,7 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 		existing.Status.Versions = versions
 
 		if err := r.Client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
-			if statusUpdateErr := r.updateSyncCondition(ctx, repo, metav1.ConditionFalse, ReasonSyncFailed, ""); statusUpdateErr != nil {
+			if statusUpdateErr := r.updateSyncCondition(ctx, repo, metav1.ConditionFalse, ReasonSyncFailed, fmt.Sprintf("failed to update chart versions: %s", err)); statusUpdateErr != nil {
 				return reconcile.Result{}, fmt.Errorf("failed to update sync condition: %w", err)
 			}
 
@@ -236,6 +241,28 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 		}
 
 		logger.Info("Successfully sync HelmClusterAddonChart versions", "operation", op, "repository", repo.Name, "chart", chart)
+	}
+
+	var existingCharts helmv1alpha1.HelmClusterAddonChartList
+	if err := r.Client.List(ctx, &existingCharts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
+		return reconcile.Result{}, fmt.Errorf("listing existing HelmClusterAddonCharts for pruning: %w", err)
+	}
+
+	for i := range existingCharts.Items {
+		staleChart := &existingCharts.Items[i]
+		if _, wanted := desiredCharts[staleChart.Name]; wanted {
+			continue
+		}
+
+		if err := r.ensureResourceDeleted(ctx, types.NamespacedName{Name: staleChart.Name}, staleChart); err != nil {
+			if statusUpdateErr := r.updateSyncCondition(ctx, repo, metav1.ConditionFalse, ReasonSyncFailed, fmt.Sprintf("failed to delete stale chart %s: %s", staleChart.Name, err)); statusUpdateErr != nil {
+				return reconcile.Result{}, fmt.Errorf("failed to update sync condition after prune error: %w", statusUpdateErr)
+			}
+
+			return reconcile.Result{}, fmt.Errorf("deleting stale HelmClusterAddonChart %s: %w", staleChart.Name, err)
+		}
+
+		logger.Info("Deleted stale HelmClusterAddonChart", "chart", staleChart.Name, "repository", repo.Name)
 	}
 
 	logger.Info(fmt.Sprintf("Scheduling next helm charts sync in %s", DefaultSyncInterval))
@@ -315,9 +342,9 @@ func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *h
 
 	if op != controllerutil.OperationResultNone {
 		logger.Info("Successfully reconciled oci repository", "operation", op)
-	} else {
-		//	TODO: implement chats sync for OCI repository
 	}
+
+	// TODO: implement chats sync for OCI repository
 
 	if _, err := r.updateSuccessStatus(ctx, repo, existing.Status.Conditions); err != nil {
 		return reconcile.Result{}, err
@@ -330,7 +357,7 @@ func (r *Reconciler) reconcileInternalRepositoryAuthSecret(ctx context.Context, 
 	secretName := utils.GetInternalRepositoryAuthSecretName(repoType, repo.Name)
 
 	if repo.Spec.Auth == nil {
-		if err := r.ensureResourceDeleted(ctx, secretName, TargetNamespace, &corev1.Secret{}); err != nil {
+		if err := r.ensureResourceDeleted(ctx, types.NamespacedName{Name: secretName, Namespace: TargetNamespace}, &corev1.Secret{}); err != nil {
 			return fmt.Errorf("cannot delete obsolete auth secret: %w", err)
 		}
 
@@ -367,7 +394,7 @@ func (r *Reconciler) reconcileInternalRepositoryTLSSecret(ctx context.Context, r
 	secretName := utils.GetInternalRepositoryTLSSecretName(repoType, repo.Name)
 
 	if repo.Spec.CACertificate == "" {
-		if err := r.ensureResourceDeleted(ctx, secretName, TargetNamespace, &corev1.Secret{}); err != nil {
+		if err := r.ensureResourceDeleted(ctx, types.NamespacedName{Name: secretName, Namespace: TargetNamespace}, &corev1.Secret{}); err != nil {
 			return fmt.Errorf("cannot delete obsolete tls secret: %w", err)
 		}
 
@@ -401,8 +428,8 @@ func (r *Reconciler) reconcileInternalRepositoryTLSSecret(ctx context.Context, r
 	return nil
 }
 
-func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace string, obj client.Object) error {
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
+func (r *Reconciler) ensureResourceDeleted(ctx context.Context, key types.NamespacedName, obj client.Object) error {
+	if err := r.Client.Get(ctx, key, obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -426,8 +453,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 
 	if err := r.ensureResourceDeleted(
 		ctx,
-		utils.GetInternalRepositoryAuthSecretName(repoType, repo.Name),
-		TargetNamespace,
+		types.NamespacedName{Name: utils.GetInternalRepositoryAuthSecretName(repoType, repo.Name), Namespace: TargetNamespace},
 		&corev1.Secret{},
 	); err != nil {
 		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeReady, fmt.Errorf("deleting internal auth secret: %w", err), ReasonCleanupFailed)
@@ -435,8 +461,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 
 	if err := r.ensureResourceDeleted(
 		ctx,
-		utils.GetInternalRepositoryTLSSecretName(repoType, repo.Name),
-		TargetNamespace,
+		types.NamespacedName{Name: utils.GetInternalRepositoryTLSSecretName(repoType, repo.Name), Namespace: TargetNamespace},
 		&corev1.Secret{},
 	); err != nil {
 		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeReady, fmt.Errorf("deleting internal tls secret: %w", err), ReasonCleanupFailed)
@@ -453,7 +478,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeReady, fmt.Errorf("cannot remove unsupported repisotory type: %s", repoType), ReasonCleanupFailed)
 	}
 
-	if err := r.ensureResourceDeleted(ctx, repo.Name, TargetNamespace, internalRepository); err != nil {
+	if err := r.ensureResourceDeleted(ctx, types.NamespacedName{Name: repo.Name, Namespace: TargetNamespace}, internalRepository); err != nil {
 		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeReady, fmt.Errorf("deleting internal repository: %w", err), ReasonCleanupFailed)
 	}
 

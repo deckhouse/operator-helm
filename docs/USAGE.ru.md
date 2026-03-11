@@ -31,7 +31,7 @@ weight: 15
   metadata:
     name: operator-helm
   spec:
-    enabled
+    enabled: true
   ```
 
 ## Выключение модуля

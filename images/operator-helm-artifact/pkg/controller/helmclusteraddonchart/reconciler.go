@@ -52,7 +52,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return ctrl.Result{}, fmt.Errorf("failed to list internal helm chart list: %w", err)
 	}
 
-	needsUpdate := false
+	updateRequired := false
 	for i, v := range chart.Status.Versions {
 		found := false
 		for _, child := range internalCharts.Items {
@@ -64,11 +64,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		if chart.Status.Versions[i].Pulled != found {
 			chart.Status.Versions[i].Pulled = found
-			needsUpdate = true
+			updateRequired = true
 		}
 	}
 
-	if needsUpdate {
+	if updateRequired {
 		if err := r.Client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to update HelmClusterAddonChart status: %w", err)
 		}

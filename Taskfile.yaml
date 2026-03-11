@@ -5,7 +5,7 @@ silent: true
 vars:
   deckhouse_lib_helm_ver: 1.55.1
   target: ""
-  VALIDATION_FILES: "tools/validation/{main,messages,diff,no_cyrillic,doc_changes}.go"
+  VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
 
 tasks:
   check-werf:
@@ -58,23 +58,10 @@ tasks:
           -v ./:/tmp/operator-helm ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
           sh -c "cd /tmp/operator-helm ; prettier -w \"**/*.yaml\" \"**/*.yml\""
 
-  dev:addlicense:
-    desc: |-
-      Add Flant CE license to files sh,go,py. Default directory is root of project, custom directory path can be passed like: "task dev:addlicense -- <somedir>"
-    cmds:
-      - |
-        {{if .CLI_ARGS}}
-          go run tools/addlicense/{main,variables,msg,utils}.go -directory {{ .CLI_ARGS }}
-        {{else}}
-          go run tools/addlicense/{main,variables,msg,utils}.go -directory ./
-        {{end}}
-
   lint:
     cmds:
       - task: lint:doc-ru
       - task: lint:prettier:yaml
-      - task: virtualization-controller:dvcr:lint
-      - task: virtualization-controller:lint
 
   lint:doc-ru:
     desc: "Check the correspondence between description fields in the original crd and the Russian language version"
@@ -88,16 +75,11 @@ tasks:
   lint:prettier:yaml:
     desc: "Check if yaml files are prettier-formatted."
     cmds:
-      # TODO: update image referecne
+      # TODO: update image reference
       - |
         docker run --rm \
           -v ./:/tmp/operator-nelm ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
           sh -c "cd /tmp/operator-nelm ; prettier -c \"**/*.yaml\" \"**/*.yml\""
-
-  validation:no-cyrillic:
-    desc: "No cyrillic"
-    cmds:
-      - go run {{ .VALIDATION_FILES }} --type no-cyrillic
 
   validation:doc-changes:
     desc: "Doc-changes"

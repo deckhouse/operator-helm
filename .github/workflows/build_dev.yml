@@ -34,6 +34,68 @@ jobs:
           DMT_METRICS_URL: ${{ secrets.DMT_METRICS_URL }}
           DMT_METRICS_TOKEN: ${{ secrets.DMT_METRICS_TOKEN }}
 
+  lint_go:
+    runs-on: [self-hosted, large]
+    name: Run golangci-lint
+    steps:
+      - name: Set up Go ${{ vars.GO_VERSION }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: "${{ vars.GO_VERSION }}"
+
+      - uses: actions/checkout@v4
+
+      - name: Install golangci-lint
+        run: |
+          echo "Installing golangci-lint..."
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v${{ vars.GOLANGCI_LINT_VERSION}}
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          echo "golangci-lint v${{ vars.GOLANGCI_LINT_VERSION}} installed successfully!"
+
+      - name: Run golangci-lint in every directory with .golangci.yaml
+        shell: bash
+        run: |
+          # set -eo pipefail
+          set -e
+
+          # Find directories containing .golangci.yaml
+          mapfile -t config_dirs < <(
+            find . \
+              -type f -name '.golangci.yaml' -printf '%h\0' | \
+            xargs -0 -n1 | sort -u
+          )
+          count=${#config_dirs[@]}
+          echo "::notice title=Lint Setup::🔍 Found $count directories with linter configurations"
+
+          report=""
+          error_count=0
+
+          for dir in "${config_dirs[@]}"; do
+            find_errors=0
+            cd "$dir" || { echo "::error::Failed to access directory $dir"; continue; }
+
+            if ! output=$(golangci-lint run); then
+              error_count=$(( error_count + 1 ))
+              echo "::group::📂 Linting directory ❌: $dir"
+              echo -e "❌ Errors:\n$output\n"
+            else
+              echo "::group::📂 Linting directory ✅: $dir"
+              echo -e "✅ All check passed\n"
+            fi
+
+            cd - &>/dev/null
+
+            echo "::endgroup::"
+          done
+
+          has_errors=$( [[ "$error_count" -gt 0 ]] && echo true || echo false)
+          echo "has_errors=$has_errors" >> "$GITHUB_OUTPUT"
+
+          if [ $error_count -gt 0 ]; then
+            echo "$error_count error more than 0, exit 1"
+            exit 1
+          fi
+
   build_dev:
     runs-on: [self-hosted, large]
     name: Build and Push images

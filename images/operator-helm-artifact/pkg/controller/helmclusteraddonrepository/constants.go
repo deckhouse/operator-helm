@@ -58,6 +58,15 @@ const (
 	// LabelSourceName stores the name of the source facade resource.
 	LabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 
+	// LabelChartName stores chart name.
+	LabelChartName = "chart"
+
+	// LabelRepositoryName stores HelmClusterAddonRepository name.
+	LabelRepositoryName = "repository"
+
+	LabelDeckhouseHeritage      = "heritage"
+	LabelDeckhouseHeritageValue = "deckhouse"
+
 	// DefaultInterval is the default reconciliation interval for the internal repository.
 	DefaultInterval = 5 * time.Minute
 
