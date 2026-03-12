@@ -2,7 +2,7 @@ name: Deploy Dev
 
 on:
   workflow_dispatch:
-   inputs:
+    inputs:
       release_channel:
         description: "Select the release channel"
         type: choice
@@ -20,7 +20,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, large]
     name: Deploy the module
     steps:
       - uses: actions/checkout@v4
