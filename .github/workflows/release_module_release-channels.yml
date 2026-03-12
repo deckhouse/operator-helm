@@ -15,500 +15,486 @@
 name: Deploy Prod
 
 env:
-    MODULES_REGISTRY: ${{ vars.PROD_REGISTRY }}
-    MODULE_SOURCE_NAME: ${{ vars.PROD_MODULE_SOURCE_NAME }}
-    CI_COMMIT_REF_NAME: ${{ github.ref_name }}
-    MODULES_MODULE_NAME: ${{ vars.MODULE_NAME }}
-    RELEASE_CHANNEL: ${{ github.event.inputs.channel }}
-    MODULES_REGISTRY_LOGIN: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
-    MODULES_REGISTRY_PASSWORD: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
-    MODULES_MODULE_TAG: ${{ github.event.inputs.tag }}
-    SOURCE_REPO: ${{ secrets.SOURCE_REPO }}
-    SOURCE_REPO_GIT: ${{secrets.SOURCE_REPO_GIT}}
+  MODULES_REGISTRY: ${{ vars.PROD_REGISTRY }}
+  MODULE_SOURCE_NAME: ${{ vars.PROD_MODULE_SOURCE_NAME }}
+  CI_COMMIT_REF_NAME: ${{ github.ref_name }}
+  MODULES_MODULE_NAME: ${{ vars.MODULES_MODULE_NAME }}
+  RELEASE_CHANNEL: ${{ github.event.inputs.channel }}
+  MODULES_REGISTRY_LOGIN: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
+  MODULES_REGISTRY_PASSWORD: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
+  MODULES_MODULE_TAG: ${{ github.event.inputs.tag }}
 
 on:
-    workflow_dispatch:
-        inputs:
-            channel:
-                description: "Select channel"
-                type: choice
-                default: alpha
-                options:
-                    - "alpha"
-                    - "beta"
-                    - "early-access"
-                    - "stable"
-                    - "rock-solid"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Select channel"
+        type: choice
+        default: alpha
+        options:
+          - "alpha"
+          - "beta"
+          - "early-access"
+          - "stable"
+          - "rock-solid"
 
-            ce:
-                type: boolean
-                description: CE
-            ee:
-                type: boolean
-                description: EE (also build CE ans SEPlus)
+      ce:
+        type: boolean
+        description: CE
+      ee:
+        type: boolean
+        description: EE (also build CE ans SEPlus)
 
-            tag:
-                description: "Tag of the module, example v1.21.1"
-                type: string
-                required: true
+      tag:
+        description: "Tag of the module, example v1.21.1"
+        type: string
+        required: true
 
-            enableBuild:
-                type: boolean
-                default: true
-                description: "Set to true if build is required"
+      enableBuild:
+        type: boolean
+        default: true
+        description: "Set to true if build is required"
 
-            check_only:
-                type: boolean
-                description: "Run only check version on release channel"
-                default: false
+      check_only:
+        type: boolean
+        description: "Run only check version on release channel"
+        default: false
 
-            send_results_to_loop:
-                type: boolean
-                description: "Send results to Loop"
-                default: true
+      send_results_to_loop:
+        type: boolean
+        description: "Send results to Loop"
+        default: true
 
 defaults:
-    run:
-        shell: bash
+  run:
+    shell: bash
 
 concurrency:
-    group: "${{ github.workflow }}-${{ github.event.inputs.channel }}-${{ github.event.inputs.tag }}"
-    cancel-in-progress: true
+  group: "${{ github.workflow }}-${{ github.event.inputs.channel }}-${{ github.event.inputs.tag }}"
+  cancel-in-progress: true
 
 jobs:
-    print-vars:
-        runs-on: [self-hosted, large]
-        name: Print vars
-        steps:
-            - name: PRINT VARS
-              run: |
-                  echo MODULES_REGISTRY=$MODULES_REGISTRY
-                  echo MODULES_MODULE_SOURCE=$MODULES_MODULE_SOURCE
-                  echo CI_COMMIT_REF_NAME=$CI_COMMIT_REF_NAME
-                  echo MODULES_MODULE_NAME=$MODULES_MODULE_NAME
-                  echo RELEASE_CHANNEL=$RELEASE_CHANNEL
-                  echo MODULE_EDITION=$MODULE_EDITION
-                  echo DOCKER_CONFIG=$DOCKER_CONFIG
-              shell: bash
+  print-vars:
+    runs-on: [self-hosted, large]
+    name: Print vars
+    steps:
+      - name: PRINT VARS
+        run: |
+          echo MODULES_REGISTRY=$MODULES_REGISTRY
+          echo MODULES_MODULE_SOURCE=$MODULES_MODULE_SOURCE
+          echo CI_COMMIT_REF_NAME=$CI_COMMIT_REF_NAME
+          echo MODULES_MODULE_NAME=$MODULES_MODULE_NAME
+          echo RELEASE_CHANNEL=$RELEASE_CHANNEL
+          echo MODULE_EDITION=$MODULE_EDITION
+          echo DOCKER_CONFIG=$DOCKER_CONFIG
+        shell: bash
 
-            - name: Check that input tag is valid
-              id: get-tag
-              run: |
-                  TAG="${{ github.event.inputs.tag }}"
-                  echo "Processing tag: $TAG"
+      - name: Check that input tag is valid
+        id: get-tag
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          echo "Processing tag: $TAG"
 
-                  # Check if tag matches vX.Y.Z pattern (release)
-                  if echo "$TAG" | grep -P '^v\d+\.\d+\.\d+$' > /dev/null; then
-                    echo "$TAG is a valid release tag"
-                  else
-                    echo "Error: Invalid tag format. Use format vX.Y.Z"
-                    exit 1
-                  fi
-              shell: bash
+          # Check if tag matches vX.Y.Z pattern (release)
+          if echo "$TAG" | grep -P '^v\d+\.\d+\.\d+$' > /dev/null; then
+            echo "$TAG is a valid release tag"
+          else
+            echo "Error: Invalid tag format. Use format vX.Y.Z"
+            exit 1
+          fi
+        shell: bash
 
-    job-CE:
-        name: Edition CE
-        runs-on: [self-hosted, large]
-        needs: print-vars
-        if: inputs.ce && !inputs.check_only
-        steps:
-            - name: Setup Docker config
-              run: |
-                  echo "DOCKER_CONFIG=$(mktemp -d)" >> $GITHUB_ENV
+  job-CE:
+    name: Edition CE
+    runs-on: [self-hosted, large]
+    needs: print-vars
+    if: inputs.ce && !inputs.check_only
+    steps:
+      - name: Setup Docker config
+        run: |
+          echo "DOCKER_CONFIG=$(mktemp -d)" >> $GITHUB_ENV
 
-            - run: echo "CE"
-            - name: SET VAR
-              id: set_vars
-              run: |
-                  echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/ce/modules" >> "$GITHUB_ENV"
-                  echo "MODULE_EDITION=CE" >> "$GITHUB_ENV"
-                  echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/ce/modules" >> "$GITHUB_OUTPUT"
-                  echo "MODULE_EDITION=CE" >> "$GITHUB_OUTPUT"
-            - name: ECHO VAR
-              run: |
-                  echo $MODULES_MODULE_SOURCE
-            - uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
-                  ref: ${{ github.event.inputs.tag }}
+      - run: echo "CE"
+      - name: SET VAR
+        id: set_vars
+        run: |
+          echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/ce/modules" >> "$GITHUB_ENV"
+          echo "MODULE_EDITION=CE" >> "$GITHUB_ENV"
+          echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/ce/modules" >> "$GITHUB_OUTPUT"
+          echo "MODULE_EDITION=CE" >> "$GITHUB_OUTPUT"
+      - name: ECHO VAR
+        run: |
+          echo $MODULES_MODULE_SOURCE
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag }}
 
-            - name: Login to PROD_REGISTRY
-              uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.PROD_REGISTRY }}
-                  registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
-                  registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
-            - name: Login to DEV_REGISTRY
-              uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.DEV_REGISTRY }}
-                  registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
-                  registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
+      - name: Login to PROD_REGISTRY
+        uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.PROD_REGISTRY }}
+          registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
+      - name: Login to DEV_REGISTRY
+        uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.DEV_REGISTRY }}
+          registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
 
-            - if: ${{ inputs.enableBuild }}
-              uses: deckhouse/modules-actions/build@v4
-              with:
-                  module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
-                  module_name: ${{ vars.MODULE_NAME }}
-                  module_tag: ${{ github.event.inputs.tag }}
-                  source_repo: ${{secrets.SOURCE_REPO_GIT}}
-                  source_repo_ssh_key: ${{ secrets.SOURCE_REPO_SSH_KEY }}
-                  secondary_repo: "${{ vars.DEV_MODULE_SOURCE }}/${{ vars.MODULE_NAME }}"
+      - if: ${{ inputs.enableBuild }}
+        uses: deckhouse/modules-actions/build@v4
+        with:
+          module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
+          module_tag: ${{ github.event.inputs.tag }}
 
-            - uses: deckhouse/modules-actions/deploy@v2
-              with:
-                  module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
-                  module_name: ${{ vars.MODULE_NAME }}
-                  module_tag: ${{ github.event.inputs.tag }}
-                  release_channel: ${{ github.event.inputs.channel }}
+      - uses: deckhouse/modules-actions/deploy@v2
+        with:
+          module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
+          module_tag: ${{ github.event.inputs.tag }}
+          release_channel: ${{ github.event.inputs.channel }}
 
-            - name: Cleanup Docker config
-              run: |
-                  rm -rf $DOCKER_CONFIG
+      - name: Cleanup Docker config
+        run: |
+          rm -rf $DOCKER_CONFIG
 
-    job-EE:
-        name: Edition EE
-        needs: print-vars
-        runs-on: [self-hosted, large]
-        if: inputs.ee && !inputs.check_only
-        steps:
-            - name: Setup Docker config
-              run: |
-                  echo "DOCKER_CONFIG=$(mktemp -d)" >> $GITHUB_ENV
+  job-EE:
+    name: Edition EE
+    needs: print-vars
+    runs-on: [self-hosted, large]
+    if: inputs.ee && !inputs.check_only
+    steps:
+      - name: Setup Docker config
+        run: |
+          echo "DOCKER_CONFIG=$(mktemp -d)" >> $GITHUB_ENV
 
-            - run: echo "EE"
-            - name: SET VAR
-              id: set_vars
-              run: |
-                  echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/ee/modules" >> "$GITHUB_ENV"
-                  echo "MODULE_EDITION=EE" >> "$GITHUB_ENV"
-                  echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/ee/modules" >> "$GITHUB_OUTPUT"
-                  echo "MODULE_EDITION=EE" >> "$GITHUB_OUTPUT"
-            - name: ECHO VAR
-              run: |
-                  echo $MODULES_MODULE_SOURCE
-            - uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
-                  ref: ${{ github.event.inputs.tag }}
+      - run: echo "EE"
+      - name: SET VAR
+        id: set_vars
+        run: |
+          echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/ee/modules" >> "$GITHUB_ENV"
+          echo "MODULE_EDITION=EE" >> "$GITHUB_ENV"
+          echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/ee/modules" >> "$GITHUB_OUTPUT"
+          echo "MODULE_EDITION=EE" >> "$GITHUB_OUTPUT"
+      - name: ECHO VAR
+        run: |
+          echo $MODULES_MODULE_SOURCE
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag }}
 
-            - uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.PROD_REGISTRY }}
-                  registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
-                  registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
+      - uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.PROD_REGISTRY }}
+          registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
 
-            - name: Login to PROD_REGISTRY
-              uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.PROD_REGISTRY }}
-                  registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
-                  registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
-            - name: Login to DEV_REGISTRY
-              uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.DEV_REGISTRY }}
-                  registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
-                  registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
+      - name: Login to PROD_REGISTRY
+        uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.PROD_REGISTRY }}
+          registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
+      - name: Login to DEV_REGISTRY
+        uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.DEV_REGISTRY }}
+          registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
 
-            - if: ${{ inputs.enableBuild }}
-              uses: deckhouse/modules-actions/build@v4
-              with:
-                  module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
-                  module_name: ${{ vars.MODULE_NAME }}
-                  module_tag: ${{ github.event.inputs.tag }}
-                  source_repo: ${{secrets.SOURCE_REPO_GIT}}
-                  source_repo_ssh_key: ${{ secrets.SOURCE_REPO_SSH_KEY }}
-                  secondary_repo: "${{ vars.DEV_MODULE_SOURCE }}/${{ vars.MODULE_NAME }}"
+      - if: ${{ inputs.enableBuild }}
+        uses: deckhouse/modules-actions/build@v4
+        with:
+          module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
+          module_tag: ${{ github.event.inputs.tag }}
 
-            - uses: deckhouse/modules-actions/deploy@v2
-              with:
-                  module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
-                  module_name: ${{ vars.MODULE_NAME }}
-                  module_tag: ${{ github.event.inputs.tag }}
-                  release_channel: ${{ github.event.inputs.channel }}
+      - uses: deckhouse/modules-actions/deploy@v2
+        with:
+          module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
+          module_tag: ${{ github.event.inputs.tag }}
+          release_channel: ${{ github.event.inputs.channel }}
 
-            - name: Cleanup Docker config
-              run: |
-                  rm -rf $DOCKER_CONFIG
+      - name: Cleanup Docker config
+        run: |
+          rm -rf $DOCKER_CONFIG
 
-    job-SE-Plus:
-        name: Edition SE Plus
-        needs: job-EE
-        runs-on: [self-hosted, large]
-        steps:
-            - name: Setup Docker config
-              run: |
-                  echo "DOCKER_CONFIG=$(mktemp -d)" >> $GITHUB_ENV
+  job-SE-Plus:
+    name: Edition SE Plus
+    needs: job-EE
+    runs-on: [self-hosted, large]
+    steps:
+      - name: Setup Docker config
+        run: |
+          echo "DOCKER_CONFIG=$(mktemp -d)" >> $GITHUB_ENV
 
-            - run: echo "SE Plus"
-            - name: SET VAR
-              id: set_vars
-              run: |
-                  echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/se-plus/modules" >> "$GITHUB_ENV"
-                  echo "MODULE_EDITION=EE" >> "$GITHUB_ENV"
-                  echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/se-plus/modules" >> "$GITHUB_OUTPUT"
-                  echo "MODULE_EDITION=EE" >> "$GITHUB_OUTPUT"
-            - name: ECHO VAR
-              run: |
-                  echo $MODULES_MODULE_SOURCE
-            - uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
-                  ref: ${{ github.event.inputs.tag }}
+      - run: echo "SE Plus"
+      - name: SET VAR
+        id: set_vars
+        run: |
+          echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/se-plus/modules" >> "$GITHUB_ENV"
+          echo "MODULE_EDITION=EE" >> "$GITHUB_ENV"
+          echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/se-plus/modules" >> "$GITHUB_OUTPUT"
+          echo "MODULE_EDITION=EE" >> "$GITHUB_OUTPUT"
+      - name: ECHO VAR
+        run: |
+          echo $MODULES_MODULE_SOURCE
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag }}
 
-            - name: Login to PROD_REGISTRY
-              uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.PROD_REGISTRY }}
-                  registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
-                  registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
-            - name: Login to DEV_REGISTRY
-              uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.DEV_REGISTRY }}
-                  registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
-                  registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
+      - name: Login to PROD_REGISTRY
+        uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.PROD_REGISTRY }}
+          registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
+      - name: Login to DEV_REGISTRY
+        uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.DEV_REGISTRY }}
+          registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
 
-            - if: ${{ inputs.enableBuild }}
-              uses: deckhouse/modules-actions/build@v4
-              with:
-                  module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
-                  module_name: ${{ vars.MODULE_NAME }}
-                  module_tag: ${{ github.event.inputs.tag }}
-                  source_repo: ${{secrets.SOURCE_REPO_GIT}}
-                  source_repo_ssh_key: ${{ secrets.SOURCE_REPO_SSH_KEY }}
-                  secondary_repo: "${{ vars.DEV_MODULE_SOURCE }}/${{ vars.MODULE_NAME }}"
+      - if: ${{ inputs.enableBuild }}
+        uses: deckhouse/modules-actions/build@v4
+        with:
+          module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
+          module_tag: ${{ github.event.inputs.tag }}
 
-            - uses: deckhouse/modules-actions/deploy@v2
-              with:
-                  module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
-                  module_name: ${{ vars.MODULE_NAME }}
-                  module_tag: ${{ github.event.inputs.tag }}
-                  release_channel: ${{ github.event.inputs.channel }}
+      - uses: deckhouse/modules-actions/deploy@v2
+        with:
+          module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
+          module_tag: ${{ github.event.inputs.tag }}
+          release_channel: ${{ github.event.inputs.channel }}
 
-            - name: Cleanup Docker config
-              run: |
-                  rm -rf $DOCKER_CONFIG
+      - name: Cleanup Docker config
+        run: |
+          rm -rf $DOCKER_CONFIG
 
-    job-FE:
-        name: Edition FE
-        needs: job-EE
-        runs-on: [self-hosted, large]
-        steps:
-            - name: Setup Docker config
-              run: |
-                  echo "DOCKER_CONFIG=$(mktemp -d)" >> $GITHUB_ENV
+  job-FE:
+    name: Edition FE
+    needs: job-EE
+    runs-on: [self-hosted, large]
+    steps:
+      - name: Setup Docker config
+        run: |
+          echo "DOCKER_CONFIG=$(mktemp -d)" >> $GITHUB_ENV
 
-            - run: echo "FE"
-            - name: SET VAR
-              id: set_vars
-              run: |
-                  echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/fe/modules" >> "$GITHUB_ENV"
-                  echo "MODULE_EDITION=EE" >> "$GITHUB_ENV"
-                  echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/fe/modules" >> "$GITHUB_OUTPUT"
-                  echo "MODULE_EDITION=EE" >> "$GITHUB_OUTPUT"
-            - name: ECHO VAR
-              run: |
-                  echo $MODULES_MODULE_SOURCE
-            - name: Validation for tag
-              run: |
-                  echo ${{ github.event.inputs.tag }} | grep -P '^v\d+\.\d+\.\d+'
-              shell: bash
-            - uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
-                  ref: ${{ github.event.inputs.tag }}
+      - run: echo "FE"
+      - name: SET VAR
+        id: set_vars
+        run: |
+          echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/fe/modules" >> "$GITHUB_ENV"
+          echo "MODULE_EDITION=EE" >> "$GITHUB_ENV"
+          echo "MODULES_MODULE_SOURCE=$MODULES_REGISTRY/$MODULE_SOURCE_NAME/fe/modules" >> "$GITHUB_OUTPUT"
+          echo "MODULE_EDITION=EE" >> "$GITHUB_OUTPUT"
+      - name: ECHO VAR
+        run: |
+          echo $MODULES_MODULE_SOURCE
+      - name: Validation for tag
+        run: |
+          echo ${{ github.event.inputs.tag }} | grep -P '^v\d+\.\d+\.\d+'
+        shell: bash
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag }}
 
-            - name: Login to PROD_REGISTRY
-              uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.PROD_REGISTRY }}
-                  registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
-                  registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
-            - name: Login to DEV_REGISTRY
-              uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.DEV_REGISTRY }}
-                  registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
-                  registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
+      - name: Login to PROD_REGISTRY
+        uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.PROD_REGISTRY }}
+          registry_login: ${{ vars.PROD_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.PROD_MODULES_REGISTRY_PASSWORD }}
+      - name: Login to DEV_REGISTRY
+        uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.DEV_REGISTRY }}
+          registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
 
-            - if: ${{ inputs.enableBuild }}
-              uses: deckhouse/modules-actions/build@v4
-              with:
-                  module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
-                  module_name: ${{ vars.MODULE_NAME }}
-                  module_tag: ${{ github.event.inputs.tag }}
-                  source_repo: ${{secrets.SOURCE_REPO_GIT}}
-                  source_repo_ssh_key: ${{ secrets.SOURCE_REPO_SSH_KEY }}
-                  secondary_repo: "${{ vars.DEV_MODULE_SOURCE }}/${{ vars.MODULE_NAME }}"
+      - if: ${{ inputs.enableBuild }}
+        uses: deckhouse/modules-actions/build@v4
+        with:
+          module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
+          module_tag: ${{ github.event.inputs.tag }}
 
-            - uses: deckhouse/modules-actions/deploy@v2
-              with:
-                  module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
-                  module_name: ${{ vars.MODULE_NAME }}
-                  module_tag: ${{ github.event.inputs.tag }}
-                  release_channel: ${{ github.event.inputs.channel }}
+      - uses: deckhouse/modules-actions/deploy@v2
+        with:
+          module_source: ${{ steps.set_vars.outputs.MODULES_MODULE_SOURCE }}
+          module_name: ${{ vars.MODULES_MODULE_NAME }}
+          module_tag: ${{ github.event.inputs.tag }}
+          release_channel: ${{ github.event.inputs.channel }}
 
-            - name: Cleanup Docker config
-              run: |
-                  rm -rf $DOCKER_CONFIG
+      - name: Cleanup Docker config
+        run: |
+          rm -rf $DOCKER_CONFIG
 
-    check-version-on-release-channel:
-        name: Check version on release channel
-        runs-on: ubuntu-latest
+  check-version-on-release-channel:
+    name: Check version on release channel
+    runs-on: ubuntu-latest
+    env:
+      GO_VERSION: "1.24.13"
+      input_channel: ${{ github.event.inputs.channel }}
+      input_version: ${{ github.event.inputs.tag }}
+    needs:
+      - job-EE
+      - job-SE-Plus
+      - job-FE
+      - job-CE
+    if: ${{ always() && ! contains(needs.*.result, 'failure') || inputs.check_only }}
+    strategy:
+      matrix:
+        check: ["registry", "releases", "documentation"]
+    steps:
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+
+      - name: Login to PROD_REGISTRY
+        uses: deckhouse/modules-actions/setup@v2
+        with:
+          registry: ${{ vars.PROD_READ_REGISTRY }}
+          registry_login: ${{ secrets.PROD_READ_REGISTRY_USER }}
+          registry_password: ${{ secrets.PROD_READ_REGISTRY_PASSWORD }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check version in registry
+        if: ${{ matrix.check == 'registry' && always() }}
+        run: |
+          CHANNEL=$input_channel \
+          VERSION=$input_version \
+          task -d tools/moduleversions check:registry
+
+      - name: Check version on site ${{ matrix.check }}
+        if: ${{ matrix.check == 'releases' && always() }}
         env:
-            GO_VERSION: "1.24.13"
-            input_channel: ${{ github.event.inputs.channel }}
-            input_version: ${{ github.event.inputs.tag }}
-        needs:
-            - job-EE
-            - job-SE-Plus
-            - job-FE
-            - job-CE
-        if: ${{ always() && ! contains(needs.*.result, 'failure') || inputs.check_only }}
-        strategy:
-            matrix:
-                check: ["registry", "releases", "documentation"]
-        steps:
-            - name: Install Task
-              uses: arduino/setup-task@v2
-              with:
-                  version: 3.x
-                  repo-token: ${{ secrets.GITHUB_TOKEN }}
+          input_check_only: ${{ inputs.check_only }}
+        run: |
+          # When check_only is true, we don't want to wait 120 seconds
+          # because we just want to check the version we're interested in on the website
+          if [ $input_check_only = false ]; then
+            echo "Waiting for site to update (versions are usually updated within 2 minutes)..."
+            sleep 120
+          fi
 
-            - name: Set up Go ${{ env.GO_VERSION }}
-              uses: actions/setup-go@v5
-              with:
-                  go-version: "${{ env.GO_VERSION }}"
+          echo "Test that version deployed on site, retrying 5 times with delay of 60 seconds"
+          CHANNEL=$input_channel \
+          VERSION=$input_version \
+          COUNT=5 \
+          task -d tools/moduleversions check:releases
+      - name: Check version on site ${{ matrix.check }}
+        if: ${{ matrix.check == 'documentation' && always() }}
+        env:
+          input_check_only: ${{ inputs.check_only }}
+        run: |
+          # When check_only is true, we don't want to wait 300 seconds
+          # because we just want to check the version we're interested in on the website
+          if [ $input_check_only = false ]; then
+            echo "Waiting for site to update (versions are usually updated within 5 minutes)..."
+            sleep 300
+          fi
 
-            - name: Login to PROD_REGISTRY
-              uses: deckhouse/modules-actions/setup@v2
-              with:
-                  registry: ${{ vars.PROD_READ_REGISTRY }}
-                  registry_login: ${{ secrets.PROD_READ_REGISTRY_USER }}
-                  registry_password: ${{ secrets.PROD_READ_REGISTRY_PASSWORD }}
+          echo "Test that version deployed on site, retrying 5 times with delay of 60 seconds"
+          CHANNEL=$input_channel \
+          VERSION=$input_version \
+          COUNT=5 \
+          task -d tools/moduleversions check:docs
 
-            - uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
-            - name: Check version in registry
-              if: ${{ matrix.check == 'registry' && always() }}
-              run: |
-                  CHANNEL=$input_channel \
-                  VERSION=$input_version \
-                  task -d tools/moduleversions check:registry
+  send-release-results-to-loop:
+    name: Send release results to Loop
+    runs-on: ubuntu-latest
+    needs:
+      - job-CE
+      - job-EE
+      - job-SE-Plus
+      - job-FE
+      - check-version-on-release-channel
+    if: ${{ always() && inputs.send_results_to_loop }}
+    steps:
+      - name: Send results to Loop
+        env:
+          LOOP_WEBHOOK_URL: ${{ secrets.LOOP_WEBHOOK_URL }}
+          TAG: ${{ github.event.inputs.tag }}
+          CHANNEL: ${{ github.event.inputs.channel }}
+          CE_ENABLED: ${{ inputs.ce }}
+          EE_ENABLED: ${{ inputs.ee }}
+          CE_RESULT: ${{ needs.job-CE.result }}
+          EE_RESULT: ${{ needs.job-EE.result }}
+          SE_PLUS_RESULT: ${{ needs.job-SE-Plus.result }}
+          FE_RESULT: ${{ needs.job-FE.result }}
+          # will be `success` only if all jobs in the matrix have succeeded
+          CHECK_RESULT: ${{ needs.check-version-on-release-channel.result }}
+        run: |
+          export TZ=Europe/Moscow
+          DATE=$(date +"%Y-%m-%d %H:%M:%S UTC+03:00")
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-            - name: Check version on site ${{ matrix.check }}
-              if: ${{ matrix.check == 'releases' && always() }}
-              env:
-                  input_check_only: ${{ inputs.check_only }}
-              run: |
-                  # When check_only is true, we don't want to wait 120 seconds
-                  # because we just want to check the version we're interested in on the website
-                  if [ $input_check_only = false ]; then
-                    echo "Waiting for site to update (versions are usually updated within 2 minutes)..."
-                    sleep 120
-                  fi
+          # Determine overall status
+          OVERALL_STATUS=":white_check_mark: **SUCCESS!**"
+          if [[ "$CE_RESULT" == "failure" ]] || [[ "$EE_RESULT" == "failure" ]] || \
+             [[ "$SE_PLUS_RESULT" == "failure" ]] || [[ "$FE_RESULT" == "failure" ]] || \
+             [[ "$CHECK_RESULT" == "failure" ]]; then
+            OVERALL_STATUS=":x: **FAILED!**"
+          elif [[ "$CE_RESULT" == "cancelled" ]] || [[ "$EE_RESULT" == "cancelled" ]] || \
+               [[ "$SE_PLUS_RESULT" == "cancelled" ]] || [[ "$FE_RESULT" == "cancelled" ]] || \
+               [[ "$CHECK_RESULT" == "cancelled" ]]; then
+            OVERALL_STATUS=":warning: **CANCELLED!**"
+          fi
 
-                  echo "Test that version deployed on site, retrying 5 times with delay of 60 seconds"
-                  CHANNEL=$input_channel \
-                  VERSION=$input_version \
-                  COUNT=5 \
-                  task -d tools/moduleversions check:releases
-            - name: Check version on site ${{ matrix.check }}
-              if: ${{ matrix.check == 'documentation' && always() }}
-              env:
-                  input_check_only: ${{ inputs.check_only }}
-              run: |
-                  # When check_only is true, we don't want to wait 300 seconds
-                  # because we just want to check the version we're interested in on the website
-                  if [ $input_check_only = false ]; then
-                    echo "Waiting for site to update (versions are usually updated within 5 minutes)..."
-                    sleep 300
-                  fi
+          # Build editions status
+          get_status_emoji() {
+            case "$1" in
+              success) echo ":white_check_mark:" ;;
+              failure) echo ":x:" ;;
+              cancelled) echo ":warning:" ;;
+              skipped) echo ":fast_forward:" ;;
+              *) echo ":grey_question:" ;;
+            esac
+          }
 
-                  echo "Test that version deployed on site, retrying 5 times with delay of 60 seconds"
-                  CHANNEL=$input_channel \
-                  VERSION=$input_version \
-                  COUNT=5 \
-                  task -d tools/moduleversions check:docs
+          EDITIONS_STATUS=""
+          if [[ "$CE_ENABLED" == "true" ]]; then
+            EDITIONS_STATUS+="| CE | $(get_status_emoji $CE_RESULT) **${CE_RESULT^^}** |\n"
+          fi
+          if [[ "$EE_ENABLED" == "true" ]]; then
+            EDITIONS_STATUS+="| EE | $(get_status_emoji $EE_RESULT) **${EE_RESULT^^}** |\n"
+            EDITIONS_STATUS+="| SE Plus | $(get_status_emoji $SE_PLUS_RESULT) **${SE_PLUS_RESULT^^}** |\n"
+            EDITIONS_STATUS+="| FE | $(get_status_emoji $FE_RESULT) **${FE_RESULT^^}** |\n"
+          fi
 
-    send-release-results-to-loop:
-        name: Send release results to Loop
-        runs-on: ubuntu-latest
-        needs:
-            - job-CE
-            - job-EE
-            - job-SE-Plus
-            - job-FE
-            - check-version-on-release-channel
-        if: ${{ always() && inputs.send_results_to_loop }}
-        steps:
-            - name: Send results to Loop
-              env:
-                  LOOP_WEBHOOK_URL: ${{ secrets.LOOP_WEBHOOK_URL }}
-                  TAG: ${{ github.event.inputs.tag }}
-                  CHANNEL: ${{ github.event.inputs.channel }}
-                  CE_ENABLED: ${{ inputs.ce }}
-                  EE_ENABLED: ${{ inputs.ee }}
-                  CE_RESULT: ${{ needs.job-CE.result }}
-                  EE_RESULT: ${{ needs.job-EE.result }}
-                  SE_PLUS_RESULT: ${{ needs.job-SE-Plus.result }}
-                  FE_RESULT: ${{ needs.job-FE.result }}
-                  # will be `success` only if all jobs in the matrix have succeeded
-                  CHECK_RESULT: ${{ needs.check-version-on-release-channel.result }}
-              run: |
-                  export TZ=Europe/Moscow
-                  DATE=$(date +"%Y-%m-%d %H:%M:%S UTC+03:00")
-                  RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RELEASE_SUMMARY="## :dvp: **DVP | Release ${TAG} to ${CHANNEL}**\n\n"
+          RELEASE_SUMMARY+="**Status:** ${OVERALL_STATUS}\n"
+          RELEASE_SUMMARY+="**Date:** ${DATE}\n\n"
 
-                  # Determine overall status
-                  OVERALL_STATUS=":white_check_mark: **SUCCESS!**"
-                  if [[ "$CE_RESULT" == "failure" ]] || [[ "$EE_RESULT" == "failure" ]] || \
-                     [[ "$SE_PLUS_RESULT" == "failure" ]] || [[ "$FE_RESULT" == "failure" ]] || \
-                     [[ "$CHECK_RESULT" == "failure" ]]; then
-                    OVERALL_STATUS=":x: **FAILED!**"
-                  elif [[ "$CE_RESULT" == "cancelled" ]] || [[ "$EE_RESULT" == "cancelled" ]] || \
-                       [[ "$SE_PLUS_RESULT" == "cancelled" ]] || [[ "$FE_RESULT" == "cancelled" ]] || \
-                       [[ "$CHECK_RESULT" == "cancelled" ]]; then
-                    OVERALL_STATUS=":warning: **CANCELLED!**"
-                  fi
+          if [[ -n "$EDITIONS_STATUS" ]]; then
+            RELEASE_SUMMARY+="| Edition | Status |\n"
+            RELEASE_SUMMARY+="|---|---|\n"
+            RELEASE_SUMMARY+="${EDITIONS_STATUS}"
+            RELEASE_SUMMARY+="\n"
+          fi
 
-                  # Build editions status
-                  get_status_emoji() {
-                    case "$1" in
-                      success) echo ":white_check_mark:" ;;
-                      failure) echo ":x:" ;;
-                      cancelled) echo ":warning:" ;;
-                      skipped) echo ":fast_forward:" ;;
-                      *) echo ":grey_question:" ;;
-                    esac
-                  }
+          RELEASE_SUMMARY+="**Version Check:** $(get_status_emoji $CHECK_RESULT) **${CHECK_RESULT^^}**\n"
+          RELEASE_SUMMARY+="[:link: GitHub Actions Output](${RUN_URL})\n\n"
 
-                  EDITIONS_STATUS=""
-                  if [[ "$CE_ENABLED" == "true" ]]; then
-                    EDITIONS_STATUS+="| CE | $(get_status_emoji $CE_RESULT) **${CE_RESULT^^}** |\n"
-                  fi
-                  if [[ "$EE_ENABLED" == "true" ]]; then
-                    EDITIONS_STATUS+="| EE | $(get_status_emoji $EE_RESULT) **${EE_RESULT^^}** |\n"
-                    EDITIONS_STATUS+="| SE Plus | $(get_status_emoji $SE_PLUS_RESULT) **${SE_PLUS_RESULT^^}** |\n"
-                    EDITIONS_STATUS+="| FE | $(get_status_emoji $FE_RESULT) **${FE_RESULT^^}** |\n"
-                  fi
-
-                  RELEASE_SUMMARY="## :dvp: **DVP | Release ${TAG} to ${CHANNEL}**\n\n"
-                  RELEASE_SUMMARY+="**Status:** ${OVERALL_STATUS}\n"
-                  RELEASE_SUMMARY+="**Date:** ${DATE}\n\n"
-
-                  if [[ -n "$EDITIONS_STATUS" ]]; then
-                    RELEASE_SUMMARY+="| Edition | Status |\n"
-                    RELEASE_SUMMARY+="|---|---|\n"
-                    RELEASE_SUMMARY+="${EDITIONS_STATUS}"
-                    RELEASE_SUMMARY+="\n"
-                  fi
-
-                  RELEASE_SUMMARY+="**Version Check:** $(get_status_emoji $CHECK_RESULT) **${CHECK_RESULT^^}**\n"
-                  RELEASE_SUMMARY+="[:link: GitHub Actions Output](${RUN_URL})\n\n"
-
-                  echo -e "$RELEASE_SUMMARY"
-                  curl --request POST --header 'Content-Type: application/json' --data "{\"text\": \"${RELEASE_SUMMARY}\"}" $LOOP_WEBHOOK_URL
+          echo -e "$RELEASE_SUMMARY"
+          curl --request POST --header 'Content-Type: application/json' --data "{\"text\": \"${RELEASE_SUMMARY}\"}" $LOOP_WEBHOOK_URL

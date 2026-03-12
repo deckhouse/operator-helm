@@ -43,14 +43,14 @@ jobs:
               with:
                   tag: ${{ github.event.inputs.tag_name || 'main' }}
                   tag_type: ${{ github.event.inputs.tag_type }}
-                  module_name: ${{ vars.MODULE_NAME }}
-                  dd_url: ${{vars.DEFECTDOJO_HOST}}
-                  dd_token: ${{secrets.DEFECTDOJO_API_TOKEN}}
-                  prod_registry: ${{vars.TRIVY_REGISTRY}}
+                  module_name: ${{ vars.MODULES_MODULE_NAME }}
+                  dd_url: ${{ vars.DEFECTDOJO_HOST }}
+                  dd_token: ${{ secrets.DEFECTDOJO_API_TOKEN }}
+                  prod_registry: ${{ vars.TRIVY_REGISTRY }}
                   prod_registry_user: ${{ secrets.PROD_READ_REGISTRY_USER }}
                   prod_registry_password: ${{ secrets.PROD_READ_REGISTRY_PASSWORD }}
                   dev_registry: ${{ vars.DEV_REGISTRY }}
                   dev_registry_user: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
                   dev_registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
-                  deckhouse_private_repo: ${{vars.DECKHOUSE_PRIVATE_REPO}}
+                  deckhouse_private_repo: ${{ secrets.DECKHOUSE_PRIVATE_REPO }}
                   latest_releases_amount: 5
