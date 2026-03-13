@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	repoclient "github.com/deckhouse/operator-helm/pkg/client"
 	"github.com/deckhouse/operator-helm/pkg/utils"
 )
 
@@ -150,13 +151,13 @@ func (r *Reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *
 	}
 
 	if apimeta.IsStatusConditionPresentAndEqual(repo.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) {
-		return r.reconcileHelmRepositoryCharts(ctx, repo)
+		return r.reconcileRepositoryCharts(ctx, repo, utils.InternalHelmRepository)
 	}
 
 	return r.requeueAtSyncInterval(repo)
 }
 
-func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
+func (r *Reconciler) reconcileRepositoryCharts(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	syncCond := apimeta.FindStatusCondition(repo.Status.Conditions, ConditionTypeSynced)
@@ -170,7 +171,21 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 		return r.requeueAtSyncInterval(repo)
 	}
 
-	charts, err := HelmRepositoryDefaultClient.FetchCharts(ctx, repo.Spec.URL)
+	repoClient, err := repoclient.New(repoType)
+	if err != nil {
+		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeSynced, fmt.Errorf("getting repository client: %w", err), ReasonSyncFailed)
+	}
+
+	var authConfig *repoclient.AuthConfig
+
+	if repo.Spec.Auth != nil {
+		authConfig = &repoclient.AuthConfig{
+			Username: repo.Spec.Auth.Username,
+			Password: repo.Spec.Auth.Password,
+		}
+	}
+
+	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, authConfig)
 	if err != nil {
 		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeSynced, fmt.Errorf("cannot fetch chart info from repository: %w", err), ReasonSyncFailed)
 	}
@@ -226,7 +241,7 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 		}
 
 		if op != controllerutil.OperationResultNone {
-			logger.Info("Successfully reconciled HelmClusterAddonChart", "operation", op, "repository", repo.Name, "chart", chart)
+			logger.Info("Successfully created/updated HelmClusterAddonChart", "operation", "chart", chart)
 		}
 
 		base := existing.DeepCopy()
@@ -240,7 +255,7 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 			return reconcile.Result{}, fmt.Errorf("failed to update chart status: %w", err)
 		}
 
-		logger.Info("Successfully sync HelmClusterAddonChart versions", "operation", op, "repository", repo.Name, "chart", chart)
+		logger.Info("Successfully sync HelmClusterAddonChart versions", "operation", op, "chart", chart)
 	}
 
 	var existingCharts helmv1alpha1.HelmClusterAddonChartList
@@ -262,10 +277,10 @@ func (r *Reconciler) reconcileHelmRepositoryCharts(ctx context.Context, repo *he
 			return reconcile.Result{}, fmt.Errorf("deleting stale HelmClusterAddonChart %s: %w", staleChart.Name, err)
 		}
 
-		logger.Info("Deleted stale HelmClusterAddonChart", "chart", staleChart.Name, "repository", repo.Name)
+		logger.Info("Deleted stale HelmClusterAddonChart", "chart", staleChart.Name)
 	}
 
-	logger.Info(fmt.Sprintf("Scheduling next helm charts sync in %s", DefaultSyncInterval))
+	logger.Info(fmt.Sprintf("Scheduling next charts sync in %s", DefaultSyncInterval))
 
 	if err := r.updateSyncCondition(ctx, repo, metav1.ConditionTrue, ReasonSyncSucceeded, ""); err != nil {
 		return reconcile.Result{}, fmt.Errorf("updating sync condition: %w", err)
@@ -344,10 +359,14 @@ func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *h
 		logger.Info("Successfully reconciled oci repository", "operation", op)
 	}
 
-	// TODO: implement chats sync for OCI repository
+	if changed, err := r.updateSuccessStatus(ctx, repo, existing.Status.Conditions); err != nil {
+		return reconcile.Result{}, fmt.Errorf("updating status after repository reconcile: %w", err)
+	} else if changed {
+		return r.requeueAtSyncInterval(repo)
+	}
 
-	if _, err := r.updateSuccessStatus(ctx, repo, existing.Status.Conditions); err != nil {
-		return reconcile.Result{}, err
+	if apimeta.IsStatusConditionPresentAndEqual(repo.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) {
+		return r.reconcileRepositoryCharts(ctx, repo, utils.InternalOCIRepository)
 	}
 
 	return r.requeueAtSyncInterval(repo)
