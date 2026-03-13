@@ -30,21 +30,19 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-var OCIRepositoryDefaultClient Interface = &OCIRepositoryClient{}
+var OCIRepositoryDefaultClient Interface = &ociRepositoryClient{}
 
-type OCIRepositoryClient struct{}
+type ociRepositoryClient struct{}
 
-func (c *OCIRepositoryClient) FetchCharts(ctx context.Context, url string, auth *AuthConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
+func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, auth *AuthConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
 	url = trimSchemaPrefixes(url)
+	urlParts := strings.Split(url, "/")
+	chartName := urlParts[len(urlParts)-1]
 
 	repo, err := name.NewRepository(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse repository url: %w", err)
 	}
-
-	path := repo.RegistryStr()
-	pathParts := strings.Split(path, "/")
-	chartName := pathParts[len(pathParts)-1]
 
 	options := []remote.Option{
 		remote.WithContext(ctx),

@@ -40,19 +40,17 @@ import (
 	"github.com/deckhouse/operator-helm/pkg/utils"
 )
 
-// Reconciler reconciles HelmClusterRepository objects by mirroring them
-// to namespaced HelmRepository resources in the target namespace.
-type Reconciler struct {
-	Client client.Client
+type reconciler struct {
+	client client.Client
 }
 
 // Reconcile implements reconcile.Reconciler.
-func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("helmclusterrepository", req.Name)
 
 	var repo helmv1alpha1.HelmClusterAddonRepository
 
-	if err := r.Client.Get(ctx, req.NamespacedName, &repo); err != nil {
+	if err := r.client.Get(ctx, req.NamespacedName, &repo); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("HelmClusterAddonRepository not found, skipping")
 
@@ -74,7 +72,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if !controllerutil.ContainsFinalizer(&repo, FinalizerName) {
 		controllerutil.AddFinalizer(&repo, FinalizerName)
 
-		if err := r.Client.Update(ctx, &repo); err != nil {
+		if err := r.client.Update(ctx, &repo); err != nil {
 			return reconcile.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
 
@@ -85,13 +83,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	case utils.InternalHelmRepository:
 		return r.reconcileInternalHelmRepository(ctx, &repo)
 	case utils.InternalOCIRepository:
-		return r.reconcileInternalOCIRepository(ctx, &repo)
+		// TODO: permanently set Ready status
+
+		return r.reconcileRepositoryCharts(ctx, &repo, utils.InternalOCIRepository)
 	default:
 		return r.requeueAtSyncInterval(&repo)
 	}
 }
 
-func (r *Reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
+func (r *reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if err := r.reconcileInternalRepositoryAuthSecret(ctx, repo, utils.InternalHelmRepository); err != nil {
@@ -109,7 +109,7 @@ func (r *Reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *
 		},
 	}
 
-	op, err := controllerutil.CreateOrPatch(ctx, r.Client, existing, func() error {
+	op, err := controllerutil.CreateOrPatch(ctx, r.client, existing, func() error {
 		existing.Spec.URL = repo.Spec.URL
 		existing.Spec.Interval = metav1.Duration{Duration: DefaultInterval}
 		existing.Spec.Insecure = !repo.Spec.TLSVerify
@@ -157,7 +157,7 @@ func (r *Reconciler) reconcileInternalHelmRepository(ctx context.Context, repo *
 	return r.requeueAtSyncInterval(repo)
 }
 
-func (r *Reconciler) reconcileRepositoryCharts(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
+func (r *reconciler) reconcileRepositoryCharts(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	syncCond := apimeta.FindStatusCondition(repo.Status.Conditions, ConditionTypeSynced)
@@ -201,7 +201,7 @@ func (r *Reconciler) reconcileRepositoryCharts(ctx context.Context, repo *helmv1
 
 		desiredCharts[existing.Name] = struct{}{}
 
-		op, err := controllerutil.CreateOrPatch(ctx, r.Client, existing, func() error {
+		op, err := controllerutil.CreateOrPatch(ctx, r.client, existing, func() error {
 			existing.OwnerReferences = []metav1.OwnerReference{
 				{
 					APIVersion:         repo.APIVersion,
@@ -247,7 +247,7 @@ func (r *Reconciler) reconcileRepositoryCharts(ctx context.Context, repo *helmv1
 		base := existing.DeepCopy()
 		existing.Status.Versions = versions
 
-		if err := r.Client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
+		if err := r.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
 			if statusUpdateErr := r.updateSyncCondition(ctx, repo, metav1.ConditionFalse, ReasonSyncFailed, fmt.Sprintf("failed to update chart versions: %s", err)); statusUpdateErr != nil {
 				return reconcile.Result{}, fmt.Errorf("failed to update sync condition: %w", err)
 			}
@@ -259,7 +259,7 @@ func (r *Reconciler) reconcileRepositoryCharts(ctx context.Context, repo *helmv1
 	}
 
 	var existingCharts helmv1alpha1.HelmClusterAddonChartList
-	if err := r.Client.List(ctx, &existingCharts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
+	if err := r.client.List(ctx, &existingCharts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
 		return reconcile.Result{}, fmt.Errorf("listing existing HelmClusterAddonCharts for pruning: %w", err)
 	}
 
@@ -289,7 +289,7 @@ func (r *Reconciler) reconcileRepositoryCharts(ctx context.Context, repo *helmv1
 	return reconcile.Result{RequeueAfter: DefaultSyncInterval}, nil
 }
 
-func (r *Reconciler) updateSyncCondition(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, status metav1.ConditionStatus, reason, message string) error {
+func (r *reconciler) updateSyncCondition(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, status metav1.ConditionStatus, reason, message string) error {
 	base := repo.DeepCopy()
 
 	apimeta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
@@ -300,79 +300,85 @@ func (r *Reconciler) updateSyncCondition(ctx context.Context, repo *helmv1alpha1
 		Message:            message,
 	})
 
-	if err := r.Client.Status().Patch(ctx, repo, client.MergeFrom(base)); err != nil {
+	if err := r.client.Status().Patch(ctx, repo, client.MergeFrom(base)); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
-	logger := log.FromContext(ctx)
+// TODO: this logic should be migrated to the addon controller.
+//func (r *Reconciler) reconcileInternalOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
+//	logger := log.FromContext(ctx)
+//
+//	if err := r.reconcileInternalRepositoryAuthSecret(ctx, repo, utils.InternalOCIRepository); err != nil {
+//		return reconcile.Result{}, err
+//	}
+//
+//	if err := r.reconcileInternalRepositoryTLSSecret(ctx, repo, utils.InternalOCIRepository); err != nil {
+//		return reconcile.Result{}, err
+//	}
+//
+//	existing := &sourcev1.OCIRepository{
+//		ObjectMeta: metav1.ObjectMeta{
+//			Name:      repo.Name,
+//			Namespace: TargetNamespace,
+//		},
+//	}
+//
+//	op, err := controllerutil.CreateOrPatch(ctx, r.Client, existing, func() error {
+//		existing.Spec.URL = repo.Spec.URL
+//		existing.Spec.Interval = metav1.Duration{Duration: DefaultInterval}
+//		existing.Spec.Insecure = !repo.Spec.TLSVerify
+//		existing.Spec.CertSecretRef = nil
+//		existing.Spec.SecretRef = nil
+//
+//		if repo.Spec.Auth != nil {
+//			existing.Spec.SecretRef = &meta.LocalObjectReference{
+//				Name: utils.GetInternalRepositoryAuthSecretName(utils.InternalOCIRepository, repo.Name),
+//			}
+//		}
+//
+//		if repo.Spec.CACertificate != "" {
+//			existing.Spec.CertSecretRef = &meta.LocalObjectReference{
+//				Name: utils.GetInternalRepositoryTLSSecretName(utils.InternalOCIRepository, repo.Name),
+//			}
+//		}
+//
+//		existing.Spec.LayerSelector = &sourcev1.OCILayerSelector{
+//			MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+//			Operation: "copy",
+//		}
+//
+//		existing.Labels = map[string]string{
+//			LabelManagedBy:  LabelManagedByValue,
+//			LabelSourceName: repo.Name,
+//		}
+//
+//		return nil
+//	})
+//	if err != nil {
+//		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeReady, fmt.Errorf("reconciling oci repository: %w", err), ReasonMirrorFailed)
+//	}
+//
+//	if op != controllerutil.OperationResultNone {
+//		logger.Info("Successfully reconciled oci repository", "operation", op)
+//	}
+//
+//	if changed, err := r.updateSuccessStatus(ctx, repo, existing.Status.Conditions); err != nil {
+//		return reconcile.Result{}, fmt.Errorf("updating status after repository reconcile: %w", err)
+//	} else if changed {
+//		return r.requeueAtSyncInterval(repo)
+//	}
+//
+//	if apimeta.IsStatusConditionPresentAndEqual(repo.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) {
+//		return r.reconcileRepositoryCharts(ctx, repo, utils.InternalOCIRepository)
+//	}
+//
+//	return r.requeueAtSyncInterval(repo)
+//}
 
-	if err := r.reconcileInternalRepositoryAuthSecret(ctx, repo, utils.InternalOCIRepository); err != nil {
-		return reconcile.Result{}, err
-	}
-
-	if err := r.reconcileInternalRepositoryTLSSecret(ctx, repo, utils.InternalOCIRepository); err != nil {
-		return reconcile.Result{}, err
-	}
-
-	existing := &sourcev1.OCIRepository{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      repo.Name,
-			Namespace: TargetNamespace,
-		},
-	}
-
-	op, err := controllerutil.CreateOrPatch(ctx, r.Client, existing, func() error {
-		existing.Spec.URL = repo.Spec.URL
-		existing.Spec.Interval = metav1.Duration{Duration: DefaultInterval}
-		existing.Spec.Insecure = !repo.Spec.TLSVerify
-		existing.Spec.CertSecretRef = nil
-		existing.Spec.SecretRef = nil
-
-		if repo.Spec.Auth != nil {
-			existing.Spec.SecretRef = &meta.LocalObjectReference{
-				Name: utils.GetInternalRepositoryAuthSecretName(utils.InternalOCIRepository, repo.Name),
-			}
-		}
-
-		if repo.Spec.CACertificate != "" {
-			existing.Spec.CertSecretRef = &meta.LocalObjectReference{
-				Name: utils.GetInternalRepositoryTLSSecretName(utils.InternalOCIRepository, repo.Name),
-			}
-		}
-
-		existing.Labels = map[string]string{
-			LabelManagedBy:  LabelManagedByValue,
-			LabelSourceName: repo.Name,
-		}
-
-		return nil
-	})
-	if err != nil {
-		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeReady, fmt.Errorf("reconciling oci repository: %w", err), ReasonMirrorFailed)
-	}
-
-	if op != controllerutil.OperationResultNone {
-		logger.Info("Successfully reconciled oci repository", "operation", op)
-	}
-
-	if changed, err := r.updateSuccessStatus(ctx, repo, existing.Status.Conditions); err != nil {
-		return reconcile.Result{}, fmt.Errorf("updating status after repository reconcile: %w", err)
-	} else if changed {
-		return r.requeueAtSyncInterval(repo)
-	}
-
-	if apimeta.IsStatusConditionPresentAndEqual(repo.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) {
-		return r.reconcileRepositoryCharts(ctx, repo, utils.InternalOCIRepository)
-	}
-
-	return r.requeueAtSyncInterval(repo)
-}
-
-func (r *Reconciler) reconcileInternalRepositoryAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) error {
+func (r *reconciler) reconcileInternalRepositoryAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) error {
 	secretName := utils.GetInternalRepositoryAuthSecretName(repoType, repo.Name)
 
 	if repo.Spec.Auth == nil {
@@ -390,7 +396,7 @@ func (r *Reconciler) reconcileInternalRepositoryAuthSecret(ctx context.Context, 
 		},
 	}
 
-	if _, err := controllerutil.CreateOrPatch(ctx, r.Client, authSecret, func() error {
+	if _, err := controllerutil.CreateOrPatch(ctx, r.client, authSecret, func() error {
 		authSecret.Labels = map[string]string{
 			LabelManagedBy:  LabelManagedByValue,
 			LabelSourceName: repo.Name,
@@ -409,7 +415,7 @@ func (r *Reconciler) reconcileInternalRepositoryAuthSecret(ctx context.Context, 
 	return nil
 }
 
-func (r *Reconciler) reconcileInternalRepositoryTLSSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) error {
+func (r *reconciler) reconcileInternalRepositoryTLSSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) error {
 	secretName := utils.GetInternalRepositoryTLSSecretName(repoType, repo.Name)
 
 	if repo.Spec.CACertificate == "" {
@@ -429,7 +435,7 @@ func (r *Reconciler) reconcileInternalRepositoryTLSSecret(ctx context.Context, r
 		},
 	}
 
-	if _, err := controllerutil.CreateOrPatch(ctx, r.Client, tlsSecret, func() error {
+	if _, err := controllerutil.CreateOrPatch(ctx, r.client, tlsSecret, func() error {
 		tlsSecret.Labels = map[string]string{
 			LabelManagedBy:  LabelManagedByValue,
 			LabelSourceName: repo.Name,
@@ -447,8 +453,8 @@ func (r *Reconciler) reconcileInternalRepositoryTLSSecret(ctx context.Context, r
 	return nil
 }
 
-func (r *Reconciler) ensureResourceDeleted(ctx context.Context, key types.NamespacedName, obj client.Object) error {
-	if err := r.Client.Get(ctx, key, obj); err != nil {
+func (r *reconciler) ensureResourceDeleted(ctx context.Context, key types.NamespacedName, obj client.Object) error {
+	if err := r.client.Get(ctx, key, obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -456,14 +462,14 @@ func (r *Reconciler) ensureResourceDeleted(ctx context.Context, key types.Namesp
 		return fmt.Errorf("checking existence of obsolete resource: %w", err)
 	}
 
-	if err := r.Client.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("deleting obsolete resource: %w", err)
 	}
 
 	return nil
 }
 
-func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
+func (r *reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("helmclusteraddonrepository", repo.Name)
 
 	if !controllerutil.ContainsFinalizer(repo, FinalizerName) {
@@ -491,8 +497,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 	switch repoType {
 	case utils.InternalHelmRepository:
 		internalRepository = &sourcev1.HelmRepository{}
-	case utils.InternalOCIRepository:
-		internalRepository = &sourcev1.OCIRepository{}
 	default:
 		return reconcile.Result{}, r.patchStatusError(ctx, repo, ConditionTypeReady, fmt.Errorf("cannot remove unsupported repisotory type: %s", repoType), ReasonCleanupFailed)
 	}
@@ -503,7 +507,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 
 	controllerutil.RemoveFinalizer(repo, FinalizerName)
 
-	if err := r.Client.Update(ctx, repo); err != nil {
+	if err := r.client.Update(ctx, repo); err != nil {
 		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 
@@ -512,7 +516,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 	return reconcile.Result{}, nil
 }
 
-func (r *Reconciler) patchStatusError(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, conditionType string, reconcileErr error, reason string) error {
+func (r *reconciler) patchStatusError(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, conditionType string, reconcileErr error, reason string) error {
 	base := repo.DeepCopy()
 
 	apimeta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
@@ -522,14 +526,14 @@ func (r *Reconciler) patchStatusError(ctx context.Context, repo *helmv1alpha1.He
 		Message: reconcileErr.Error(),
 	})
 
-	if patchErr := r.Client.Status().Patch(ctx, repo, client.MergeFrom(base)); patchErr != nil {
+	if patchErr := r.client.Status().Patch(ctx, repo, client.MergeFrom(base)); patchErr != nil {
 		return errors.Join(reconcileErr, fmt.Errorf("failed to patch status: %w", patchErr))
 	}
 
 	return reconcileErr
 }
 
-func (r *Reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
+func (r *reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
 	repoSyncCond := apimeta.FindStatusCondition(repo.Status.Conditions, ConditionTypeSynced)
 	if repoSyncCond != nil {
 		remaining := time.Until(repoSyncCond.LastTransitionTime.Add(DefaultSyncInterval))
@@ -541,7 +545,7 @@ func (r *Reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRe
 	return reconcile.Result{RequeueAfter: DefaultSyncInterval}, nil
 }
 
-func (r *Reconciler) updateSuccessStatus(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, internalConditions []metav1.Condition) (bool, error) {
+func (r *reconciler) updateSuccessStatus(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, internalConditions []metav1.Condition) (bool, error) {
 	var changed bool
 
 	base := repo.DeepCopy()
@@ -554,7 +558,7 @@ func (r *Reconciler) updateSuccessStatus(ctx context.Context, repo *helmv1alpha1
 	if changed {
 		repo.Status.ObservedGeneration = repo.Generation
 
-		if err := r.Client.Status().Patch(ctx, repo, client.MergeFrom(base)); err != nil {
+		if err := r.client.Status().Patch(ctx, repo, client.MergeFrom(base)); err != nil {
 			return false, fmt.Errorf("patching status: %w", err)
 		}
 	}

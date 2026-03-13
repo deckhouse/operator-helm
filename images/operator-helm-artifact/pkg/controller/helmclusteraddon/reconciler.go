@@ -40,25 +40,26 @@ import (
 	"github.com/deckhouse/operator-helm/pkg/utils"
 )
 
-type Reconciler struct {
-	Client client.Client
+type reconciler struct {
+	client client.Client
 }
 
 type addonState struct {
-	addon               *helmv1alpha1.HelmClusterAddon
-	base                *helmv1alpha1.HelmClusterAddon
-	addonRepository     *helmv1alpha1.HelmClusterAddonRepository
-	internalHelmRelease *helmv2.HelmRelease
-	internalHelmChart   *sourcev1.HelmChart
+	addon                  *helmv1alpha1.HelmClusterAddon
+	base                   *helmv1alpha1.HelmClusterAddon
+	addonRepository        *helmv1alpha1.HelmClusterAddonRepository
+	internalRepositoryType utils.InternalRepositoryType
+	internalHelmRelease    *helmv2.HelmRelease
+	internalHelmChart      *sourcev1.HelmChart
 }
 
-func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("helmclusteraddon", req.Name)
 	ctx = log.IntoContext(ctx, logger)
 
 	state := &addonState{addon: &helmv1alpha1.HelmClusterAddon{}}
 
-	if err := r.Client.Get(ctx, req.NamespacedName, state.addon); err != nil {
+	if err := r.client.Get(ctx, req.NamespacedName, state.addon); err != nil {
 		if apierrors.IsNotFound(err) {
 			return reconcile.Result{}, nil
 		}
@@ -79,7 +80,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return r.phaseSync(ctx, state)
 }
 
-func (r *Reconciler) phaseDelete(ctx context.Context, state *addonState) (bool, error) {
+func (r *reconciler) phaseDelete(ctx context.Context, state *addonState) (bool, error) {
 	logger := log.FromContext(ctx)
 
 	if state.addon.DeletionTimestamp.IsZero() {
@@ -100,7 +101,7 @@ func (r *Reconciler) phaseDelete(ctx context.Context, state *addonState) (bool, 
 
 	controllerutil.RemoveFinalizer(state.addon, FinalizerName)
 
-	if err := r.Client.Update(ctx, state.addon); err != nil {
+	if err := r.client.Update(ctx, state.addon); err != nil {
 		return true, fmt.Errorf("removing finalizer: %w", err)
 	}
 
@@ -109,7 +110,7 @@ func (r *Reconciler) phaseDelete(ctx context.Context, state *addonState) (bool, 
 	return true, nil
 }
 
-func (r *Reconciler) phaseBootstrap(ctx context.Context, state *addonState) (bool, reconcile.Result, error) {
+func (r *reconciler) phaseBootstrap(ctx context.Context, state *addonState) (bool, reconcile.Result, error) {
 	conditionsInitialized := apimeta.FindStatusCondition(state.addon.Status.Conditions, ConditionTypeReady) != nil
 	finalizerPresent := controllerutil.ContainsFinalizer(state.addon, FinalizerName)
 
@@ -128,7 +129,7 @@ func (r *Reconciler) phaseBootstrap(ctx context.Context, state *addonState) (boo
 			}
 		}
 
-		if err := r.Client.Status().Update(ctx, state.addon); err != nil {
+		if err := r.client.Status().Update(ctx, state.addon); err != nil {
 			return true, reconcile.Result{}, fmt.Errorf("updating helm cluster addon status conditions: %w", err)
 		}
 
@@ -137,16 +138,16 @@ func (r *Reconciler) phaseBootstrap(ctx context.Context, state *addonState) (boo
 
 	controllerutil.AddFinalizer(state.addon, FinalizerName)
 
-	if err := r.Client.Update(ctx, state.addon); err != nil {
+	if err := r.client.Update(ctx, state.addon); err != nil {
 		return true, reconcile.Result{}, fmt.Errorf("adding finalizer to helm cluster addon: %w", err)
 	}
 
 	return true, reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
 }
 
-func (r *Reconciler) ensureInternalHelmReleaseSuspended(ctx context.Context, addonName string) (*helmv2.HelmRelease, error) {
+func (r *reconciler) ensureInternalHelmReleaseSuspended(ctx context.Context, addonName string) (*helmv2.HelmRelease, error) {
 	helmRelease := &helmv2.HelmRelease{}
-	if err := r.Client.Get(ctx, types.NamespacedName{
+	if err := r.client.Get(ctx, types.NamespacedName{
 		Name:      utils.GetInternalHelmReleaseName(addonName),
 		Namespace: TargetNamespace,
 	}, helmRelease); err != nil {
@@ -165,14 +166,14 @@ func (r *Reconciler) ensureInternalHelmReleaseSuspended(ctx context.Context, add
 
 	helmRelease.Spec.Suspend = true
 
-	if err := r.Client.Patch(ctx, helmRelease, client.MergeFrom(base)); err != nil {
+	if err := r.client.Patch(ctx, helmRelease, client.MergeFrom(base)); err != nil {
 		return nil, fmt.Errorf("suspending internal helm release: %w", err)
 	}
 
 	return helmRelease, nil
 }
 
-func (r *Reconciler) phaseMaintenance(ctx context.Context, state *addonState) (bool, error) {
+func (r *reconciler) phaseMaintenance(ctx context.Context, state *addonState) (bool, error) {
 	managedCond := apimeta.FindStatusCondition(state.addon.Status.Conditions, ConditionTypeManaged)
 	if managedCond == nil {
 		return true, fmt.Errorf("reading managed condition: not initialized")
@@ -211,14 +212,14 @@ func (r *Reconciler) phaseMaintenance(ctx context.Context, state *addonState) (b
 
 	state.addon.Status.ObservedGeneration = state.addon.Generation
 
-	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+	if err := r.client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
 		return true, fmt.Errorf("patching status for maintenance mode: %w", err)
 	}
 
 	return true, nil
 }
 
-func (r *Reconciler) phaseSync(ctx context.Context, state *addonState) (reconcile.Result, error) {
+func (r *reconciler) phaseSync(ctx context.Context, state *addonState) (reconcile.Result, error) {
 	requeue, err := r.setStatusToProcessing(ctx, state)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -227,41 +228,52 @@ func (r *Reconciler) phaseSync(ctx context.Context, state *addonState) (reconcil
 		return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
 	}
 
-	var syncErr error
-
 	if err := r.getRepository(ctx, state); err != nil {
-		syncErr = err
+		return r.updateStatus(ctx, state, err)
 	}
 
-	if syncErr == nil {
+	switch state.internalRepositoryType {
+	case utils.InternalHelmRepository:
 		if err := r.reconcileInternalHelmChart(ctx, state); err != nil {
-			syncErr = err
+			return r.updateStatus(ctx, state, err)
 		}
+	case utils.InternalOCIRepository:
+		// TODO: add internal OCI repository reconcile here.
 	}
 
-	if syncErr == nil && state.internalHelmChart != nil && state.internalHelmChart.Status.Artifact != nil {
+	shouldReconcileRelease := state.internalRepositoryType == utils.InternalOCIRepository ||
+		(state.internalHelmChart != nil && state.internalHelmChart.Status.Artifact != nil)
+
+	if shouldReconcileRelease {
 		if err := r.reconcileInternalHelmRelease(ctx, state); err != nil {
-			syncErr = err
+			return r.updateStatus(ctx, state, err)
 		}
 	}
 
-	return r.updateStatus(ctx, state, syncErr)
+	return r.updateStatus(ctx, state, nil)
 }
 
-func (r *Reconciler) getRepository(ctx context.Context, state *addonState) error {
+func (r *reconciler) getRepository(ctx context.Context, state *addonState) error {
 	state.addonRepository = &helmv1alpha1.HelmClusterAddonRepository{}
 
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: state.addon.Spec.Chart.HelmClusterAddonRepository}, state.addonRepository); err != nil {
+	if err := r.client.Get(ctx, types.NamespacedName{Name: state.addon.Spec.Chart.HelmClusterAddonRepository}, state.addonRepository); err != nil {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("helm cluster addon repository not found: %w", err)
 		}
 		return fmt.Errorf("getting helm cluster addon repository: %w", err)
 	}
 
+	var err error
+
+	state.internalRepositoryType, err = utils.GetRepositoryType(state.addonRepository.Spec.URL)
+	if err != nil {
+		return fmt.Errorf("getting helm cluster addon repository type: %w", err)
+	}
+
 	return nil
 }
 
-func (r *Reconciler) setStatusToProcessing(ctx context.Context, state *addonState) (bool, error) {
+func (r *reconciler) setStatusToProcessing(ctx context.Context, state *addonState) (bool, error) {
 	readyCond := apimeta.FindStatusCondition(state.addon.Status.Conditions, ConditionTypeReady)
 
 	if state.addon.Generation == state.addon.Status.ObservedGeneration ||
@@ -276,14 +288,14 @@ func (r *Reconciler) setStatusToProcessing(ctx context.Context, state *addonStat
 		Message: "",
 	})
 
-	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+	if err := r.client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
 		return false, fmt.Errorf("updating helm cluster addon status: %w", err)
 	}
 
 	return true, nil
 }
 
-func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, state *addonState) error {
+func (r *reconciler) reconcileInternalHelmChart(ctx context.Context, state *addonState) error {
 	logger := log.FromContext(ctx)
 
 	repoType, err := utils.GetRepositoryType(state.addonRepository.Spec.URL)
@@ -298,7 +310,7 @@ func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, state *addo
 		},
 	}
 
-	op, err := controllerutil.CreateOrPatch(ctx, r.Client, state.internalHelmChart, func() error {
+	op, err := controllerutil.CreateOrPatch(ctx, r.client, state.internalHelmChart, func() error {
 		if state.internalHelmChart.Labels == nil {
 			state.internalHelmChart.Labels = map[string]string{}
 		}
@@ -339,7 +351,7 @@ func (r *Reconciler) reconcileInternalHelmChart(ctx context.Context, state *addo
 	return nil
 }
 
-func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, state *addonState) error {
+func (r *reconciler) reconcileInternalHelmRelease(ctx context.Context, state *addonState) error {
 	logger := log.FromContext(ctx)
 
 	state.internalHelmRelease = &helmv2.HelmRelease{
@@ -349,7 +361,7 @@ func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, state *ad
 		},
 	}
 
-	op, err := controllerutil.CreateOrPatch(ctx, r.Client, state.internalHelmRelease, func() error {
+	op, err := controllerutil.CreateOrPatch(ctx, r.client, state.internalHelmRelease, func() error {
 		if state.internalHelmRelease.Labels == nil {
 			state.internalHelmRelease.Labels = map[string]string{}
 		}
@@ -363,10 +375,21 @@ func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, state *ad
 
 		state.internalHelmRelease.Spec.Suspend = false
 
-		state.internalHelmRelease.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
-			Kind:      sourcev1.HelmChartKind,
-			Name:      utils.GetInternalHelmChartName(state.addon.Name),
-			Namespace: TargetNamespace,
+		switch state.internalRepositoryType {
+		case utils.InternalHelmRepository:
+			state.internalHelmRelease.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
+				Kind:      sourcev1.HelmChartKind,
+				Name:      utils.GetInternalHelmChartName(state.addon.Name),
+				Namespace: TargetNamespace,
+			}
+		case utils.InternalOCIRepository:
+			state.internalHelmRelease.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
+				Kind:      sourcev1.OCIRepositoryKind,
+				Name:      state.addon.Spec.Chart.HelmClusterAddonRepository,
+				Namespace: TargetNamespace,
+			}
+		default:
+			return fmt.Errorf("invalid repository type: %s", state.internalRepositoryType)
 		}
 
 		return nil
@@ -382,7 +405,7 @@ func (r *Reconciler) reconcileInternalHelmRelease(ctx context.Context, state *ad
 	return nil
 }
 
-func (r *Reconciler) updateStatus(ctx context.Context, state *addonState, syncErr error) (reconcile.Result, error) {
+func (r *reconciler) updateStatus(ctx context.Context, state *addonState, syncErr error) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if syncErr != nil {
@@ -400,15 +423,19 @@ func (r *Reconciler) updateStatus(ctx context.Context, state *addonState, syncEr
 		})
 	}
 
-	helmChartReadyCond := apimeta.FindStatusCondition(state.internalHelmChart.Status.Conditions, ConditionTypeReady)
-	if helmChartReadyCond == nil || helmChartReadyCond.ObservedGeneration != state.internalHelmChart.Generation {
-		logger.Info("Internal helm chart is not observed yet")
-		return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
-	}
+	var helmChartReadyCond *metav1.Condition
 
-	if state.internalHelmChart.Status.Artifact == nil {
-		logger.Info("Internal helm chart has no artifact")
-		return r.updateStatusChartNotReady(ctx, state, helmChartReadyCond)
+	if state.internalHelmChart != nil {
+		helmChartReadyCond = apimeta.FindStatusCondition(state.internalHelmChart.Status.Conditions, ConditionTypeReady)
+		if helmChartReadyCond == nil || helmChartReadyCond.ObservedGeneration != state.internalHelmChart.Generation {
+			logger.Info("Internal helm chart is not observed yet")
+			return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
+		}
+
+		if state.internalHelmChart.Status.Artifact == nil {
+			logger.Info("Internal helm chart has no artifact")
+			return r.updateStatusChartNotReady(ctx, state, helmChartReadyCond)
+		}
 	}
 
 	if state.internalHelmRelease == nil {
@@ -431,7 +458,7 @@ func (r *Reconciler) updateStatus(ctx context.Context, state *addonState, syncEr
 	})
 
 	if helmReleaseReadyCond.Status == metav1.ConditionTrue {
-		if helmChartReadyCond.Status != metav1.ConditionTrue {
+		if helmChartReadyCond != nil && helmChartReadyCond.Status != metav1.ConditionTrue {
 			apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
 				Type:               ConditionTypePartiallyDegraded,
 				Status:             metav1.ConditionTrue,
@@ -448,14 +475,14 @@ func (r *Reconciler) updateStatus(ctx context.Context, state *addonState, syncEr
 
 	state.addon.Status.ObservedGeneration = state.addon.Generation
 
-	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+	if err := r.client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
 		return reconcile.Result{}, fmt.Errorf("updating helm cluster addon status: %w", err)
 	}
 
 	return reconcile.Result{}, nil
 }
 
-func (r *Reconciler) updateStatusHelmReleaseReady(_ context.Context, state *addonState) {
+func (r *reconciler) updateStatusHelmReleaseReady(_ context.Context, state *addonState) {
 	firstInstallCompleted := apimeta.IsStatusConditionPresentAndEqual(state.addon.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue)
 
 	if !firstInstallCompleted {
@@ -470,8 +497,9 @@ func (r *Reconciler) updateStatusHelmReleaseReady(_ context.Context, state *addo
 		apimeta.RemoveStatusCondition(&state.addon.Status.Conditions, ConditionTypeConfigurationApplied)
 		apimeta.RemoveStatusCondition(&state.addon.Status.Conditions, ConditionTypeUpdateInstalled)
 
-		if apimeta.IsStatusConditionPresentAndEqual(state.internalHelmChart.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) &&
-			state.internalHelmChart.Generation == state.internalHelmChart.Status.ObservedGeneration {
+		if state.internalHelmChart == nil ||
+			(apimeta.IsStatusConditionPresentAndEqual(state.internalHelmChart.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) &&
+				state.internalHelmChart.Generation == state.internalHelmChart.Status.ObservedGeneration) {
 			state.addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
 				HelmClusterAddonChartName:  state.addon.Spec.Chart.HelmClusterAddonChartName,
 				HelmClusterAddonRepository: state.addon.Spec.Chart.HelmClusterAddonRepository,
@@ -533,7 +561,7 @@ func (r *Reconciler) updateStatusHelmReleaseReady(_ context.Context, state *addo
 	}
 }
 
-func (r *Reconciler) updateStatusHelmReleaseFailed(state *addonState, helmReleaseReadyCond *metav1.Condition) {
+func (r *reconciler) updateStatusHelmReleaseFailed(state *addonState, helmReleaseReadyCond *metav1.Condition) {
 	firstInstallCompleted := apimeta.IsStatusConditionPresentAndEqual(state.addon.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue)
 
 	if !firstInstallCompleted {
@@ -568,7 +596,7 @@ func (r *Reconciler) updateStatusHelmReleaseFailed(state *addonState, helmReleas
 	}
 }
 
-func (r *Reconciler) updateStatusOnSyncError(ctx context.Context, state *addonState, syncErr error) (reconcile.Result, error) {
+func (r *reconciler) updateStatusOnSyncError(ctx context.Context, state *addonState, syncErr error) (reconcile.Result, error) {
 	apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
 		Type:               ConditionTypeReady,
 		Status:             metav1.ConditionFalse,
@@ -579,14 +607,14 @@ func (r *Reconciler) updateStatusOnSyncError(ctx context.Context, state *addonSt
 
 	state.addon.Status.ObservedGeneration = state.addon.Generation
 
-	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+	if err := r.client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
 		return reconcile.Result{}, fmt.Errorf("patching status on error: %w", err)
 	}
 
 	return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
 }
 
-func (r *Reconciler) updateStatusChartNotReady(ctx context.Context, state *addonState, helmChartReadyCond *metav1.Condition) (reconcile.Result, error) {
+func (r *reconciler) updateStatusChartNotReady(ctx context.Context, state *addonState, helmChartReadyCond *metav1.Condition) (reconcile.Result, error) {
 	apimeta.SetStatusCondition(&state.addon.Status.Conditions, metav1.Condition{
 		Type:               ConditionTypeReady,
 		Status:             metav1.ConditionFalse,
@@ -624,15 +652,15 @@ func (r *Reconciler) updateStatusChartNotReady(ctx context.Context, state *addon
 
 	state.addon.Status.ObservedGeneration = state.addon.Generation
 
-	if err := r.Client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
+	if err := r.client.Status().Patch(ctx, state.addon, client.MergeFrom(state.base)); err != nil {
 		return reconcile.Result{}, fmt.Errorf("patching status on error: %w", err)
 	}
 
 	return reconcile.Result{RequeueAfter: ReconcileRetryInterval}, nil
 }
 
-func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace string, obj client.Object) error {
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
+func (r *reconciler) ensureResourceDeleted(ctx context.Context, name, namespace string, obj client.Object) error {
+	if err := r.client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -640,7 +668,7 @@ func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace 
 		return fmt.Errorf("checking existence of obsolete resource: %w", err)
 	}
 
-	if err := r.Client.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.client.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("deleting obsolete resource: %w", err)
 	}
 
@@ -648,16 +676,21 @@ func (r *Reconciler) ensureResourceDeleted(ctx context.Context, name, namespace 
 }
 
 func isLastAppliedChartUpdateRequired(addon *helmv1alpha1.HelmClusterAddon, internalHelmChart *sourcev1.HelmChart, internalHelmRelease *helmv2.HelmRelease) bool {
-	if internalHelmChart.Status.ObservedGeneration != internalHelmChart.Generation {
-		return false
-	}
-
 	if internalHelmRelease.Status.ObservedGeneration != internalHelmRelease.Generation {
 		return false
 	}
 
-	if apimeta.IsStatusConditionPresentAndEqual(internalHelmChart.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) &&
-		apimeta.IsStatusConditionPresentAndEqual(internalHelmRelease.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) &&
+	if internalHelmChart != nil {
+		if internalHelmChart.Status.ObservedGeneration != internalHelmChart.Generation {
+			return false
+		}
+
+		if !apimeta.IsStatusConditionPresentAndEqual(internalHelmChart.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) {
+			return false
+		}
+	}
+
+	if apimeta.IsStatusConditionPresentAndEqual(internalHelmRelease.Status.Conditions, ConditionTypeReady, metav1.ConditionTrue) &&
 		internalHelmRelease.Status.History.Len() > 1 {
 		latest := internalHelmRelease.Status.History.Latest()
 		previous := internalHelmRelease.Status.History.Previous(true)

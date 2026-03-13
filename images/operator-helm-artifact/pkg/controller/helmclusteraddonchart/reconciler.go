@@ -29,15 +29,15 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-type Reconciler struct {
-	Client client.Client
+type reconciler struct {
+	client client.Client
 }
 
-func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("helmclusteraddonchart", req.Name)
 
 	chart := &helmv1alpha1.HelmClusterAddonChart{}
-	if err := r.Client.Get(ctx, req.NamespacedName, chart); client.IgnoreNotFound(err) != nil {
+	if err := r.client.Get(ctx, req.NamespacedName, chart); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to get HelmClusterAddonChart: %w", err)
 	}
 
@@ -48,7 +48,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	base := chart.DeepCopy()
 
 	internalCharts := &sourcev1.HelmChartList{}
-	if err := r.Client.List(ctx, internalCharts, client.InNamespace(TargetNamespace)); err != nil {
+	if err := r.client.List(ctx, internalCharts, client.InNamespace(TargetNamespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to list internal helm chart list: %w", err)
 	}
 
@@ -69,7 +69,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if updateRequired {
-		if err := r.Client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
+		if err := r.client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to update HelmClusterAddonChart status: %w", err)
 		}
 

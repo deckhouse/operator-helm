@@ -29,11 +29,11 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-var HelmRepositoryDefaultClient Interface = &HelmRepositoryClient{}
+var HelmRepositoryDefaultClient Interface = &helmRepositoryClient{}
 
-type HelmRepositoryClient struct{}
+type helmRepositoryClient struct{}
 
-func (c *HelmRepositoryClient) FetchCharts(ctx context.Context, url string, auth *AuthConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
+func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, auth *AuthConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
 	if !strings.HasSuffix(url, "/index.yaml") {
 		url += "/index.yaml"
 	}

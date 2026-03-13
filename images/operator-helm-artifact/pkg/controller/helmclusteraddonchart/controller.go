@@ -28,8 +28,8 @@ import (
 )
 
 func SetupWithManager(mgr ctrl.Manager) error {
-	r := &Reconciler{
-		Client: mgr.GetClient(),
+	r := &reconciler{
+		client: mgr.GetClient(),
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
