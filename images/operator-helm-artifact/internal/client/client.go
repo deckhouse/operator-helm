@@ -21,7 +21,7 @@ import (
 	"fmt"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/pkg/utils"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 type Interface interface {

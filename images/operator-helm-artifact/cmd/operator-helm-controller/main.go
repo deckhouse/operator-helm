@@ -31,9 +31,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddon"
-	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonchart"
-	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonrepository"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddon"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonchart"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonrepository"
 )
 
 var scheme = runtime.NewScheme()

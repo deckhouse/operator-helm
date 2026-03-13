@@ -16,8 +16,6 @@ limitations under the License.
 
 package helmclusteraddonrepository
 
-import "time"
-
 const (
 	// ControllerName is the name of this controller, used for leader election and logging.
 	ControllerName = "helmclusteraddonrepository-controller"
@@ -28,27 +26,6 @@ const (
 	// FinalizerName is the finalizer added to HelmClusterRepository to ensure cleanup.
 	FinalizerName = "helm.deckhouse.io/cleanup"
 
-	// ConditionTypeReady is the condition type for readiness.
-	ConditionTypeReady = "Ready"
-
-	// ConditionTypeSynced is the condition type to track chart sync status
-	ConditionTypeSynced = "Synced"
-
-	// ReasonMirrorFailed indicates the internal HelmRepository create/update failed.
-	ReasonMirrorFailed = "MirrorFailed"
-
-	// ReasonSyncSucceeded indicates that chart sync was successfully completed.
-	ReasonSyncSucceeded = "SyncSucceeded"
-
-	// ReasonSyncInProgress indicates that chart sync is in progress.
-	ReasonSyncInProgress = "ReasonSyncInProgress"
-
-	// ReasonSyncFailed indicates that charts sync was failed.
-	ReasonSyncFailed = "SyncFailed"
-
-	// ReasonCleanupFailed indicates deletion of the internal HelmRepository failed.
-	ReasonCleanupFailed = "CleanupFailed"
-
 	// LabelManagedBy marks resources as managed by this controller.
 	LabelManagedBy = "helm.deckhouse.io/managed-by"
 
@@ -57,19 +34,4 @@ const (
 
 	// LabelSourceName stores the name of the source facade resource.
 	LabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
-
-	// LabelChartName stores chart name.
-	LabelChartName = "chart"
-
-	// LabelRepositoryName stores HelmClusterAddonRepository name.
-	LabelRepositoryName = "repository"
-
-	LabelDeckhouseHeritage      = "heritage"
-	LabelDeckhouseHeritageValue = "deckhouse"
-
-	// DefaultInterval is the default reconciliation interval for the internal repository.
-	DefaultInterval = 5 * time.Minute
-
-	// DefaultSyncInterval is the default repository charts sync interval.
-	DefaultSyncInterval = 5 * time.Minute
 )

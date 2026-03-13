@@ -14,18 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils
+package common
 
-import (
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+const (
+	LabelDeckhouseHeritage      = "heritage"
+	LabelDeckhouseHeritageValue = "deckhouse"
 )
-
-func IsConditionObserved(conditions []metav1.Condition, conditionType string, generation int64) bool {
-	cond := apimeta.FindStatusCondition(conditions, conditionType)
-	if cond == nil || cond.ObservedGeneration != generation {
-		return false
-	}
-
-	return true
-}

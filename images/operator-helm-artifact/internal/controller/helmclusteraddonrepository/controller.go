@@ -14,31 +14,51 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package helmclusteraddonchart
+package helmclusteraddonrepository
 
 import (
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/pkg/utils"
+	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 func SetupWithManager(mgr ctrl.Manager) error {
+	client := mgr.GetClient()
+
 	r := &reconciler{
-		client: mgr.GetClient(),
+		Client:            client,
+		repositoryService: services.NewRepoService(client, mgr.GetScheme(), TargetNamespace),
+		chartSyncService:  services.NewChartSyncService(client, mgr.GetScheme()),
+		statusManager:     services.NewStatusManager(client, LabelManagedByValue),
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
-		For(&helmv1alpha1.HelmClusterAddonChart{}).
+		For(&helmv1alpha1.HelmClusterAddonRepository{}).
 		Watches(
-			&sourcev1.HelmChart{},
+			&sourcev1.HelmRepository{},
 			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
-		Complete(r)
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(
+			&helmv1alpha1.HelmClusterAddonChart{},
+			handler.EnqueueRequestForOwner(
+				mgr.GetScheme(),
+				mgr.GetRESTMapper(),
+				&helmv1alpha1.HelmClusterAddonRepository{},
+				handler.OnlyControllerOwner(),
+			),
+		).Complete(r)
 }

@@ -36,8 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonchart"
-	"github.com/deckhouse/operator-helm/pkg/utils"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonchart"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 type reconciler struct {
@@ -344,7 +344,7 @@ func (r *reconciler) reconcileInternalHelmChart(ctx context.Context, state *addo
 		return fmt.Errorf("creating or updating internal helm chart: %w", err)
 	}
 
-	if utils.IsConditionObserved(state.internalHelmChart.GetConditions(), ConditionTypeReady, state.internalHelmChart.Generation) {
+	if _, ok := utils.IsConditionObserved(state.internalHelmChart.GetConditions(), ConditionTypeReady, state.internalHelmChart.Generation); ok {
 		logger.Info("Successfully reconciled internal helm chart", "operation", op, "repository", state.addon.Spec.Chart.HelmClusterAddonRepository, "chart", state.addon.Spec.Chart.HelmClusterAddonChartName)
 	}
 
@@ -398,7 +398,7 @@ func (r *reconciler) reconcileInternalHelmRelease(ctx context.Context, state *ad
 		return fmt.Errorf("reconciling internal helm release: %w", err)
 	}
 
-	if utils.IsConditionObserved(state.internalHelmRelease.GetConditions(), ConditionTypeReady, state.internalHelmRelease.Generation) {
+	if _, ok := utils.IsConditionObserved(state.internalHelmRelease.GetConditions(), ConditionTypeReady, state.internalHelmRelease.Generation); ok {
 		logger.Info("Successfully reconciled internal helm release", "operation", op, "chart", state.addon.Spec.Chart.HelmClusterAddonChartName)
 	}
 
