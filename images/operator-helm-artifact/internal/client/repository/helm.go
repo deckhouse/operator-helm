@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package helmclusteraddonrepository
+package repository
 
 import (
 	"context"
@@ -23,16 +23,17 @@ import (
 	"strings"
 	"time"
 
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"go.yaml.in/yaml/v3"
 	"k8s.io/apimachinery/pkg/util/wait"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-var HelmRepositoryDefaultClient HelmRepositoryClient
+var HelmRepositoryDefaultClient ClientInterface = &helmRepositoryClient{}
 
-type HelmRepositoryClient struct{}
+type helmRepositoryClient struct{}
 
-func (c *HelmRepositoryClient) FetchCharts(ctx context.Context, url string) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
+func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, auth *AuthConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
 	if !strings.HasSuffix(url, "/index.yaml") {
 		url += "/index.yaml"
 	}
@@ -53,6 +54,10 @@ func (c *HelmRepositoryClient) FetchCharts(ctx context.Context, url string) (map
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return true, fmt.Errorf("creating request: %w", err)
+		}
+
+		if auth != nil {
+			req.SetBasicAuth(auth.Username, auth.Password)
 		}
 
 		resp, err := http.DefaultClient.Do(req)

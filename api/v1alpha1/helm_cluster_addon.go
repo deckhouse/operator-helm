@@ -17,19 +17,24 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"context"
-	"fmt"
+	"reflect"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 const (
 	HelmClusterAddonKind     = "HelmClusterAddon"
 	HelmClusterAddonResource = "helmclusteraddons"
+
+	// LabelSourceName stores the name of the source facade resource.
+	HelmClusterAddonLabelSourceName = "helm.deckhouse.io/cluster-addon"
+
+	ConditionTypeManaged              = "Managed"
+	ConditionTypeInstalled            = "Installed"
+	ConditionTypeUpdateInstalled      = "UpdateInstalled"
+	ConditionTypeConfigurationApplied = "ConfigurationApplied"
+	ConditionTypePartiallyDegraded    = "PartiallyDegraded"
 )
 
 // HelmClusterAddon represents a Helm addon that is installed across the whole cluster.
@@ -52,10 +57,42 @@ type HelmClusterAddon struct {
 	Status HelmClusterAddonStatus `json:"status,omitempty"`
 }
 
-func (r *HelmClusterAddon) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, r).
-		WithValidator(&HelmClusterAddonValidator{Client: mgr.GetClient()}).
-		Complete()
+func (r *HelmClusterAddon) GetConditions() *[]metav1.Condition {
+	return &r.Status.Conditions
+}
+
+func (r *HelmClusterAddon) SetObservedGeneration(generation int64) {
+	r.Status.ObservedGeneration = generation
+}
+
+func (r *HelmClusterAddon) GetObservedGeneration() int64 {
+	return r.Status.ObservedGeneration
+}
+
+func (r *HelmClusterAddon) GetStatus() any {
+	return r.Status
+}
+
+func (r *HelmClusterAddon) MaintenanceModeEnabled() bool {
+	if r.Spec.Maintenance == string(NoResourceReconciliation) {
+		return true
+	}
+
+	return false
+}
+
+func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
+	conditionTypes := []string{"Ready"}
+
+	if r.Status.LastAppliedChart == nil {
+		return append(conditionTypes, ConditionTypeInstalled)
+	}
+
+	if reflect.DeepEqual(r.Spec.Values, r.Status.LastAppliedValues) {
+		return append(conditionTypes, ConditionTypeUpdateInstalled)
+	}
+
+	return append(conditionTypes, ConditionTypeConfigurationApplied)
 }
 
 type HelmClusterAddonSpec struct {
@@ -143,41 +180,3 @@ type HelmClusterAddonMaintenance string
 const (
 	NoResourceReconciliation HelmClusterAddonMaintenance = "NoResourceReconciliation"
 )
-
-// +k8s:deepcopy-gen=false
-type HelmClusterAddonValidator struct {
-	Client client.Client
-}
-
-func (v *HelmClusterAddonValidator) ValidateCreate(ctx context.Context, addon *HelmClusterAddon) (admission.Warnings, error) {
-	return nil, v.checkUniqueness(ctx, addon)
-}
-
-func (v *HelmClusterAddonValidator) ValidateUpdate(ctx context.Context, _, newObj *HelmClusterAddon) (admission.Warnings, error) {
-	return nil, v.checkUniqueness(ctx, newObj)
-}
-
-func (v *HelmClusterAddonValidator) ValidateDelete(_ context.Context, _ *HelmClusterAddon) (admission.Warnings, error) {
-	return nil, nil
-}
-
-func (v *HelmClusterAddonValidator) checkUniqueness(ctx context.Context, addon *HelmClusterAddon) error {
-	list := &HelmClusterAddonList{}
-
-	if err := v.Client.List(ctx, list); err != nil {
-		return err
-	}
-
-	for _, existing := range list.Items {
-		if existing.Name != addon.Name &&
-			existing.Spec.Chart.HelmClusterAddonRepository == addon.Spec.Chart.HelmClusterAddonRepository &&
-			existing.Spec.Chart.HelmClusterAddonChartName == addon.Spec.Chart.HelmClusterAddonChartName {
-			return fmt.Errorf(
-				"chart %s is already used by helmclusteraddon/%s",
-				addon.Spec.Chart.HelmClusterAddonChartName, existing.Name,
-			)
-		}
-	}
-
-	return nil
-}

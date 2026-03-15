@@ -73,8 +73,8 @@ func RunDocChangesValidation(info *DiffInfo) (exitCode int) {
 	return exitCode
 }
 
-var possibleDocRootsRe = regexp.MustCompile(`docs/|docs/documentation`)
-var docsDirAllowedFileRe = regexp.MustCompile(`docs/(CONFIGURATION|CR|FAQ|README|ADMIN_GUIDE|USER_GUIDE|CHARACTERISTICS_DESCRIPTION|INSTALL|RELEASE_NOTES)(\.ru)?.md`)
+var possibleDocRootsRe = regexp.MustCompile(`docs/`)
+var docsDirAllowedFileRe = regexp.MustCompile(`docs/(CONFIGURATION|CR|README|RELEASE_NOTES|USAGE|EXAMPLE)(\.ru)?.md`)
 var docsDirFileRe = regexp.MustCompile(`docs/[^/]+.md`)
 
 func checkDocFile(fName string, diffInfo *DiffInfo) (msg Message) {
@@ -88,15 +88,11 @@ func checkDocFile(fName string, diffInfo *DiffInfo) (msg Message) {
 			"name is not allowed",
 			`Rename this file or move it, for example, into 'internal' folder.
 Only following file names are allowed in the module '/docs/' directory:
-    CLUSTER_CONFIGURATION.md
     CONFIGURATION.md
     CR.md
-    FAQ.md
+	EXAMPLE.md
+	USAGE.md
     README.md
-    RELEASE_NOTES.md
-    ADMIN_GUIDE.md
-    USER_GUIDE.md
-    CHARACTERISTICS_DESCRIPTION.md
 (also their Russian versions ended with '.ru.md')`,
 		)
 	}

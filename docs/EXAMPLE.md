@@ -24,7 +24,7 @@ spec:
 After creating the repository, you can view the Helm charts available in it using the command below:
 
 ```shell
-kubectl get helmclusteraddoncharts.helm.deckhouse.io -l helm.deckhouse.io/cluster-addon-repository=podinfo
+kubectl get helmclusteraddoncharts.helm.deckhouse.io -l repository=podinfo
 NAME              AGE
 podinfo-podinfo   56s
 ```
@@ -32,15 +32,15 @@ podinfo-podinfo   56s
 To view the list of versions available for a specific chart, run the following command:
 
 ```shell
-kubectl get helmclusteraddoncharts.helm.deckhouse.io podinfo-podinfo -o yaml
 apiVersion: helm.deckhouse.io/v1alpha1
 kind: HelmClusterAddonChart
 metadata:
-  creationTimestamp: "2026-03-11T05:31:14Z"
+  creationTimestamp: "2026-03-12T02:24:04Z"
   generation: 1
   labels:
-    helm.deckhouse.io/cluster-addon-repository: podinfo
-    helm.deckhouse.io/managed-by: operator-helm
+    chart: podinfo
+    heritage: deckhouse
+    repository: podinfo
   name: podinfo-podinfo
   ownerReferences:
   - apiVersion: helm.deckhouse.io/v1alpha1
@@ -48,9 +48,9 @@ metadata:
     controller: true
     kind: HelmClusterAddonRepository
     name: podinfo
-    uid: 073d6efc-aa19-4ccd-9d8e-d3b1253f94cf
-  resourceVersion: "27054847"
-  uid: cef0e7aa-6d36-4ade-bc6d-9e66b853badf
+    uid: d5e026f9-6151-4f9f-a4bc-756d96b86e95
+  resourceVersion: "28306911"
+  uid: 7f232359-5553-463e-beed-d6f175596b0b
 status:
   versions:
   - digest: a5c4b7381a0907128243354ab100d2eecc480d7dcac5014ff7272b0acef03780
