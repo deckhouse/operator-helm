@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/deckhouse/operator-helm/internal/common"
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 type BaseService struct {
@@ -46,8 +46,20 @@ func (s *BaseService) ensureResourceDeleted(ctx context.Context, nn types.Namesp
 	return nil
 }
 
-type CommonState struct {
-	ReconcileError error
+type PartiallyDegradedResult struct {
+	Status ResourceStatus
+}
+
+func (r PartiallyDegradedResult) GetStatus() ResourceStatus {
+	return r.Status
+}
+
+func (r PartiallyDegradedResult) IsReady() bool {
+	return r.Status.IsReady()
+}
+
+func (r PartiallyDegradedResult) GetConditionType() string {
+	return helmv1alpha1.ConditionTypePartiallyDegraded
 }
 
 type ResourceStatus struct {
@@ -76,7 +88,7 @@ func AsCondition(res StatusProvider, conditionType string) StatusProvider {
 func Success(obj client.Object) ResourceStatus {
 	return ResourceStatus{
 		Status:             metav1.ConditionTrue,
-		Reason:             common.ReasonSuccess,
+		Reason:             helmv1alpha1.ReasonSuccess,
 		ObservedGeneration: obj.GetGeneration(),
 	}
 }

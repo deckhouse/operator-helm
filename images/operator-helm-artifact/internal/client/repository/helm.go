@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package client
+package repository
 
 import (
 	"context"
@@ -29,7 +29,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-var HelmRepositoryDefaultClient Interface = &helmRepositoryClient{}
+var HelmRepositoryDefaultClient ClientInterface = &helmRepositoryClient{}
 
 type helmRepositoryClient struct{}
 

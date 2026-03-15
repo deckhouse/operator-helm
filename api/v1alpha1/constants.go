@@ -14,9 +14,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package common
+package v1alpha1
 
 const (
+	// TargetNamespace is the namespace where internal customer resources are created.
+	TargetNamespace = "d8-operator-helm"
+
+	// FinalizerName is the finalizer added to HelmClusterRepository to ensure cleanup.
+	FinalizerName = "helm.deckhouse.io/cleanup"
+
+	// LabelManagedBy marks resources as managed by this controller.
+	LabelManagedBy = "helm.deckhouse.io/managed-by"
+
+	// LabelManagedByValue is the value for the managed-by label.
+	LabelManagedByValue = "operator-helm"
+
 	LabelDeckhouseHeritage      = "heritage"
 	LabelDeckhouseHeritageValue = "deckhouse"
 )

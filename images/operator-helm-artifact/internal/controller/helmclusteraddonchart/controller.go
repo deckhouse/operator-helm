@@ -27,9 +27,14 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+const (
+	// ControllerName is the name of this controller, used for leader election and logging.
+	ControllerName = "helmclusteraddonchart-controller"
+)
+
 func SetupWithManager(mgr ctrl.Manager) error {
 	r := &reconciler{
-		client: mgr.GetClient(),
+		Client: mgr.GetClient(),
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -37,7 +42,12 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		For(&helmv1alpha1.HelmClusterAddonChart{}).
 		Watches(
 			&sourcev1.HelmChart{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
+			handler.EnqueueRequestsFromMapFunc(
+				utils.MapInternalToFacade(
+					helmv1alpha1.TargetNamespace,
+					helmv1alpha1.LabelManagedBy,
+					helmv1alpha1.LabelManagedByValue,
+					helmv1alpha1.HelmClusterAddonChartLabelSourceName)),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)

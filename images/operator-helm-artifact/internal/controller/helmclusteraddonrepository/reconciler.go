@@ -29,7 +29,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/common"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -38,7 +37,7 @@ type reconciler struct {
 	client.Client
 
 	repositoryService *services.RepoService
-	chartSyncService  *services.ChartSyncService
+	chartSyncService  *services.RepoSyncService
 	statusManager     *services.StatusManager
 }
 
@@ -54,14 +53,6 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("getting helm cluster addon repository: %w", err)
 	}
 
-	err := r.statusManager.InitializeConditions(ctx, &repo,
-		services.ConditionTypeReady,
-		services.ConditionTypeSynced,
-	)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-
 	repoType, err := utils.GetRepositoryType(repo.Spec.URL)
 	if err != nil {
 		logger.Error(err, "failed to determine repository type")
@@ -72,8 +63,8 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.reconcileDelete(ctx, &repo, repoType)
 	}
 
-	if !controllerutil.ContainsFinalizer(&repo, FinalizerName) {
-		controllerutil.AddFinalizer(&repo, FinalizerName)
+	if !controllerutil.ContainsFinalizer(&repo, helmv1alpha1.FinalizerName) {
+		controllerutil.AddFinalizer(&repo, helmv1alpha1.FinalizerName)
 
 		if err := r.Update(ctx, &repo); err != nil {
 			return reconcile.Result{}, fmt.Errorf("adding finalizer: %w", err)
@@ -81,8 +72,15 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.requeueAtSyncInterval(&repo)
 	}
 
+	if err := r.statusManager.InitializeConditions(ctx, &repo,
+		helmv1alpha1.ConditionTypeReady,
+		helmv1alpha1.ConditionTypeSynced,
+	); err != nil {
+		return reconcile.Result{}, err
+	}
+
 	var repoRes services.RepoResult
-	var chartSyncRes services.ChartSyncResult
+	var chartSyncRes services.RepoSyncResult
 
 	switch repoType {
 	case utils.InternalHelmRepository:
@@ -98,13 +96,13 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		repoRes = services.RepoResult{Status: services.Failed(&repo, "UnsupportedRepositoryType", err.Error(), err)}
 	}
 
-	if repoRes.Status.IsReady() {
+	if repoRes.IsReady() {
 		chartSyncRes = r.chartSyncService.EnsureAddonCharts(ctx, &repo, repoType)
 	} else {
-		chartSyncRes = services.ChartSyncResult{Status: services.Failed(&repo, services.ReasonRepositoryNotReady, repoRes.Status.Message, err)}
+		chartSyncRes = services.RepoSyncResult{Status: services.Failed(&repo, helmv1alpha1.ReasonRepositoryNotReady, repoRes.Status.Message, err)}
 	}
 
-	if err := r.statusManager.Update(ctx, &repo, repoRes, chartSyncRes); err != nil {
+	if err := r.statusManager.Update(ctx, &repo, services.NoopStatusMutator, repoRes, chartSyncRes); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -114,21 +112,21 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 func (r *reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
-	if !controllerutil.ContainsFinalizer(repo, FinalizerName) {
+	if !controllerutil.ContainsFinalizer(repo, helmv1alpha1.FinalizerName) {
 		return reconcile.Result{}, nil
 	}
 
 	if repoType == utils.InternalHelmRepository {
-		if err := r.repositoryService.InternalOCIRepositoryCleanup(ctx, repo); err != nil {
-			_ = r.statusManager.Update(ctx, repo, services.RepoResult{
-				Status: services.Failed(repo, common.ReasonFailed, "Failed to remove dependencies", err),
+		if err := r.repositoryService.CleanupHelmRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
+			_ = r.statusManager.Update(ctx, repo, services.NoopStatusMutator, services.RepoResult{
+				Status: services.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to remove dependencies", err),
 			})
 			return reconcile.Result{}, err
 		}
 	}
 
-	controllerutil.RemoveFinalizer(repo, FinalizerName)
-	if err := r.Update(ctx, repo); err != nil {
+	controllerutil.RemoveFinalizer(repo, helmv1alpha1.FinalizerName)
+	if err := r.Update(ctx, repo); err != nil && !apierrors.IsNotFound(err) {
 		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 
@@ -138,7 +136,7 @@ func (r *reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 }
 
 func (r *reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
-	repoSyncCond := apimeta.FindStatusCondition(repo.Status.Conditions, services.ConditionTypeSynced)
+	repoSyncCond := apimeta.FindStatusCondition(repo.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
 	if repoSyncCond != nil {
 		remaining := time.Until(repoSyncCond.LastTransitionTime.Add(services.ChartsSyncInterval))
 		if remaining > 0 {

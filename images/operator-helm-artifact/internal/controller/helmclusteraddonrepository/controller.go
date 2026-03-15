@@ -29,14 +29,18 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+const (
+	ControllerName = "helmclusteraddonrepository-controller"
+)
+
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
 	r := &reconciler{
 		Client:            client,
-		repositoryService: services.NewRepoService(client, mgr.GetScheme(), TargetNamespace),
-		chartSyncService:  services.NewChartSyncService(client, mgr.GetScheme()),
-		statusManager:     services.NewStatusManager(client, LabelManagedByValue),
+		repositoryService: services.NewRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		chartSyncService:  services.NewRepoSyncService(client, mgr.GetScheme()),
+		statusManager:     services.NewStatusManager(client, helmv1alpha1.LabelManagedByValue),
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -44,12 +48,24 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		For(&helmv1alpha1.HelmClusterAddonRepository{}).
 		Watches(
 			&sourcev1.HelmRepository{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
+			handler.EnqueueRequestsFromMapFunc(
+				utils.MapInternalToFacade(
+					helmv1alpha1.TargetNamespace,
+					helmv1alpha1.LabelManagedBy,
+					helmv1alpha1.LabelManagedByValue,
+					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName),
+			),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Watches(
 			&corev1.Secret{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
+			handler.EnqueueRequestsFromMapFunc(
+				utils.MapInternalToFacade(
+					helmv1alpha1.TargetNamespace,
+					helmv1alpha1.LabelManagedBy,
+					helmv1alpha1.LabelManagedByValue,
+					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName),
+			),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Watches(

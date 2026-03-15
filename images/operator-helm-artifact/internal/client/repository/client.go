@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package client
+package repository
 
 import (
 	"context"
@@ -24,11 +24,11 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-type Interface interface {
+type ClientInterface interface {
 	FetchCharts(ctx context.Context, url string, auth *AuthConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error)
 }
 
-func New(repoType utils.InternalRepositoryType) (Interface, error) {
+func NewClient(repoType utils.InternalRepositoryType) (ClientInterface, error) {
 	switch repoType {
 	case utils.InternalHelmRepository:
 		return HelmRepositoryDefaultClient, nil
