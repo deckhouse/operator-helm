@@ -20,6 +20,7 @@ import (
 	"reflect"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -67,8 +68,16 @@ func (r *HelmClusterAddon) GetStatus() any {
 	return r.Status
 }
 
-func (r *HelmClusterAddon) MaintenanceModeEnabled() bool {
+func (r *HelmClusterAddon) MaintenanceModeActivated() bool {
 	if r.Spec.Maintenance == string(NoResourceReconciliation) {
+		return true
+	}
+
+	return false
+}
+
+func (r *HelmClusterAddon) MaintenanceModeEnabled() bool {
+	if apimeta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeManaged, metav1.ConditionFalse) {
 		return true
 	}
 
@@ -82,11 +91,25 @@ func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
 		return append(conditionTypes, ConditionTypeInstalled)
 	}
 
-	if reflect.DeepEqual(r.Spec.Values, r.Status.LastAppliedValues) {
+	if r.IsChartStatusInfoOutdated() {
 		return append(conditionTypes, ConditionTypeUpdateInstalled)
 	}
 
-	return append(conditionTypes, ConditionTypeConfigurationApplied)
+	if !reflect.DeepEqual(r.Spec.Values, r.Status.LastAppliedValues) {
+		return append(conditionTypes, ConditionTypeConfigurationApplied)
+	}
+
+	return conditionTypes
+}
+
+func (r *HelmClusterAddon) IsChartStatusInfoOutdated() bool {
+	if r.Status.LastAppliedChart == nil {
+		return true
+	}
+
+	return r.Spec.Chart.HelmClusterAddonChartName != r.Status.LastAppliedChart.HelmClusterAddonChartName ||
+		r.Spec.Chart.HelmClusterAddonRepository != r.Status.LastAppliedChart.HelmClusterAddonRepository ||
+		r.Spec.Chart.Version != r.Status.LastAppliedChart.Version
 }
 
 type HelmClusterAddonSpec struct {

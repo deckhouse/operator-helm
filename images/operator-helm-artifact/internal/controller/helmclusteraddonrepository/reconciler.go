@@ -102,7 +102,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		chartSyncRes = services.RepoSyncResult{Status: services.Failed(&repo, helmv1alpha1.ReasonRepositoryNotReady, repoRes.Status.Message, err)}
 	}
 
-	if err := r.statusManager.Update(ctx, &repo, services.NoopStatusMutator, repoRes, chartSyncRes); err != nil {
+	if err := r.statusManager.Update(ctx, &repo, services.NoopStatusMutator, services.NoopStatusMapper, repoRes, chartSyncRes); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -116,9 +116,17 @@ func (r *reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 		return reconcile.Result{}, nil
 	}
 
-	if repoType == utils.InternalHelmRepository {
+	switch repoType {
+	case utils.InternalHelmRepository:
 		if err := r.repositoryService.CleanupHelmRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
-			_ = r.statusManager.Update(ctx, repo, services.NoopStatusMutator, services.RepoResult{
+			_ = r.statusManager.Update(ctx, repo, services.NoopStatusMutator, services.NoopStatusMapper, services.RepoResult{
+				Status: services.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to remove dependencies", err),
+			})
+			return reconcile.Result{}, err
+		}
+	case utils.InternalOCIRepository:
+		if err := r.repositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
+			_ = r.statusManager.Update(ctx, repo, services.NoopStatusMutator, services.NoopStatusMapper, services.RepoResult{
 				Status: services.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to remove dependencies", err),
 			})
 			return reconcile.Result{}, err

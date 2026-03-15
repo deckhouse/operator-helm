@@ -63,15 +63,17 @@ func (r PartiallyDegradedResult) GetConditionType() string {
 }
 
 type ResourceStatus struct {
+	Observed           bool
 	Status             metav1.ConditionStatus
 	ObservedGeneration int64
 	Reason             string
 	Message            string
+	NotReflectable     bool
 	Err                error
 }
 
 func (s ResourceStatus) IsReady() bool {
-	return s.Status == metav1.ConditionTrue
+	return s.Status == metav1.ConditionTrue && s.Observed
 }
 
 type statusProxy struct {

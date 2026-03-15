@@ -59,15 +59,19 @@ func (r ChartResult) GetStatus() ResourceStatus {
 }
 
 func (r ChartResult) IsReady() bool {
-	return r.Artifact != nil
+	return r.Artifact != nil && r.Status.Observed && r.Status.Status == metav1.ConditionTrue
 }
 
 func (r ChartResult) IsPartiallyDegraded() bool {
-	return !r.Status.IsReady()
+	return r.Artifact != nil && r.Status.Status != metav1.ConditionTrue && r.Status.Observed
+}
+
+func (r ChartResult) HasArtifact() bool {
+	return r.Artifact != nil && r.Status.Observed
 }
 
 func (r ChartResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeReleaseChart
+	return helmv1alpha1.ConditionTypePartiallyDegraded
 }
 
 func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) ChartResult {
@@ -103,10 +107,12 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.
 		return ChartResult{
 			Artifact: existing.Status.Artifact,
 			Status: ResourceStatus{
+				Observed:           ok,
 				Status:             cond.Status,
 				ObservedGeneration: addon.Generation,
 				Reason:             cond.Reason,
 				Message:            cond.Message,
+				NotReflectable:     existing.Status.Artifact != nil,
 			},
 		}
 	}

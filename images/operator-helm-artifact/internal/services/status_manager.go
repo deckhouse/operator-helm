@@ -59,17 +59,23 @@ func NewStatusManager(c client.Client, fieldOwner string) *StatusManager {
 	}
 }
 
-type StatusMutatorFunc func(ObjectWithConditions) ObjectWithConditions
+type StatusMutatorFunc func(ObjectWithConditions, []StatusProvider) (ObjectWithConditions, []StatusProvider)
 
-var NoopStatusMutator = StatusMutatorFunc(func(o ObjectWithConditions) ObjectWithConditions { return o })
+var NoopStatusMutator = StatusMutatorFunc(func(o ObjectWithConditions, s []StatusProvider) (ObjectWithConditions, []StatusProvider) { return o, s })
 
-func (s *StatusManager) Update(ctx context.Context, obj ObjectWithConditions, mutatorFunc StatusMutatorFunc, results ...StatusProvider) error {
+type StatusMapperFunc func(string, ResourceStatus) ResourceStatus
+
+var NoopStatusMapper = StatusMapperFunc(func(_ string, status ResourceStatus) ResourceStatus {
+	return status
+})
+
+func (s *StatusManager) Update(ctx context.Context, obj ObjectWithConditions, mutatorFunc StatusMutatorFunc, statusMapperFunc StatusMapperFunc, results ...StatusProvider) error {
 	logger := log.FromContext(ctx)
 
 	oldObj := obj.DeepCopyObject().(ObjectWithConditions)
 
 	if mutatorFunc != nil {
-		oldObj = mutatorFunc(oldObj)
+		obj, results = mutatorFunc(obj, results)
 	}
 
 	conditions := obj.GetConditions()
@@ -82,6 +88,9 @@ func (s *StatusManager) Update(ctx context.Context, obj ObjectWithConditions, mu
 		}
 
 		status := res.GetStatus()
+
+		status = statusMapperFunc(res.GetConditionType(), status)
+
 		if status.Status == "" || status.Reason == "" {
 			continue
 		}
@@ -165,6 +174,11 @@ func ConsolidateConditions(obj ObjectWithConditions, results ...StatusProvider) 
 
 		status := res.GetStatus()
 		if status.Status == "" || status.Reason == "" {
+			continue
+		}
+
+		if status.NotReflectable {
+			result = append(result, res)
 			continue
 		}
 

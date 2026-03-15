@@ -37,11 +37,12 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
 	r := &reconciler{
-		Client:            mgr.GetClient(),
-		releaseService:    services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		repositoryService: services.NewRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		chartService:      services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		statusManager:     services.NewStatusManager(client, ControllerName),
+		Client:             mgr.GetClient(),
+		releaseService:     services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		repositoryService:  services.NewRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		chartService:       services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		maintenanceService: services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		statusManager:      services.NewStatusManager(client, ControllerName),
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).

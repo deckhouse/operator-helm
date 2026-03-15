@@ -22,7 +22,6 @@ import (
 
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -94,6 +93,7 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 		return ReleaseResult{
 			History: existing.Status.History,
 			Status: ResourceStatus{
+				Observed:           ok,
 				Status:             cond.Status,
 				ObservedGeneration: addon.Generation,
 				Reason:             cond.Reason,
@@ -103,41 +103,6 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 	}
 
 	return ReleaseResult{Status: Unknown(addon, helmv1alpha1.ReasonReconciling)}
-}
-
-func (s *ReleaseService) SuspendHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) ReleaseResult {
-	helmRelease := &helmv2.HelmRelease{}
-	if err := s.Client.Get(ctx, types.NamespacedName{
-		Name:      utils.GetInternalHelmReleaseName(addon.Name),
-		Namespace: s.TargetNamespace,
-	}, helmRelease); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ReleaseResult{Status: Success(addon)}
-		}
-		return ReleaseResult{Status: Failed(
-			addon,
-			helmv1alpha1.ReasonHelmReleaseFailed,
-			"Failed to suspend helm release",
-			fmt.Errorf("getting helm release: %w", err),
-		)}
-	}
-
-	if helmRelease.Spec.Suspend {
-		return ReleaseResult{Status: Success(addon)}
-	}
-
-	base := helmRelease.DeepCopy()
-	helmRelease.Spec.Suspend = true
-
-	if err := s.Client.Patch(ctx, helmRelease, client.MergeFrom(base)); err != nil {
-		return ReleaseResult{Status: Failed(
-			addon,
-			helmv1alpha1.ReasonHelmReleaseFailed,
-			"Failed to suspend helm release",
-			fmt.Errorf("suspending helm release: %w", err),
-		)}
-	}
-	return ReleaseResult{Status: Success(addon)}
 }
 
 func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
@@ -163,6 +128,10 @@ func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2
 
 	existing.Spec.Suspend = false
 
+	if addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
+		existing.Spec.Suspend = true
+	}
+
 	switch repoType {
 	case utils.InternalHelmRepository:
 		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
@@ -173,7 +142,7 @@ func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2
 	case utils.InternalOCIRepository:
 		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
 			Kind:      sourcev1.OCIRepositoryKind,
-			Name:      addon.Spec.Chart.HelmClusterAddonRepository,
+			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
 			Namespace: targetNamespace,
 		}
 	default:

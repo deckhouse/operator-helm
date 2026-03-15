@@ -111,6 +111,7 @@ func (s *RepoService) EnsureInternalHelmRepository(ctx context.Context, repo *he
 
 	if cond, ok := utils.IsConditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
 		return RepoResult{Status: ResourceStatus{
+			Observed:           ok,
 			Status:             cond.Status,
 			ObservedGeneration: repo.Generation,
 			Reason:             cond.Reason,
@@ -121,33 +122,33 @@ func (s *RepoService) EnsureInternalHelmRepository(ctx context.Context, repo *he
 	return RepoResult{Status: Unknown(repo, helmv1alpha1.ReasonReconciling)}
 }
 
-func (s *RepoService) EnsureInternalOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) RepoResult {
+func (s *RepoService) EnsureInternalOCIRepository(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository) RepoResult {
 	logger := log.FromContext(ctx)
 
 	if err := s.reconcileAuthSecret(ctx, repo, utils.InternalHelmRepository); err != nil {
-		return RepoResult{Status: Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile auth secret", err)}
+		return RepoResult{Status: Failed(addon, helmv1alpha1.ReasonFailed, "Failed to reconcile auth secret", err)}
 	}
 
 	if err := s.reconcileTLSSecret(ctx, repo, utils.InternalHelmRepository); err != nil {
-		return RepoResult{Status: Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile tls secret", err)}
+		return RepoResult{Status: Failed(addon, helmv1alpha1.ReasonFailed, "Failed to reconcile tls secret", err)}
 	}
 
 	existing := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      repo.Name,
+			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
 			Namespace: s.TargetNamespace,
 		},
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		applyOCIRepositorySpec(repo, existing)
+		applyOCIRepositorySpec(addon, repo, existing)
 
 		return nil
 	})
 	if err != nil {
 		return RepoResult{
 			Status: Failed(
-				repo,
+				addon,
 				helmv1alpha1.ReasonFailed,
 				"Failed to reconcile oci repository",
 				fmt.Errorf("creating oci repository: %w", err)),
@@ -158,7 +159,17 @@ func (s *RepoService) EnsureInternalOCIRepository(ctx context.Context, repo *hel
 		logger.Info("Reconciled oci repository", "operation", op)
 	}
 
-	return RepoResult{Status: Success(repo)}
+	if cond, ok := utils.IsConditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
+		return RepoResult{Status: ResourceStatus{
+			Observed:           ok,
+			Status:             cond.Status,
+			ObservedGeneration: addon.Generation,
+			Reason:             cond.Reason,
+			Message:            cond.Message,
+		}}
+	}
+
+	return RepoResult{Status: Unknown(addon, helmv1alpha1.ReasonReconciling)}
 }
 
 func (s *RepoService) CleanupHelmRepository(ctx context.Context, repoName string) error {
@@ -203,10 +214,6 @@ func (s *RepoService) CleanupOCIRepository(ctx context.Context, repoName string)
 			name: utils.GetInternalRepositoryTLSSecretName(utils.InternalHelmRepository, repoName),
 			obj:  &corev1.Secret{},
 		},
-		{
-			name: repoName,
-			obj:  &sourcev1.OCIRepository{},
-		},
 	}
 
 	for _, r := range resources {
@@ -214,6 +221,16 @@ func (s *RepoService) CleanupOCIRepository(ctx context.Context, repoName string)
 		if err := s.ensureResourceDeleted(ctx, nn, r.obj); err != nil {
 			return fmt.Errorf("cleaning up %T %s: %w", r.obj, r.name, err)
 		}
+	}
+
+	return nil
+}
+
+func (s *RepoService) RemoveOCIRepository(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+	name := utils.GetInternalOCIRepositoryName(addon.Name)
+	nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
+	if err := s.ensureResourceDeleted(ctx, nn, &sourcev1.OCIRepository{}); err != nil {
+		return fmt.Errorf("removing oci repository: %w", err)
 	}
 
 	return nil
@@ -278,8 +295,8 @@ func (s *RepoService) reconcileTLSSecret(ctx context.Context, repo *helmv1alpha1
 
 	if _, err := controllerutil.CreateOrPatch(ctx, s.Client, tlsSecret, func() error {
 		tlsSecret.Labels = map[string]string{
-			helmv1alpha1.LabelManagedBy:                            helmv1alpha1.LabelManagedByValue,
-			helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repo.Name,
+			helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
+			helmv1alpha1.HelmClusterAddonLabelSourceName: repo.Name,
 		}
 
 		tlsSecret.StringData = map[string]string{
@@ -320,8 +337,11 @@ func applyHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, exis
 	}
 }
 
-func applyOCIRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.OCIRepository) {
+func applyOCIRepositorySpec(addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.OCIRepository) {
 	existing.Spec.URL = repo.Spec.URL
+	existing.Spec.Reference = &sourcev1.OCIRepositoryRef{
+		Tag: addon.Spec.Chart.Version,
+	}
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
 	existing.Spec.Insecure = !repo.Spec.TLSVerify
 	existing.Spec.CertSecretRef = nil

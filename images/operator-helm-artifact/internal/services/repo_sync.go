@@ -221,6 +221,7 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 
 	return RepoSyncResult{
 		Status: ResourceStatus{
+			Observed:           true,
 			Status:             metav1.ConditionTrue,
 			Reason:             helmv1alpha1.ReasonSyncSucceeded,
 			ObservedGeneration: repo.Generation,
