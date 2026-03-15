@@ -78,6 +78,10 @@ func (r RepoResult) GetStatus() ResourceStatus {
 	return r.Status
 }
 
+func (r RepoResult) IsReady() bool {
+	return r.Status.IsReady()
+}
+
 func (r RepoResult) GetConditionType() string {
 	return ConditionTypeReady
 }
@@ -101,7 +105,7 @@ func (s *RepoService) EnsureInternalHelmRepository(ctx context.Context, repo *he
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		applyInternalHelmRepositorySpec(repo, existing)
+		applyHelmRepositorySpec(repo, existing)
 
 		return nil
 	})
@@ -110,13 +114,13 @@ func (s *RepoService) EnsureInternalHelmRepository(ctx context.Context, repo *he
 			Status: Failed(
 				repo,
 				common.ReasonFailed,
-				"Failed to reconcile internal helm repository",
-				fmt.Errorf("creating internal helm repository: %w", err)),
+				"Failed to reconcile helm repository",
+				fmt.Errorf("creating helm repository: %w", err)),
 		}
 	}
 
 	if op != controllerutil.OperationResultNone {
-		logger.Info("Reconciled internal helm repository", "operation", op)
+		logger.Info("Reconciled helm repository", "operation", op)
 	}
 
 	if cond, ok := utils.IsConditionObserved(existing.Status.Conditions, ConditionTypeReady, existing.Generation); ok {
@@ -150,7 +154,7 @@ func (s *RepoService) EnsureInternalOCIRepository(ctx context.Context, repo *hel
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		applyInternalOCIRepositorySpec(repo, existing)
+		applyOCIRepositorySpec(repo, existing)
 
 		return nil
 	})
@@ -159,34 +163,63 @@ func (s *RepoService) EnsureInternalOCIRepository(ctx context.Context, repo *hel
 			Status: Failed(
 				repo,
 				common.ReasonFailed,
-				"Failed to reconcile internal oci repository",
-				fmt.Errorf("creating internal oci repository: %w", err)),
+				"Failed to reconcile oci repository",
+				fmt.Errorf("creating oci repository: %w", err)),
 		}
 	}
 
 	if op != controllerutil.OperationResultNone {
-		logger.Info("Reconciled internal oci repository", "operation", op)
+		logger.Info("Reconciled oci repository", "operation", op)
 	}
 
 	return RepoResult{Status: Success(repo)}
 }
 
-func (s *RepoService) InternalOCIRepositoryCleanup(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+func (s *RepoService) CleanupHelmRepository(ctx context.Context, repoName string) error {
 	resources := []struct {
 		name string
 		obj  client.Object
 	}{
 		{
-			name: utils.GetInternalRepositoryAuthSecretName(utils.InternalHelmRepository, repo.Name),
+			name: utils.GetInternalRepositoryAuthSecretName(utils.InternalHelmRepository, repoName),
 			obj:  &corev1.Secret{},
 		},
 		{
-			name: utils.GetInternalRepositoryTLSSecretName(utils.InternalHelmRepository, repo.Name),
+			name: utils.GetInternalRepositoryTLSSecretName(utils.InternalHelmRepository, repoName),
 			obj:  &corev1.Secret{},
 		},
 		{
-			name: repo.Name,
+			name: repoName,
 			obj:  &sourcev1.HelmRepository{},
+		},
+	}
+
+	for _, r := range resources {
+		nn := types.NamespacedName{Name: r.name, Namespace: s.TargetNamespace}
+		if err := s.ensureResourceDeleted(ctx, nn, r.obj); err != nil {
+			return fmt.Errorf("cleaning up %T %s: %w", r.obj, r.name, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *RepoService) CleanupOCIRepository(ctx context.Context, repoName string) error {
+	resources := []struct {
+		name string
+		obj  client.Object
+	}{
+		{
+			name: utils.GetInternalRepositoryAuthSecretName(utils.InternalHelmRepository, repoName),
+			obj:  &corev1.Secret{},
+		},
+		{
+			name: utils.GetInternalRepositoryTLSSecretName(utils.InternalHelmRepository, repoName),
+			obj:  &corev1.Secret{},
+		},
+		{
+			name: repoName,
+			obj:  &sourcev1.OCIRepository{},
 		},
 	}
 
@@ -275,7 +308,7 @@ func (s *RepoService) reconcileTLSSecret(ctx context.Context, repo *helmv1alpha1
 	return nil
 }
 
-func applyInternalHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.HelmRepository) {
+func applyHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.HelmRepository) {
 	existing.Spec.URL = repo.Spec.URL
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
 	existing.Spec.Insecure = !repo.Spec.TLSVerify
@@ -301,7 +334,7 @@ func applyInternalHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonReposito
 	}
 }
 
-func applyInternalOCIRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.OCIRepository) {
+func applyOCIRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.OCIRepository) {
 	existing.Spec.URL = repo.Spec.URL
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
 	existing.Spec.Insecure = !repo.Spec.TLSVerify

@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -36,6 +37,7 @@ type ObjectWithConditions interface {
 	GetGeneration() int64
 	GetObservedGeneration() int64
 	SetObservedGeneration(int64)
+	GetConditionTypesForUpdate() []string
 	GetStatus() interface{}
 }
 
@@ -61,10 +63,19 @@ func NewStatusManager(c client.Client, fieldOwner string) *StatusManager {
 	}
 }
 
-func (s *StatusManager) Update(ctx context.Context, obj ObjectWithConditions, results ...StatusProvider) error {
+type StatusMutatorFunc func(ObjectWithConditions) ObjectWithConditions
+
+var NoopStatusMutator = StatusMutatorFunc(func(o ObjectWithConditions) ObjectWithConditions { return o })
+
+func (s *StatusManager) Update(ctx context.Context, obj ObjectWithConditions, mutatorFunc StatusMutatorFunc, results ...StatusProvider) error {
 	logger := log.FromContext(ctx)
 
 	oldObj := obj.DeepCopyObject().(ObjectWithConditions)
+
+	if mutatorFunc != nil {
+		oldObj = mutatorFunc(oldObj)
+	}
+
 	conditions := obj.GetConditions()
 	currentGen := obj.GetGeneration()
 	minObservedGen := currentGen
@@ -122,10 +133,9 @@ func (s *StatusManager) InitializeConditions(ctx context.Context, obj ObjectWith
 	for _, t := range conditionTypes {
 		if meta.FindStatusCondition(*conditions, t) == nil {
 			meta.SetStatusCondition(conditions, metav1.Condition{
-				Type:    t,
-				Status:  metav1.ConditionUnknown,
-				Reason:  "Initialization",
-				Message: "Condition initialized, waiting for reconciliation",
+				Type:   t,
+				Status: metav1.ConditionUnknown,
+				Reason: "Initialized",
 			})
 			changed = true
 		}
@@ -134,8 +144,43 @@ func (s *StatusManager) InitializeConditions(ctx context.Context, obj ObjectWith
 	if changed {
 		logger := log.FromContext(ctx)
 		logger.Info("Initializing conditions", "name", obj.GetName(), "types", conditionTypes)
-		return s.Client.Status().Patch(ctx, obj, patchBase)
+
+		if err := s.Client.Status().Patch(ctx, obj, patchBase); err != nil {
+			return fmt.Errorf("initializing conditions: %w", err)
+		}
 	}
 
 	return nil
+}
+
+func ConsolidateConditions(obj ObjectWithConditions, results ...StatusProvider) []StatusProvider {
+	var result []StatusProvider
+
+	conditionTypes := obj.GetConditionTypesForUpdate()
+	if len(results) == 0 {
+		return result
+	}
+
+	var decisionRes StatusProvider
+	for _, res := range results {
+		if res == nil {
+			continue
+		}
+
+		status := res.GetStatus()
+		if status.Status == "" {
+			continue
+		}
+
+		decisionRes = res
+		if !status.IsReady() {
+			break
+		}
+	}
+
+	for _, conditionType := range conditionTypes {
+		result = append(result, AsCondition(decisionRes, conditionType))
+	}
+
+	return result
 }

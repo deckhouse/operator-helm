@@ -17,6 +17,9 @@ limitations under the License.
 package common
 
 const (
-	ReasonSuccess = "Success"
-	ReasonFailed  = "Failed"
+	ConditionTypeReady = "Ready"
+
+	ReasonSuccess     = "Success"
+	ReasonFailed      = "Failed"
+	ReasonReconciling = "Reconciling"
 )

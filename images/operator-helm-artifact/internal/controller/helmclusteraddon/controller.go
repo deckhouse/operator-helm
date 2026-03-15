@@ -25,12 +25,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+const (
+	ControllerName = "helmclusteraddon-controller"
+)
+
 func SetupWithManager(mgr ctrl.Manager) error {
+	client := mgr.GetClient()
+
 	r := &reconciler{
-		client: mgr.GetClient(),
+		Client:            mgr.GetClient(),
+		releaseService:    services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		repositoryService: services.NewRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		chartService:      services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		statusManager:     services.NewStatusManager(client, ControllerName),
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -38,12 +49,26 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		For(&helmv1alpha1.HelmClusterAddon{}).
 		Watches(
 			&sourcev1.HelmChart{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
+			handler.EnqueueRequestsFromMapFunc(
+				utils.MapInternalToFacade(
+					helmv1alpha1.TargetNamespace,
+					helmv1alpha1.LabelManagedBy,
+					helmv1alpha1.LabelManagedByValue,
+					helmv1alpha1.HelmClusterAddonLabelSourceName,
+				),
+			),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Watches(
 			&helmv2.HelmRelease{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
+			handler.EnqueueRequestsFromMapFunc(
+				utils.MapInternalToFacade(
+					helmv1alpha1.TargetNamespace,
+					helmv1alpha1.LabelManagedBy,
+					helmv1alpha1.LabelManagedByValue,
+					helmv1alpha1.HelmClusterAddonLabelSourceName,
+				),
+			),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)

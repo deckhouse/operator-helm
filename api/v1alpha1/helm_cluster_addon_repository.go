@@ -23,6 +23,9 @@ import (
 const (
 	HelmClusterAddonRepositoryKind     = "HelmClusterAddonRepository"
 	HelmClusterAddonRepositoryResource = "helmclusteraddonrepositories"
+
+	// HelmClusterAddonRepositoryLabelSourceName stores the name of the source facade resource.
+	HelmClusterAddonRepositoryLabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 )
 
 // HelmClusterAddonRepository represents a Helm or an OCI compliant repository with Helm charts.
@@ -57,6 +60,10 @@ func (r *HelmClusterAddonRepository) GetObservedGeneration() int64 {
 
 func (r *HelmClusterAddonRepository) GetStatus() any {
 	return r.Status
+}
+
+func (r *HelmClusterAddonRepository) GetConditionTypesForUpdate() []string {
+	return []string{"Ready"}
 }
 
 type HelmClusterAddonRepositorySpec struct {

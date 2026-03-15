@@ -30,15 +30,15 @@ import (
 )
 
 type reconciler struct {
-	client client.Client
+	client.Client
 }
 
 func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
-	logger := log.FromContext(ctx).WithValues("helmclusteraddonchart", req.Name)
+	logger := log.FromContext(ctx)
 
 	chart := &helmv1alpha1.HelmClusterAddonChart{}
-	if err := r.client.Get(ctx, req.NamespacedName, chart); client.IgnoreNotFound(err) != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get HelmClusterAddonChart: %w", err)
+	if err := r.Get(ctx, req.NamespacedName, chart); client.IgnoreNotFound(err) != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to get helm cluster addon chart: %w", err)
 	}
 
 	if !chart.DeletionTimestamp.IsZero() {
@@ -48,8 +48,8 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	base := chart.DeepCopy()
 
 	internalCharts := &sourcev1.HelmChartList{}
-	if err := r.client.List(ctx, internalCharts, client.InNamespace(TargetNamespace)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to list internal helm chart list: %w", err)
+	if err := r.List(ctx, internalCharts, client.InNamespace(helmv1alpha1.TargetNamespace)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list internal helm charts: %w", err)
 	}
 
 	updateRequired := false
@@ -69,8 +69,8 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if updateRequired {
-		if err := r.client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
-			return reconcile.Result{}, fmt.Errorf("failed to update HelmClusterAddonChart status: %w", err)
+		if err := r.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to update helm cluster addon chart status: %w", err)
 		}
 
 		logger.Info("HelmClusterAddonChart successfully reconciled")
