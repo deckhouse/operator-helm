@@ -37,11 +37,11 @@ import (
 type reconciler struct {
 	client.Client
 
-	chartService       *services.ChartService
-	repositoryService  *services.RepoService
-	releaseService     *services.ReleaseService
-	maintenanceService *services.MaintenanceService
-	statusManager      *services.StatusManager
+	chartService         *services.ChartService
+	ociRepositoryService *services.OCIRepoService
+	releaseService       *services.ReleaseService
+	maintenanceService   *services.MaintenanceService
+	statusManager        *services.StatusManager
 }
 
 func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -106,8 +106,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	var chartRes services.ChartResult
-	var partiallyDegradedRes services.PartiallyDegradedResult
-	var repoRes services.RepoResult
+	var repoRes services.OCIRepoResult
 	var releaseRes services.ReleaseResult
 
 	switch repoType {
@@ -122,7 +121,15 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			})
 		}
 	case utils.InternalOCIRepository:
-		repoRes = r.repositoryService.EnsureInternalOCIRepository(ctx, addon, repo)
+		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo)
+		if !repoRes.IsPartiallyDegraded() {
+			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+				Type:               helmv1alpha1.ConditionTypePartiallyDegraded,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: addon.Generation,
+				Reason:             helmv1alpha1.ReasonSuccess,
+			})
+		}
 	default:
 		return reconcile.Result{}, r.statusManager.Update(ctx, addon, services.NoopStatusMutator, services.NoopStatusMapper, services.ReleaseResult{Status: services.Failed(
 			addon,
@@ -132,7 +139,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		)})
 	}
 
-	if chartRes.HasArtifact() || repoRes.IsReady() {
+	if chartRes.HasArtifact() || repoRes.HasArtifact() {
 		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, repoType)
 	}
 
@@ -153,7 +160,6 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		chartRes,
 		repoRes,
 		releaseRes,
-		partiallyDegradedRes,
 	)
 }
 
@@ -164,7 +170,7 @@ func (r *reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		return reconcile.Result{}, nil
 	}
 
-	if err := r.repositoryService.RemoveOCIRepository(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
 		return reconcile.Result{}, err
 	}
 
@@ -186,7 +192,7 @@ func (r *reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 	return reconcile.Result{}, nil
 }
 
-func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.RepoResult, releaseRes services.ReleaseResult) services.StatusMutatorFunc {
+func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.OCIRepoResult, releaseRes services.ReleaseResult) services.StatusMutatorFunc {
 	return func(obj services.ObjectWithConditions, results []services.StatusProvider) (services.ObjectWithConditions, []services.StatusProvider) {
 		results = services.ConsolidateConditions(obj, results...)
 		addon := obj.(*helmv1alpha1.HelmClusterAddon)
@@ -209,12 +215,12 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 				}
 			}
 		case utils.InternalOCIRepository:
-			if repoRes.IsReady() && releaseRes.IsReady() {
+			if repoRes.HasArtifact() && releaseRes.IsReady() {
 				if addon.Status.LastAppliedChart == nil {
 					updateChart = true
 					updateValues = true
 				} else {
-					if addon.IsChartStatusInfoOutdated() {
+					if addon.IsChartStatusInfoOutdated() && repoRes.IsReady() {
 						updateChart = true
 						updateValues = true
 					} else {

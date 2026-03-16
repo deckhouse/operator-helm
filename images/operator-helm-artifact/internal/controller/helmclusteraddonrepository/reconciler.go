@@ -21,8 +21,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -36,9 +38,10 @@ import (
 type reconciler struct {
 	client.Client
 
-	repositoryService *services.RepoService
-	chartSyncService  *services.RepoSyncService
-	statusManager     *services.StatusManager
+	helmRepositoryService *services.HelmRepoService
+	ociRepositoryService  *services.OCIRepoService
+	chartSyncService      *services.RepoSyncService
+	statusManager         *services.StatusManager
 }
 
 func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -79,30 +82,37 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, err
 	}
 
-	var repoRes services.RepoResult
+	var helmRepoRes services.HelmRepoResult
+	var ociRepoRes services.OCIRepoResult
 	var chartSyncRes services.RepoSyncResult
 
 	switch repoType {
 	case utils.InternalHelmRepository:
-		repoRes = r.repositoryService.EnsureInternalHelmRepository(ctx, &repo)
+		helmRepoRes = r.helmRepositoryService.EnsureInternalHelmRepository(ctx, &repo)
 	case utils.InternalOCIRepository:
 		// TODO: need to add extra check to ensure that URL provided by user is valid OCI url and credentials are correct.
 		// Otherwise permanent ready status is invalid.
-
-		// OCI repositories managed by helmclusteraddon controller. Parent object primary state is always true by default.
-		repoRes = services.RepoResult{Status: services.Success(&repo)}
+		ociRepoRes = services.OCIRepoResult{
+			Artifact: &meta.Artifact{},
+			Status: services.ResourceStatus{
+				ConditionType:      helmv1alpha1.ConditionTypeReady,
+				Observed:           true,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: repo.Generation,
+				Reason:             helmv1alpha1.ReasonSuccess,
+			}}
 	default:
 		err := fmt.Errorf("unsupported repository type: %q", repoType)
-		repoRes = services.RepoResult{Status: services.Failed(&repo, "UnsupportedRepositoryType", err.Error(), err)}
+		helmRepoRes = services.HelmRepoResult{Status: services.Failed(&repo, "UnsupportedRepositoryType", err.Error(), err)}
 	}
 
-	if repoRes.IsReady() {
+	if helmRepoRes.IsReady() || ociRepoRes.IsReady() {
 		chartSyncRes = r.chartSyncService.EnsureAddonCharts(ctx, &repo, repoType)
 	} else {
-		chartSyncRes = services.RepoSyncResult{Status: services.Failed(&repo, helmv1alpha1.ReasonRepositoryNotReady, repoRes.Status.Message, err)}
+		chartSyncRes = services.RepoSyncResult{Status: services.Failed(&repo, helmv1alpha1.ReasonRepositoryNotReady, helmRepoRes.Status.Message, err)}
 	}
 
-	if err := r.statusManager.Update(ctx, &repo, services.NoopStatusMutator, services.NoopStatusMapper, repoRes, chartSyncRes); err != nil {
+	if err := r.statusManager.Update(ctx, &repo, services.NoopStatusMutator, services.NoopStatusMapper, helmRepoRes, ociRepoRes, chartSyncRes); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -118,15 +128,15 @@ func (r *reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 
 	switch repoType {
 	case utils.InternalHelmRepository:
-		if err := r.repositoryService.CleanupHelmRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
-			_ = r.statusManager.Update(ctx, repo, services.NoopStatusMutator, services.NoopStatusMapper, services.RepoResult{
+		if err := r.helmRepositoryService.CleanupHelmRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
+			_ = r.statusManager.Update(ctx, repo, services.NoopStatusMutator, services.NoopStatusMapper, services.HelmRepoResult{
 				Status: services.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to remove dependencies", err),
 			})
 			return reconcile.Result{}, err
 		}
 	case utils.InternalOCIRepository:
-		if err := r.repositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
-			_ = r.statusManager.Update(ctx, repo, services.NoopStatusMutator, services.NoopStatusMapper, services.RepoResult{
+		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
+			_ = r.statusManager.Update(ctx, repo, services.NoopStatusMutator, services.NoopStatusMapper, services.HelmRepoResult{
 				Status: services.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to remove dependencies", err),
 			})
 			return reconcile.Result{}, err

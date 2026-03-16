@@ -46,23 +46,8 @@ func (s *BaseService) ensureResourceDeleted(ctx context.Context, nn types.Namesp
 	return nil
 }
 
-type PartiallyDegradedResult struct {
-	Status ResourceStatus
-}
-
-func (r PartiallyDegradedResult) GetStatus() ResourceStatus {
-	return r.Status
-}
-
-func (r PartiallyDegradedResult) IsReady() bool {
-	return r.Status.IsReady()
-}
-
-func (r PartiallyDegradedResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypePartiallyDegraded
-}
-
 type ResourceStatus struct {
+	ConditionType      string
 	Observed           bool
 	Status             metav1.ConditionStatus
 	ObservedGeneration int64
