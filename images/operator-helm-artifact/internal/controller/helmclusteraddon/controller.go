@@ -19,6 +19,7 @@ package helmclusteraddon
 import (
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -83,5 +84,21 @@ func SetupWithManager(mgr ctrl.Manager) error {
 				),
 			),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(
+				utils.MapInternalToFacade(
+					helmv1alpha1.TargetNamespace,
+					helmv1alpha1.LabelManagedBy,
+					helmv1alpha1.LabelManagedByValue,
+					helmv1alpha1.HelmClusterAddonLabelSourceName),
+			),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(
+			&helmv1alpha1.HelmClusterAddonRepository{},
+			&handler.EnqueueRequestForObject{},
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
 		Complete(r)
 }
