@@ -6,8 +6,8 @@ subsystems:
   - delivery
 namespace: d8-operator-helm
 descriptions:
-  en: An operator to deploy helm applications declaratively.
-  ru: Оператор для декларативного развертывания helm-приложений.
+  en: An operator to deploy Helm applications declaratively.
+  ru: Оператор для декларативного развертывания Helm-приложений.
 tags: ["delivery"]
 disable:
   confirmation: true

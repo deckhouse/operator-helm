@@ -1,0 +1,28 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: helmclusteraddoncharts.helm.deckhouse.io
+spec:
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: HelmClusterAddonChart описывает Helm-чарт и его версии из определённого репозитория.
+          properties:
+            status:
+              properties:
+                conditions:
+                  description: Условия отражают последние наблюдения за состоянием репозитория.
+                observedGeneration:
+                  description: Поколение ресурса, обработанное контроллером последним.
+                versions:
+                  description: Доступные версии Helm-чарта.
+                  items:
+                    properties:
+                      digest:
+                        description: Дайджест Helm-чарта.
+                      pulled:
+                        description: Признак загрузки чарта из репозитория.
+                      version:
+                        description: Версия Helm-чарта.
