@@ -1,0 +1,51 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: helmclusteraddons.helm.deckhouse.io
+spec:
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: HelmClusterAddon описывает Helm-аддон, устанавливаемый на уровне кластера.
+          properties:
+            spec:
+              properties:
+                chart:
+                  properties:
+                    helmClusterAddonChart:
+                      description: |
+                        Имя Helm-чарта для установки из указанного репозитория (например, «ingress-nginx» или «redis»).
+                    helmClusterAddonRepository:
+                      description: |
+                        Имя ресурса HelmClusterAddonRepository, содержащего параметры подключения и учётные данные для доступа к репозиторию, в котором расположен чарт.
+                    version:
+                      description: Версия Helm-чарта для HelmClusterAddon.
+                maintenance:
+                  description: |
+                    Стратегия согласования ресурса.
+
+                    При значении `NoResourceReconciliation` контроллер прекращает обновление управляемых ресурсов, что позволяет выполнять ручное вмешательство или обслуживание без перезаписи изменений оператором.
+                    При пустом значении (`""`) используется стандартное согласование.
+                namespace:
+                  description: Пространство имён для развёртывания релиза аддона.
+                values:
+                  description: Пользовательские значения для релиза HelmClusterAddon.
+            status:
+              properties:
+                conditions:
+                  description: Условия отражают последние наблюдения за состоянием ресурса.
+                lastAppliedChart:
+                  description: Последний применённый чарт, инициировавший установку или обновление аддона.
+                  properties:
+                    helmClusterAddonChart:
+                      description: Имя Helm-чарта.
+                    helmClusterAddonRepository:
+                      description: Имя ресурса HelmClusterAddonRepository.
+                    version:
+                      description: Версия Helm-чарта.
+                lastAppliedValues:
+                  description: Последние применённые значения, инициировавшие установку или обновление аддона.
+                observedGeneration:
+                  description: Поколение ресурса, обработанное контроллером последним.

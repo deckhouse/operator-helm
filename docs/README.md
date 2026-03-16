@@ -1,20 +1,20 @@
 ---
-title: "operator-helm"
-menuTitle: "operator-helm"
-moduleStatus: Experimental
+title: "Module operator-helm"
+description: "Deckhouse Kubernetes Platform — the operator-helm module for declarative Helm chart management."
 weight: 10
 ---
 
-The operator-helm module is designed for declarative management of Helm charts. It enables application deployment via Custom Resources (CRs), minimizing the amount of required input data.
+The `operator-helm` module provides declarative management of Helm chart deployments for cluster administrators and DevOps engineers. It deploys applications through custom resources, reducing the amount of manual configuration required.
 
-## Supported Sources
-The module provides flexibility in choosing application sources, supporting:
-* Helm repositories (classic HTTP/HTTPS repositories);
-* OCI registries that support Helm chart storage.
+The module acts as a Kubernetes operator that reconciles the desired state described in HelmClusterAddon resources with the actual Helm releases in the cluster.
 
-## Management Methods
-Management of the module's resources is unified and accessible via:
-* Command Line Interface (CLI): using the `d8` or `kubectl` utility.
-* Web Interface: through the Deckhouse Kubernetes Platform graphical console.
+## Main Features
 
-See module usage examples in [Usage examples](example.html) section.
+- Deploying Helm charts from classic HTTP/HTTPS repositories and OCI registries through a unified declarative API.
+- Automatic chart version discovery and tracking via HelmClusterAddonChart resources.
+- Configurable chart values through HelmClusterAddon resources.
+- Maintenance mode to pause reconciliation on managed releases.
+- TLS verification and authentication support for private Helm and OCI repositories.
+- Management through CLI (`d8 k`) or the Deckhouse web interface.
+
+See [usage examples](example.html) for practical scenarios.

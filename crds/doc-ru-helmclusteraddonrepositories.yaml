@@ -1,0 +1,36 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: helmclusteraddonrepositories.helm.deckhouse.io
+spec:
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: HelmClusterAddonRepository описывает Helm-репозиторий или OCI-репозиторий с Helm-чартами.
+          properties:
+            spec:
+              properties:
+                auth:
+                  description: Учётные данные для аутентификации в репозитории.
+                  properties:
+                    password:
+                      description: Пароль для аутентификации в репозитории.
+                    username:
+                      description: Имя пользователя для аутентификации в репозитории.
+                caCertificate:
+                  description: CA-сертификат в формате PEM для проверки TLS.
+                tlsVerify:
+                  description: Включает или выключает проверку TLS-сертификата.
+                url:
+                  description: |
+                    URL Helm-репозитория.
+
+                    Поддерживаются протоколы `http(s)://` и `oci://`.
+            status:
+              properties:
+                conditions:
+                  description: Условия отражают последние наблюдения за состоянием репозитория.
+                observedGeneration:
+                  description: Поколение ресурса, обработанное контроллером последним.
