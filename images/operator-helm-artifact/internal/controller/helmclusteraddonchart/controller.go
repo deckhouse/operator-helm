@@ -14,35 +14,40 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package helmclusteraddon
+package helmclusteraddonchart
 
 import (
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/pkg/utils"
-	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/utils"
+)
+
+const (
+	// ControllerName is the name of this controller, used for leader election and logging.
+	ControllerName = "helmclusteraddonchart-controller"
 )
 
 func SetupWithManager(mgr ctrl.Manager) error {
-	r := &Reconciler{
+	r := &reconciler{
 		Client: mgr.GetClient(),
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
-		For(&helmv1alpha1.HelmClusterAddon{}).
+		For(&helmv1alpha1.HelmClusterAddonChart{}).
 		Watches(
 			&sourcev1.HelmChart{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
-		).
-		Watches(
-			&helmv2.HelmRelease{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapInternalToFacade(TargetNamespace, LabelManagedBy, LabelManagedByValue, LabelSourceName)),
+			handler.EnqueueRequestsFromMapFunc(
+				utils.MapInternalToFacade(
+					helmv1alpha1.TargetNamespace,
+					helmv1alpha1.LabelManagedBy,
+					helmv1alpha1.LabelManagedByValue,
+					helmv1alpha1.HelmClusterAddonChartLabelSourceName)),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)

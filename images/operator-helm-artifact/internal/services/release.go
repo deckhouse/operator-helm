@@ -1,0 +1,153 @@
+/*
+Copyright 2026 Flant JSC.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package services
+
+import (
+	"context"
+	"fmt"
+
+	helmv2 "github.com/werf/3p-helm-controller/api/v2"
+	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/utils"
+)
+
+type ReleaseService struct {
+	BaseService
+
+	TargetNamespace string
+}
+
+func NewReleaseService(client client.Client, scheme *runtime.Scheme, targetNamespace string) *ReleaseService {
+	return &ReleaseService{
+		BaseService: BaseService{
+			Client: client,
+			Scheme: scheme,
+		},
+		TargetNamespace: targetNamespace,
+	}
+}
+
+type ReleaseResult struct {
+	Status  ResourceStatus
+	History helmv2.Snapshots
+}
+
+func (r ReleaseResult) GetStatus() ResourceStatus {
+	return r.Status
+}
+
+func (r ReleaseResult) IsReady() bool {
+	return r.Status.IsReady()
+}
+
+func (r ReleaseResult) GetConditionType() string {
+	return helmv1alpha1.ConditionTypeReady
+}
+
+func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repoType utils.InternalRepositoryType) ReleaseResult {
+	logger := log.FromContext(ctx)
+
+	existing := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalHelmReleaseName(addon.Name),
+			Namespace: s.TargetNamespace,
+		},
+	}
+
+	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
+		return applyHelmReleaseSpec(addon, existing, repoType, s.TargetNamespace)
+	})
+	if err != nil {
+		return ReleaseResult{Status: Failed(
+			addon,
+			helmv1alpha1.ReasonHelmReleaseFailed,
+			"Failed to create helm release",
+			fmt.Errorf("reconciling helm release: %w", err),
+		)}
+	}
+
+	if cond, ok := utils.IsConditionObserved(existing.GetConditions(), helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
+		logger.Info("Successfully reconciled helm release", "operation", op)
+		return ReleaseResult{
+			History: existing.Status.History,
+			Status: ResourceStatus{
+				Observed:           ok,
+				Status:             cond.Status,
+				ObservedGeneration: addon.Generation,
+				Reason:             cond.Reason,
+				Message:            cond.Message,
+			},
+		}
+	}
+
+	return ReleaseResult{Status: Unknown(addon, helmv1alpha1.ReasonReconciling)}
+}
+
+func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+	nn := types.NamespacedName{Name: utils.GetInternalHelmReleaseName(addon.Name), Namespace: s.TargetNamespace}
+	if err := s.ensureResourceDeleted(ctx, nn, &helmv2.HelmRelease{}); err != nil {
+		return fmt.Errorf("failed to delete helm release: %w", err)
+	}
+
+	return nil
+}
+
+func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2.HelmRelease, repoType utils.InternalRepositoryType, targetNamespace string) error {
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+
+	existing.Labels[helmv1alpha1.LabelManagedBy] = helmv1alpha1.LabelManagedByValue
+	existing.Labels[helmv1alpha1.HelmClusterAddonLabelSourceName] = addon.Name
+
+	existing.Spec.ReleaseName = addon.Name
+	existing.Spec.TargetNamespace = addon.Spec.Namespace
+	existing.Spec.Values = addon.Spec.Values
+
+	existing.Spec.Suspend = false
+
+	if addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
+		existing.Spec.Suspend = true
+	}
+
+	switch repoType {
+	case utils.InternalHelmRepository:
+		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
+			Kind:      sourcev1.HelmChartKind,
+			Name:      utils.GetInternalHelmChartName(addon.Name),
+			Namespace: targetNamespace,
+		}
+	case utils.InternalOCIRepository:
+		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
+			Kind:      sourcev1.OCIRepositoryKind,
+			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+			Namespace: targetNamespace,
+		}
+	default:
+		return fmt.Errorf("invalid repository type: %s", repoType)
+	}
+
+	return nil
+}

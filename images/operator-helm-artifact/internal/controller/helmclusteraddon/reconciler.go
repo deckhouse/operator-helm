@@ -1,0 +1,264 @@
+/*
+Copyright 2026 Flant JSC.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package helmclusteraddon
+
+import (
+	"context"
+	"fmt"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/utils"
+)
+
+type reconciler struct {
+	client.Client
+
+	chartService         *services.ChartService
+	ociRepositoryService *services.OCIRepoService
+	releaseService       *services.ReleaseService
+	maintenanceService   *services.MaintenanceService
+	statusManager        *services.StatusManager
+}
+
+func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	logger := log.FromContext(ctx)
+	ctx = log.IntoContext(ctx, logger)
+
+	addon := &helmv1alpha1.HelmClusterAddon{}
+	if err := r.Get(ctx, req.NamespacedName, addon); err != nil {
+		if apierrors.IsNotFound(err) {
+			return reconcile.Result{}, nil
+		}
+		return reconcile.Result{}, fmt.Errorf("getting helm cluster addon: %w", err)
+	}
+
+	if !addon.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, addon)
+	}
+
+	if !controllerutil.ContainsFinalizer(addon, helmv1alpha1.FinalizerName) {
+		controllerutil.AddFinalizer(addon, helmv1alpha1.FinalizerName)
+		if err := r.Update(ctx, addon); err != nil {
+			return reconcile.Result{}, fmt.Errorf("adding finalizer: %w", err)
+		}
+		return reconcile.Result{}, nil
+	}
+
+	err := r.statusManager.InitializeConditions(ctx, addon,
+		helmv1alpha1.ConditionTypeReady,
+		helmv1alpha1.ConditionTypeManaged,
+		helmv1alpha1.ConditionTypeInstalled,
+		helmv1alpha1.ConditionTypeUpdateInstalled,
+		helmv1alpha1.ConditionTypeConfigurationApplied,
+		helmv1alpha1.ConditionTypePartiallyDegraded,
+	)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	maintenanceRes := r.maintenanceService.EnsureMaintenanceMode(ctx, addon)
+	if maintenanceRes.StatusUpdateRequired {
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, services.NoopStatusMutator, services.NoopStatusMapper, maintenanceRes)
+	}
+
+	repo := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := r.Get(ctx, types.NamespacedName{Name: addon.Spec.Chart.HelmClusterAddonRepository}, repo); err != nil {
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, services.NoopStatusMutator, services.NoopStatusMapper, services.ReleaseResult{Status: services.Failed(
+			addon,
+			helmv1alpha1.ReasonFailed,
+			"Failed to get internal repository",
+			fmt.Errorf("getting internal repository: %w", err),
+		)})
+	}
+
+	repoType, err := utils.GetRepositoryType(repo.Spec.URL)
+	if err != nil {
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, services.NoopStatusMutator, services.NoopStatusMapper, services.ReleaseResult{Status: services.Failed(
+			addon,
+			helmv1alpha1.ReasonFailed,
+			fmt.Sprintf("Failed to parse repository type: %s", err.Error()),
+			err,
+		)})
+	}
+
+	var chartRes services.ChartResult
+	var repoRes services.OCIRepoResult
+	var releaseRes services.ReleaseResult
+
+	switch repoType {
+	case utils.InternalHelmRepository:
+		chartRes = r.chartService.EnsureHelmChart(ctx, addon)
+		if !chartRes.IsPartiallyDegraded() {
+			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+				Type:               helmv1alpha1.ConditionTypePartiallyDegraded,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: addon.Generation,
+				Reason:             helmv1alpha1.ReasonSuccess,
+			})
+		}
+	case utils.InternalOCIRepository:
+		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo)
+		if !repoRes.IsPartiallyDegraded() {
+			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+				Type:               helmv1alpha1.ConditionTypePartiallyDegraded,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: addon.Generation,
+				Reason:             helmv1alpha1.ReasonSuccess,
+			})
+		}
+	default:
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, services.NoopStatusMutator, services.NoopStatusMapper, services.ReleaseResult{Status: services.Failed(
+			addon,
+			helmv1alpha1.ReasonFailed,
+			fmt.Sprintf("Unsupported repository type: %s", repoType),
+			err,
+		)})
+	}
+
+	if chartRes.HasArtifact() || repoRes.HasArtifact() {
+		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, repoType)
+	}
+
+	if !releaseRes.IsReady() {
+		releaseRes = services.ReleaseResult{Status: services.Failed(
+			addon,
+			releaseRes.Status.Reason,
+			releaseRes.Status.Message,
+			nil,
+		)}
+	}
+
+	return reconcile.Result{}, r.statusManager.Update(
+		ctx,
+		addon,
+		setStatusAttrs(repoType, chartRes, repoRes, releaseRes),
+		mapResourceStatus(),
+		chartRes,
+		repoRes,
+		releaseRes,
+	)
+}
+
+func (r *reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(addon, helmv1alpha1.FinalizerName) {
+		return reconcile.Result{}, nil
+	}
+
+	if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+		return reconcile.Result{}, err
+	}
+
+	if err := r.chartService.CleanupHelmChart(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+		return reconcile.Result{}, err
+	}
+
+	if err := r.releaseService.CleanupHelmRelease(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+		return reconcile.Result{}, err
+	}
+
+	controllerutil.RemoveFinalizer(addon, helmv1alpha1.FinalizerName)
+	if err := r.Update(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
+	}
+
+	logger.Info("Cleanup complete")
+
+	return reconcile.Result{}, nil
+}
+
+func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.OCIRepoResult, releaseRes services.ReleaseResult) services.StatusMutatorFunc {
+	return func(obj services.ObjectWithConditions, results []services.StatusProvider) (services.ObjectWithConditions, []services.StatusProvider) {
+		results = services.ConsolidateConditions(obj, results...)
+		addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+		var updateChart, updateValues bool
+
+		switch repoType {
+		case utils.InternalHelmRepository:
+			if chartRes.HasArtifact() && releaseRes.IsReady() {
+				if addon.Status.LastAppliedChart == nil {
+					updateChart = true
+					updateValues = true
+				} else {
+					if addon.IsChartStatusInfoOutdated() && chartRes.IsReady() {
+						updateChart = true
+						updateValues = true
+					} else {
+						updateValues = true
+					}
+				}
+			}
+		case utils.InternalOCIRepository:
+			if repoRes.HasArtifact() && releaseRes.IsReady() {
+				if addon.Status.LastAppliedChart == nil {
+					updateChart = true
+					updateValues = true
+				} else {
+					if addon.IsChartStatusInfoOutdated() && repoRes.IsReady() {
+						updateChart = true
+						updateValues = true
+					} else {
+						updateValues = true
+					}
+				}
+			}
+		}
+
+		if updateChart {
+			addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+				HelmClusterAddonChartName:  addon.Spec.Chart.HelmClusterAddonChartName,
+				HelmClusterAddonRepository: addon.Spec.Chart.HelmClusterAddonRepository,
+				Version:                    addon.Spec.Chart.Version,
+			}
+		}
+
+		if updateValues {
+			if addon.Spec.Values == nil {
+				addon.Status.LastAppliedValues = nil
+			} else {
+				addon.Status.LastAppliedValues = addon.Spec.Values.DeepCopy()
+			}
+		}
+
+		return obj, results
+	}
+}
+
+func mapResourceStatus() services.StatusMapperFunc {
+	return func(conditionType string, status services.ResourceStatus) services.ResourceStatus {
+		if conditionType == helmv1alpha1.ConditionTypePartiallyDegraded {
+			// ConditionTrue means that HelmChartSucceeded, resetting status would exclude it from result.
+			if status.Status == metav1.ConditionTrue {
+				status.Status = ""
+			}
+		}
+
+		return status
+	}
+}

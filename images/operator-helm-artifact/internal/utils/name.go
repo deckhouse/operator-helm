@@ -110,3 +110,20 @@ func GetInternalHelmReleaseName(addonName string) string {
 func GetInternalHelmChartName(addonName string) string {
 	return GetInternalHelmReleaseName(addonName)
 }
+
+func GetInternalOCIRepositoryName(addonName string) string {
+	prefix := "addon"
+	hash := GetHash(fmt.Sprintf("%s-%s", prefix, addonName))
+
+	result := prefix + "-"
+	postfix := ""
+
+	if len(addonName) > 40 {
+		result += addonName[:40]
+		postfix = "-" + hash
+	} else {
+		result += addonName
+	}
+
+	return strings.TrimRight(result, "-") + postfix
+}

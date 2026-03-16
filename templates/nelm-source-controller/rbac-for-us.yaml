@@ -31,21 +31,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods
-  - services
-  - secrets
-  - configmaps
-  verbs:
-  - get
-  - create
-  - update
-  - delete
-  - list
-  - watch
-  - patch
-- apiGroups:
-  - ""
-  resources:
   - events
   verbs:
   - create

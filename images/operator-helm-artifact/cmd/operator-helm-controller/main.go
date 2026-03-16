@@ -20,8 +20,8 @@ import (
 	"flag"
 	"os"
 
-	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonchart"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
+	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -31,9 +31,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddon"
-	"github.com/deckhouse/operator-helm/pkg/controller/helmclusteraddonrepository"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddon"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonchart"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonrepository"
+	helmclusteraddonwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmclusteraddon"
 )
 
 var scheme = runtime.NewScheme()
@@ -89,7 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&helmv1alpha1.HelmClusterAddon{}).SetupWebhookWithManager(mgr); err != nil {
+	if err = helmclusteraddonwebhook.SetupWebhookWithManager(mgr); err != nil {
 		logger.Error(err, "unable to create webhook", "webhook", "HelmClusterAddon")
 		os.Exit(1)
 	}
