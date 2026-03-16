@@ -151,7 +151,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		setStatusAttrs(repoType, chartRes, repoRes, releaseRes),
 		mapResourceStatus(),
 		chartRes,
-		releaseRes,
+		repoRes,
 		releaseRes,
 		partiallyDegradedRes,
 	)

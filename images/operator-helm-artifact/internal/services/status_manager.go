@@ -188,6 +188,10 @@ func ConsolidateConditions(obj ObjectWithConditions, results ...StatusProvider) 
 		}
 	}
 
+	if decisionRes == nil {
+		return result
+	}
+
 	for _, conditionType := range conditionTypes {
 		result = append(result, AsCondition(decisionRes, conditionType))
 	}

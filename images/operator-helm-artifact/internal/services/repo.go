@@ -365,7 +365,7 @@ func applyOCIRepositorySpec(addon *helmv1alpha1.HelmClusterAddon, repo *helmv1al
 	}
 
 	existing.Labels = map[string]string{
-		helmv1alpha1.LabelManagedBy:                            helmv1alpha1.LabelManagedByValue,
-		helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repo.Name,
+		helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
+		helmv1alpha1.HelmClusterAddonLabelSourceName: addon.Name,
 	}
 }
