@@ -20,8 +20,6 @@ import (
 	"context"
 	"fmt"
 
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/utils"
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +29,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 type OCIRepoService struct {
@@ -132,7 +133,8 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon 
 				Reason:             cond.Reason,
 				Message:            cond.Message,
 				NotReflectable:     existing.Status.Artifact != nil,
-			}}
+			},
+		}
 	}
 
 	return OCIRepoResult{Status: Unknown(addon, helmv1alpha1.ReasonReconciling)}

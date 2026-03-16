@@ -20,12 +20,13 @@ import (
 	"context"
 	"fmt"
 
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 type BaseRepoService struct {

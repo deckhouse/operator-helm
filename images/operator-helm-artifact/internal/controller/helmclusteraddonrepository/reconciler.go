@@ -100,7 +100,8 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				Status:             metav1.ConditionTrue,
 				ObservedGeneration: repo.Generation,
 				Reason:             helmv1alpha1.ReasonSuccess,
-			}}
+			},
+		}
 	default:
 		err := fmt.Errorf("unsupported repository type: %q", repoType)
 		helmRepoRes = services.HelmRepoResult{Status: services.Failed(&repo, "UnsupportedRepositoryType", err.Error(), err)}
