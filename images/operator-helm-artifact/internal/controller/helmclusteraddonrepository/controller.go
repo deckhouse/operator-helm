@@ -17,7 +17,6 @@ limitations under the License.
 package helmclusteraddonrepository
 
 import (
-	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddonrepository"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -26,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddonrepository"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )

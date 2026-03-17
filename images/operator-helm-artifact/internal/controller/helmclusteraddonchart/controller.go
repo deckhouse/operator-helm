@@ -17,7 +17,6 @@ limitations under the License.
 package helmclusteraddonchart
 
 import (
-	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddonchart"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -25,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddonchart"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
