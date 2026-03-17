@@ -18,14 +18,17 @@ package repository
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"net/http"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 type ClientInterface interface {
-	FetchCharts(ctx context.Context, url string, auth *AuthConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error)
+	FetchCharts(ctx context.Context, url string, config *RepoConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error)
 }
 
 func NewClient(repoType utils.InternalRepositoryType) (ClientInterface, error) {
@@ -39,7 +42,25 @@ func NewClient(repoType utils.InternalRepositoryType) (ClientInterface, error) {
 	}
 }
 
-type AuthConfig struct {
-	Username string
-	Password string
+type RepoConfig struct {
+	Username      string
+	Password      string
+	CACertificate string
+	Insecure      bool
+}
+
+func BuildTLSTransport(config *RepoConfig) *http.Transport {
+	tlsConfig := &tls.Config{}
+
+	if config.Insecure {
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	if config.CACertificate != "" {
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM([]byte(config.CACertificate))
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	return &http.Transport{TLSClientConfig: tlsConfig}
 }

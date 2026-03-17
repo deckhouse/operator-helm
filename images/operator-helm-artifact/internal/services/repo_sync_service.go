@@ -97,15 +97,21 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 		}
 	}
 
-	var authConfig *repoclient.AuthConfig
-	if repo.Spec.Auth != nil {
-		authConfig = &repoclient.AuthConfig{
-			Username: repo.Spec.Auth.Username,
-			Password: repo.Spec.Auth.Password,
+	var repoConfig *repoclient.RepoConfig
+	if repo.Spec.Auth != nil || repo.Spec.CACertificate != "" || !repo.Spec.TLSVerify {
+		repoConfig = &repoclient.RepoConfig{
+			Insecure: !repo.Spec.TLSVerify,
+		}
+		if repo.Spec.Auth != nil {
+			repoConfig.Username = repo.Spec.Auth.Username
+			repoConfig.Password = repo.Spec.Auth.Password
+		}
+		if repo.Spec.CACertificate != "" {
+			repoConfig.CACertificate = repo.Spec.CACertificate
 		}
 	}
 
-	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, authConfig)
+	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, repoConfig)
 	if err != nil {
 		return RepoSyncResult{
 			Status: status.Failed(

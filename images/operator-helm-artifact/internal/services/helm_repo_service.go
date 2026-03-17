@@ -42,18 +42,11 @@ const (
 )
 
 type HelmRepoService struct {
-	BaseService
 	BaseRepoService
-
-	TargetNamespace string
 }
 
 func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace string) *HelmRepoService {
 	return &HelmRepoService{
-		BaseService: BaseService{
-			Client: client,
-			Scheme: scheme,
-		},
 		BaseRepoService: BaseRepoService{
 			BaseService: BaseService{
 				Client: client,
@@ -61,7 +54,6 @@ func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace 
 			},
 			TargetNamespace: namespace,
 		},
-		TargetNamespace: namespace,
 	}
 }
 

@@ -33,18 +33,23 @@ var HelmRepositoryDefaultClient ClientInterface = &helmRepositoryClient{}
 
 type helmRepositoryClient struct{}
 
-func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, auth *AuthConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
+func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
 	if !strings.HasSuffix(url, "/index.yaml") {
 		url += "/index.yaml"
 	}
 
 	var indexFile HelmRepositoryIndex
 
+	httpClient := http.DefaultClient
+	if config != nil && (config.CACertificate != "" || config.Insecure) {
+		httpClient = &http.Client{Transport: BuildTLSTransport(config)}
+	}
+
 	backoff := wait.Backoff{
-		Duration: 1 * time.Second, // Initial delay
-		Factor:   2.0,             // Double the delay each time
-		Jitter:   0.1,             // Add 10% randomness to prevent the thundering herd problem
-		Steps:    3,               // Maximum number of retries (1s, 2s, 4s, 8s, 16s)
+		Duration: 1 * time.Second,
+		Factor:   2.0,
+		Jitter:   0.1,
+		Steps:    3,
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -56,11 +61,11 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, auth
 			return true, fmt.Errorf("creating request: %w", err)
 		}
 
-		if auth != nil {
-			req.SetBasicAuth(auth.Username, auth.Password)
+		if config != nil && config.Username != "" {
+			req.SetBasicAuth(config.Username, config.Password)
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			return false, nil
 		}

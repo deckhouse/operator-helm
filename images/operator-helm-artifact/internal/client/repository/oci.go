@@ -34,7 +34,7 @@ var OCIRepositoryDefaultClient ClientInterface = &ociRepositoryClient{}
 
 type ociRepositoryClient struct{}
 
-func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, auth *AuthConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
+func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
 	url = trimSchemaPrefixes(url)
 	urlParts := strings.Split(url, "/")
 	chartName := urlParts[len(urlParts)-1]
@@ -55,11 +55,15 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, auth 
 		}),
 	}
 
-	if auth != nil {
+	if config != nil && config.Username != "" {
 		options = append(options, remote.WithAuth(authn.FromConfig(authn.AuthConfig{
-			Username: auth.Username,
-			Password: auth.Password,
+			Username: config.Username,
+			Password: config.Password,
 		})))
+	}
+
+	if config != nil && (config.CACertificate != "" || config.Insecure) {
+		options = append(options, remote.WithTransport(BuildTLSTransport(config)))
 	}
 
 	tags, err := remote.List(repo, options...)
