@@ -32,7 +32,6 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddon"
-	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonchart"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonrepository"
 	helmclusteraddonwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmclusteraddon"
 )
@@ -56,9 +55,6 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":9440", "The address the health probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager.")
-
-	// TODO: replace zap by deckhouse logger
-
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -92,11 +88,6 @@ func main() {
 
 	if err = helmclusteraddonwebhook.SetupWebhookWithManager(mgr); err != nil {
 		logger.Error(err, "unable to create webhook", "webhook", "HelmClusterAddon")
-		os.Exit(1)
-	}
-
-	if err := helmclusteraddonchart.SetupWithManager(mgr); err != nil {
-		logger.Error(err, "unable to setup HelmClusterAddonChart controller")
 		os.Exit(1)
 	}
 

@@ -30,21 +30,40 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-type reconciler struct {
+func New(
+	client client.Client,
+	chartService *services.ChartService,
+	ociRepositoryService *services.OCIRepoService,
+	releaseService *services.ReleaseService,
+	maintenanceService *services.MaintenanceService,
+	statusManager *status.Manager,
+) *Reconciler {
+	return &Reconciler{
+		Client:               client,
+		chartService:         chartService,
+		ociRepositoryService: ociRepositoryService,
+		releaseService:       releaseService,
+		maintenanceService:   maintenanceService,
+		statusManager:        statusManager,
+	}
+}
+
+type Reconciler struct {
 	client.Client
 
 	chartService         *services.ChartService
 	ociRepositoryService *services.OCIRepoService
 	releaseService       *services.ReleaseService
 	maintenanceService   *services.MaintenanceService
-	statusManager        *services.StatusManager
+	statusManager        *status.Manager
 }
 
-func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 	ctx = log.IntoContext(ctx, logger)
 
@@ -80,14 +99,14 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, err
 	}
 
-	maintenanceRes := r.maintenanceService.EnsureMaintenanceMode(ctx, addon)
-	if maintenanceRes.StatusUpdateRequired {
-		return reconcile.Result{}, r.statusManager.Update(ctx, addon, services.NoopStatusMutator, services.NoopStatusMapper, maintenanceRes)
+	if r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
+		maintenanceRes := r.maintenanceService.EnsureMaintenanceMode(ctx, addon)
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, maintenanceRes)
 	}
 
 	repo := &helmv1alpha1.HelmClusterAddonRepository{}
 	if err := r.Get(ctx, types.NamespacedName{Name: addon.Spec.Chart.HelmClusterAddonRepository}, repo); err != nil {
-		return reconcile.Result{}, r.statusManager.Update(ctx, addon, services.NoopStatusMutator, services.NoopStatusMapper, services.ReleaseResult{Status: services.Failed(
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
 			addon,
 			helmv1alpha1.ReasonFailed,
 			"Failed to get internal repository",
@@ -97,7 +116,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	repoType, err := utils.GetRepositoryType(repo.Spec.URL)
 	if err != nil {
-		return reconcile.Result{}, r.statusManager.Update(ctx, addon, services.NoopStatusMutator, services.NoopStatusMapper, services.ReleaseResult{Status: services.Failed(
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
 			addon,
 			helmv1alpha1.ReasonFailed,
 			fmt.Sprintf("Failed to parse repository type: %s", err.Error()),
@@ -111,6 +130,15 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	switch repoType {
 	case utils.InternalHelmRepository:
+		// URL change in the HelmClusterAddonRepository may lead to repository type change.
+		// If repository type changed from OCI to Helm, we need to remove previously created OCI repository.
+		if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil {
+			chartRes = services.ChartResult{
+				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
+			}
+			break
+		}
+
 		chartRes = r.chartService.EnsureHelmChart(ctx, addon)
 		if !chartRes.IsPartiallyDegraded() {
 			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
@@ -131,7 +159,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			})
 		}
 	default:
-		return reconcile.Result{}, r.statusManager.Update(ctx, addon, services.NoopStatusMutator, services.NoopStatusMapper, services.ReleaseResult{Status: services.Failed(
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
 			addon,
 			helmv1alpha1.ReasonFailed,
 			fmt.Sprintf("Unsupported repository type: %s", repoType),
@@ -144,7 +172,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if !releaseRes.IsReady() {
-		releaseRes = services.ReleaseResult{Status: services.Failed(
+		releaseRes = services.ReleaseResult{Status: status.Failed(
 			addon,
 			releaseRes.Status.Reason,
 			releaseRes.Status.Message,
@@ -152,7 +180,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		)}
 	}
 
-	return reconcile.Result{}, r.statusManager.Update(
+	if err := r.statusManager.Update(
 		ctx,
 		addon,
 		setStatusAttrs(repoType, chartRes, repoRes, releaseRes),
@@ -160,31 +188,41 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		chartRes,
 		repoRes,
 		releaseRes,
-	)
+	); client.IgnoreNotFound(err) != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
+	}
+
+	return reconcile.Result{}, nil
 }
 
-func (r *reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(addon, helmv1alpha1.FinalizerName) {
 		return reconcile.Result{}, nil
 	}
 
-	if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
 
-	if err := r.chartService.CleanupHelmChart(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.chartService.CleanupHelmChart(ctx, addon); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
 
-	if err := r.releaseService.CleanupHelmRelease(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.releaseService.CleanupHelmRelease(ctx, addon); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
 
-	controllerutil.RemoveFinalizer(addon, helmv1alpha1.FinalizerName)
-	if err := r.Update(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
-		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
+	latestAddon := &helmv1alpha1.HelmClusterAddon{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(addon), latestAddon); err != nil {
+		return reconcile.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if controllerutil.RemoveFinalizer(latestAddon, helmv1alpha1.FinalizerName) {
+		if err := r.Update(ctx, latestAddon); err != nil {
+			return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
+		}
 	}
 
 	logger.Info("Cleanup complete")
@@ -192,9 +230,9 @@ func (r *reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 	return reconcile.Result{}, nil
 }
 
-func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.OCIRepoResult, releaseRes services.ReleaseResult) services.StatusMutatorFunc {
-	return func(obj services.ObjectWithConditions, results []services.StatusProvider) (services.ObjectWithConditions, []services.StatusProvider) {
-		results = services.ConsolidateConditions(obj, results...)
+func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.OCIRepoResult, releaseRes services.ReleaseResult) status.MutatorFunc {
+	return func(obj status.ObjectWithConditions, results []status.Provider) (status.ObjectWithConditions, []status.Provider) {
+		results = status.DetermineConditions(obj, results...)
 		addon := obj.(*helmv1alpha1.HelmClusterAddon)
 
 		var updateChart, updateValues bool
@@ -250,8 +288,8 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 	}
 }
 
-func mapResourceStatus() services.StatusMapperFunc {
-	return func(conditionType string, status services.ResourceStatus) services.ResourceStatus {
+func mapResourceStatus() status.MapperFunc {
+	return func(conditionType string, status status.Status) status.Status {
 		if conditionType == helmv1alpha1.ConditionTypePartiallyDegraded {
 			// ConditionTrue means that HelmChartSucceeded, resetting status would exclude it from result.
 			if status.Status == metav1.ConditionTrue {

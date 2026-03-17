@@ -26,6 +26,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/manager/status"
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddon"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -37,14 +39,14 @@ const (
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
-	r := &reconciler{
-		Client:               mgr.GetClient(),
-		releaseService:       services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		ociRepositoryService: services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		chartService:         services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		maintenanceService:   services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		statusManager:        services.NewStatusManager(client, ControllerName),
-	}
+	r := reconcile.New(
+		mgr.GetClient(),
+		services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		status.NewManager(client, ControllerName),
+	)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
@@ -52,7 +54,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&sourcev1.HelmChart{},
 			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalToFacade(
+				utils.MapInternalResources(
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -64,7 +66,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&helmv2.HelmRelease{},
 			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalToFacade(
+				utils.MapInternalResources(
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -76,7 +78,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&sourcev1.OCIRepository{},
 			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalToFacade(
+				utils.MapInternalResources(
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -87,7 +89,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalToFacade(
+				utils.MapInternalResources(
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,

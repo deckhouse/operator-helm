@@ -28,17 +28,8 @@ import:
   add: /src
   to: /src
   before: install
-# TODO: uncomment as soon as CI will be ready
-# secrets:
-# - id: GOPROXY
-#   value: {{ .GOPROXY }}
-# mount:
-# - fromPath: ~/go-pkg-cache
-#   to: /go/pkg
 shell:
   install:
-  # TODO: uncomment as soon as CI will be ready
-  # - export GOPROXY=$(cat /run/secrets/GOPROXY)
   - cd /src/images/operator-helm-artifact
   - go mod download
   setup:

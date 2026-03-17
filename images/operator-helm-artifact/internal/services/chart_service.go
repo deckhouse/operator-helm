@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -49,12 +50,14 @@ func NewChartService(client client.Client, scheme *runtime.Scheme, targetNamespa
 	}
 }
 
+var _ status.Provider = (*ChartResult)(nil)
+
 type ChartResult struct {
-	Status   ResourceStatus
+	Status   status.Status
 	Artifact *meta.Artifact
 }
 
-func (r ChartResult) GetStatus() ResourceStatus {
+func (r ChartResult) GetStatus() status.Status {
 	return r.Status
 }
 
@@ -90,7 +93,7 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.
 		return nil
 	})
 	if err != nil {
-		return ChartResult{Status: Failed(
+		return ChartResult{Status: status.Failed(
 			addon,
 			helmv1alpha1.ReasonHelmChartFailed,
 			"Failed to create helm chart",
@@ -102,11 +105,11 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.
 		logger.Info("Reconciled helm chart", "operation", op)
 	}
 
-	if cond, ok := utils.IsConditionObserved(existing.GetConditions(), helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
+	if cond, ok := status.IsConditionObserved(existing.GetConditions(), helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
 		logger.Info("Successfully reconciled helm chart", "operation", op, "chart", addon.Spec.Chart.HelmClusterAddonChartName)
 		return ChartResult{
 			Artifact: existing.Status.Artifact,
-			Status: ResourceStatus{
+			Status: status.Status{
 				Observed:           ok,
 				Status:             cond.Status,
 				ObservedGeneration: addon.Generation,
@@ -117,7 +120,7 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.
 		}
 	}
 
-	return ChartResult{Status: Unknown(addon, helmv1alpha1.ReasonReconciling)}
+	return ChartResult{Status: status.Unknown(addon, helmv1alpha1.ReasonReconciling)}
 }
 
 func (s *ChartService) CleanupHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
@@ -144,6 +147,6 @@ func applyHelmChartSpec(addon *helmv1alpha1.HelmClusterAddon, existing *sourcev1
 
 	existing.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
 		Kind: sourcev1.HelmRepositoryKind,
-		Name: addon.Spec.Chart.HelmClusterAddonRepository,
+		Name: utils.GetInternalHelmRepositoryName(addon.Spec.Chart.HelmClusterAddonRepository),
 	}
 }

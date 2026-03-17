@@ -116,18 +116,11 @@ spec:
                   description: Available helm chart versions
                   items:
                     properties:
-                      digest:
-                        description: Helm chart digest
-                        type: string
-                      pulled:
-                        description: Chart pulled from repository
-                        type: boolean
                       version:
                         description: Helm chart version
                         minLength: 1
                         type: string
                     required:
-                      - pulled
                       - version
                     type: object
                   type: array

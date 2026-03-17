@@ -88,10 +88,6 @@ type HelmClusterAddonChartVersion struct {
 	// Helm chart version
 	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`
-	// Helm chart digest
-	Digest string `json:"digest,omitempty"`
-	// Chart pulled from repository
-	Pulled bool `json:"pulled"`
 }
 
 // HelmClusterAddonChartList contains a list of HelmClusterAddonCharts.
