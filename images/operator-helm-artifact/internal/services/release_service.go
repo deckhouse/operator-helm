@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -49,12 +50,14 @@ func NewReleaseService(client client.Client, scheme *runtime.Scheme, targetNames
 	}
 }
 
+var _ status.Provider = (*ReleaseResult)(nil)
+
 type ReleaseResult struct {
-	Status  ResourceStatus
+	Status  status.Status
 	History helmv2.Snapshots
 }
 
-func (r ReleaseResult) GetStatus() ResourceStatus {
+func (r ReleaseResult) GetStatus() status.Status {
 	return r.Status
 }
 
@@ -80,7 +83,7 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 		return applyHelmReleaseSpec(addon, existing, repoType, s.TargetNamespace)
 	})
 	if err != nil {
-		return ReleaseResult{Status: Failed(
+		return ReleaseResult{Status: status.Failed(
 			addon,
 			helmv1alpha1.ReasonHelmReleaseFailed,
 			"Failed to create helm release",
@@ -88,11 +91,11 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 		)}
 	}
 
-	if cond, ok := utils.IsConditionObserved(existing.GetConditions(), helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
+	if cond, ok := status.IsConditionObserved(existing.GetConditions(), helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
 		logger.Info("Successfully reconciled helm release", "operation", op)
 		return ReleaseResult{
 			History: existing.Status.History,
-			Status: ResourceStatus{
+			Status: status.Status{
 				Observed:           ok,
 				Status:             cond.Status,
 				ObservedGeneration: addon.Generation,
@@ -102,7 +105,7 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 		}
 	}
 
-	return ReleaseResult{Status: Unknown(addon, helmv1alpha1.ReasonReconciling)}
+	return ReleaseResult{Status: status.Unknown(addon, helmv1alpha1.ReasonReconciling)}
 }
 
 func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {

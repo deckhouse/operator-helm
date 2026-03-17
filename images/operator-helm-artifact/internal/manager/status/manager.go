@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package status
 
 import (
 	"context"
@@ -37,8 +37,8 @@ type ObjectWithConditions interface {
 	GetStatus() interface{}
 }
 
-type StatusProvider interface {
-	GetStatus() ResourceStatus
+type Provider interface {
+	GetStatus() Status
 	GetConditionType() string
 }
 
@@ -46,30 +46,30 @@ type GenerationProvider interface {
 	GetObservedGeneration() int64
 }
 
-type StatusManager struct {
+type Manager struct {
 	client.Client
 
 	FieldOwner string
 }
 
-func NewStatusManager(c client.Client, fieldOwner string) *StatusManager {
-	return &StatusManager{
+func NewManager(c client.Client, fieldOwner string) *Manager {
+	return &Manager{
 		Client:     c,
 		FieldOwner: fieldOwner,
 	}
 }
 
-type StatusMutatorFunc func(ObjectWithConditions, []StatusProvider) (ObjectWithConditions, []StatusProvider)
+type MutatorFunc func(ObjectWithConditions, []Provider) (ObjectWithConditions, []Provider)
 
-var NoopStatusMutator = StatusMutatorFunc(func(o ObjectWithConditions, s []StatusProvider) (ObjectWithConditions, []StatusProvider) { return o, s })
+var NoopStatusMutator = MutatorFunc(func(o ObjectWithConditions, s []Provider) (ObjectWithConditions, []Provider) { return o, s })
 
-type StatusMapperFunc func(string, ResourceStatus) ResourceStatus
+type MapperFunc func(string, Status) Status
 
-var NoopStatusMapper = StatusMapperFunc(func(_ string, status ResourceStatus) ResourceStatus {
+var NoopStatusMapper = MapperFunc(func(_ string, status Status) Status {
 	return status
 })
 
-func (s *StatusManager) Update(ctx context.Context, obj ObjectWithConditions, mutatorFunc StatusMutatorFunc, statusMapperFunc StatusMapperFunc, results ...StatusProvider) error {
+func (s *Manager) Update(ctx context.Context, obj ObjectWithConditions, mutatorFunc MutatorFunc, statusMapperFunc MapperFunc, results ...Provider) error {
 	logger := log.FromContext(ctx)
 
 	oldObj := obj.DeepCopyObject().(ObjectWithConditions)
@@ -128,7 +128,7 @@ func (s *StatusManager) Update(ctx context.Context, obj ObjectWithConditions, mu
 	return s.Status().Patch(ctx, obj, client.MergeFrom(oldObj))
 }
 
-func (s *StatusManager) InitializeConditions(ctx context.Context, obj ObjectWithConditions, conditionTypes ...string) error {
+func (s *Manager) InitializeConditions(ctx context.Context, obj ObjectWithConditions, conditionTypes ...string) error {
 	oldObj := obj.DeepCopyObject().(ObjectWithConditions)
 	patchBase := client.MergeFrom(oldObj)
 
@@ -158,15 +158,15 @@ func (s *StatusManager) InitializeConditions(ctx context.Context, obj ObjectWith
 	return nil
 }
 
-func ConsolidateConditions(obj ObjectWithConditions, results ...StatusProvider) []StatusProvider {
-	var result []StatusProvider
+func DetermineConditions(obj ObjectWithConditions, results ...Provider) []Provider {
+	var result []Provider
 
 	conditionTypes := obj.GetConditionTypesForUpdate()
 	if len(results) == 0 {
 		return result
 	}
 
-	var decisionRes StatusProvider
+	var decisionRes Provider
 	for _, res := range results {
 		if res == nil {
 			continue
@@ -197,4 +197,19 @@ func ConsolidateConditions(obj ObjectWithConditions, results ...StatusProvider) 
 	}
 
 	return result
+}
+
+type Status struct {
+	ConditionType      string
+	Observed           bool
+	Status             metav1.ConditionStatus
+	ObservedGeneration int64
+	Reason             string
+	Message            string
+	NotReflectable     bool
+	Err                error
+}
+
+func (s Status) IsReady() bool {
+	return s.Status == metav1.ConditionTrue && s.Observed
 }

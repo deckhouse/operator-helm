@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/manager/status"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddon"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -44,7 +45,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewStatusManager(client, ControllerName),
+		status.NewManager(client, ControllerName),
 	)
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -53,7 +54,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&sourcev1.HelmChart{},
 			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalToFacade(
+				utils.MapInternalResources(
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -65,7 +66,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&helmv2.HelmRelease{},
 			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalToFacade(
+				utils.MapInternalResources(
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -77,7 +78,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&sourcev1.OCIRepository{},
 			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalToFacade(
+				utils.MapInternalResources(
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -88,7 +89,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalToFacade(
+				utils.MapInternalResources(
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,

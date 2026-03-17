@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -64,11 +65,13 @@ func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace 
 	}
 }
 
+var _ status.Provider = (*HelmRepoResult)(nil)
+
 type HelmRepoResult struct {
-	Status ResourceStatus
+	Status status.Status
 }
 
-func (r HelmRepoResult) GetStatus() ResourceStatus {
+func (r HelmRepoResult) GetStatus() status.Status {
 	return r.Status
 }
 
@@ -84,11 +87,11 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo
 	logger := log.FromContext(ctx)
 
 	if err := s.reconcileAuthSecret(ctx, repo); err != nil {
-		return HelmRepoResult{Status: Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile auth secret", err)}
+		return HelmRepoResult{Status: status.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile auth secret", err)}
 	}
 
 	if err := s.reconcileTLSSecret(ctx, repo); err != nil {
-		return HelmRepoResult{Status: Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile tls secret", err)}
+		return HelmRepoResult{Status: status.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile tls secret", err)}
 	}
 
 	existing := &sourcev1.HelmRepository{
@@ -105,7 +108,7 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo
 	})
 	if err != nil {
 		return HelmRepoResult{
-			Status: Failed(
+			Status: status.Failed(
 				repo,
 				helmv1alpha1.ReasonFailed,
 				"Failed to reconcile helm repository",
@@ -117,8 +120,8 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo
 		logger.Info("Reconciled helm repository", "operation", op)
 	}
 
-	if cond, ok := utils.IsConditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
-		return HelmRepoResult{Status: ResourceStatus{
+	if cond, ok := status.IsConditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
+		return HelmRepoResult{Status: status.Status{
 			Observed:           ok,
 			Status:             cond.Status,
 			ObservedGeneration: repo.Generation,
@@ -127,7 +130,7 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo
 		}}
 	}
 
-	return HelmRepoResult{Status: Unknown(repo, helmv1alpha1.ReasonReconciling)}
+	return HelmRepoResult{Status: status.Unknown(repo, helmv1alpha1.ReasonReconciling)}
 }
 
 func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName string) error {

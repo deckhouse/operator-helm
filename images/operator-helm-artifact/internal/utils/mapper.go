@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func MapInternalToFacade(targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName string) handler.MapFunc {
+func MapInternalResources(targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName string) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		logger := log.FromContext(ctx)
 

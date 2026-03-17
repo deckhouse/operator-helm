@@ -32,6 +32,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -57,11 +58,13 @@ func NewRepoSyncService(client client.Client, scheme *runtime.Scheme) *RepoSyncS
 	}
 }
 
+var _ status.Provider = (*RepoSyncResult)(nil)
+
 type RepoSyncResult struct {
-	Status ResourceStatus
+	Status status.Status
 }
 
-func (r RepoSyncResult) GetStatus() ResourceStatus {
+func (r RepoSyncResult) GetStatus() status.Status {
 	return r.Status
 }
 
@@ -77,15 +80,15 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 	logger := log.FromContext(ctx)
 
 	if !isRepoSyncRequired(repo) {
-		return RepoSyncResult{Status: Success(repo)}
+		return RepoSyncResult{Status: status.Empty()}
 	} else if !isRepoSyncInProgress(repo) {
-		return RepoSyncResult{Status: Unknown(repo, helmv1alpha1.ReasonReconciling)}
+		return RepoSyncResult{Status: status.Unknown(repo, helmv1alpha1.ReasonReconciling)}
 	}
 
 	repoClient, err := repoclient.NewClient(repoType)
 	if err != nil {
 		return RepoSyncResult{
-			Status: Failed(
+			Status: status.Failed(
 				repo,
 				helmv1alpha1.ReasonSyncFailed,
 				"Failed to get repository client on chart sync",
@@ -105,7 +108,7 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, authConfig)
 	if err != nil {
 		return RepoSyncResult{
-			Status: Failed(
+			Status: status.Failed(
 				repo,
 				helmv1alpha1.ReasonSyncFailed,
 				"Failed to fetch charts from repository",
@@ -146,7 +149,7 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 		})
 		if err != nil {
 			return RepoSyncResult{
-				Status: Failed(
+				Status: status.Failed(
 					repo,
 					helmv1alpha1.ReasonSyncFailed,
 					fmt.Sprintf("Failed to create HelmClusterAddonChart %q", addonChartName),
@@ -175,7 +178,7 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 
 		if err := s.Client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
 			return RepoSyncResult{
-				Status: Failed(
+				Status: status.Failed(
 					repo,
 					helmv1alpha1.ReasonSyncFailed,
 					fmt.Sprintf("Failed to update HelmClusterAddonChart %q versions", addonChartName),
@@ -190,7 +193,7 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 	var existingCharts helmv1alpha1.HelmClusterAddonChartList
 	if err := s.Client.List(ctx, &existingCharts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
 		return RepoSyncResult{
-			Status: Failed(
+			Status: status.Failed(
 				repo,
 				helmv1alpha1.ReasonSyncFailed,
 				"Failed to list stale charts for pruning",
@@ -207,7 +210,7 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 
 		if err := s.ensureResourceDeleted(ctx, types.NamespacedName{Name: staleChart.Name}, staleChart); err != nil {
 			return RepoSyncResult{
-				Status: Failed(
+				Status: status.Failed(
 					repo,
 					helmv1alpha1.ReasonSyncFailed,
 					"Failed to delete stale charts",
@@ -220,14 +223,7 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 	logger.Info(fmt.Sprintf("Scheduling next repo sync in %s", ChartsSyncInterval))
 
 	return RepoSyncResult{
-		Status: ResourceStatus{
-			Observed:           true,
-			Status:             metav1.ConditionTrue,
-			Reason:             helmv1alpha1.ReasonSyncSucceeded,
-			ObservedGeneration: repo.Generation,
-			Message:            "",
-			Err:                nil,
-		},
+		Status: status.Success(repo),
 	}
 }
 

@@ -42,7 +42,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&sourcev1.HelmChart{},
 			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalToFacade(
+				utils.MapInternalResources(
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
