@@ -17,30 +17,29 @@ limitations under the License.
 package utils
 
 import (
+	"crypto/sha256"
 	"fmt"
-	"hash/fnv"
 	"strings"
 )
 
 func GetHash(s string) string {
-	h := fnv.New32a()
+	h := sha256.New()
+	h.Write([]byte(s))
 
-	_, _ = h.Write([]byte(s))
-
-	return fmt.Sprintf("%x", h.Sum32())
+	return fmt.Sprintf("%x", h.Sum(nil))[:12]
 }
 
-func GetInternalRepositoryAuthSecretName(repoType InternalRepositoryType, internalRepoName string) string {
-	prefix := "auth"
+func GetInternalRepositoryAuthSecretName(internalRepoName string) string {
+	prefix := "hcar-auth"
 
-	hash := GetHash(fmt.Sprintf("%s-%s-%s", prefix, repoType, internalRepoName))
+	hash := GetHash(fmt.Sprintf("%s-%s", prefix, internalRepoName))
 
 	var result, postfix string
 
-	result = prefix + "-" + string(repoType) + "-"
+	result = prefix + "-"
 
-	if len(internalRepoName) > 35 {
-		result += internalRepoName[:35]
+	if len(internalRepoName) > 53 {
+		result += internalRepoName[:40]
 		postfix = "-" + hash
 	} else {
 		result += internalRepoName
@@ -49,17 +48,17 @@ func GetInternalRepositoryAuthSecretName(repoType InternalRepositoryType, intern
 	return strings.TrimRight(result, "-") + postfix
 }
 
-func GetInternalRepositoryTLSSecretName(repoType InternalRepositoryType, internalRepoName string) string {
-	prefix := "tls"
+func GetInternalRepositoryTLSSecretName(internalRepoName string) string {
+	prefix := "hcar-tls"
 
-	hash := GetHash(fmt.Sprintf("%s-%s-%s", prefix, repoType, internalRepoName))
+	hash := GetHash(fmt.Sprintf("%s-%s", prefix, internalRepoName))
 
 	var result, postfix string
 
-	result = prefix + "-" + string(repoType) + "-"
+	result = prefix + "-"
 
-	if len(internalRepoName) > 35 {
-		result += internalRepoName[:35]
+	if len(internalRepoName) > 54 {
+		result += internalRepoName[:41]
 		postfix = "-" + hash
 	} else {
 		result += internalRepoName
@@ -73,15 +72,15 @@ func GetHelmClusterAddonChartName(repoName, addonName string) string {
 
 	var result, postfix string
 
-	if len(repoName) > 20 {
-		result += repoName[:20]
+	if len(repoName) > 24 {
+		result += repoName[:24]
 		postfix = "-" + hash
 	} else {
 		result += repoName
 	}
 
-	if len(addonName) > 20 {
-		result += "-" + addonName[:20]
+	if len(addonName) > 24 {
+		result += "-" + addonName[:24]
 		postfix = "-" + hash
 	} else {
 		result += "-" + addonName
@@ -91,14 +90,14 @@ func GetHelmClusterAddonChartName(repoName, addonName string) string {
 }
 
 func GetInternalHelmReleaseName(addonName string) string {
-	prefix := "addon"
+	prefix := "hca"
 	hash := GetHash(fmt.Sprintf("%s-%s", prefix, addonName))
 
 	result := prefix + "-"
 	postfix := ""
 
-	if len(addonName) > 40 {
-		result += addonName[:40]
+	if len(addonName) > 59 {
+		result += addonName[:46]
 		postfix = "-" + hash
 	} else {
 		result += addonName
@@ -112,17 +111,34 @@ func GetInternalHelmChartName(addonName string) string {
 }
 
 func GetInternalOCIRepositoryName(addonName string) string {
-	prefix := "addon"
+	prefix := "hca"
 	hash := GetHash(fmt.Sprintf("%s-%s", prefix, addonName))
 
 	result := prefix + "-"
 	postfix := ""
 
-	if len(addonName) > 40 {
-		result += addonName[:40]
+	if len(addonName) > 59 {
+		result += addonName[:46]
 		postfix = "-" + hash
 	} else {
 		result += addonName
+	}
+
+	return strings.TrimRight(result, "-") + postfix
+}
+
+func GetInternalHelmRepositoryName(addonRepositoryName string) string {
+	prefix := "hcar"
+	hash := GetHash(fmt.Sprintf("%s-%s", prefix, addonRepositoryName))
+
+	result := prefix + "-"
+	postfix := ""
+
+	if len(addonRepositoryName) > 58 {
+		result += addonRepositoryName[:45]
+		postfix = "-" + hash
+	} else {
+		result += addonRepositoryName
 	}
 
 	return strings.TrimRight(result, "-") + postfix

@@ -35,8 +35,8 @@ type BaseRepoService struct {
 	TargetNamespace string
 }
 
-func (s *BaseRepoService) reconcileAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) error {
-	secretName := utils.GetInternalRepositoryAuthSecretName(repoType, repo.Name)
+func (s *BaseRepoService) reconcileAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+	secretName := utils.GetInternalRepositoryAuthSecretName(repo.Name)
 
 	if repo.Spec.Auth == nil {
 		nn := types.NamespacedName{Name: secretName, Namespace: s.TargetNamespace}
@@ -72,8 +72,8 @@ func (s *BaseRepoService) reconcileAuthSecret(ctx context.Context, repo *helmv1a
 	return nil
 }
 
-func (s *BaseRepoService) reconcileTLSSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) error {
-	secretName := utils.GetInternalRepositoryTLSSecretName(repoType, repo.Name)
+func (s *BaseRepoService) reconcileTLSSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+	secretName := utils.GetInternalRepositoryTLSSecretName(repo.Name)
 
 	if repo.Spec.CACertificate == "" {
 		nn := types.NamespacedName{Name: secretName, Namespace: s.TargetNamespace}

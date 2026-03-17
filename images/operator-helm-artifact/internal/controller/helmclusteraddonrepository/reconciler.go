@@ -21,10 +21,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -90,18 +88,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	case utils.InternalHelmRepository:
 		helmRepoRes = r.helmRepositoryService.EnsureInternalHelmRepository(ctx, &repo)
 	case utils.InternalOCIRepository:
-		// TODO: need to add extra check to ensure that URL provided by user is valid OCI url and credentials are correct.
-		// Otherwise permanent ready status is invalid.
-		ociRepoRes = services.OCIRepoResult{
-			Artifact: &meta.Artifact{},
-			Status: services.ResourceStatus{
-				ConditionType:      helmv1alpha1.ConditionTypeReady,
-				Observed:           true,
-				Status:             metav1.ConditionTrue,
-				ObservedGeneration: repo.Generation,
-				Reason:             helmv1alpha1.ReasonSuccess,
-			},
-		}
+		ociRepoRes = r.ociRepositoryService.EnsureRepositorySecrets(ctx, &repo)
 	default:
 		err := fmt.Errorf("unsupported repository type: %q", repoType)
 		helmRepoRes = services.HelmRepoResult{Status: services.Failed(&repo, "UnsupportedRepositoryType", err.Error(), err)}

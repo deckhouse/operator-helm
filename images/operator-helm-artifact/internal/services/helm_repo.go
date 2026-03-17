@@ -83,17 +83,17 @@ func (r HelmRepoResult) GetConditionType() string {
 func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) HelmRepoResult {
 	logger := log.FromContext(ctx)
 
-	if err := s.reconcileAuthSecret(ctx, repo, utils.InternalHelmRepository); err != nil {
+	if err := s.reconcileAuthSecret(ctx, repo); err != nil {
 		return HelmRepoResult{Status: Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile auth secret", err)}
 	}
 
-	if err := s.reconcileTLSSecret(ctx, repo, utils.InternalHelmRepository); err != nil {
+	if err := s.reconcileTLSSecret(ctx, repo); err != nil {
 		return HelmRepoResult{Status: Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile tls secret", err)}
 	}
 
 	existing := &sourcev1.HelmRepository{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      repo.Name,
+			Name:      utils.GetInternalHelmRepositoryName(repo.Name),
 			Namespace: s.TargetNamespace,
 		},
 	}
@@ -136,11 +136,11 @@ func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName st
 		obj  client.Object
 	}{
 		{
-			name: utils.GetInternalRepositoryAuthSecretName(utils.InternalHelmRepository, repoName),
+			name: utils.GetInternalRepositoryAuthSecretName(repoName),
 			obj:  &corev1.Secret{},
 		},
 		{
-			name: utils.GetInternalRepositoryTLSSecretName(utils.InternalHelmRepository, repoName),
+			name: utils.GetInternalRepositoryTLSSecretName(repoName),
 			obj:  &corev1.Secret{},
 		},
 		{
@@ -168,14 +168,14 @@ func applyHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, exis
 
 	if repo.Spec.Auth != nil {
 		existing.Spec.SecretRef = &meta.LocalObjectReference{
-			Name: utils.GetInternalRepositoryAuthSecretName(utils.InternalHelmRepository, repo.Name),
+			Name: utils.GetInternalRepositoryAuthSecretName(repo.Name),
 		}
 		existing.Spec.PassCredentials = true
 	}
 
 	if repo.Spec.CACertificate != "" {
 		existing.Spec.CertSecretRef = &meta.LocalObjectReference{
-			Name: utils.GetInternalRepositoryTLSSecretName(utils.InternalHelmRepository, repo.Name),
+			Name: utils.GetInternalRepositoryTLSSecretName(repo.Name),
 		}
 	}
 

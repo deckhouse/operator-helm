@@ -89,14 +89,6 @@ func (r OCIRepoResult) GetConditionType() string {
 func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository) OCIRepoResult {
 	logger := log.FromContext(ctx)
 
-	if err := s.reconcileAuthSecret(ctx, repo, utils.InternalHelmRepository); err != nil {
-		return OCIRepoResult{Status: Failed(addon, helmv1alpha1.ReasonFailed, "Failed to reconcile auth secret", err)}
-	}
-
-	if err := s.reconcileTLSSecret(ctx, repo, utils.InternalHelmRepository); err != nil {
-		return OCIRepoResult{Status: Failed(addon, helmv1alpha1.ReasonFailed, "Failed to reconcile tls secret", err)}
-	}
-
 	existing := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
@@ -140,17 +132,58 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon 
 	return OCIRepoResult{Status: Unknown(addon, helmv1alpha1.ReasonReconciling)}
 }
 
+func (s *OCIRepoService) EnsureRepositorySecrets(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) OCIRepoResult {
+	if err := s.reconcileAuthSecret(ctx, repo); err != nil {
+		return OCIRepoResult{
+			Status: ResourceStatus{
+				ConditionType:      helmv1alpha1.ConditionTypeReady,
+				Observed:           true,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: repo.Generation,
+				Reason:             helmv1alpha1.ReasonFailed,
+				Message:            "Failed to reconcile auth secret",
+				Err:                err,
+			},
+		}
+	}
+
+	if err := s.reconcileTLSSecret(ctx, repo); err != nil {
+		return OCIRepoResult{
+			Status: ResourceStatus{
+				ConditionType:      helmv1alpha1.ConditionTypeReady,
+				Observed:           true,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: repo.Generation,
+				Reason:             helmv1alpha1.ReasonFailed,
+				Message:            "Failed to reconcile tls secret",
+				Err:                err,
+			},
+		}
+	}
+
+	return OCIRepoResult{
+		Artifact: &meta.Artifact{},
+		Status: ResourceStatus{
+			ConditionType:      helmv1alpha1.ConditionTypeReady,
+			Observed:           true,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: repo.Generation,
+			Reason:             helmv1alpha1.ReasonSuccess,
+		},
+	}
+}
+
 func (s *OCIRepoService) CleanupOCIRepository(ctx context.Context, repoName string) error {
 	resources := []struct {
 		name string
 		obj  client.Object
 	}{
 		{
-			name: utils.GetInternalRepositoryAuthSecretName(utils.InternalHelmRepository, repoName),
+			name: utils.GetInternalRepositoryAuthSecretName(repoName),
 			obj:  &corev1.Secret{},
 		},
 		{
-			name: utils.GetInternalRepositoryTLSSecretName(utils.InternalHelmRepository, repoName),
+			name: utils.GetInternalRepositoryTLSSecretName(repoName),
 			obj:  &corev1.Secret{},
 		},
 	}
@@ -187,13 +220,13 @@ func applyOCIRepositorySpec(addon *helmv1alpha1.HelmClusterAddon, repo *helmv1al
 
 	if repo.Spec.Auth != nil {
 		existing.Spec.SecretRef = &meta.LocalObjectReference{
-			Name: utils.GetInternalRepositoryAuthSecretName(utils.InternalOCIRepository, repo.Name),
+			Name: utils.GetInternalRepositoryAuthSecretName(repo.Name),
 		}
 	}
 
 	if repo.Spec.CACertificate != "" {
 		existing.Spec.CertSecretRef = &meta.LocalObjectReference{
-			Name: utils.GetInternalRepositoryTLSSecretName(utils.InternalOCIRepository, repo.Name),
+			Name: utils.GetInternalRepositoryTLSSecretName(repo.Name),
 		}
 	}
 

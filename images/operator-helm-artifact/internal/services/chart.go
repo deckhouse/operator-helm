@@ -144,6 +144,6 @@ func applyHelmChartSpec(addon *helmv1alpha1.HelmClusterAddon, existing *sourcev1
 
 	existing.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
 		Kind: sourcev1.HelmRepositoryKind,
-		Name: addon.Spec.Chart.HelmClusterAddonRepository,
+		Name: utils.GetInternalHelmRepositoryName(addon.Spec.Chart.HelmClusterAddonRepository),
 	}
 }

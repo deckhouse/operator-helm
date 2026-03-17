@@ -111,6 +111,15 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	switch repoType {
 	case utils.InternalHelmRepository:
+		// URL change in the HelmClusterAddonRepository may lead to repository type change.
+		// If repository type changed from OCI to Helm, we need to remove previously created OCI repository.
+		if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil {
+			chartRes = services.ChartResult{
+				Status: services.Failed(addon, helmv1alpha1.ReasonFailed, "Preflight check failed", err),
+			}
+			break
+		}
+
 		chartRes = r.chartService.EnsureHelmChart(ctx, addon)
 		if !chartRes.IsPartiallyDegraded() {
 			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
