@@ -33,7 +33,23 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-type reconciler struct {
+func New(
+	client client.Client,
+	helmRepositoryService *services.HelmRepoService,
+	ociRepositoryService *services.OCIRepoService,
+	chartSyncService *services.RepoSyncService,
+	statusManager *services.StatusManager,
+) *Reconciler {
+	return &Reconciler{
+		Client:                client,
+		helmRepositoryService: helmRepositoryService,
+		ociRepositoryService:  ociRepositoryService,
+		chartSyncService:      chartSyncService,
+		statusManager:         statusManager,
+	}
+}
+
+type Reconciler struct {
 	client.Client
 
 	helmRepositoryService *services.HelmRepoService
@@ -42,7 +58,7 @@ type reconciler struct {
 	statusManager         *services.StatusManager
 }
 
-func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 	ctx = log.IntoContext(ctx, logger)
 
@@ -107,7 +123,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return r.requeueAtSyncInterval(&repo)
 }
 
-func (r *reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(repo, helmv1alpha1.FinalizerName) {
@@ -141,7 +157,7 @@ func (r *reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 	return reconcile.Result{}, nil
 }
 
-func (r *reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
+func (r *Reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
 	repoSyncCond := apimeta.FindStatusCondition(repo.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
 	if repoSyncCond != nil {
 		remaining := time.Until(repoSyncCond.LastTransitionTime.Add(services.ChartsSyncInterval))

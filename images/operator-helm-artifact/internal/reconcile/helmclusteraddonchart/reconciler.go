@@ -29,11 +29,15 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-type reconciler struct {
+func New(client client.Client) *Reconciler {
+	return &Reconciler{Client: client}
+}
+
+type Reconciler struct {
 	client.Client
 }
 
-func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	chart := &helmv1alpha1.HelmClusterAddonChart{}

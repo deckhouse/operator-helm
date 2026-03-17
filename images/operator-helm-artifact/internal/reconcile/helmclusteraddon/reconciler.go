@@ -34,7 +34,25 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-type reconciler struct {
+func New(
+	client client.Client,
+	chartService *services.ChartService,
+	ociRepositoryService *services.OCIRepoService,
+	releaseService *services.ReleaseService,
+	maintenanceService *services.MaintenanceService,
+	statusManager *services.StatusManager,
+) *Reconciler {
+	return &Reconciler{
+		Client:               client,
+		chartService:         chartService,
+		ociRepositoryService: ociRepositoryService,
+		releaseService:       releaseService,
+		maintenanceService:   maintenanceService,
+		statusManager:        statusManager,
+	}
+}
+
+type Reconciler struct {
 	client.Client
 
 	chartService         *services.ChartService
@@ -44,7 +62,7 @@ type reconciler struct {
 	statusManager        *services.StatusManager
 }
 
-func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 	ctx = log.IntoContext(ctx, logger)
 
@@ -172,7 +190,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	)
 }
 
-func (r *reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(addon, helmv1alpha1.FinalizerName) {

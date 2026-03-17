@@ -17,6 +17,7 @@ limitations under the License.
 package helmclusteraddonchart
 
 import (
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddonchart"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -33,9 +34,7 @@ const (
 )
 
 func SetupWithManager(mgr ctrl.Manager) error {
-	r := &reconciler{
-		Client: mgr.GetClient(),
-	}
+	r := reconcile.New(mgr.GetClient())
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).

@@ -17,6 +17,7 @@ limitations under the License.
 package helmclusteraddon
 
 import (
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddon"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -37,14 +38,14 @@ const (
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
-	r := &reconciler{
-		Client:               mgr.GetClient(),
-		releaseService:       services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		ociRepositoryService: services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		chartService:         services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		maintenanceService:   services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		statusManager:        services.NewStatusManager(client, ControllerName),
-	}
+	r := reconcile.New(
+		mgr.GetClient(),
+		services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewStatusManager(client, ControllerName),
+	)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
