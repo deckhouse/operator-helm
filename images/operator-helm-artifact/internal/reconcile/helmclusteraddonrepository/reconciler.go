@@ -120,7 +120,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if helmRepoRes.IsReady() || ociRepoRes.IsReady() {
 		chartSyncRes = r.chartSyncService.EnsureAddonCharts(ctx, &repo, repoType)
 	} else {
-		chartSyncRes = services.RepoSyncResult{Status: status.Failed(&repo, helmv1alpha1.ReasonRepositoryNotReady, helmRepoRes.Status.Message, err)}
+		chartSyncRes = services.RepoSyncResult{Status: status.Failed(&repo, helmv1alpha1.ReasonRepositoryNotReady, helmRepoRes.Status.Message, nil)}
 	}
 
 	if err := r.statusManager.Update(
