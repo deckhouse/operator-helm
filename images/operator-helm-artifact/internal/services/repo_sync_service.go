@@ -158,17 +158,6 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 			}
 		}
 
-		existingVersionsMap := make(map[string]helmv1alpha1.HelmClusterAddonChartVersion)
-		for _, version := range existing.Status.Versions {
-			existingVersionsMap[version.Version] = version
-		}
-
-		for i, version := range versions {
-			if existingVersion, found := existingVersionsMap[version.Version]; found && version.Digest == existingVersion.Digest {
-				versions[i].Pulled = existingVersion.Pulled
-			}
-		}
-
 		if op != controllerutil.OperationResultNone {
 			logger.Info("Reconciled HelmClusterAddonChart", "operation", op, "addonChartName", addonChartName)
 		}
@@ -202,13 +191,12 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 		}
 	}
 
-	for i := range existingCharts.Items {
-		staleChart := &existingCharts.Items[i]
-		if _, wanted := desiredCharts[staleChart.Name]; wanted {
+	for _, chart := range existingCharts.Items {
+		if _, wanted := desiredCharts[chart.Name]; wanted {
 			continue
 		}
 
-		if err := s.ensureResourceDeleted(ctx, types.NamespacedName{Name: staleChart.Name}, staleChart); err != nil {
+		if err := s.ensureResourceDeleted(ctx, types.NamespacedName{Name: chart.Name}, &chart); err != nil {
 			return RepoSyncResult{
 				Status: status.Failed(
 					repo,

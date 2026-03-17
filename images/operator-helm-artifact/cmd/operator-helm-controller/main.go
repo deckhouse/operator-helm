@@ -32,7 +32,6 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddon"
-	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonchart"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonrepository"
 	helmclusteraddonwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmclusteraddon"
 )
@@ -89,11 +88,6 @@ func main() {
 
 	if err = helmclusteraddonwebhook.SetupWebhookWithManager(mgr); err != nil {
 		logger.Error(err, "unable to create webhook", "webhook", "HelmClusterAddon")
-		os.Exit(1)
-	}
-
-	if err := helmclusteraddonchart.SetupWithManager(mgr); err != nil {
-		logger.Error(err, "unable to setup HelmClusterAddonChart controller")
 		os.Exit(1)
 	}
 

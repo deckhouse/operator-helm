@@ -20,9 +20,5 @@ spec:
                   description: Доступные версии Helm-чарта.
                   items:
                     properties:
-                      digest:
-                        description: Дайджест Helm-чарта.
-                      pulled:
-                        description: Признак загрузки чарта из репозитория.
                       version:
                         description: Версия Helm-чарта.

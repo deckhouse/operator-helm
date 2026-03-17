@@ -96,7 +96,6 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, auth
 
 			charts[chartName] = append(charts[chartName], helmv1alpha1.HelmClusterAddonChartVersion{
 				Version: chartVersion.Version,
-				Digest:  chartVersion.Digest,
 			})
 		}
 	}
