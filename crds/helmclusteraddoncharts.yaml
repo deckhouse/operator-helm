@@ -49,7 +49,7 @@ spec:
                 conditions:
                   description:
                     Conditions represent the latest available observations
-                    of the repository state.
+                    of the addon chart state.
                   items:
                     description:
                       Condition contains details for one aspect of the current
@@ -108,8 +108,8 @@ spec:
                   type: array
                 observedGeneration:
                   description:
-                    Generating a resource that was last processed by the
-                    controller.
+                    Generation represents resource generation that was last
+                    processed by the controller.
                   format: int64
                   type: integer
                 versions:

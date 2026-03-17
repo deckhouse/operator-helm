@@ -85,7 +85,7 @@ func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, addon *h
 
 	err := s.updateHelmReleaseSuspendState(ctx, addon, suspendState)
 	if err != nil {
-		return MaintenanceResult{Status: statusmgr.Failed(addon, helmv1alpha1.ReasonFailed, "Failed to enable maintenance mode", err)}
+		return MaintenanceResult{Status: statusmgr.Failed(addon, helmv1alpha1.ReasonFailed, "Failed to change maintenance mode", err)}
 	}
 	return MaintenanceResult{
 		Status: statusmgr.Status{

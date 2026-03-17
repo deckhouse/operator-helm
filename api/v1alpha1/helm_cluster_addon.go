@@ -40,7 +40,7 @@ const (
 // +kubebuilder:resource:categories={all,operator-helm},singular=helmclusteraddon,scope=Cluster
 // +kubebuilder:printcolumn:name="Chart Name",type="string",JSONPath=".spec.chart.helmClusterAddonChart",description="Helm release chart name."
 // +kubebuilder:printcolumn:name="Chart Version",type="string",JSONPath=".spec.chart.version",description="Helm release chart version."
-// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the repository"
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the addon"
 // +genclient
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -157,10 +157,10 @@ type HelmClusterAddonStatus struct {
 	// LastAppliedValues represents the latest values that triggered addon install or update.
 	// +optional
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
-	// Conditions represent the latest available observations of the repository state.
+	// Conditions represent the latest available observations of the addon state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generating a resource that was last processed by the controller.
+	// Generation represents resource generation that was last processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
@@ -190,7 +190,7 @@ type HelmClusterAddonList struct {
 	Items []HelmClusterAddon `json:"items"`
 }
 
-// HelmClusterAddonMaintenance describe HelmClusterAddon maintanance operation mode.
+// HelmClusterAddonMaintenance describe HelmClusterAddon maintenance operation mode.
 // +kubebuilder:validation:Enum={"",NoResourceReconciliation}
 type HelmClusterAddonMaintenance string
 

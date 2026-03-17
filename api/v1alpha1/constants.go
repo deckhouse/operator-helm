@@ -20,7 +20,7 @@ const (
 	// TargetNamespace is the namespace where internal customer resources are created.
 	TargetNamespace = "d8-operator-helm"
 
-	// FinalizerName is the finalizer added to HelmClusterRepository to ensure cleanup.
+	// FinalizerName is the finalizer used to ensure cleanup.
 	FinalizerName = "helm.deckhouse.io/cleanup"
 
 	// LabelManagedBy marks resources as managed by this controller.

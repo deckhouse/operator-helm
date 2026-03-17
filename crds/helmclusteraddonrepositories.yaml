@@ -152,8 +152,8 @@ spec:
                   type: array
                 observedGeneration:
                   description:
-                    Generating a resource that was last processed by the
-                    controller.
+                    Generation represents resource generation that was last
+                    processed by the controller.
                   format: int64
                   type: integer
               type: object

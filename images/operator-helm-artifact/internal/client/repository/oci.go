@@ -36,6 +36,8 @@ type ociRepositoryClient struct{}
 
 func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
 	url = trimSchemaPrefixes(url)
+	url = strings.TrimSuffix(url, "/")
+
 	urlParts := strings.Split(url, "/")
 	chartName := urlParts[len(urlParts)-1]
 

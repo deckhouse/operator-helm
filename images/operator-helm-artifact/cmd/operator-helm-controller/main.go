@@ -33,6 +33,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddon"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonrepository"
+	"github.com/deckhouse/operator-helm/internal/utils"
 	helmclusteraddonwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmclusteraddon"
 )
 
@@ -76,6 +77,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := utils.SetupAddonRepositoryIndex(mgr); err != nil {
+		logger.Error(err, "unable to setup addon repository index")
+		os.Exit(1)
+	}
+
 	if err := helmclusteraddonrepository.SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to setup HelmClusterAddonRepository controller")
 		os.Exit(1)
@@ -83,6 +89,11 @@ func main() {
 
 	if err := helmclusteraddon.SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to setup HelmClusterAddon controller")
+		os.Exit(1)
+	}
+
+	if err = helmclusteraddonwebhook.SetupIndexes(mgr); err != nil {
+		logger.Error(err, "unable to setup indexes", "webhook", "HelmClusterAddon")
 		os.Exit(1)
 	}
 

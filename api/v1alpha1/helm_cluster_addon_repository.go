@@ -99,17 +99,17 @@ type HelmClusterAddonRepositoryStatus struct {
 	// Conditions represent the latest available observations of the repository state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generating a resource that was last processed by the controller.
+	// Generation represents resource generation that was last processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
-// HelmClusterAddonRepositoryList contains a list of HelmClusterRepositories.
+// HelmClusterAddonRepositoryList contains a list of HelmClusterAddonRepositories.
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type HelmClusterAddonRepositoryList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
 
-	// Items provides a list of HelmClusterRepositories.
+	// Items provides a list of HelmClusterAddonRepositories.
 	Items []HelmClusterAddonRepository `json:"items"`
 }

@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -45,11 +46,12 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		status.NewManager(client, ControllerName),
+		status.NewManager(client),
 	)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
 		For(&helmv1alpha1.HelmClusterAddon{}).
 		Watches(
 			&sourcev1.HelmChart{},
@@ -99,7 +101,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Watches(
 			&helmv1alpha1.HelmClusterAddonRepository{},
-			&handler.EnqueueRequestForObject{},
+			handler.EnqueueRequestsFromMapFunc(utils.MapRepositoryToAddons(client)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Complete(r)

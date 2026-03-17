@@ -163,7 +163,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			addon,
 			helmv1alpha1.ReasonFailed,
 			fmt.Sprintf("Unsupported repository type: %s", repoType),
-			err,
+			fmt.Errorf("unsupported repository type: %s", repoType),
 		)})
 	}
 

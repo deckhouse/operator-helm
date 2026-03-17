@@ -139,7 +139,7 @@ func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName st
 			obj:  &corev1.Secret{},
 		},
 		{
-			name: repoName,
+			name: utils.GetInternalHelmRepositoryName(repoName),
 			obj:  &sourcev1.HelmRepository{},
 		},
 	}
