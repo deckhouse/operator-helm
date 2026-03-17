@@ -214,9 +214,15 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		return reconcile.Result{}, err
 	}
 
-	controllerutil.RemoveFinalizer(addon, helmv1alpha1.FinalizerName)
-	if err := r.Update(ctx, addon); client.IgnoreNotFound(err) != nil {
-		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
+	latestAddon := &helmv1alpha1.HelmClusterAddon{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(addon), latestAddon); err != nil {
+		return reconcile.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if controllerutil.RemoveFinalizer(latestAddon, helmv1alpha1.FinalizerName) {
+		if err := r.Update(ctx, latestAddon); err != nil {
+			return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
+		}
 	}
 
 	logger.Info("Cleanup complete")

@@ -162,9 +162,15 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 		}
 	}
 
-	controllerutil.RemoveFinalizer(repo, helmv1alpha1.FinalizerName)
-	if err := r.Update(ctx, repo); err != nil && !apierrors.IsNotFound(err) {
-		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
+	latestRepo := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(repo), latestRepo); err != nil {
+		return reconcile.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if controllerutil.RemoveFinalizer(latestRepo, helmv1alpha1.FinalizerName) {
+		if err := r.Update(ctx, latestRepo); err != nil {
+			return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
+		}
 	}
 
 	logger.Info("Cleanup complete")
