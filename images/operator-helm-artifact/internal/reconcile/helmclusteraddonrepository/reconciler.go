@@ -123,7 +123,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		chartSyncRes = services.RepoSyncResult{Status: status.Failed(&repo, helmv1alpha1.ReasonRepositoryNotReady, helmRepoRes.Status.Message, err)}
 	}
 
-	if err := r.statusManager.Update(ctx, &repo, status.NoopStatusMutator, status.NoopStatusMapper, helmRepoRes, ociRepoRes, chartSyncRes); err != nil {
+	if err := r.statusManager.Update(
+		ctx,
+		&repo,
+		status.NoopStatusMutator,
+		status.NoopStatusMapper,
+		helmRepoRes,
+		ociRepoRes,
+		chartSyncRes,
+	); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 

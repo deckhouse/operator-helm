@@ -42,7 +42,7 @@ func (s *BaseService) ensureResourceDeleted(ctx context.Context, nn types.Namesp
 		return client.IgnoreNotFound(err)
 	}
 
-	if err := s.Client.Delete(ctx, obj); err != nil {
+	if err := s.Client.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("failed to delete resource %s/%s: %w", nn.Namespace, nn.Name, err)
 	}
 

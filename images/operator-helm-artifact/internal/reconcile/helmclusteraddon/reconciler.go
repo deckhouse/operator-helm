@@ -180,7 +180,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		)}
 	}
 
-	return reconcile.Result{}, r.statusManager.Update(
+	if err := r.statusManager.Update(
 		ctx,
 		addon,
 		setStatusAttrs(repoType, chartRes, repoRes, releaseRes),
@@ -188,7 +188,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		chartRes,
 		repoRes,
 		releaseRes,
-	)
+	); client.IgnoreNotFound(err) != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
+	}
+
+	return reconcile.Result{}, nil
 }
 
 func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
@@ -198,20 +202,20 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		return reconcile.Result{}, nil
 	}
 
-	if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
 
-	if err := r.chartService.CleanupHelmChart(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.chartService.CleanupHelmChart(ctx, addon); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
 
-	if err := r.releaseService.CleanupHelmRelease(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.releaseService.CleanupHelmRelease(ctx, addon); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
 
 	controllerutil.RemoveFinalizer(addon, helmv1alpha1.FinalizerName)
-	if err := r.Update(ctx, addon); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.Update(ctx, addon); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 
