@@ -105,6 +105,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	case utils.InternalHelmRepository:
 		helmRepoRes = r.helmRepositoryService.EnsureInternalHelmRepository(ctx, &repo)
 	case utils.InternalOCIRepository:
+		if err := r.helmRepositoryService.CleanupHelmRepository(ctx, utils.GetInternalHelmRepositoryName(repo.Name)); err != nil {
+			ociRepoRes = services.OCIRepoResult{
+				Status: status.Failed(&repo, helmv1alpha1.ReasonFailed, "Repository change failed", err),
+			}
+			break
+		}
 		ociRepoRes = r.ociRepositoryService.EnsureRepositorySecrets(ctx, &repo)
 	default:
 		err := fmt.Errorf("unsupported repository type: %q", repoType)

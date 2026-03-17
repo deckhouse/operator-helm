@@ -134,7 +134,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// If repository type changed from OCI to Helm, we need to remove previously created OCI repository.
 		if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil {
 			chartRes = services.ChartResult{
-				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Preflight check failed", err),
+				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
 			}
 			break
 		}
