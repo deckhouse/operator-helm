@@ -79,7 +79,6 @@ spec:
           image: {{ include "helm_lib_module_image" (list . "operatorHelmController") }}
           imagePullPolicy: IfNotPresent
           args:
-            {{/* TODO: add log level option */}}
             - --leader-elect
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:9440

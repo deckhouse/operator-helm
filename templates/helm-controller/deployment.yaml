@@ -80,7 +80,6 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - --watch-all-namespaces
-            - --log-level={{ include "moduleLogLevel" . }}
             - --log-encoding=json
             - --enable-leader-election
           volumeMounts:
