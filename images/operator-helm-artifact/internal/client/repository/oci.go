@@ -18,6 +18,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -38,8 +39,16 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 	url = trimSchemaPrefixes(url)
 	url = strings.TrimSuffix(url, "/")
 
+	if !strings.Contains(url, "/") {
+		return nil, errors.New("url must contain chart/image name")
+	}
+
 	urlParts := strings.Split(url, "/")
 	chartName := urlParts[len(urlParts)-1]
+
+	if len(chartName) == 0 {
+		return nil, errors.New("failed to parse chart/image name from the url")
+	}
 
 	repo, err := name.NewRepository(url)
 	if err != nil {
