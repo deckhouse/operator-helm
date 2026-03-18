@@ -3,7 +3,7 @@ version: "3"
 silent: true
 
 vars:
-  deckhouse_lib_helm_ver: 1.55.1
+  deckhouse_lib_helm_ver: 1.71.2
   target: ""
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
 
