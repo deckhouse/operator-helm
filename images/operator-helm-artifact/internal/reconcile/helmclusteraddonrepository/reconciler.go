@@ -23,6 +23,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -162,15 +163,20 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 		}
 	}
 
-	latestRepo := &helmv1alpha1.HelmClusterAddonRepository{}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(repo), latestRepo); err != nil {
-		return reconcile.Result{}, client.IgnoreNotFound(err)
-	}
-
-	if controllerutil.RemoveFinalizer(latestRepo, helmv1alpha1.FinalizerName) {
-		if err := r.Update(ctx, latestRepo); err != nil {
-			return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latestRepo := &helmv1alpha1.HelmClusterAddonRepository{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(repo), latestRepo); err != nil {
+			return client.IgnoreNotFound(err)
 		}
+
+		if controllerutil.RemoveFinalizer(latestRepo, helmv1alpha1.FinalizerName) {
+			if err := r.Update(ctx, latestRepo); err != nil {
+				return err // This will trigger a retry if it's a conflict
+			}
+		}
+		return nil
+	}); err != nil {
+		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 
 	logger.Info("Cleanup complete")
