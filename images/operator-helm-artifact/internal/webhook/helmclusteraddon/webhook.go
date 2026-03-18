@@ -27,6 +27,17 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
+const addonChartIndex = ".spec.chart.repoAndChart"
+
+func SetupIndexes(mgr ctrl.Manager) error {
+	return mgr.GetFieldIndexer().IndexField(context.Background(), &helmv1alpha1.HelmClusterAddon{}, addonChartIndex,
+		func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+			return []string{addon.Spec.Chart.HelmClusterAddonRepository + "/" + addon.Spec.Chart.HelmClusterAddonChartName}
+		},
+	)
+}
+
 func SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &helmv1alpha1.HelmClusterAddon{}).
 		WithValidator(&UniqRepositoryAndChartNameWebhookValidator{Client: mgr.GetClient()}).
@@ -51,15 +62,14 @@ func (v *UniqRepositoryAndChartNameWebhookValidator) ValidateDelete(_ context.Co
 
 func (v *UniqRepositoryAndChartNameWebhookValidator) checkUniqueness(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
 	list := &helmv1alpha1.HelmClusterAddonList{}
+	indexValue := addon.Spec.Chart.HelmClusterAddonRepository + "/" + addon.Spec.Chart.HelmClusterAddonChartName
 
-	if err := v.Client.List(ctx, list); err != nil {
+	if err := v.Client.List(ctx, list, client.MatchingFields{addonChartIndex: indexValue}); err != nil {
 		return err
 	}
 
 	for _, existing := range list.Items {
-		if existing.Name != addon.Name &&
-			existing.Spec.Chart.HelmClusterAddonRepository == addon.Spec.Chart.HelmClusterAddonRepository &&
-			existing.Spec.Chart.HelmClusterAddonChartName == addon.Spec.Chart.HelmClusterAddonChartName {
+		if existing.Name != addon.Name {
 			return fmt.Errorf(
 				"chart %s is already used by helmclusteraddon/%s",
 				addon.Spec.Chart.HelmClusterAddonChartName, existing.Name,

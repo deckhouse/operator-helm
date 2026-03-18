@@ -114,8 +114,8 @@ func (s *BaseRepoService) reconcileTLSSecret(ctx context.Context, repo *helmv1al
 
 	if _, err := controllerutil.CreateOrPatch(ctx, s.Client, tlsSecret, func() error {
 		tlsSecret.Labels = map[string]string{
-			helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
-			helmv1alpha1.HelmClusterAddonLabelSourceName: repo.Name,
+			helmv1alpha1.LabelManagedBy:                            helmv1alpha1.LabelManagedByValue,
+			helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repo.Name,
 		}
 
 		tlsSecret.StringData = map[string]string{

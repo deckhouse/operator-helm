@@ -42,18 +42,11 @@ const (
 )
 
 type HelmRepoService struct {
-	BaseService
 	BaseRepoService
-
-	TargetNamespace string
 }
 
 func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace string) *HelmRepoService {
 	return &HelmRepoService{
-		BaseService: BaseService{
-			Client: client,
-			Scheme: scheme,
-		},
 		BaseRepoService: BaseRepoService{
 			BaseService: BaseService{
 				Client: client,
@@ -61,7 +54,6 @@ func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace 
 			},
 			TargetNamespace: namespace,
 		},
-		TargetNamespace: namespace,
 	}
 }
 
@@ -133,6 +125,16 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo
 	return HelmRepoResult{Status: status.Unknown(repo, helmv1alpha1.ReasonReconciling)}
 }
 
+func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, repoName string) error {
+	name := utils.GetInternalHelmRepositoryName(repoName)
+	nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
+	if err := s.ensureResourceDeleted(ctx, nn, &sourcev1.HelmRepository{}); err != nil {
+		return fmt.Errorf("removing helm repository: %w", err)
+	}
+
+	return nil
+}
+
 func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName string) error {
 	resources := []struct {
 		name string
@@ -147,7 +149,7 @@ func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName st
 			obj:  &corev1.Secret{},
 		},
 		{
-			name: repoName,
+			name: utils.GetInternalHelmRepositoryName(repoName),
 			obj:  &sourcev1.HelmRepository{},
 		},
 	}

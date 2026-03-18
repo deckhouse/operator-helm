@@ -36,18 +36,11 @@ import (
 )
 
 type OCIRepoService struct {
-	BaseService
 	BaseRepoService
-
-	TargetNamespace string
 }
 
 func NewOCIRepoService(client client.Client, scheme *runtime.Scheme, namespace string) *OCIRepoService {
 	return &OCIRepoService{
-		BaseService: BaseService{
-			Client: client,
-			Scheme: scheme,
-		},
 		BaseRepoService: BaseRepoService{
 			BaseService: BaseService{
 				Client: client,
@@ -55,7 +48,6 @@ func NewOCIRepoService(client client.Client, scheme *runtime.Scheme, namespace s
 			},
 			TargetNamespace: namespace,
 		},
-		TargetNamespace: namespace,
 	}
 }
 

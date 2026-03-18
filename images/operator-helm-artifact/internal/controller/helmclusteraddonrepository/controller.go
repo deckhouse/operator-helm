@@ -21,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -43,16 +44,18 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewRepoSyncService(client, mgr.GetScheme()),
-		status.NewManager(client, helmv1alpha1.LabelManagedByValue),
+		status.NewManager(client),
 	)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
 		For(&helmv1alpha1.HelmClusterAddonRepository{}).
 		Watches(
 			&sourcev1.HelmRepository{},
 			handler.EnqueueRequestsFromMapFunc(
 				utils.MapInternalResources(
+					ControllerName,
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -64,6 +67,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(
 				utils.MapInternalResources(
+					ControllerName,
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,

@@ -24,6 +24,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -163,7 +164,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			addon,
 			helmv1alpha1.ReasonFailed,
 			fmt.Sprintf("Unsupported repository type: %s", repoType),
-			err,
+			fmt.Errorf("unsupported repository type: %s", repoType),
 		)})
 	}
 
@@ -214,15 +215,20 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		return reconcile.Result{}, err
 	}
 
-	latestAddon := &helmv1alpha1.HelmClusterAddon{}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(addon), latestAddon); err != nil {
-		return reconcile.Result{}, client.IgnoreNotFound(err)
-	}
-
-	if controllerutil.RemoveFinalizer(latestAddon, helmv1alpha1.FinalizerName) {
-		if err := r.Update(ctx, latestAddon); err != nil {
-			return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latestAddon := &helmv1alpha1.HelmClusterAddon{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(addon), latestAddon); err != nil {
+			return client.IgnoreNotFound(err)
 		}
+
+		if controllerutil.RemoveFinalizer(latestAddon, helmv1alpha1.FinalizerName) {
+			if err := r.Update(ctx, latestAddon); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return reconcile.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 
 	logger.Info("Cleanup complete")

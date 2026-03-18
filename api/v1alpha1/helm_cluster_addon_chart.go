@@ -63,21 +63,11 @@ func (r *HelmClusterAddonChart) GetConditionTypesForUpdate() []string {
 	return []string{"Ready"}
 }
 
-type HelmClusterAddonChartSpec struct {
-	// Helm chart name
-	// +kubebuilder:validation:MinLength=1
-	ChartName string `json:"chartName"`
-	// Name of HelmClusterAddonRepository where respective helm chart resides.
-	// +kubebuilder:validation:MinLength=3
-	// +kubebuilder:validation:MaxLength=63
-	RepositoryName string `json:"repositoryName"`
-}
-
 type HelmClusterAddonChartStatus struct {
-	// Conditions represent the latest available observations of the repository state.
+	// Conditions represent the latest available observations of the addon chart state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generating a resource that was last processed by the controller.
+	// Generation represents resource generation that was last processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Available helm chart versions
 	// +optional

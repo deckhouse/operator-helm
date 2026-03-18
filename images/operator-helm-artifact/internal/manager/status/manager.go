@@ -48,14 +48,11 @@ type GenerationProvider interface {
 
 type Manager struct {
 	client.Client
-
-	FieldOwner string
 }
 
-func NewManager(c client.Client, fieldOwner string) *Manager {
+func NewManager(c client.Client) *Manager {
 	return &Manager{
-		Client:     c,
-		FieldOwner: fieldOwner,
+		Client: c,
 	}
 }
 
@@ -206,8 +203,12 @@ type Status struct {
 	ObservedGeneration int64
 	Reason             string
 	Message            string
-	NotReflectable     bool
-	Err                error
+	// NotReflectable marks a result that is appended as its own condition directly,
+	// bypassing the "decision result" logic in DetermineConditions. When true, the
+	// result does not participate in selecting the single decision result that gets
+	// projected across all condition types returned by GetConditionTypesForUpdate.
+	NotReflectable bool
+	Err            error
 }
 
 func (s Status) IsReady() bool {

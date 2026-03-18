@@ -29,7 +29,7 @@ spec:
           jsonPath: .spec.chart.version
           name: Chart Version
           type: string
-        - description: The readiness status of the repository
+        - description: The readiness status of the addon
           jsonPath: .status.conditions[?(@.type=='Ready')].status
           name: Status
           type: string
@@ -110,7 +110,7 @@ spec:
                 conditions:
                   description:
                     Conditions represent the latest available observations
-                    of the repository state.
+                    of the addon state.
                   items:
                     description:
                       Condition contains details for one aspect of the current
@@ -194,8 +194,8 @@ spec:
                   x-kubernetes-preserve-unknown-fields: true
                 observedGeneration:
                   description:
-                    Generating a resource that was last processed by the
-                    controller.
+                    Generation represents resource generation that was last
+                    processed by the controller.
                   format: int64
                   type: integer
               type: object
