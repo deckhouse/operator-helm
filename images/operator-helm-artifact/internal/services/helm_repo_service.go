@@ -125,6 +125,16 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo
 	return HelmRepoResult{Status: status.Unknown(repo, helmv1alpha1.ReasonReconciling)}
 }
 
+func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, repoName string) error {
+	name := utils.GetInternalHelmRepositoryName(repoName)
+	nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
+	if err := s.ensureResourceDeleted(ctx, nn, &sourcev1.HelmRepository{}); err != nil {
+		return fmt.Errorf("removing helm repository: %w", err)
+	}
+
+	return nil
+}
+
 func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName string) error {
 	resources := []struct {
 		name string

@@ -105,7 +105,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	case utils.InternalHelmRepository:
 		helmRepoRes = r.helmRepositoryService.EnsureInternalHelmRepository(ctx, &repo)
 	case utils.InternalOCIRepository:
-		if err := r.helmRepositoryService.CleanupHelmRepository(ctx, repo.Name); err != nil {
+		if err := r.helmRepositoryService.RemoveHelmRepository(ctx, repo.Name); err != nil {
 			ociRepoRes = services.OCIRepoResult{
 				Status: status.Failed(&repo, helmv1alpha1.ReasonFailed, "Repository change failed", err),
 			}
