@@ -1,3 +1,0 @@
-## Placement strategies
-
-<WIP>
