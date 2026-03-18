@@ -56,6 +56,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			&sourcev1.HelmChart{},
 			handler.EnqueueRequestsFromMapFunc(
 				utils.MapInternalResources(
+					ControllerName,
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -68,6 +69,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			&helmv2.HelmRelease{},
 			handler.EnqueueRequestsFromMapFunc(
 				utils.MapInternalResources(
+					ControllerName,
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -80,6 +82,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			&sourcev1.OCIRepository{},
 			handler.EnqueueRequestsFromMapFunc(
 				utils.MapInternalResources(
+					ControllerName,
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,

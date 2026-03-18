@@ -29,7 +29,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-func MapInternalResources(targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName string) handler.MapFunc {
+func MapInternalResources(controllerName, targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName string) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		logger := log.FromContext(ctx)
 
@@ -45,7 +45,7 @@ func MapInternalResources(targetNamespace, labelManagedBy, labelManagedByValue, 
 		sourceName := labels[labelSourceName]
 		if sourceName == "" {
 			logger.Info("resource missing source label, skipping",
-				"name", obj.GetName(), "namespace", obj.GetNamespace())
+				"controller", controllerName, "name", obj.GetName(), "namespace", obj.GetNamespace())
 
 			return nil
 		}

@@ -55,6 +55,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			&sourcev1.HelmRepository{},
 			handler.EnqueueRequestsFromMapFunc(
 				utils.MapInternalResources(
+					ControllerName,
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
@@ -66,6 +67,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(
 				utils.MapInternalResources(
+					ControllerName,
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
