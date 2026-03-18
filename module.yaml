@@ -1,7 +1,7 @@
 name: operator-helm
 stage: Experimental
 requirements:
-  deckhouse: ">= 1.69"
+  deckhouse: ">= 1.74"
 subsystems:
   - delivery
 namespace: d8-operator-helm
