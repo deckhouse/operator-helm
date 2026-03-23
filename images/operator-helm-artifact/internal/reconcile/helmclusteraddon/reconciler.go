@@ -172,15 +172,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, repoType)
 	}
 
-	if !releaseRes.IsReady() {
-		releaseRes = services.ReleaseResult{Status: status.Failed(
-			addon,
-			releaseRes.Status.Reason,
-			releaseRes.Status.Message,
-			nil,
-		)}
-	}
-
 	if err := r.statusManager.Update(
 		ctx,
 		addon,

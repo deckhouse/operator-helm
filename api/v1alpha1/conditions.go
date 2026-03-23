@@ -25,8 +25,6 @@ const (
 	ConditionTypeReady                = "Ready"
 	ConditionTypeSynced               = "Synced"
 
-	ReasonHelmChartFailed         = "HelmChartFailed"
-	ReasonHelmReleaseFailed       = "HelmReleaseFailed"
 	ReasonMaintenanceModeActive   = "MaintenanceModeActive"
 	ReasonMaintenanceModeInactive = "MaintenanceModeInactive"
 	ReasonSyncFailed              = "SyncFailed"
@@ -34,4 +32,20 @@ const (
 	ReasonReconciling             = "Reconciling"
 	ReasonSuccess                 = "Success"
 	ReasonFailed                  = "Failed"
+
+	// HelmRelease error reasons
+	ReasonReleaseFailed = "ReleaseFailed"
+	ReasonTestFailed    = "TestFailed"
+	ReasonRemediated    = "Remediated"
+
+	// HelmChart error reasons
+	ReasonHelmChartFailed    = "HelmChartFailed"
+	ReasonChartFetchFailed   = "ChartFetchFailed"
+	ReasonChartStorageFailed = "ChartStorageFailed"
+
+	// OCIRepository error reasons
+	ReasonOCIFetchFailed        = "OCIFetchFailed"
+	ReasonOCIIncludeUnavailable = "OCIIncludeUnavailable"
+	ReasonOCIStorageFailed      = "OCIStorageFailed"
+	ReasonOCIVerificationFailed = "OCIVerificationFailed"
 )
