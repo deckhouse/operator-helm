@@ -34,6 +34,12 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+var helmReleaseErrorRules = []status.ErrorConditionRule{
+	{Type: "Released", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonReleaseFailed},
+	{Type: "TestSuccess", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonTestFailed},
+	{Type: "Remediated", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonRemediated},
+}
+
 type ReleaseService struct {
 	BaseService
 
@@ -85,27 +91,24 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 	if err != nil {
 		return ReleaseResult{Status: status.Failed(
 			addon,
-			helmv1alpha1.ReasonHelmReleaseFailed,
+			helmv1alpha1.ReasonReleaseFailed,
 			"Failed to create helm release",
 			fmt.Errorf("reconciling helm release: %w", err),
 		)}
 	}
 
-	if cond, ok := status.IsConditionObserved(existing.GetConditions(), helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
+	processedStatus := status.ProcessChildConditions(
+		existing.GetConditions(), existing.Generation, addon, helmReleaseErrorRules,
+	)
+
+	if processedStatus.IsReady() {
 		logger.Info("Successfully reconciled helm release", "operation", op)
-		return ReleaseResult{
-			History: existing.Status.History,
-			Status: status.Status{
-				Observed:           ok,
-				Status:             cond.Status,
-				ObservedGeneration: addon.Generation,
-				Reason:             cond.Reason,
-				Message:            cond.Message,
-			},
-		}
 	}
 
-	return ReleaseResult{Status: status.Unknown(addon, helmv1alpha1.ReasonReconciling)}
+	return ReleaseResult{
+		History: existing.Status.History,
+		Status:  processedStatus,
+	}
 }
 
 func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {

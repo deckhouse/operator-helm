@@ -34,6 +34,11 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+var helmChartErrorRules = []status.ErrorConditionRule{
+	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartFetchFailed},
+	{Type: "StorageOperationFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartStorageFailed},
+}
+
 type ChartService struct {
 	BaseService
 
@@ -105,22 +110,19 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.
 		logger.Info("Reconciled helm chart", "operation", op)
 	}
 
-	if cond, ok := status.IsConditionObserved(existing.GetConditions(), helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
+	processedStatus := status.ProcessChildConditions(
+		existing.GetConditions(), existing.Generation, addon, helmChartErrorRules,
+	)
+	processedStatus.NotReflectable = existing.Status.Artifact != nil
+
+	if processedStatus.IsReady() {
 		logger.Info("Successfully reconciled helm chart", "operation", op, "chart", addon.Spec.Chart.HelmClusterAddonChartName)
-		return ChartResult{
-			Artifact: existing.Status.Artifact,
-			Status: status.Status{
-				Observed:           ok,
-				Status:             cond.Status,
-				ObservedGeneration: addon.Generation,
-				Reason:             cond.Reason,
-				Message:            cond.Message,
-				NotReflectable:     existing.Status.Artifact != nil,
-			},
-		}
 	}
 
-	return ChartResult{Status: status.Unknown(addon, helmv1alpha1.ReasonReconciling)}
+	return ChartResult{
+		Artifact: existing.Status.Artifact,
+		Status:   processedStatus,
+	}
 }
 
 func (s *ChartService) CleanupHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
