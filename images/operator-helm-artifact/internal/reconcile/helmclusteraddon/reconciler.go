@@ -288,9 +288,13 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 func mapResourceStatus() status.MapperFunc {
 	return func(conditionType string, status status.Status) status.Status {
 		if conditionType == helmv1alpha1.ConditionTypePartiallyDegraded {
+			switch status.Status {
 			// ConditionTrue means that HelmChartSucceeded, resetting status would exclude it from result.
-			if status.Status == metav1.ConditionTrue {
+			case metav1.ConditionTrue:
 				status.Status = ""
+			//	ConditionFalse means that chart failed, change Status to True, to raise ConditionTypePartiallyDegraded condition.
+			case metav1.ConditionFalse:
+				status.Status = metav1.ConditionTrue
 			}
 		}
 
