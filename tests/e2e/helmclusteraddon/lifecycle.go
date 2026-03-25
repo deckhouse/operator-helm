@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/util"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
@@ -118,9 +118,7 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 			framework.ShortTimeout,
 			created,
 		)
-	})
 
-	It("should have pods running in the target namespace", func() {
 		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", addonName, chartName)
 
 		By("Checking all pods are ready")
@@ -147,13 +145,54 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updated.Status.LastAppliedChart).NotTo(BeNil())
 		Expect(updated.Status.LastAppliedChart.Version).To(Equal("6.10.0"))
-	})
 
-	It("should verify pod count after update", func() {
 		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", addonName, chartName)
 
 		By("Verifying pods are still running after update")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 1, framework.LongTimeout)
+	})
+
+	It("should update last applied values", func() {
+		expectedValues := `{"replicaCount": 2}`
+
+		By("Updating last applied values")
+		updated := util.UpdateHelmClusterAddon(addonName, func(addon *apiv1alpha1.HelmClusterAddon) {
+			addon.Spec.Values = &apiextensionsv1.JSON{Raw: []byte(expectedValues)}
+		})
+
+		By("Waiting for update to be applied")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypeReady,
+			framework.LongTimeout,
+			updated,
+		)
+
+		By("Verifying that values are applied")
+		updated, err := f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddons().
+			Get(context.Background(), addonName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.Status.LastAppliedValues).NotTo(BeNil())
+		Expect(updated.Status.LastAppliedValues.Raw).To(MatchJSON(expectedValues))
+
+		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", addonName, chartName)
+
+		By("Verifying pods number changed after values update")
+		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
+	})
+
+	It("should not update chart version on invalid chart version", func() {
+		By("Updating addon chart version")
+		updated := util.UpdateHelmClusterAddon(addonName, func(addon *apiv1alpha1.HelmClusterAddon) {
+			addon.Spec.Chart.Version = "2000"
+		})
+
+		By("Waiting for reconcile to be completed")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypePartiallyDegraded,
+			framework.LongTimeout,
+			updated,
+		)
 	})
 
 	It("should have no errors in any controller", func() {

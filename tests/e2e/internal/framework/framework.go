@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -71,6 +72,8 @@ func (f *Framework) After() {
 	for _, fn := range f.deferredDeletes {
 		_ = fn()
 	}
+
+	slices.Reverse(f.objectsToDelete)
 
 	for _, obj := range f.objectsToDelete {
 		_ = f.generic.Delete(context.Background(), obj)
