@@ -1,3 +1,19 @@
+/*
+Copyright 2026 Flant JSC.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package helmclusteraddon
 
 import (
@@ -182,17 +198,37 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 	})
 
 	It("should not update chart version on invalid chart version", func() {
-		By("Updating addon chart version")
+		addon, err := f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddons().
+			Get(context.Background(), addonName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Should have PartiallyDegraded condition inactive")
+		util.UntilConditionStatus(
+			apiv1alpha1.ConditionTypePartiallyDegraded,
+			string(metav1.ConditionFalse),
+			framework.LongTimeout,
+			addon,
+		)
+
+		invalidChartVersion := "2000"
+
+		By("Updating addon chart to invalid version")
 		updated := util.UpdateHelmClusterAddon(addonName, func(addon *apiv1alpha1.HelmClusterAddon) {
-			addon.Spec.Chart.Version = "2000"
+			addon.Spec.Chart.Version = invalidChartVersion
 		})
 
-		By("Waiting for reconcile to be completed")
+		By("Should have PartiallyDegraded condition active")
 		util.UntilConditionTrue(
 			apiv1alpha1.ConditionTypePartiallyDegraded,
 			framework.LongTimeout,
 			updated,
 		)
+
+		By("Should not update chart info")
+		Expect(updated.Status.LastAppliedValues).NotTo(BeNil())
+		Expect(updated.Status.LastAppliedChart.Version).NotTo(Equal(invalidChartVersion))
+		Expect(updated.Status.LastAppliedChart.Version).To(Equal(addon.Status.LastAppliedChart.Version))
 	})
 
 	It("should have no errors in any controller", func() {
