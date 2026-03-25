@@ -79,6 +79,13 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 			created,
 		)
 
+		By("Waiting for HelmClusterAddonRepository to become Synced")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypeSynced,
+			framework.LongTimeout,
+			created,
+		)
+
 		By("Verifying no errors in controllers after repo creation")
 		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
@@ -139,6 +146,9 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Checking all pods are ready")
 		util.UntilAllPodsReady(f.NamespaceName(), labelSelector, 1, framework.LongTimeout)
+
+		By("Verifying no errors in controllers after addon creation")
+		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("should update chart version and apply changes", func() {
@@ -166,6 +176,9 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Verifying pods are still running after update")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 1, framework.LongTimeout)
+
+		By("Verifying no errors in controllers after addon update")
+		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("should update last applied values", func() {
@@ -195,6 +208,9 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Verifying pods number changed after values update")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
+
+		By("Verifying no errors in controllers after addon values update")
+		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("should not update chart version on invalid chart version", func() {
@@ -229,9 +245,8 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 		Expect(updated.Status.LastAppliedValues).NotTo(BeNil())
 		Expect(updated.Status.LastAppliedChart.Version).NotTo(Equal(invalidChartVersion))
 		Expect(updated.Status.LastAppliedChart.Version).To(Equal(addon.Status.LastAppliedChart.Version))
-	})
 
-	It("should have no errors in any controller", func() {
-		controller.AssertNoErrors()
+		By("Verifying no errors in controllers after update chart to invalid version")
+		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 })
