@@ -1,0 +1,12 @@
+clusterTransport:
+  kubeConfig: ""
+
+controllers:
+  - name: "operator-helm-controller"
+    namespace: "d8-operator-helm"
+    labelSelector: "app=operator-helm-controller"
+    containers:
+      - "operator-helm-controller"
+    logFilters:
+      exclude: []
+      excludeRegexp: []

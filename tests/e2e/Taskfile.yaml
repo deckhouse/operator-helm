@@ -1,0 +1,24 @@
+version: '3'
+
+vars:
+  TIMEOUT: '{{.TIMEOUT | default "30m"}}'
+
+tasks:
+  run:
+    desc: Run e2e tests
+    cmds:
+      - |
+        args="-v --race --timeout={{.TIMEOUT}}"
+        go tool ginkgo $args ./...
+
+  runp:
+    desc: Run e2e tests in parallel
+    cmds:
+      - |
+        args="-v -p --procs=4 --timeout={{.TIMEOUT}}"
+        go tool ginkgo $args ./...
+
+  lint:
+    desc: Lint e2e tests
+    cmds:
+      - golangci-lint run ./...
