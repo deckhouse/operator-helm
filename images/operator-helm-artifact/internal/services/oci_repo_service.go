@@ -35,6 +35,13 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+var ociRepositoryErrorRules = []status.ErrorConditionRule{
+	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonOCIFetchFailed},
+	{Type: "IncludeUnavailable", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonOCIIncludeUnavailable},
+	{Type: "StorageOperationFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonOCIStorageFailed},
+	{Type: "SourceVerified", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonOCIVerificationFailed},
+}
+
 type OCIRepoService struct {
 	BaseRepoService
 }
@@ -110,21 +117,15 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon 
 		logger.Info("Reconciled oci repository", "operation", op)
 	}
 
-	if cond, ok := status.IsConditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
-		return OCIRepoResult{
-			Artifact: existing.Status.Artifact,
-			Status: status.Status{
-				Observed:           ok,
-				Status:             cond.Status,
-				ObservedGeneration: addon.Generation,
-				Reason:             cond.Reason,
-				Message:            cond.Message,
-				NotReflectable:     existing.Status.Artifact != nil,
-			},
-		}
-	}
+	processedStatus := status.ProcessChildConditions(
+		existing.Status.Conditions, existing.Generation, addon, ociRepositoryErrorRules,
+	)
+	processedStatus.NotReflectable = existing.Status.Artifact != nil
 
-	return OCIRepoResult{Status: status.Unknown(addon, helmv1alpha1.ReasonReconciling)}
+	return OCIRepoResult{
+		Artifact: existing.Status.Artifact,
+		Status:   processedStatus,
+	}
 }
 
 func (s *OCIRepoService) EnsureRepositorySecrets(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) OCIRepoResult {
