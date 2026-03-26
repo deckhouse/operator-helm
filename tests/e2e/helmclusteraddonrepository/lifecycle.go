@@ -19,7 +19,7 @@ package helmclusteraddonrepository
 import (
 	"context"
 	"fmt"
-	"os"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -31,85 +31,85 @@ import (
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/util"
 )
 
-var _ = Describe("HelmClusterAddonRepository lifecycle", Ordered, func() {
-	f := framework.NewFramework("repository-lifecycle")
-	cfg := framework.GetConfig()
+func DefineLifecycleTests(repoType string, repoURL string) {
+	Describe(fmt.Sprintf("Testing %s repository", repoType), Ordered, func() {
+		f := framework.NewFramework("repository-lifecycle")
+		cfg := framework.GetConfig()
 
-	const (
-		repoName = "e2e-test-repo"
-	)
+		repoName := "e2e-test-repo-" + strings.ToLower(repoType)
 
-	repoURL := os.Getenv("E2E_REPOSITORY_URL")
+		BeforeAll(func() {
+			DeferCleanup(f.After)
+			f.Before()
 
-	BeforeAll(func() {
-		DeferCleanup(f.After)
-		f.Before()
-
-		By("Verifying repository url is set")
-		Expect(repoURL).NotTo(BeEmpty())
-
-		By("Verifying all controllers are running")
-		for _, ctrl := range cfg.Controllers {
-			util.UntilControllerReady(ctrl.Namespace, ctrl.LabelSelector, framework.LongTimeout)
-		}
-	})
-
-	AfterEach(func() {
-		By("Verifying no errors in operator-helm-controller logs")
-		controller.AssertNoErrorsFor("operator-helm-controller")
-	})
-
-	It("should create HelmClusterAddonRepository", func() {
-		repo := &apiv1alpha1.HelmClusterAddonRepository{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: repoName,
-			},
-			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
-				URL:       repoURL,
-				TLSVerify: true,
-			},
-		}
-
-		created, err := f.OperatorClient().HelmV1alpha1().
-			HelmClusterAddonRepositories().
-			Create(context.Background(), repo, metav1.CreateOptions{})
-		Expect(err).NotTo(HaveOccurred())
-
-		f.DeferDeleteFunc(func() error {
-			return f.OperatorClient().HelmV1alpha1().
-				HelmClusterAddonRepositories().
-				Delete(context.Background(), created.Name, metav1.DeleteOptions{})
+			By("Verifying all controllers are running")
+			for _, ctrl := range cfg.Controllers {
+				util.UntilControllerReady(ctrl.Namespace, ctrl.LabelSelector, framework.LongTimeout)
+			}
 		})
 
-		By("Waiting for repository to become Ready")
-		util.UntilConditionTrue(
-			apiv1alpha1.ConditionTypeReady,
-			framework.LongTimeout,
-			created,
-		)
+		AfterEach(func() {
+			By("Verifying no errors in operator-helm-controller logs")
+			controller.AssertNoErrorsFor("operator-helm-controller")
+		})
 
-		By("Waiting for HelmClusterAddonRepository to become Synced")
-		util.UntilConditionTrue(
-			apiv1alpha1.ConditionTypeSynced,
-			framework.LongTimeout,
-			created,
-		)
+		It("should create HelmClusterAddonRepository", func() {
+			repo := &apiv1alpha1.HelmClusterAddonRepository{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: repoName,
+				},
+				Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+					URL:       repoURL,
+					TLSVerify: true,
+				},
+			}
 
-		By("Should have existing HelmClusterAddonChart")
-		labelSelector := fmt.Sprintf("repository=%s", repoName)
-		charts, err := f.OperatorClient().
-			HelmV1alpha1().
-			HelmClusterAddonCharts().
-			List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(len(charts.Items)).To(BeNumerically(">=", 1),
-			"waiting for >= %d charts, got %d", 1, len(charts.Items))
+			created, err := f.OperatorClient().HelmV1alpha1().
+				HelmClusterAddonRepositories().
+				Create(context.Background(), repo, metav1.CreateOptions{})
+			Expect(err).NotTo(HaveOccurred())
 
-		By("HelmClusterAddonChart should have versions")
-		for _, chart := range charts.Items {
-			Expect(chart.Status.Versions).NotTo(BeEmpty())
-		}
+			f.DeferDeleteFunc(func() error {
+				return f.OperatorClient().HelmV1alpha1().
+					HelmClusterAddonRepositories().
+					Delete(context.Background(), created.Name, metav1.DeleteOptions{})
+			})
+
+			By("Waiting for repository to become Ready")
+			util.UntilConditionTrue(
+				apiv1alpha1.ConditionTypeReady,
+				framework.LongTimeout,
+				created,
+			)
+
+			By("Waiting for HelmClusterAddonRepository to become Synced")
+			util.UntilConditionTrue(
+				apiv1alpha1.ConditionTypeSynced,
+				framework.LongTimeout,
+				created,
+			)
+
+			By("Should have existing HelmClusterAddonChart")
+			labelSelector := fmt.Sprintf("repository=%s", repoName)
+			charts, err := f.OperatorClient().
+				HelmV1alpha1().
+				HelmClusterAddonCharts().
+				List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(charts.Items)).To(BeNumerically(">=", 1),
+				"waiting for >= %d charts, got %d", 1, len(charts.Items))
+
+			By("HelmClusterAddonChart should have versions")
+			for _, chart := range charts.Items {
+				Expect(chart.Status.Versions).NotTo(BeEmpty())
+			}
+		})
 	})
+}
+
+var _ = Describe("HelmClusterAddonRepository lifecycle", Ordered, func() {
+	DefineLifecycleTests("Helm", "https://stefanprodan.github.io/podinfo")
+	DefineLifecycleTests("OCI", "oci://ghcr.io/stefanprodan/charts/podinfo")
 })
 
 var _ = Describe("Create HelmClusterAddonRepository with invalid url", Ordered, func() {
