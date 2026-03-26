@@ -54,6 +54,11 @@ var _ = Describe("HelmClusterAddonRepository lifecycle", Ordered, func() {
 		}
 	})
 
+	AfterEach(func() {
+		By("Verifying no errors in operator-helm-controller logs")
+		controller.AssertNoErrorsFor("operator-helm-controller")
+	})
+
 	It("should create HelmClusterAddonRepository", func() {
 		repo := &apiv1alpha1.HelmClusterAddonRepository{
 			ObjectMeta: metav1.ObjectMeta{
@@ -104,8 +109,43 @@ var _ = Describe("HelmClusterAddonRepository lifecycle", Ordered, func() {
 		for _, chart := range charts.Items {
 			Expect(chart.Status.Versions).NotTo(BeEmpty())
 		}
+	})
+})
 
-		By("Verifying no errors in controllers after repo creation")
+var _ = Describe("Create HelmClusterAddonRepository with invalid url", Ordered, func() {
+	f := framework.NewFramework("repository-lifecycle")
+	cfg := framework.GetConfig()
+
+	BeforeAll(func() {
+		DeferCleanup(f.After)
+		f.Before()
+
+		By("Verifying all controllers are running")
+		for _, ctrl := range cfg.Controllers {
+			util.UntilControllerReady(ctrl.Namespace, ctrl.LabelSelector, framework.LongTimeout)
+		}
+	})
+
+	AfterEach(func() {
+		By("Verifying no errors in operator-helm-controller logs")
 		controller.AssertNoErrorsFor("operator-helm-controller")
+	})
+
+	It("should create HelmClusterAddonRepository with invalid url", func() {
+		By("Creating HelmClusterAddonRepository with invalid url")
+		repo := &apiv1alpha1.HelmClusterAddonRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "repo-with-invalid-url",
+			},
+			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+				URL: "invalid-url",
+			},
+		}
+
+		_, err := f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddonRepositories().
+			Create(context.Background(), repo, metav1.CreateOptions{})
+		Expect(err).To(HaveOccurred())
+		Expect(err).To(MatchError(ContainSubstring("is invalid: spec.url")))
 	})
 })

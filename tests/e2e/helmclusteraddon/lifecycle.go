@@ -58,6 +58,11 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 		}
 	})
 
+	AfterEach(func() {
+		By("Verifying no errors in operator-helm-controller logs")
+		controller.AssertNoErrorsFor("operator-helm-controller")
+	})
+
 	It("should create HelmClusterAddonRepository and reach Ready", func() {
 		repo := &apiv1alpha1.HelmClusterAddonRepository{
 			ObjectMeta: metav1.ObjectMeta{
@@ -93,9 +98,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 			framework.LongTimeout,
 			created,
 		)
-
-		By("Verifying no errors in controllers after repo creation")
-		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("should verify target namespace does not have addon pods yet", func() {
@@ -152,9 +154,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Checking all pods are ready")
 		util.UntilAllPodsReady(f.NamespaceName(), labelSelector, 1, framework.LongTimeout)
-
-		By("Verifying no errors in controllers after addon creation")
-		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("should update chart version and apply changes", func() {
@@ -180,9 +179,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Verifying pods are still running after update")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 1, framework.LongTimeout)
-
-		By("Verifying no errors in controllers after addon update")
-		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("should update last applied values", func() {
@@ -210,9 +206,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Verifying pods number changed after values update")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
-
-		By("Verifying no errors in controllers after addon values update")
-		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("should not update chart version on invalid chart version", func() {
@@ -253,9 +246,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Verifying pods number changed after invalid chart info set")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
-
-		By("Verifying no errors in controllers after update chart to invalid version")
-		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("Should redeem on reverting chart version", func() {
@@ -303,9 +293,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Verifying pods number changed after invalid chart info set")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
-
-		By("Verifying no errors in controllers after update chart to invalid version")
-		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("Should fail on invalid values set", func() {
@@ -334,9 +321,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Verifying pods are still running after update")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
-
-		By("Verifying no errors in controllers after addon update")
-		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("Should redeem on reverting values", func() {
@@ -364,8 +348,5 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Verifying pods are running after update")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 3, framework.LongTimeout)
-
-		By("Verifying no errors in controllers after addon update")
-		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 })
