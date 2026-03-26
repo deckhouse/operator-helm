@@ -8,5 +8,7 @@ controllers:
     containers:
       - "operator-helm-controller"
     logFilters:
-      exclude: []
+      exclude:
+        # On cascade deletion after tests, HelmClusterAddon reconcile can be triggered after repository removal.
+        - "Failed to get internal repository"
       excludeRegexp: []

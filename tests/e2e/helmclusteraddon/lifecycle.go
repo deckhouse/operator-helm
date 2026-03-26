@@ -19,15 +19,17 @@ package helmclusteraddon
 import (
 	"context"
 	"fmt"
+	"os"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/util"
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
@@ -40,9 +42,15 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 		chartName = "podinfo"
 	)
 
+	repoURL := os.Getenv("E2E_REPOSITORY_URL")
+	labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", addonName, chartName)
+
 	BeforeAll(func() {
 		DeferCleanup(f.After)
 		f.Before()
+
+		By("Verifying repository url is set")
+		Expect(repoURL).NotTo(BeEmpty())
 
 		By("Verifying all controllers are running")
 		for _, ctrl := range cfg.Controllers {
@@ -56,7 +64,7 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 				Name: repoName,
 			},
 			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
-				URL:       "https://stefanprodan.github.io/podinfo",
+				URL:       repoURL,
 				TLSVerify: true,
 			},
 		}
@@ -142,8 +150,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 			created,
 		)
 
-		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", addonName, chartName)
-
 		By("Checking all pods are ready")
 		util.UntilAllPodsReady(f.NamespaceName(), labelSelector, 1, framework.LongTimeout)
 
@@ -159,7 +165,7 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Waiting for update to be applied")
 		util.UntilConditionTrue(
-			apiv1alpha1.ConditionTypeReady,
+			apiv1alpha1.ConditionTypeUpdateInstalled,
 			framework.LongTimeout,
 			updated,
 		)
@@ -171,8 +177,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updated.Status.LastAppliedChart).NotTo(BeNil())
 		Expect(updated.Status.LastAppliedChart.Version).To(Equal("6.10.0"))
-
-		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", addonName, chartName)
 
 		By("Verifying pods are still running after update")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 1, framework.LongTimeout)
@@ -191,7 +195,7 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 
 		By("Waiting for update to be applied")
 		util.UntilConditionTrue(
-			apiv1alpha1.ConditionTypeReady,
+			apiv1alpha1.ConditionTypeConfigurationApplied,
 			framework.LongTimeout,
 			updated,
 		)
@@ -203,8 +207,6 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updated.Status.LastAppliedValues).NotTo(BeNil())
 		Expect(updated.Status.LastAppliedValues.Raw).To(MatchJSON(expectedValues))
-
-		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", addonName, chartName)
 
 		By("Verifying pods number changed after values update")
 		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
@@ -227,7 +229,7 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 			addon,
 		)
 
-		invalidChartVersion := "2000"
+		invalidChartVersion := "invalid-version"
 
 		By("Updating addon chart to invalid version")
 		updated := util.UpdateHelmClusterAddon(addonName, func(addon *apiv1alpha1.HelmClusterAddon) {
@@ -242,11 +244,128 @@ var _ = Describe("HelmClusterAddon lifecycle", Ordered, func() {
 		)
 
 		By("Should not update chart info")
+		updated, err = f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddons().
+			Get(context.Background(), addonName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
 		Expect(updated.Status.LastAppliedValues).NotTo(BeNil())
 		Expect(updated.Status.LastAppliedChart.Version).NotTo(Equal(invalidChartVersion))
-		Expect(updated.Status.LastAppliedChart.Version).To(Equal(addon.Status.LastAppliedChart.Version))
+
+		By("Verifying pods number changed after invalid chart info set")
+		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
 
 		By("Verifying no errors in controllers after update chart to invalid version")
+		controller.AssertNoErrorsFor("operator-helm-controller")
+	})
+
+	It("Should redeem on reverting chart version", func() {
+		addon, err := f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddons().
+			Get(context.Background(), addonName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Should have PartiallyDegraded condition active")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypePartiallyDegraded,
+			framework.LongTimeout,
+			addon,
+		)
+
+		validChartVersion := "6.10.2"
+
+		By("Updating addon chart to invalid version")
+		updated := util.UpdateHelmClusterAddon(addonName, func(addon *apiv1alpha1.HelmClusterAddon) {
+			addon.Spec.Chart.Version = validChartVersion
+		})
+
+		By("Waiting for addon to be upgraded")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypeReady,
+			framework.LongTimeout,
+			updated,
+		)
+
+		By("Should have PartiallyDegraded condition inactive")
+		util.UntilConditionStatus(
+			apiv1alpha1.ConditionTypePartiallyDegraded,
+			string(metav1.ConditionFalse),
+			framework.LongTimeout,
+			updated,
+		)
+
+		By("Should update chart info")
+		updated, err = f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddons().
+			Get(context.Background(), addonName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.Status.LastAppliedValues).NotTo(BeNil())
+		Expect(updated.Status.LastAppliedChart.Version).To(Equal(validChartVersion))
+
+		By("Verifying pods number changed after invalid chart info set")
+		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
+
+		By("Verifying no errors in controllers after update chart to invalid version")
+		controller.AssertNoErrorsFor("operator-helm-controller")
+	})
+
+	It("Should fail on invalid values set", func() {
+		invalidValues := `{"replicaCount": "no"}`
+
+		By("Updating addon chart version")
+		updated := util.UpdateHelmClusterAddon(addonName, func(addon *apiv1alpha1.HelmClusterAddon) {
+			addon.Spec.Values = &apiextensionsv1.JSON{Raw: []byte(invalidValues)}
+		})
+
+		By("Waiting for update to be applied")
+		util.UntilConditionStatus(
+			apiv1alpha1.ConditionTypeReady,
+			string(metav1.ConditionFalse),
+			framework.LongTimeout,
+			updated,
+		)
+
+		By("Verifying invalid values were not applied")
+		updated, err := f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddons().
+			Get(context.Background(), addonName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.Status.LastAppliedValues).NotTo(BeNil())
+		Expect(updated.Status.LastAppliedValues.Raw).NotTo(MatchJSON(invalidValues))
+
+		By("Verifying pods are still running after update")
+		util.UntilPodCount(f.NamespaceName(), labelSelector, 2, framework.LongTimeout)
+
+		By("Verifying no errors in controllers after addon update")
+		controller.AssertNoErrorsFor("operator-helm-controller")
+	})
+
+	It("Should redeem on reverting values", func() {
+		validValues := `{"replicaCount": 3}`
+
+		By("Updating addon chart version")
+		updated := util.UpdateHelmClusterAddon(addonName, func(addon *apiv1alpha1.HelmClusterAddon) {
+			addon.Spec.Values = &apiextensionsv1.JSON{Raw: []byte(validValues)}
+		})
+
+		By("Waiting for update to be applied")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypeConfigurationApplied,
+			framework.LongTimeout,
+			updated,
+		)
+
+		By("Verifying valid values were applied")
+		updated, err := f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddons().
+			Get(context.Background(), addonName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.Status.LastAppliedValues).NotTo(BeNil())
+		Expect(updated.Status.LastAppliedValues.Raw).To(MatchJSON(validValues))
+
+		By("Verifying pods are running after update")
+		util.UntilPodCount(f.NamespaceName(), labelSelector, 3, framework.LongTimeout)
+
+		By("Verifying no errors in controllers after addon update")
 		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 })

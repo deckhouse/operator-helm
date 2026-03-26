@@ -17,13 +17,14 @@ limitations under the License.
 package framework
 
 import (
-	operatorhelmclient "github.com/deckhouse/operator-helm/api/client/generated/clientset/versioned"
-	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	operatorhelmclient "github.com/deckhouse/operator-helm/api/client/generated/clientset/versioned"
+	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 var clients Clients

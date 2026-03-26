@@ -22,9 +22,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
-
 	_ "github.com/deckhouse/operator-helm/tests/e2e/helmclusteraddon"
+	_ "github.com/deckhouse/operator-helm/tests/e2e/helmclusteraddonrepository"
+	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
 )
 
 func TestE2E(t *testing.T) {
