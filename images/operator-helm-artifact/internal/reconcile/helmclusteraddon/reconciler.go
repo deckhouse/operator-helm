@@ -150,6 +150,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			})
 		}
 	case utils.InternalOCIRepository:
+		if err := r.chartService.CleanupHelmChart(ctx, addon); err != nil {
+			chartRes = services.ChartResult{
+				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
+			}
+			break
+		}
+
 		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo)
 		if !repoRes.IsPartiallyDegraded() {
 			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
