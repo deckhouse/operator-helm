@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/opencontainers/go-digest"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +35,8 @@ import (
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
+	"github.com/werf/3p-fluxcd-pkg/chartutil"
+	helmchartutil "helm.sh/helm/v3/pkg/chartutil"
 )
 
 func New(
@@ -239,35 +242,19 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 		results = status.DetermineConditions(obj, results...)
 		addon := obj.(*helmv1alpha1.HelmClusterAddon)
 
-		var updateChart, updateValues bool
+		var updateChart bool
 
 		switch repoType {
 		case utils.InternalHelmRepository:
 			if chartRes.HasArtifact() && releaseRes.IsReady() {
-				if addon.Status.LastAppliedChart == nil {
+				if addon.Status.LastAppliedChart == nil || (addon.IsChartStatusInfoOutdated() && chartRes.IsReady()) {
 					updateChart = true
-					updateValues = true
-				} else {
-					if addon.IsChartStatusInfoOutdated() && chartRes.IsReady() {
-						updateChart = true
-						updateValues = true
-					} else {
-						updateValues = true
-					}
 				}
 			}
 		case utils.InternalOCIRepository:
 			if repoRes.HasArtifact() && releaseRes.IsReady() {
-				if addon.Status.LastAppliedChart == nil {
+				if addon.Status.LastAppliedChart == nil || (addon.IsChartStatusInfoOutdated() && repoRes.IsReady()) {
 					updateChart = true
-					updateValues = true
-				} else {
-					if addon.IsChartStatusInfoOutdated() && repoRes.IsReady() {
-						updateChart = true
-						updateValues = true
-					} else {
-						updateValues = true
-					}
 				}
 			}
 		}
@@ -280,11 +267,20 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 			}
 		}
 
-		if updateValues {
-			if addon.Spec.Values == nil {
-				addon.Status.LastAppliedValues = nil
-			} else {
-				addon.Status.LastAppliedValues = addon.Spec.Values.DeepCopy()
+		latestRelease := releaseRes.History.Latest()
+		if releaseRes.IsReady() && latestRelease != nil {
+			rawValues := []byte(`{}`)
+			if addon.Spec.Values != nil {
+				rawValues = addon.Spec.Values.Raw
+			}
+
+			addonValues, _ := helmchartutil.ReadValues(rawValues)
+			if latestRelease.Status == "deployed" && latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, addonValues).String() {
+				if addon.Spec.Values == nil {
+					addon.Status.LastAppliedValues = nil
+				} else {
+					addon.Status.LastAppliedValues = addon.Spec.Values.DeepCopy()
+				}
 			}
 		}
 
