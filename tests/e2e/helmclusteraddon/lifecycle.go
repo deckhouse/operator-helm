@@ -32,7 +32,7 @@ import (
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/util"
 )
 
-func DefineLifecycleTests(repoType string, repoURL string) {
+func DefineLifecycleTests(repoType, repoURL string) {
 	Describe(fmt.Sprintf("Using %s repository", repoType), Ordered, func() {
 		f := framework.NewFramework("addon-lifecycle")
 		cfg := framework.GetConfig()

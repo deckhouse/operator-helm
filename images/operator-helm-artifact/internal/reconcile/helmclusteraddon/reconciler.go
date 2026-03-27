@@ -21,6 +21,8 @@ import (
 	"fmt"
 
 	"github.com/opencontainers/go-digest"
+	"github.com/werf/3p-fluxcd-pkg/chartutil"
+	helmchartutil "helm.sh/helm/v3/pkg/chartutil"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,8 +37,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
-	"github.com/werf/3p-fluxcd-pkg/chartutil"
-	helmchartutil "helm.sh/helm/v3/pkg/chartutil"
 )
 
 func New(
