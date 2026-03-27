@@ -1,0 +1,63 @@
+name: Run e2e tests
+
+on:
+  workflow_run:
+    workflows: ["Build and Push for Dev"]
+    types:
+      - completed
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  _:
+    runs-on: [self-hosted, large]
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    continue-on-error: false
+    steps:
+      - name: Checkout specific branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+
+      - name: Get module tag name from build workflow
+        uses: actions/download-artifact@v4
+        with:
+          name: module_tag_name
+          run_id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read module tag name
+        id: module_tag_name
+        run: echo "MODULE_TAG_NAME=$(cat module_tag_name.txt)" >> $GITHUB_OUTPUT
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          cache: true
+          go-version-file: go.mod
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ginkgo
+        run: task --yes -p deps:install:ginkgo
+
+      - name: Setup kind with module operator-helm enabled
+        run: task --yes -p kind:ci:setup
+        env:
+          KIND_CLUSTER_NAME: d8-operator-helm
+          MODULE_TAG_NAME: ${{ steps.module_tag_name.outputs.MODULE_TAG_NAME }}
+          DEV_REGISTRY_DOCKER_CONFIG: ${{ secrets.DEV_REGISTRY_DOCKER_CONFIG }}
+
+      - name: Run e2e tests
+        run: task --yes -p tests:e2e
+        env:
+          E2E_CLUSTERTRANSPORT_KUBECONFIG: "~/.kind-d8-operator-helm/kubeconfig"
+
+      - name: Delete kind cluster
+        run: task --yes -p kind:ci:cleanup
+        if: always()

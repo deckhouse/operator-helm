@@ -7,6 +7,11 @@ vars:
   target: ""
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
 
+includes:
+  e2e:
+    taskfile: ./tests/e2e/Taskfile.dist.yaml
+    dir: ./tests/e2e
+
 tasks:
   check-werf:
     cmds:

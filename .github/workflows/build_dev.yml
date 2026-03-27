@@ -120,6 +120,14 @@ jobs:
 
           echo "MODULES_MODULE_TAG=$MODULES_MODULE_TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Save module tag info
+        run: echo "${{ steps.modules_module_tag.outputs.MODULES_MODULE_TAG }}" > module_tag_name.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module_tag_name
+          path: module_tag_name.txt
+
       - uses: actions/checkout@v4
 
       - uses: deckhouse/modules-actions/setup@main

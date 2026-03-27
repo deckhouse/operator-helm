@@ -1,0 +1,39 @@
+version: '3'
+
+vars:
+  TIMEOUT: '{{.TIMEOUT | default "30m"}}'
+  KIND_CLUSTER_NAME: '{{.KIND_CLUSTER_NAME | default "d8-operator-helm"}}'
+  KIND_BIN_PATH: '{{.KIND_BIN_PATH | default "~/.kind-d8-operator-helm/kind"}}'
+
+tasks:
+  deps:install:ginkgo:
+    desc: 'Install ginkgo binary. Important vars: "paths".'
+    cmds:
+      - |
+        cd {{.paths | default "./"}}
+        version="$(go list -m -f '{{ printf `{{ .Version }}` }}' github.com/onsi/ginkgo/v2)"
+        go install {{.CLI_ARGS}} github.com/onsi/ginkgo/v2/ginkgo@${version}  
+
+  kind:ci:setup:
+    desc: Setup kind in CI
+    cmds:
+      - ./scripts/kind-d8-ci.sh --channel $KIND_DECKHOUSE_CHANNEL
+    env:
+      KIND_DECKHOUSE_CHANNEL: '{{.KIND_DECKHOUSE_CHANNEL | default "Stable"}}'
+      MODULE_TAG_NAME: '{{.MODULE_TAG_NAME | default "main"}}'
+      DEV_REGISTRY_URL: '{{.DEV_REGISTRY_URL | default "dev-registry.deckhouse.io/sys/deckhouse-oss/modules"}}'
+      DEV_REGISTRY_DOCKER_CONFIG: '{{.DEV_REGISTRY_DOCKER_CONFIG}}'
+
+  kind:ci:cleanup:
+    desc: Delete kind cluster in CI
+    cmds:
+      - '{{.KIND_BIN_PATH}} delete cluster --name {{.KIND_CLUSTER_NAME}} || exit 0'
+
+  tests:
+    desc: Run e2e tests
+    cmds:
+      - |
+        args="-v --race --timeout={{.TIMEOUT}}"
+        go tool ginkgo $args ./...
+    env:
+      E2E_CLUSTERTRANSPORT_KUBECONFIG: ./kube.config
