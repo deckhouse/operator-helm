@@ -195,9 +195,6 @@ jobs:
   e2e_tests:
     name: Run e2e tests
     runs-on: [self-hosted, large]
-    concurrency:
-      group: ${{ github.workflow }}
-      cancel-in-progress: false
     needs: build_dev
     steps:
       - uses: actions/checkout@v4
@@ -216,21 +213,20 @@ jobs:
       - name: Install ginkgo
         run: task --yes -p e2e:deps:install:ginkgo
 
-      - name: Install kubectl
-        run: task --yes -p e2e:deps:install:kubectl
-
       - name: Setup kind with module operator-helm enabled
         run: task --yes -p e2e:kind:ci:setup
         env:
-          KIND_CLUSTER_NAME: d8-operator-helm
+          KIND_CLUSTER_NAME: d8-operator-helm-${{ github.run_number }}
           MODULE_TAG_NAME: ${{ needs.build_dev.outputs.modules_module_tag }}
           DEV_REGISTRY_DOCKER_CONFIG: ${{ secrets.DEV_REGISTRY_DOCKER_CONFIG }}
 
       - name: Run e2e tests
         run: task --yes -p e2e:tests
         env:
-          E2E_CLUSTERTRANSPORT_KUBECONFIG: "~/.kind-d8-operator-helm/kubeconfig"
+          KIND_CLUSTER_NAME: d8-operator-helm-${{ github.run_number }}
 
       - name: Delete kind cluster
         run: task --yes -p e2e:kind:ci:cleanup
+        env:
+          KIND_CLUSTER_NAME: d8-operator-helm-${{ github.run_number }}
         if: always()

@@ -35,20 +35,23 @@ if uname -s | grep -q "Darwin"; then
     fi
 fi
 
-CONFIG_DIR=~/.kind-d8-operator-helm
+PARENT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." &> /dev/null && pwd)
+
+KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME:-d8-operator-helm}
+KIND_CONFIG_DIR=${KIND_CONFIG_DIR:-$PARENT_DIR/kind}/$KIND_CLUSTER_NAME
 KIND_IMAGE=kindest/node:v1.31.6@sha256:28b7cbb993dfe093c76641a0c95807637213c9109b761f1d422c2400e22b8e87
+
 D8_RELEASE_CHANNEL_TAG=stable
 D8_RELEASE_CHANNEL_NAME=Stable
 D8_REGISTRY_ADDRESS=registry.deckhouse.io
 D8_REGISTRY_PATH=${D8_REGISTRY_ADDRESS}/deckhouse/ce
 D8_LICENSE_KEY=
 
-KIND_INSTALL_DIRECTORY=$CONFIG_DIR
+KIND_INSTALL_DIRECTORY=$PARENT_DIR/kind/bin
 KIND_PATH=kind
-KIND_CLUSTER_NAME=d8-operator-helm
 KIND_VERSION=v0.27.0
 
-KUBECTL_INSTALL_DIRECTORY=$CONFIG_DIR
+KUBECTL_INSTALL_DIRECTORY=$PARENT_DIR/kind/bin
 KUBECTL_PATH=kubectl
 KUBECTL_VERSION=v1.31.6
 
@@ -235,33 +238,10 @@ kubectl_check() {
     KUBECTL_PATH=${KUBECTL_INSTALL_DIRECTORY}/kubectl
   else
     echo "kubectl is not installed."
-    while [[ "$should_install_kubectl" != "y" ]]; do
-      read -rp "Install kubectl? y/[n]: " should_install_kubectl
-
-      if [[ ("$should_install_kubectl" == "n") || (-z "$should_install_kubectl") ]]; then
-        printf "
-Please install kubectl.
-
-You can find the installation instruction here: https://kubernetes.io/docs/tasks/tools/#kubectl
-"
-        exit 1
-      fi
-
-      if [[ "$should_install_kubectl" != "y" ]]; then
-        echo "Please type 'y' to continue or 'n' to abort the installation."
-      fi
-
-    done
-
-    read -rp "kubectl installation directory [$KUBECTL_INSTALL_DIRECTORY]: " kubectl_install_directory_answer
-    if [[ -n "$kubectl_install_directory_answer" ]]; then
-      KUBECTL_INSTALL_DIRECTORY=$kubectl_install_directory_answer
-    fi
-
     echo "Installing the latest stable kubectl version to ${KUBECTL_INSTALL_DIRECTORY}/kubectl ..."
 
     mkdir -p $KUBECTL_INSTALL_DIRECTORY
-    curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/${OS_NAME/mac/darwin}/${MACHINE_ARCH/x86_64/amd64}/kubectl"
+    curl -sLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/${OS_NAME/mac/darwin}/${MACHINE_ARCH/x86_64/amd64}/kubectl"
 
     if [ "$?" -ne "0" ]; then
       echo "Unable to download kubectl."
@@ -294,18 +274,18 @@ kind_check() {
 
     mkdir -p ${KIND_INSTALL_DIRECTORY}
 
-    curl -Lo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-${OS_NAME/mac/darwin}-${MACHINE_ARCH/x86_64/amd64}"
+    curl -sLo ./kind-binary "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-${OS_NAME/mac/darwin}-${MACHINE_ARCH/x86_64/amd64}"
 
     if [ "$?" -ne "0" ]; then
       echo "Unable to download kind."
       exit 1
     fi
 
-    install -m 0755 kind "${KIND_INSTALL_DIRECTORY}"/kind
+    install -m 0755 kind-binary "${KIND_INSTALL_DIRECTORY}"/kind
 
     if [ "$?" -ne "0" ]; then
       echo "Insufficient permissions to install kind. Trying again with sudo..."
-      sudo install -m 0755 kind "${KIND_INSTALL_DIRECTORY}"/kind
+      sudo install -m 0755 kind-binary "${KIND_INSTALL_DIRECTORY}"/kind
       if [ "$?" -ne "0" ]; then
         echo "Unable to install kind. Check installation path and permissions."
         exit 1
@@ -338,10 +318,10 @@ preinstall_checks() {
 }
 
 configs_create() {
-  mkdir -p ${CONFIG_DIR}
+  mkdir -p ${KIND_CONFIG_DIR}
 
-  echo "Creating kind config file (${CONFIG_DIR}/kind.cfg)..."
-  cat <<EOF >${CONFIG_DIR}/kind.cfg
+  echo "Creating kind config file (${KIND_CONFIG_DIR}/kind.cfg)..."
+  cat <<EOF >${KIND_CONFIG_DIR}/kind.cfg
 apiVersion: kind.x-k8s.io/v1alpha4
 kind: Cluster
 featureGates:
@@ -350,19 +330,10 @@ runtimeConfig:
   "admissionregistration.k8s.io/v1alpha1": true
 nodes:
 - role: control-plane
-  extraPortMappings:
-  - containerPort: 80
-    hostPort: 10080
-    listenAddress: "127.0.0.1"
-    protocol: TCP
-  - containerPort: 443
-    hostPort: 10443
-    listenAddress: "127.0.0.1"
-    protocol: TCP
 EOF
 
-  echo "Creating Deckhouse Kubernetes Platform installation config file (${CONFIG_DIR}/config.yml)..."
-  cat <<EOF >${CONFIG_DIR}/config.yml
+  echo "Creating Deckhouse Kubernetes Platform installation config file (${KIND_CONFIG_DIR}/config.yml)..."
+  cat <<EOF >${KIND_CONFIG_DIR}/config.yml
 apiVersion: deckhouse.io/v1alpha1
 kind: ModuleConfig
 metadata:
@@ -457,7 +428,7 @@ EOF
 
   if [[ -n "$D8_LICENSE_KEY" ]]; then
     generate_ee_access_string "$D8_LICENSE_KEY"
-    cat <<EOF >>${CONFIG_DIR}/config.yml
+    cat <<EOF >>${KIND_CONFIG_DIR}/config.yml
 ---
 apiVersion: deckhouse.io/v1
 kind: InitConfiguration
@@ -467,8 +438,8 @@ deckhouse:
 EOF
   fi
 
-  echo "Creating Deckhouse Kubernetes Platform resource file (${CONFIG_DIR}/resources.yml)..."
-  cat <<EOF >${CONFIG_DIR}/resources.yml
+  echo "Creating Deckhouse Kubernetes Platform resource file (${KIND_CONFIG_DIR}/resources.yml)..."
+  cat <<EOF >${KIND_CONFIG_DIR}/resources.yml
 apiVersion: deckhouse.io/v1
 kind: IngressNginxController
 metadata:
@@ -476,9 +447,6 @@ metadata:
 spec:
   ingressClass: nginx
   inlet: HostPort
-  hostPort:
-    httpPort: 10080
-    httpsPort: 10443
 EOF
 }
 
@@ -494,7 +462,7 @@ To delete created cluster use the following command:
 
 cluster_create() {
 
-  ${KIND_PATH} create cluster --name "${KIND_CLUSTER_NAME}" --image "${KIND_IMAGE}" --config "${CONFIG_DIR}/kind.cfg"
+  ${KIND_PATH} create cluster --name "${KIND_CLUSTER_NAME}" --image "${KIND_IMAGE}" --config "${KIND_CONFIG_DIR}/kind.cfg"
 
   if [ "$?" -ne "0" ]; then
     printf "
@@ -508,7 +476,7 @@ E.g., you can find programs that use these ports using the following command:
     exit 1
   fi
 
-  ${KIND_PATH} get kubeconfig --internal --name "${KIND_CLUSTER_NAME}" >${CONFIG_DIR}/kubeconfig
+  ${KIND_PATH} get kubeconfig --internal --name "${KIND_CLUSTER_NAME}" >${KIND_CONFIG_DIR}/kubeconfig
 
 }
 
@@ -517,9 +485,9 @@ deckhouse_install() {
 
   # Use the --debug flag to see exactly why it's failing
   docker run --pull=always --rm --network kind \
-    -v "${CONFIG_DIR}/config.yml:/config.yml" \
-    -v "${CONFIG_DIR}/resources.yml:/resources.yml" \
-    -v "${CONFIG_DIR}/kubeconfig:/kubeconfig" \
+    -v "${KIND_CONFIG_DIR}/config.yml:/config.yml" \
+    -v "${KIND_CONFIG_DIR}/resources.yml:/resources.yml" \
+    -v "${KIND_CONFIG_DIR}/kubeconfig:/kubeconfig" \
     ${D8_REGISTRY_PATH}/install:${D8_RELEASE_CHANNEL_TAG} \
     bash -c "dhctl bootstrap-phase install-deckhouse --kubeconfig=/kubeconfig --kubeconfig-context=kind-${KIND_CLUSTER_NAME} --config=/config.yml"
 
@@ -528,7 +496,7 @@ deckhouse_install() {
     echo "First phase might have timed out. Waiting 30s for CRDs to settle..."
     sleep 30
     # Try the resource creation phase separately
-    docker run --rm --network kind -v "${CONFIG_DIR}/resources.yml:/resources.yml" -v "${CONFIG_DIR}/kubeconfig:/kubeconfig" \
+    docker run --rm --network kind -v "${KIND_CONFIG_DIR}/resources.yml:/resources.yml" -v "${KIND_CONFIG_DIR}/kubeconfig:/kubeconfig" \
       ${D8_REGISTRY_PATH}/install:${D8_RELEASE_CHANNEL_TAG} \
       dhctl bootstrap-phase create-resources --kubeconfig=/kubeconfig --kubeconfig-context=kind-${KIND_CLUSTER_NAME} --resources=/resources.yml
   fi
@@ -540,51 +508,6 @@ macos_force_qemu() {
   fi
 }
 
-ingress_check() {
-  local retries_max=100
-  local retries_count=0
-
-  retries_count=0
-  echo -n "Waiting for the Ingress controller to be ready..."
-
-  while true; do
-    ingress_ready_pods=$(${KUBECTL_PATH} --context kind-"${KIND_CLUSTER_NAME}" -n d8-ingress-nginx get ads/controller-nginx -o jsonpath="{$.status.numberReady}" 2>/dev/null)
-    if [ "$?" -ne "0" ]; then
-      echo -n "."
-      ((retries_count++))
-      sleep 10
-    else
-      # Check Ingress readiness
-      if [ "$ingress_ready_pods" = "1" ]; then
-        break
-      else
-        echo -n "."
-        ((retries_count++))
-        sleep 10
-      fi
-    fi
-
-    if [ "$retries_count" -ge "$retries_max" ]; then
-      echo
-      echo "Timeout waiting for the creation of Ingress controller!"
-      echo
-      echo "Here is the output of the 'kubectl -n d8-ingress-nginx get ads/controller-nginx -o wide' command:"
-      ${KUBECTL_PATH} --context "kind-${KIND_CLUSTER_NAME}" -n d8-ingress-nginx get ads/controller-nginx -o wide
-      echo
-      echo "Here is the output of the 'kubectl -n d8-ingress-nginx get all' command:"
-      ${KUBECTL_PATH} --context "kind-${KIND_CLUSTER_NAME}" -n d8-ingress-nginx get all
-      echo
-      echo "If the controller-nginx Pod is in the ContainerCreating status, you most likely have a slow connection. If so, wait a little longer until the controller-nginx Pod becomes Ready. After that, run the following command to get the admin password for Grafana: '${KUBECTL_PATH} --context kind-${KIND_CLUSTER_NAME} -n d8-system exec deploy/deckhouse -- sh -c \"deckhouse-controller module values prometheus -o json | jq -r '.internal.auth.password'\""
-      echo
-      cluster_deletion_info
-      exit 1
-    fi
-  done
-
-  echo
-  echo "Ingress controller is running."
-}
-
 generate_ee_access_string() {
   if [ "$OS_NAME" != "mac" ]; then B64_ARG="-w0"; else B64_ARG=""; fi
   auth_part=$(echo -n "license-token:$1" | base64 $B64_ARG)
@@ -593,30 +516,6 @@ generate_ee_access_string() {
   if [ "$?" -ne "0" ]; then
     echo "Error generation container registry access string for Deckhouse Kubernetes Platform Enterprise Edition"
     exit 1
-  fi
-}
-
-install_show_credentials() {
-
-  local prometheus_password
-  prometheus_password=$(${KUBECTL_PATH} --context "kind-${KIND_CLUSTER_NAME}" -n d8-system exec deploy/deckhouse -c deckhouse -- sh -c "deckhouse-controller module values prometheus -o json | jq -r '.internal.auth.password'")
-  if [ "$?" -ne "0" ] || [ -z "$prometheus_password" ]; then
-    printf "
-Error getting Prometheus password.
-
-Try to run the following command to get Prometheus password:
-
-    %s --context %s -n d8-system exec deploy/deckhouse -c deckhouse -- sh -c "deckhouse-controller module values prometheus -o json | jq -r '.internal.auth.password'"
-
-" "${KUBECTL_PATH}" "kind-${KIND_CLUSTER_NAME}"
-  else
-    printf "
-Provide following credentials to access Grafana at http://grafana.127.0.0.1.sslip.io/ :
-
-    Username: admin
-    Password: %s
-
-" "${prometheus_password}"
   fi
 }
 
@@ -655,6 +554,10 @@ spec:
 EOF
 }
 
+extract_kubectl_context() {
+  ${KUBECTL_PATH} config view --context "kind-${KIND_CLUSTER_NAME}" --minify --flatten > "${KIND_CONFIG_DIR}/kubeconfig-external"
+}
+
 main() {
   parse_args "$@"
 
@@ -665,6 +568,7 @@ main() {
   deckhouse_install
   macos_force_qemu
   setup_operator_helm
+  extract_kubectl_context
 }
 
 main "$@"
