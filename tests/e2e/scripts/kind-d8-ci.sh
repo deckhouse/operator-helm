@@ -621,37 +621,7 @@ Provide following credentials to access Grafana at http://grafana.127.0.0.1.ssli
 }
 
 setup_operator_helm() {
-  echo "Creating operator-helm setup resources (${CONFIG_DIR}/operator-helm.yml)"
-  cat <<EOF >${CONFIG_DIR}/operator-helm.yml
----
-apiVersion: deckhouse.io/v1alpha1
-kind: ModuleSource
-metadata:
-  name: operator-helm
-spec:
-  registry:
-    ca: ""
-    dockerCfg: ${DEV_REGISTRY_DOCKER_CONFIG}
-    repo: ${DEV_REGISTRY_URL}
-    scheme: HTTPS
----
-apiVersion: deckhouse.io/v1alpha2
-kind: ModulePullOverride
-metadata:
-  name: operator-helm
-spec:
-  imageTag: ${GIT_REF}
-  rollback: false
-  scanInterval: 15s
----
-apiVersion: deckhouse.io/v1alpha1
-kind: ModuleConfig
-metadata:
-  name: operator-helm
-spec:
-  enabled: true
-  source: operator-helm
-EOF
+  echo "Enabling operator-helm module..."
 
   ${KUBECTL_PATH} --context "kind-${KIND_CLUSTER_NAME}" create -f - <<EOF
 ---

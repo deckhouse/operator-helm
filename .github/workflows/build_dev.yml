@@ -135,13 +135,6 @@ jobs:
           module_tag: ${{ steps.modules_module_tag.outputs.MODULES_MODULE_TAG }}
           svace_enabled: false
 
-      - name: Save module tag info
-        run: echo "${{ steps.modules_module_tag.outputs.MODULES_MODULE_TAG }}" > module_tag_name.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: module_tag_name
-          path: module_tag_name.txt
   show_dev_manifest:
     runs-on: [self-hosted, large]
     name: Show manifest
@@ -198,3 +191,46 @@ jobs:
           dev_registry_user: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
           dev_registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
           deckhouse_private_repo: ${{ secrets.DECKHOUSE_PRIVATE_REPO }}
+
+  e2e_tests:
+    name: Run e2e tests
+    runs-on: [self-hosted, large]
+    concurrency:
+      group: ${{ github.workflow }}
+      cancel-in-progress: false
+    needs: build_dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          cache: true
+          go-version-file: tests/e2e/go.mod
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ginkgo
+        run: task --yes -p e2e:deps:install:ginkgo
+
+      - name: Install kubectl
+        run: task --yes -p e2e:deps:install:kubectl
+
+      - name: Setup kind with module operator-helm enabled
+        run: task --yes -p e2e:kind:ci:setup
+        env:
+          KIND_CLUSTER_NAME: d8-operator-helm
+          MODULE_TAG_NAME: ${{ needs.build_dev.outputs.modules_module_tag }}
+          DEV_REGISTRY_DOCKER_CONFIG: ${{ secrets.DEV_REGISTRY_DOCKER_CONFIG }}
+
+      - name: Run e2e tests
+        run: task --yes -p e2e:tests
+        env:
+          E2E_CLUSTERTRANSPORT_KUBECONFIG: "~/.kind-d8-operator-helm/kubeconfig"
+
+      - name: Delete kind cluster
+        run: task --yes -p e2e:kind:ci:cleanup
+        if: always()
