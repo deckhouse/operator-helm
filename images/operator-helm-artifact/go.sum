@@ -133,6 +133,7 @@ github.com/werf/3p-fluxcd-pkg/apis/kustomize v1.14.0-nelm.1/go.mod h1:dAboSMVeoh
 github.com/werf/3p-fluxcd-pkg/apis/meta v1.23.0-nelm.1 h1:rYX8cMeryBHH7sNPVSQm1IAVES08TiWvADaZsDj98Wk=
 github.com/werf/3p-fluxcd-pkg/apis/meta v1.23.0-nelm.1/go.mod h1:14co1+Ub5rW0Bp3Qo4IzCHwEcaw06StyMu7Rv5pMVCY=
 github.com/werf/3p-fluxcd-pkg/chartutil v1.17.0-nelm.1 h1:ua0xt66rxKptzbG1zxy3u96qfV8XsFT9Jd2PU8L6mc8=
+github.com/werf/3p-fluxcd-pkg/chartutil v1.17.0-nelm.1/go.mod h1:fodaCyMGXGxYYSIdWvokrjki8e+DAhgu6BtzHbH2VJ8=
 github.com/werf/3p-helm-controller/api v0.1.4 h1:s7g9UQOrDMUzVE+JtWOP2xApnPOKYlNe1tXkkWCisAw=
 github.com/werf/3p-helm-controller/api v0.1.4/go.mod h1:tiPvDerlc5SwKIDmXB8L3kIMJHse+wigueoEGQq+588=
 github.com/werf/nelm-source-controller/api v0.1.4 h1:/k3RT+hHdwKHntoebdcjhO+zboJIlljHJZlbcumoY08=
