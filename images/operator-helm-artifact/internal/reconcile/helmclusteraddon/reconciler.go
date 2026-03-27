@@ -20,6 +20,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/opencontainers/go-digest"
+	"github.com/werf/3p-fluxcd-pkg/chartutil"
+	helmchartutil "helm.sh/helm/v3/pkg/chartutil"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -150,6 +153,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			})
 		}
 	case utils.InternalOCIRepository:
+		if err := r.chartService.CleanupHelmChart(ctx, addon); err != nil {
+			chartRes = services.ChartResult{
+				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
+			}
+			break
+		}
+
 		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo)
 		if !repoRes.IsPartiallyDegraded() {
 			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
@@ -232,35 +242,19 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 		results = status.DetermineConditions(obj, results...)
 		addon := obj.(*helmv1alpha1.HelmClusterAddon)
 
-		var updateChart, updateValues bool
+		var updateChart bool
 
 		switch repoType {
 		case utils.InternalHelmRepository:
 			if chartRes.HasArtifact() && releaseRes.IsReady() {
-				if addon.Status.LastAppliedChart == nil {
+				if addon.Status.LastAppliedChart == nil || (addon.IsChartStatusInfoOutdated() && chartRes.IsReady()) {
 					updateChart = true
-					updateValues = true
-				} else {
-					if addon.IsChartStatusInfoOutdated() && chartRes.IsReady() {
-						updateChart = true
-						updateValues = true
-					} else {
-						updateValues = true
-					}
 				}
 			}
 		case utils.InternalOCIRepository:
 			if repoRes.HasArtifact() && releaseRes.IsReady() {
-				if addon.Status.LastAppliedChart == nil {
+				if addon.Status.LastAppliedChart == nil || (addon.IsChartStatusInfoOutdated() && repoRes.IsReady()) {
 					updateChart = true
-					updateValues = true
-				} else {
-					if addon.IsChartStatusInfoOutdated() && repoRes.IsReady() {
-						updateChart = true
-						updateValues = true
-					} else {
-						updateValues = true
-					}
 				}
 			}
 		}
@@ -273,11 +267,20 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 			}
 		}
 
-		if updateValues {
-			if addon.Spec.Values == nil {
-				addon.Status.LastAppliedValues = nil
-			} else {
-				addon.Status.LastAppliedValues = addon.Spec.Values.DeepCopy()
+		latestRelease := releaseRes.History.Latest()
+		if releaseRes.IsReady() && latestRelease != nil {
+			rawValues := []byte(`{}`)
+			if addon.Spec.Values != nil {
+				rawValues = addon.Spec.Values.Raw
+			}
+
+			addonValues, _ := helmchartutil.ReadValues(rawValues)
+			if latestRelease.Status == "deployed" && latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, addonValues).String() {
+				if addon.Spec.Values == nil {
+					addon.Status.LastAppliedValues = nil
+				} else {
+					addon.Status.LastAppliedValues = addon.Spec.Values.DeepCopy()
+				}
 			}
 		}
 
@@ -288,9 +291,13 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 func mapResourceStatus() status.MapperFunc {
 	return func(conditionType string, status status.Status) status.Status {
 		if conditionType == helmv1alpha1.ConditionTypePartiallyDegraded {
+			switch status.Status {
 			// ConditionTrue means that HelmChartSucceeded, resetting status would exclude it from result.
-			if status.Status == metav1.ConditionTrue {
+			case metav1.ConditionTrue:
 				status.Status = ""
+			//	ConditionFalse means that chart failed, change Status to True, to raise ConditionTypePartiallyDegraded condition.
+			case metav1.ConditionFalse:
+				status.Status = metav1.ConditionTrue
 			}
 		}
 
