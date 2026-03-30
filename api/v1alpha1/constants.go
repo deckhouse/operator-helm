@@ -31,4 +31,6 @@ const (
 
 	LabelDeckhouseHeritage      = "heritage"
 	LabelDeckhouseHeritageValue = "deckhouse"
+
+	AnnotationForceReconcile = "reconcile.helm.deckhouse.io/force"
 )

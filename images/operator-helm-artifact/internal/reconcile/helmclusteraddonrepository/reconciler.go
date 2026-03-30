@@ -124,6 +124,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		chartSyncRes = services.RepoSyncResult{Status: status.Failed(&repo, helmv1alpha1.ReasonRepositoryNotReady, helmRepoRes.Status.Message, nil)}
 	}
 
+	if err := r.reconcileForceAnnotation(ctx, req); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
+	}
+
 	if err := r.statusManager.Update(
 		ctx,
 		&repo,
@@ -182,6 +186,31 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 	logger.Info("Cleanup complete")
 
 	return reconcile.Result{}, nil
+}
+
+func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile.Request) error {
+	var repo helmv1alpha1.HelmClusterAddonRepository
+
+	if err := r.Get(ctx, req.NamespacedName, &repo); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("getting helm cluster addon repository: %w", err)
+	}
+
+	if repo.Annotations == nil {
+		return nil
+	}
+
+	patchBase := client.MergeFrom(repo.DeepCopy())
+
+	delete(repo.Annotations, helmv1alpha1.AnnotationForceReconcile)
+
+	if err := r.Patch(ctx, &repo, patchBase); err != nil {
+		return fmt.Errorf("removing force reconcile annotation: %w", err)
+	}
+
+	return nil
 }
 
 func (r *Reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {

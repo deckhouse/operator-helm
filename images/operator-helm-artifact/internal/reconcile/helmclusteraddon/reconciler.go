@@ -182,6 +182,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, repoType)
 	}
 
+	if err := r.reconcileForceAnnotation(ctx, req); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
+	}
+
 	if err := r.statusManager.Update(
 		ctx,
 		addon,
@@ -235,6 +239,31 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 	logger.Info("Cleanup complete")
 
 	return reconcile.Result{}, nil
+}
+
+func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile.Request) error {
+	var addon helmv1alpha1.HelmClusterAddon
+
+	if err := r.Get(ctx, req.NamespacedName, &addon); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("getting helm cluster addon: %w", err)
+	}
+
+	if addon.Annotations == nil {
+		return nil
+	}
+
+	patchBase := client.MergeFrom(addon.DeepCopy())
+
+	delete(addon.Annotations, helmv1alpha1.AnnotationForceReconcile)
+
+	if err := r.Patch(ctx, &addon, patchBase); err != nil {
+		return fmt.Errorf("removing force reconcile annotation: %w", err)
+	}
+
+	return nil
 }
 
 func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.OCIRepoResult, releaseRes services.ReleaseResult) status.MutatorFunc {

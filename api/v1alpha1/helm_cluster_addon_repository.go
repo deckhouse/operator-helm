@@ -66,6 +66,17 @@ func (r *HelmClusterAddonRepository) GetConditionTypesForUpdate() []string {
 	return []string{"Ready"}
 }
 
+func (r *HelmClusterAddonRepository) ForceReconcileRequired() bool {
+	annotations := r.GetAnnotations()
+	if annotations == nil {
+		return false
+	}
+
+	_, found := annotations[AnnotationForceReconcile]
+
+	return found
+}
+
 type HelmClusterAddonRepositorySpec struct {
 	// URL of the Helm repository. Supports http(s):// and oci:// protocols.
 	// +kubebuilder:validation:Required

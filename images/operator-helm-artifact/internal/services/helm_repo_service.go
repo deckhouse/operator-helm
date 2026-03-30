@@ -165,6 +165,15 @@ func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName st
 }
 
 func applyHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.HelmRepository) {
+	if repo.ForceReconcileRequired() {
+		if existing.Annotations == nil {
+			existing.Annotations = map[string]string{}
+		}
+		ts := time.Now().UTC().Format(time.RFC3339)
+		existing.Annotations[meta.ForceRequestAnnotation] = ts
+		existing.Annotations[meta.ReconcileRequestAnnotation] = ts
+	}
+
 	existing.Spec.URL = repo.Spec.URL
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
 	existing.Spec.Insecure = !repo.Spec.TLSVerify

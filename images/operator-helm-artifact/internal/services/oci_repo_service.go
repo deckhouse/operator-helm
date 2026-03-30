@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
@@ -205,6 +206,15 @@ func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, addon *helmv1a
 }
 
 func applyOCIRepositorySpec(addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.OCIRepository) {
+	if repo.ForceReconcileRequired() {
+		if existing.Annotations == nil {
+			existing.Annotations = map[string]string{}
+		}
+		ts := time.Now().UTC().Format(time.RFC3339)
+		existing.Annotations[meta.ForceRequestAnnotation] = ts
+		existing.Annotations[meta.ReconcileRequestAnnotation] = ts
+	}
+
 	existing.Spec.URL = repo.Spec.URL
 	existing.Spec.Reference = &sourcev1.OCIRepositoryRef{
 		Tag: addon.Spec.Chart.Version,
