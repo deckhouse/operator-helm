@@ -112,6 +112,17 @@ func (r *HelmClusterAddon) IsChartStatusInfoOutdated() bool {
 		r.Spec.Chart.Version != r.Status.LastAppliedChart.Version
 }
 
+func (r *HelmClusterAddon) ForceReconcileRequired() bool {
+	annotations := r.GetAnnotations()
+	if annotations == nil {
+		return false
+	}
+
+	_, found := annotations[AnnotationForceReconcile]
+
+	return found
+}
+
 type HelmClusterAddonSpec struct {
 	Chart HelmClusterAddonChartRef `json:"chart"`
 	// Values holds the values for this HelmClusterAddon release.

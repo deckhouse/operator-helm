@@ -81,3 +81,23 @@ spec:
 {{< alert level="info" >}}
 Параметр `.spec.chart.version` является необязательным. Если он не указан, будет установлена последняя доступная версия чарта.
 {{< /alert >}}
+
+## Ручной запуск реконсиляции
+
+Чтобы запустить немедленную реконсиляцию ресурса, не дожидаясь следующей запланированной синхронизации, добавьте к нему аннотацию `reconcile.helm.deckhouse.io/force`. Контроллер обнаружит аннотацию, выполнит полный цикл реконсиляции и автоматически удалит аннотацию после завершения обработки.
+
+Запуск реконсиляции для HelmClusterAddon:
+
+```shell
+d8 k annotate helmclusteraddon podinfo reconcile.helm.deckhouse.io/force="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite
+```
+
+Запуск реконсиляции для HelmClusterAddonRepository:
+
+```shell
+d8 k annotate helmclusteraddonrepository podinfo reconcile.helm.deckhouse.io/force="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite
+```
+
+{{< alert level="info" >}}
+Значение аннотации не имеет значения — контроллер проверяет только её наличие на ресурсе. После завершения реконсиляции аннотация удаляется автоматически.
+{{< /alert >}}

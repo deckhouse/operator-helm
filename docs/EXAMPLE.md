@@ -81,3 +81,23 @@ Only one instance of HelmClusterAddon using a specific Helm chart from a specifi
 {{< alert level="info" >}}
 The `.spec.chart.version` parameter is optional. If omitted, the latest available version of the chart will be installed.
 {{< /alert >}}
+
+## Triggering a manual reconciliation
+
+To trigger an immediate reconciliation of a resource without waiting for the next scheduled sync, annotate it with `reconcile.helm.deckhouse.io/force`. The controller will detect the annotation, run a full reconciliation cycle, and remove the annotation automatically once processing is complete.
+
+To trigger reconciliation of a HelmClusterAddon:
+
+```shell
+d8 k annotate helmclusteraddon podinfo reconcile.helm.deckhouse.io/force="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite
+```
+
+To trigger reconciliation of a HelmClusterAddonRepository:
+
+```shell
+d8 k annotate helmclusteraddonrepository podinfo reconcile.helm.deckhouse.io/force="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --overwrite
+```
+
+{{< alert level="info" >}}
+The annotation value is not significant — only its presence on the resource matters. The controller removes the annotation after the reconciliation is complete.
+{{< /alert >}}

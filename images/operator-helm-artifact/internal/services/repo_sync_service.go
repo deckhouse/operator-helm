@@ -222,6 +222,10 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 }
 
 func isRepoSyncRequired(repo *helmv1alpha1.HelmClusterAddonRepository) bool {
+	if repo.ForceReconcileRequired() {
+		return true
+	}
+
 	syncCond := apimeta.FindStatusCondition(repo.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
 	if syncCond != nil && syncCond.Status == metav1.ConditionTrue && syncCond.LastTransitionTime.UTC().Add(ChartsSyncInterval).After(time.Now().UTC()) {
 		return false

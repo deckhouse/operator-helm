@@ -41,7 +41,12 @@ var OperatorNelmRewriteRules = &RewriteRules{
 			{Original: "helm.werf.io", Renamed: "helm." + internalPrefix},
 		},
 	},
+	//reconcile.internal.operator-helm.deckhouse.io/forceAt
 	Annotations: MetadataReplace{
+		Names: []MetadataReplaceRule{
+			{Original: "reconcile.werf.io/forceAt", Renamed: "reconcile." + internalPrefix + "/forceAt"},
+			{Original: "reconcile.werf.io/requestedAt", Renamed: "reconcile." + internalPrefix + "/requestedAt"},
+		},
 		Prefixes: []MetadataReplaceRule{
 			{Original: "source.werf.io", Renamed: "source." + internalPrefix},
 			{Original: "helm.werf.io", Renamed: "helm." + internalPrefix},

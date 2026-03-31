@@ -19,7 +19,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -121,6 +123,15 @@ func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1al
 }
 
 func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2.HelmRelease, repoType utils.InternalRepositoryType, targetNamespace string) error {
+	if addon.ForceReconcileRequired() {
+		if existing.Annotations == nil {
+			existing.Annotations = map[string]string{}
+		}
+		ts := time.Now().UTC().Format(time.RFC3339)
+		existing.Annotations[meta.ForceRequestAnnotation] = ts
+		existing.Annotations[meta.ReconcileRequestAnnotation] = ts
+	}
+
 	if existing.Labels == nil {
 		existing.Labels = map[string]string{}
 	}
