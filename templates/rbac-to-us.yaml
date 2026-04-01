@@ -8,7 +8,7 @@ metadata:
 rules:
 - apiGroups: ["apps"]
   resources: ["deployments/prometheus-metrics"]
-  resourceNames: ["operator-helm-controller", "helm-controller", "nelm-source-controller", "kube-api-rewriter"]
+  resourceNames: ["operator-helm-controller", "helm-controller", "nelm-source-controller"]
   verbs: ["get"]
 
 {{- if (.Values.global.enabledModules | has "prometheus") }}
@@ -16,7 +16,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: access-to-virtualization
+  name: access-to-operator-helm
   namespace: d8-{{ .Chart.Name }}
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 roleRef:
