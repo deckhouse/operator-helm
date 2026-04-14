@@ -1,0 +1,76 @@
+name: Reusable CVE scan
+
+on:
+  workflow_call:
+    inputs:
+      source_tag:
+        description: Tag to scan
+        required: true
+        type: string
+      external_module_name:
+        description: External module name
+        required: true
+        type: string
+      latest_releases_amount:
+        description: Number of latest releases to scan when action needs it
+        required: false
+        default: "5"
+        type: string
+      release_in_dev:
+        description: If true, release-like tags are searched in dev registry instead of prod
+        required: false
+        default: "true"
+        type: string
+
+jobs:
+  cve_scan:
+    name: Trivy images check
+    runs-on: [self-hosted, large]
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Import CVE secrets from Seguro
+        id: secrets
+        uses: hashicorp/vault-action@v2
+        with:
+          url: https://seguro.flant.com
+          path: github
+          role: operator-helm
+          method: jwt
+          jwtGithubAudience: github-access-aud
+          secrets: |
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets DD_URL | DD_URL ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets DD_TOKEN | DD_TOKEN ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets PROD_READ_REGISTRY | PROD_READ_REGISTRY ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets PROD_READ_REGISTRY_USER | PROD_READ_REGISTRY_USER ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets PROD_READ_REGISTRY_PASSWORD | PROD_READ_REGISTRY_PASSWORD ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets DECKHOUSE_DEV_REGISTRY_HOST | DECKHOUSE_DEV_REGISTRY_HOST ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets DEV_REGISTRY_USER | DEV_REGISTRY_USER ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets DEV_REGISTRY_PASSWORD | DEV_REGISTRY_PASSWORD ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets DECKHOUSE_PRIVATE_REPO | DECKHOUSE_PRIVATE_REPO ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets CODEOWNERS_REPO_TOKEN | CODEOWNERS_REPO_TOKEN ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets CVE_TEST_REPO_GIT | CVE_TEST_REPO_GIT ;
+            projects/data/24cb1d7c-717a-4f92-8547-26f632916a7a/Trivy_CVE_Scan_CI_Secrets CVE_TEST_SSH_PRIVATE_KEY | CVE_TEST_SSH_PRIVATE_KEY ;
+
+      - uses: deckhouse/modules-actions/cve_scan@v11
+        with:
+          source_tag: ${{ inputs.source_tag }}
+          case: "External Modules"
+          external_module_name: ${{ inputs.external_module_name }}
+          dd_url: ${{ steps.secrets.outputs.DD_URL }}
+          dd_token: ${{ steps.secrets.outputs.DD_TOKEN }}
+          prod_registry: ${{ steps.secrets.outputs.PROD_READ_REGISTRY }}
+          prod_registry_user: ${{ steps.secrets.outputs.PROD_READ_REGISTRY_USER }}
+          prod_registry_password: ${{ steps.secrets.outputs.PROD_READ_REGISTRY_PASSWORD }}
+          dev_registry: ${{ steps.secrets.outputs.DECKHOUSE_DEV_REGISTRY_HOST }}
+          dev_registry_user: ${{ steps.secrets.outputs.DEV_REGISTRY_USER }}
+          dev_registry_password: ${{ steps.secrets.outputs.DEV_REGISTRY_PASSWORD }}
+          deckhouse_private_repo: ${{ steps.secrets.outputs.DECKHOUSE_PRIVATE_REPO }}
+          codeowners_repo_token: ${{ steps.secrets.outputs.CODEOWNERS_REPO_TOKEN }}
+          cve_test_repo_git: ${{ steps.secrets.outputs.CVE_TEST_REPO_GIT }}
+          cve_ssh_private_key: ${{ steps.secrets.outputs.CVE_TEST_SSH_PRIVATE_KEY }}
+          release_in_dev: ${{ inputs.release_in_dev }}
+          latest_releases_amount: ${{ inputs.latest_releases_amount }}
