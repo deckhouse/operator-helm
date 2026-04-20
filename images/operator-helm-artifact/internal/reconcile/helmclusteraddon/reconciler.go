@@ -105,7 +105,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	if r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
 		maintenanceRes := r.maintenanceService.EnsureMaintenanceMode(ctx, addon)
-		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, maintenanceRes)
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, maintenanceRes, status.AsCondition(maintenanceRes, "Ready"))
+	}
+
+	if addon.MaintenanceModeActivated() {
+		return reconcile.Result{}, nil
 	}
 
 	repo := &helmv1alpha1.HelmClusterAddonRepository{}

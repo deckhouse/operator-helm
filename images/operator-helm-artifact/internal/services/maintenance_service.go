@@ -75,12 +75,16 @@ func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, addon *h
 	status := metav1.ConditionTrue
 	reason := helmv1alpha1.ReasonMaintenanceModeInactive
 
+	var message string
+
 	if suspendState {
 		logger.Info("Enabling maintenance mode")
+		message = "Maintenance mode enabled"
 		status = metav1.ConditionFalse
 		reason = helmv1alpha1.ReasonMaintenanceModeActive
 	} else {
 		logger.Info("Disabling maintenance mode")
+		message = "Maintenance mode disabled"
 	}
 
 	err := s.updateHelmReleaseSuspendState(ctx, addon, suspendState)
@@ -92,6 +96,7 @@ func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, addon *h
 			Observed:           true,
 			Status:             status,
 			ObservedGeneration: addon.Generation,
+			Message:            message,
 			Reason:             reason,
 		},
 	}
