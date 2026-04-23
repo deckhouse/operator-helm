@@ -69,19 +69,11 @@ func (r *HelmClusterAddon) GetStatus() any {
 }
 
 func (r *HelmClusterAddon) MaintenanceModeActivated() bool {
-	if r.Spec.Maintenance == string(NoResourceReconciliation) {
-		return true
-	}
-
-	return false
+	return r.Spec.Maintenance == string(NoResourceReconciliation)
 }
 
 func (r *HelmClusterAddon) MaintenanceModeEnabled() bool {
-	if apimeta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeManaged, metav1.ConditionFalse) {
-		return true
-	}
-
-	return false
+	return apimeta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeManaged, metav1.ConditionFalse)
 }
 
 func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
