@@ -6,13 +6,29 @@ vars:
   deckhouse_lib_helm_ver: 1.71.2
   target: ""
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
+  prettier_image: 'ghcr.io/deckhouse/virtualization/prettier:3.2.5'
+  golangci_lint_version: 'v2.8.0'
+  golangci_lint_bin: '{{.TASKFILE_DIR}}/bin/golangci-lint-{{.golangci_lint_version}}'
 
 includes:
   e2e:
     taskfile: ./tests/e2e/Taskfile.dist.yaml
     dir: ./tests/e2e
+  deps:
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
+    flatten: true
+    vars:
+      golangciLintVersion: "{{.golangci_lint_version}}"
 
 tasks:
+  deps:install:all:
+    desc: "Install development dependencies."
+    deps:
+      - deps:install:gci
+      - deps:install:gofumpt
+      - deps:install:golangci-lint
+      - e2e:deps:install:ginkgo
+
   check-werf:
     cmds:
       - which werf >/dev/null || (echo "werf not found."; exit 1)
@@ -54,19 +70,154 @@ tasks:
     cmds:
       - werf build {{ .target }}
 
+  check:golangci-lint:
+    desc: "Check that the repository-local golangci-lint binary is installed."
+    cmds:
+      - test -x "{{.golangci_lint_bin}}" || (echo "golangci-lint not found at {{.golangci_lint_bin}}. Run 'task deps:install:golangci-lint' or 'task deps:install:all'."; exit 1)
+
+  format:
+    desc: "Run formatters for Go and YAML."
+    cmds:
+      - task: format:go
+      - task: format:yaml
+
+  format:go:
+    desc: "Format supported Go modules (excluding kube-api-rewriter and tools)."
+    cmds:
+      - task: format:go:api
+      - task: format:go:hooks
+      - task: format:go:artifact
+      - task: format:go:e2e
+
+  format:go:api:
+    desc: "Format Go files in api/."
+    cmds:
+      - task: _format:go:module
+        vars:
+          moduleDir: ./api
+
+  _format:go:module:
+    internal: true
+    deps:
+      - check:golangci-lint
+    requires:
+      vars:
+        - moduleDir
+    dir: "{{.moduleDir}}"
+    cmds:
+      - '{{.golangci_lint_bin}} fmt ./...'
+
+  format:go:hooks:
+    desc: "Format Go files in images/hooks/."
+    cmds:
+      - task: _format:go:module
+        vars:
+          moduleDir: ./images/hooks
+
+  format:go:artifact:
+    desc: "Format Go files in images/operator-helm-artifact/."
+    cmds:
+      - task: _format:go:module
+        vars:
+          moduleDir: ./images/operator-helm-artifact
+
+  format:go:e2e:
+    desc: "Format Go files in tests/e2e/."
+    cmds:
+      - task: _format:go:module
+        vars:
+          moduleDir: ./tests/e2e
+
   dev:format:yaml:
     desc: "Format non-templated YAML files, e.g. CRDs"
     cmds:
-      # TODO: update image reference
+      - task: format:yaml
+
+  _prettier:yaml:
+    desc: "Format YAML files with prettier."
+    internal: true
+    requires:
+      vars:
+        - prettierMode
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
       - |
-        docker run --rm \
-          -v ./:/tmp/operator-helm ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
-          sh -c "cd /tmp/operator-helm ; prettier -w \"**/*.yaml\" \"**/*.yml\""
+        docker run --rm -u "$(id -u):$(id -g)" \
+          -v "$(pwd):/tmp/operator-helm" "{{.prettier_image}}" \
+          sh -ec 'cd /tmp/operator-helm && prettier {{.prettierMode}} {{.prettierTargets | default "\"**/*.yaml\" \"**/*.yml\""}}'
+
+  format:yaml:
+    desc: "Format YAML files with prettier."
+    cmds:
+      - task: _prettier:yaml
+        vars:
+          prettierMode: "-w"
+
+  format:yaml:crds:
+    desc: "Format CRD YAML files with prettier."
+    cmds:
+      - task: _prettier:yaml
+        vars:
+          prettierMode: "-w"
+          prettierTargets: '"crds/*.yaml"'
 
   lint:
     cmds:
+      - task: lint:go
+      - task: lint:yaml
+
+  lint:yaml:
+    desc: "Run non-Go linters."
+    cmds:
       - task: lint:doc-ru
       - task: lint:prettier:yaml
+
+  lint:go:
+    desc: "Lint supported Go modules (excluding kube-api-rewriter and tools)."
+    cmds:
+      - task: lint:go:api
+      - task: lint:go:hooks
+      - task: lint:go:artifact
+      - task: lint:go:e2e
+
+  lint:go:api:
+    desc: "Run golangci-lint for api/."
+    cmds:
+      - task: _lint:go:module
+        vars:
+          moduleDir: ./api
+
+  _lint:go:module:
+    internal: true
+    deps:
+      - check:golangci-lint
+    requires:
+      vars:
+        - moduleDir
+    dir: "{{.moduleDir}}"
+    cmds:
+      - '{{.golangci_lint_bin}} run ./...'
+
+  lint:go:hooks:
+    desc: "Run golangci-lint for images/hooks/."
+    cmds:
+      - task: _lint:go:module
+        vars:
+          moduleDir: ./images/hooks
+
+  lint:go:artifact:
+    desc: "Run golangci-lint for images/operator-helm-artifact/."
+    cmds:
+      - task: _lint:go:module
+        vars:
+          moduleDir: ./images/operator-helm-artifact
+
+  lint:go:e2e:
+    desc: "Run golangci-lint for tests/e2e/."
+    cmds:
+      - task: _lint:go:module
+        vars:
+          moduleDir: ./tests/e2e
 
   lint:doc-ru:
     desc: "Check the correspondence between description fields in the original crd and the Russian language version"
@@ -80,11 +231,9 @@ tasks:
   lint:prettier:yaml:
     desc: "Check if yaml files are prettier-formatted."
     cmds:
-      # TODO: update image reference
-      - |
-        docker run --rm \
-          -v ./:/tmp/operator-nelm ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
-          sh -c "cd /tmp/operator-nelm ; prettier -c \"**/*.yaml\" \"**/*.yml\""
+      - task: _prettier:yaml
+        vars:
+          prettierMode: "-c"
 
   validation:doc-changes:
     desc: "Doc-changes"

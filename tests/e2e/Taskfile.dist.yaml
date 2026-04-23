@@ -1,17 +1,15 @@
 version: '3'
 
+includes:
+  deps:
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
+    flatten: true
+
 vars:
   TIMEOUT: '{{.TIMEOUT | default "30m"}}'
   KIND_CLUSTER_NAME: '{{.KIND_CLUSTER_NAME | default "d8-operator-helm"}}'
 
 tasks:
-  deps:install:ginkgo:
-    desc: 'Install ginkgo binary. Important vars: "paths".'
-    cmds:
-      - |
-        cd {{.paths | default "./"}}
-        version="$(go list -m -f '{{ printf `{{ .Version }}` }}' github.com/onsi/ginkgo/v2)"
-        go install {{.CLI_ARGS}} github.com/onsi/ginkgo/v2/ginkgo@${version}  
 
   kind:ci:setup:
     desc: Setup kind in CI

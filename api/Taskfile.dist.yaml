@@ -2,6 +2,10 @@ version: "3"
 
 silent: false
 
+includes:
+  root:
+    taskfile: ../Taskfile.yaml
+
 tasks:
   generate:
     desc: "Regenerate all"
@@ -28,11 +32,7 @@ tasks:
   format:yaml:
     desc: "Format non-templated YAML files, e.g. CRDs"
     cmds:
-      # TODO: replace prettier image
-      - |
-        cd ../ && docker run --rm \
-          -v "$(pwd):/tmp/operator-helm" ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
-          sh -c "cd /tmp/operator-helm ; prettier -w \"crds/*.yaml\""
+      - task: root:format:yaml
 
   _ci:verify-gen:
     desc: "Check generated files are up-to-date."
