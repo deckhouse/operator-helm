@@ -11,6 +11,9 @@ vars:
   golangci_lint_bin: '{{.TASKFILE_DIR}}/bin/golangci-lint-{{.golangci_lint_version}}'
 
 includes:
+  api:
+    taskfile: ./api/Taskfile.dist.yaml
+    dir: ./api
   e2e:
     taskfile: ./tests/e2e/Taskfile.dist.yaml
     dir: ./tests/e2e
@@ -28,6 +31,37 @@ tasks:
       - deps:install:gofumpt
       - deps:install:golangci-lint
       - e2e:deps:install:ginkgo
+
+  deps:install:e2e:
+    desc: "Install e2e test dependencies."
+    cmds:
+      - task: e2e:deps:install:ginkgo
+
+  generate:api:
+    desc: "Regenerate API artifacts."
+    cmds:
+      - task: api:generate
+      - task: format:yaml:crds
+
+  ci:generate:api:
+    desc: "Run API generation and verify committed files."
+    cmds:
+      - task: api:ci:generate
+
+  test:e2e:setup:
+    desc: "Setup environment for e2e tests."
+    cmds:
+      - task: e2e:kind:ci:setup
+
+  test:e2e:
+    desc: "Run e2e tests."
+    cmds:
+      - task: e2e:tests
+
+  test:e2e:cleanup:
+    desc: "Cleanup e2e environment."
+    cmds:
+      - task: e2e:kind:ci:cleanup
 
   check-werf:
     cmds:

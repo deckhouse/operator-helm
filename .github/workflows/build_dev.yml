@@ -161,22 +161,22 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install ginkgo
-        run: task --yes e2e:deps:install:ginkgo
+        run: task --yes deps:install:e2e
 
       - name: Setup kind with module operator-helm enabled
-        run: task --yes -p e2e:kind:ci:setup
+        run: task --yes -p test:e2e:setup
         env:
           KIND_CLUSTER_NAME: d8-operator-helm-${{ github.run_number }}
           MODULE_TAG_NAME: ${{ needs.build_dev.outputs.modules_module_tag }}
           DEV_REGISTRY_DOCKER_CONFIG: ${{ secrets.DEV_REGISTRY_DOCKER_CONFIG }}
 
       - name: Run e2e tests
-        run: task --yes -p e2e:tests
+        run: task --yes -p test:e2e
         env:
           KIND_CLUSTER_NAME: d8-operator-helm-${{ github.run_number }}
 
       - name: Delete kind cluster
-        run: task --yes -p e2e:kind:ci:cleanup
+        run: task --yes -p test:e2e:cleanup
         env:
           KIND_CLUSTER_NAME: d8-operator-helm-${{ github.run_number }}
         if: always()
