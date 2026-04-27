@@ -30,11 +30,11 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Import CVE secrets from Seguro
         id: secrets
-        uses: hashicorp/vault-action@v2
+        uses: hashicorp/vault-action@v3
         with:
           url: https://seguro.flant.com
           path: github
@@ -74,3 +74,5 @@ jobs:
           cve_ssh_private_key: ${{ steps.secrets.outputs.CVE_TEST_SSH_PRIVATE_KEY }}
           release_in_dev: ${{ inputs.release_in_dev }}
           latest_releases_amount: ${{ inputs.latest_releases_amount }}
+
+

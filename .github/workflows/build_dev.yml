@@ -28,7 +28,7 @@ jobs:
     continue-on-error: true
     name: Lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: deckhouse/modules-actions/lint@main
         env:
           DMT_METRICS_URL: ${{ secrets.DMT_METRICS_URL }}
@@ -39,11 +39,11 @@ jobs:
     name: Run golangci-lint
     steps:
       - name: Set up Go ${{ vars.GO_VERSION }}
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "${{ vars.GO_VERSION }}"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install golangci-lint
         run: |
@@ -120,7 +120,7 @@ jobs:
 
           echo "MODULES_MODULE_TAG=$MODULES_MODULE_TAG" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: deckhouse/modules-actions/setup@main
         with:
@@ -184,10 +184,10 @@ jobs:
     runs-on: [self-hosted, large]
     needs: build_dev
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           cache: true
           go-version-file: tests/e2e/go.mod
