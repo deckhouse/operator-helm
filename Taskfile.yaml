@@ -229,8 +229,6 @@ tasks:
 
   _lint:go:module:
     internal: true
-    deps:
-      - check:golangci-lint
     requires:
       vars:
         - moduleDir
