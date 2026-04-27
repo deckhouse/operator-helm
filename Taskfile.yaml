@@ -6,9 +6,7 @@ vars:
   deckhouse_lib_helm_ver: 1.71.2
   target: ""
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
-  prettier_image: 'ghcr.io/deckhouse/virtualization/prettier:3.2.5'
-  golangci_lint_version: 'v2.8.0'
-  golangci_lint_bin: '{{.TASKFILE_DIR}}/bin/golangci-lint-{{.golangci_lint_version}}'
+  golangciLintVersion: "v2.8.0"
 
 includes:
   api:
@@ -17,11 +15,17 @@ includes:
   e2e:
     taskfile: ./tests/e2e/Taskfile.dist.yaml
     dir: ./tests/e2e
+  lint:
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/chore/ref-golangci-lint/Taskfile.format_lint.yml
+    vars:
+      golangciLintBinDir: "./bin"
+      golangciLintVersion: "{{.golangciLintVersion}}"
+
   deps:
-    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/chore/ref-golangci-lint/Taskfile.deps.yml
     flatten: true
     vars:
-      golangciLintVersion: "{{.golangci_lint_version}}"
+      golangciLintVersion: "{{.golangciLintVersion}}"
 
 tasks:
   deps:install:all:
@@ -41,7 +45,6 @@ tasks:
     desc: "Regenerate API artifacts."
     cmds:
       - task: api:generate
-      - task: format:yaml:crds
 
   ci:generate:api:
     desc: "Run API generation and verify committed files."
@@ -107,7 +110,7 @@ tasks:
   check:golangci-lint:
     desc: "Check that the repository-local golangci-lint binary is installed."
     cmds:
-      - test -x "{{.golangci_lint_bin}}" || (echo "golangci-lint not found at {{.golangci_lint_bin}}. Run 'task deps:install:golangci-lint' or 'task deps:install:all'."; exit 1)
+      - test -x "{{.TASKFILE_DIR}}/bin/golangci-lint-{{.golangciLintVersion}}" || (echo "golangci-lint not found at {{.TASKFILE_DIR}}/bin/golangci-lint-{{.golangciLintVersion}}. Run 'task deps:install:golangci-lint' or 'task deps:install:all'."; exit 1)
 
   format:
     desc: "Run formatters for Go and YAML."
@@ -139,7 +142,7 @@ tasks:
         - moduleDir
     dir: "{{.moduleDir}}"
     cmds:
-      - '{{.golangci_lint_bin}} fmt ./...'
+      - "{{.TASKFILE_DIR}}/bin/golangci-lint-{{.golangciLintVersion}} fmt ./..."
 
   format:go:hooks:
     desc: "Format Go files in images/hooks/."
@@ -163,37 +166,19 @@ tasks:
           moduleDir: ./tests/e2e
 
   dev:format:yaml:
-    desc: "Format non-templated YAML files, e.g. CRDs"
+    desc: "Format non-templated YAML files."
     cmds:
       - task: format:yaml
 
-  _prettier:yaml:
-    desc: "Format YAML files with prettier."
-    internal: true
-    requires:
-      vars:
-        - prettierMode
-    dir: "{{.TASKFILE_DIR}}"
-    cmds:
-      - |
-        docker run --rm -u "$(id -u):$(id -g)" \
-          -v "$(pwd):/tmp/operator-helm" "{{.prettier_image}}" \
-          sh -ec 'cd /tmp/operator-helm && prettier {{.prettierMode}} {{.prettierTargets | default "\"**/*.yaml\" \"**/*.yml\""}}'
-
   format:yaml:
-    desc: "Format YAML files with prettier."
+    desc: "Format non-templated YAML files with prettier."
     cmds:
-      - task: _prettier:yaml
-        vars:
-          prettierMode: "-w"
+      - task: lint:format:prettier:yaml
 
   format:yaml:crds:
     desc: "Format CRD YAML files with prettier."
     cmds:
-      - task: _prettier:yaml
-        vars:
-          prettierMode: "-w"
-          prettierTargets: '"crds/*.yaml"'
+      - task: api:format:yaml:crds
 
   lint:
     cmds:
@@ -221,17 +206,6 @@ tasks:
         vars:
           moduleDir: ./api
 
-  _lint:go:module:
-    internal: true
-    deps:
-      - check:golangci-lint
-    requires:
-      vars:
-        - moduleDir
-    dir: "{{.moduleDir}}"
-    cmds:
-      - '{{.golangci_lint_bin}} run ./...'
-
   lint:go:hooks:
     desc: "Run golangci-lint for images/hooks/."
     cmds:
@@ -253,6 +227,21 @@ tasks:
         vars:
           moduleDir: ./tests/e2e
 
+  _lint:go:module:
+    internal: true
+    deps:
+      - check:golangci-lint
+    requires:
+      vars:
+        - moduleDir
+    cmds:
+      - task: lint:_lint:golangci-lint:run
+        vars:
+          cgoEnabled: "0"
+          moduleDir: "{{.moduleDir}}"
+          golangciConfig: "./.golangci.yaml"
+          golangciPaths: "./..."
+
   lint:doc-ru:
     desc: "Check the correspondence between description fields in the original crd and the Russian language version"
     cmds:
@@ -263,11 +252,14 @@ tasks:
             'for crd in /src/crds/*.yaml; do [[ "$(basename "$crd")" =~ ^doc-ru ]] || (echo ${crd}; /d8-doc-ru-linter -s "$crd" -d "/src/crds/doc-ru-$(basename "$crd")" -n /dev/null); done'
 
   lint:prettier:yaml:
-    desc: "Check if yaml files are prettier-formatted."
+    desc: "Check non-templated YAML files are prettier-formatted."
     cmds:
-      - task: _prettier:yaml
-        vars:
-          prettierMode: "-c"
+      - task: lint:lint:prettier:yaml
+
+  lint:prettier:yaml:crds:
+    desc: "Check if CRD yaml files are prettier-formatted."
+    cmds:
+      - task: api:lint:prettier:yaml:crds
 
   validation:doc-changes:
     desc: "Doc-changes"

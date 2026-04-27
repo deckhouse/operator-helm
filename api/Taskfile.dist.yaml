@@ -2,11 +2,19 @@ version: "3"
 
 silent: false
 
+includes:
+  lint:
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/chore/ref-golangci-lint/Taskfile.format_lint.yml
+    flatten: true
+    vars:
+      prettierPattern: '"crds/*.yaml"'
+
 tasks:
   generate:
     desc: "Regenerate all"
     cmds:
       - ./scripts/update-codegen.sh all
+      - task: format:yaml:crds
 
   ci:generate:
     desc: "Run generations and check git diff to ensure all files are committed"
@@ -22,6 +30,16 @@ tasks:
     desc: "Regenerate crds"
     cmds:
       - ./scripts/update-codegen.sh crds
+
+  format:yaml:crds:
+    desc: "Format CRD YAML files with prettier."
+    cmds:
+      - task: format:prettier:yaml
+
+  lint:prettier:yaml:crds:
+    desc: "Check if CRD yaml files are prettier-formatted."
+    cmds:
+      - task: lint:prettier:yaml
 
   ci:verify:
     desc: "Check generated files are up-to-date."
