@@ -43,3 +43,6 @@ __pycache__/
 go.work
 go.work.sum
 
+# Task
+.task/
+

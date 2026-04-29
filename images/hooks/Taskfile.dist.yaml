@@ -1,0 +1,17 @@
+version: "3"
+
+silent: true
+
+includes:
+  hooks:
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/chore/ref-golangci-lint/Taskfile.format_lint.yml
+    flatten: true
+    vars:
+      gciPrefix: '{{.gciPrefix | default "github.com/deckhouse/"}}'
+      golangciConfigPath: '{{.golangciConfigPath | default "./.golangci.yaml"}}'
+      golangciLintBinDir: '{{.golangciLintBinDir | default "../../bin"}}'
+      golangciLintVersion: '{{.golangciLintVersion | default "v2.8.0"}}'
+      golangciPaths: '{{.golangciPaths | default "./..."}}'
+      paths: '{{.paths | default "."}}'
+
+

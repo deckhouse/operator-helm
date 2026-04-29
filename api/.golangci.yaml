@@ -97,4 +97,3 @@ linters:
     importas:
       no-unaliased: true
       no-extra-aliases: false
-

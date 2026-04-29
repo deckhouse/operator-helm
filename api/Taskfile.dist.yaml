@@ -3,11 +3,16 @@ version: "3"
 silent: false
 
 includes:
-  lint:
+  api:
     taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/chore/ref-golangci-lint/Taskfile.format_lint.yml
     flatten: true
     vars:
-      prettierPattern: '"crds/*.yaml"'
+      gciPrefix: '{{.gciPrefix | default "github.com/deckhouse/"}}'
+      golangciConfigPath: '{{.golangciConfigPath | default "./.golangci.yaml"}}'
+      golangciLintBinDir: '{{.golangciLintBinDir | default "../bin"}}'
+      golangciLintVersion: '{{.golangciLintVersion | default "v2.8.0"}}'
+      golangciPaths: '{{.golangciPaths | default "./..."}}'
+      paths: '{{.paths | default "."}}'
 
 tasks:
   generate:
@@ -33,13 +38,19 @@ tasks:
 
   format:yaml:crds:
     desc: "Format CRD YAML files with prettier."
+    dir: ..
     cmds:
       - task: format:prettier:yaml
+        vars:
+          prettierPattern: '"crds/*.yaml"'
 
-  lint:prettier:yaml:crds:
-    desc: "Check if CRD yaml files are prettier-formatted."
+  lint:yaml:crds:
+    desc: "Check CRD YAML files are prettier-formatted."
+    dir: ..
     cmds:
       - task: lint:prettier:yaml
+        vars:
+          prettierPattern: '"crds/*.yaml"'
 
   ci:verify:
     desc: "Check generated files are up-to-date."
