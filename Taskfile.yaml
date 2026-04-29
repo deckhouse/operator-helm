@@ -162,7 +162,7 @@ tasks:
     cmds:
       - |
         docker run \
-          --rm -it -v "$PWD:/src" docker.io/fl64/d8-doc-ru-linter:v0.0.1-dev0 \
+          --rm -v "$PWD:/src" docker.io/fl64/d8-doc-ru-linter:v0.0.1-dev0 \
           sh -c \
             'for crd in /src/crds/*.yaml; do [[ "$(basename "$crd")" =~ ^doc-ru ]] || (echo ${crd}; /d8-doc-ru-linter -s "$crd" -d "/src/crds/doc-ru-$(basename "$crd")" -n /dev/null); done'
 
