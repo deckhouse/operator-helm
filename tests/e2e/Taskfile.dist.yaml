@@ -5,7 +5,7 @@ includes:
     taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
     flatten: true
   e2e:
-    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/chore/ref-golangci-lint/Taskfile.format_lint.yml
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.format_lint.yml
     flatten: true
     vars:
       gciPrefix: '{{.gciPrefix | default "github.com/deckhouse/"}}'

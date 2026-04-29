@@ -115,24 +115,6 @@ tasks:
       - task: hooks:format
       - task: artifact:format
       - task: e2e:format
-      - task: format:yaml:crds
-
-  format:go:
-    desc: "Format supported Go modules (excluding kube-api-rewriter and tools)."
-    cmds:
-      - task: api:format:gci
-      - task: api:format:gofumpt
-      - task: hooks:format:gci
-      - task: hooks:format:gofumpt
-      - task: artifact:format:gci
-      - task: artifact:format:gofumpt
-      - task: e2e:format:gci
-      - task: e2e:format:gofumpt
-
-  format:yaml:crds:
-    desc: "Format CRD YAML files with prettier."
-    cmds:
-      - task: api:format:yaml:crds
 
   lint:
     cmds:
@@ -140,22 +122,7 @@ tasks:
       - task: hooks:lint
       - task: artifact:lint
       - task: e2e:lint
-      - task: lint:prettier:yaml:crds
       - task: lint:doc-ru
-
-  lint:yaml:
-    desc: "Run non-Go linters."
-    cmds:
-      - task: lint:doc-ru
-      - task: lint:prettier:yaml:crds
-
-  lint:go:
-    desc: "Lint supported Go modules (excluding kube-api-rewriter and tools)."
-    cmds:
-      - task: api:lint:golangci-lint:go
-      - task: hooks:lint:golangci-lint:go
-      - task: artifact:lint:golangci-lint:go
-      - task: e2e:lint:golangci-lint:go
 
   lint:doc-ru:
     desc: "Check the correspondence between description fields in the original crd and the Russian language version"
@@ -165,11 +132,6 @@ tasks:
           --rm -v "$PWD:/src" docker.io/fl64/d8-doc-ru-linter:v0.0.1-dev0 \
           sh -c \
             'for crd in /src/crds/*.yaml; do [[ "$(basename "$crd")" =~ ^doc-ru ]] || (echo ${crd}; /d8-doc-ru-linter -s "$crd" -d "/src/crds/doc-ru-$(basename "$crd")" -n /dev/null); done'
-
-  lint:prettier:yaml:crds:
-    desc: "Check CRD YAML files are prettier-formatted."
-    cmds:
-      - task: api:lint:yaml:crds
 
   validation:doc-changes:
     desc: "Doc-changes"

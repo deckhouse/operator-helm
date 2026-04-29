@@ -4,7 +4,7 @@ silent: false
 
 includes:
   api:
-    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/chore/ref-golangci-lint/Taskfile.format_lint.yml
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.format_lint.yml
     flatten: true
     vars:
       gciPrefix: '{{.gciPrefix | default "github.com/deckhouse/"}}'
@@ -13,13 +13,14 @@ includes:
       golangciLintVersion: '{{.golangciLintVersion | default "v2.8.0"}}'
       golangciPaths: '{{.golangciPaths | default "./..."}}'
       paths: '{{.paths | default "."}}'
+      prettierPattern: '../crds/*.yaml'
 
 tasks:
   generate:
     desc: "Regenerate all"
     cmds:
       - ./scripts/update-codegen.sh all
-      - task: format:yaml:crds
+      - task: lint:prettier:yaml
 
   ci:generate:
     desc: "Run generations and check git diff to ensure all files are committed"
@@ -35,22 +36,6 @@ tasks:
     desc: "Regenerate crds"
     cmds:
       - ./scripts/update-codegen.sh crds
-
-  format:yaml:crds:
-    desc: "Format CRD YAML files with prettier."
-    dir: ..
-    cmds:
-      - task: format:prettier:yaml
-        vars:
-          prettierPattern: '"crds/*.yaml"'
-
-  lint:yaml:crds:
-    desc: "Check CRD YAML files are prettier-formatted."
-    dir: ..
-    cmds:
-      - task: lint:prettier:yaml
-        vars:
-          prettierPattern: '"crds/*.yaml"'
 
   ci:verify:
     desc: "Check generated files are up-to-date."

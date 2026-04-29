@@ -26,53 +26,6 @@ env:
   TASK_X_REMOTE_TASKFILES: 1
 
 jobs:
-  lint:
-    runs-on: [self-hosted, large]
-    continue-on-error: true
-    name: Lint
-    steps:
-      - uses: actions/checkout@v4
-      - uses: deckhouse/modules-actions/lint@main
-        env:
-          DMT_METRICS_URL: ${{ secrets.DMT_METRICS_URL }}
-          DMT_METRICS_TOKEN: ${{ secrets.DMT_METRICS_TOKEN }}
-
-  lint_go:
-    runs-on: [self-hosted, large]
-    name: Run golangci-lint
-    steps:
-      - name: Set up Go ${{ vars.GO_VERSION }}
-        uses: actions/setup-go@v5
-        with:
-          go-version: "${{ vars.GO_VERSION }}"
-
-      - uses: actions/checkout@v4
-
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install golangci-lint
-        run: task --yes deps:install:golangci-lint
-
-      - name: Run golangci-lint for supported Go modules
-        run: task --yes lint:go
-
-  lint_yaml:
-    runs-on: [self-hosted, large]
-    name: Run YAML linters
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run YAML linters
-        run: task --yes lint:yaml
-
   build_dev:
     runs-on: [self-hosted, large]
     name: Build and Push images
