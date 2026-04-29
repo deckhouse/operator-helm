@@ -147,7 +147,7 @@ tasks:
     desc: "Run non-Go linters."
     cmds:
       - task: lint:doc-ru
-      - task: lint:prettier:yaml
+      - task: lint:prettier:yaml:crds
 
   lint:go:
     desc: "Lint supported Go modules (excluding kube-api-rewriter and tools)."

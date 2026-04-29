@@ -59,6 +59,20 @@ jobs:
       - name: Run golangci-lint for supported Go modules
         run: task --yes lint:go
 
+  lint_yaml:
+    runs-on: [self-hosted, large]
+    name: Run YAML linters
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run YAML linters
+        run: task --yes lint:yaml
+
   build_dev:
     runs-on: [self-hosted, large]
     name: Build and Push images
