@@ -23,7 +23,7 @@ jobs:
     runs-on: [self-hosted, large]
     name: Deploy the module
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: deckhouse/modules-actions/setup@main
         with:
