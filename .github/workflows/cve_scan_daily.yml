@@ -14,23 +14,23 @@
 
 name: "Daily CVE tests"
 on:
-    schedule:
-        # Run at 2:00 every night (UTC).
-        - cron: "0 02 * * *"
-    workflow_dispatch:
-        inputs:
-            tag_name:
-                description: "Tag from dev registry to scan manually; defaults to main"
-                required: false
+  schedule:
+    # Run at 2:00 every night (UTC).
+    - cron: "0 02 * * *"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag from dev registry to scan manually; defaults to main"
+        required: false
 
 concurrency:
-    group: cve-daily
+  group: cve-daily
 
 jobs:
-    cve_scan_daily:
-        name: Trivy images check
-        uses: ./.github/workflows/cve_scan_reusable.yml
-        with:
-            source_tag: ${{ github.event.inputs.tag_name || 'main' }}
-            external_module_name: ${{ vars.MODULES_MODULE_NAME }}
-            latest_releases_amount: "5"
+  cve_scan_daily:
+    name: Trivy images check
+    uses: ./.github/workflows/cve_scan_reusable.yml
+    with:
+      source_tag: ${{ github.event.inputs.tag_name || 'main' }}
+      external_module_name: ${{ vars.MODULES_MODULE_NAME }}
+      latest_releases_amount: "5"

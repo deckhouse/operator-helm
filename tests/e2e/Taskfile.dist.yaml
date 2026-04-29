@@ -1,18 +1,25 @@
-version: '3'
+version: "3"
+
+includes:
+  deps:
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
+    flatten: true
+  e2e:
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.format_lint.yml
+    flatten: true
+    vars:
+      gciPrefix: '{{.gciPrefix | default "github.com/deckhouse/"}}'
+      golangciConfigPath: '{{.golangciConfigPath | default "./.golangci.yaml"}}'
+      golangciLintBinDir: '{{.golangciLintBinDir | default "../../bin"}}'
+      golangciLintVersion: '{{.golangciLintVersion | default "v2.8.0"}}'
+      golangciPaths: '{{.golangciPaths | default "./..."}}'
+      paths: '{{.paths | default "."}}'
 
 vars:
   TIMEOUT: '{{.TIMEOUT | default "30m"}}'
   KIND_CLUSTER_NAME: '{{.KIND_CLUSTER_NAME | default "d8-operator-helm"}}'
 
 tasks:
-  deps:install:ginkgo:
-    desc: 'Install ginkgo binary. Important vars: "paths".'
-    cmds:
-      - |
-        cd {{.paths | default "./"}}
-        version="$(go list -m -f '{{ printf `{{ .Version }}` }}' github.com/onsi/ginkgo/v2)"
-        go install {{.CLI_ARGS}} github.com/onsi/ginkgo/v2/ginkgo@${version}  
-
   kind:ci:setup:
     desc: Setup kind in CI
     cmds:
@@ -21,12 +28,12 @@ tasks:
       KIND_DECKHOUSE_CHANNEL: '{{.KIND_DECKHOUSE_CHANNEL | default "Stable"}}'
       MODULE_TAG_NAME: '{{.MODULE_TAG_NAME | default "main"}}'
       DEV_REGISTRY_URL: '{{.DEV_REGISTRY_URL | default "dev-registry.deckhouse.io/sys/deckhouse-oss/modules"}}'
-      DEV_REGISTRY_DOCKER_CONFIG: '{{.DEV_REGISTRY_DOCKER_CONFIG}}'
+      DEV_REGISTRY_DOCKER_CONFIG: "{{.DEV_REGISTRY_DOCKER_CONFIG}}"
 
   kind:ci:cleanup:
     desc: Delete kind cluster in CI
     cmds:
-      - './kind/bin/kind delete cluster --name {{.KIND_CLUSTER_NAME}} || exit 0'
+      - "./kind/bin/kind delete cluster --name {{.KIND_CLUSTER_NAME}} || exit 0"
 
   tests:
     desc: Run e2e tests
@@ -35,4 +42,4 @@ tasks:
         args="-v --race --timeout={{.TIMEOUT}}"
         go tool ginkgo $args ./...
     env:
-      E2E_CLUSTERTRANSPORT_KUBECONFIG: './kind/{{.KIND_CLUSTER_NAME}}/kubeconfig-external'
+      E2E_CLUSTERTRANSPORT_KUBECONFIG: "./kind/{{.KIND_CLUSTER_NAME}}/kubeconfig-external"

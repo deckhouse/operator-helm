@@ -2,41 +2,43 @@ version: "3"
 
 silent: false
 
+includes:
+  api:
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.format_lint.yml
+    flatten: true
+    vars:
+      gciPrefix: '{{.gciPrefix | default "github.com/deckhouse/"}}'
+      golangciConfigPath: '{{.golangciConfigPath | default "./.golangci.yaml"}}'
+      golangciLintBinDir: '{{.golangciLintBinDir | default "../bin"}}'
+      golangciLintVersion: '{{.golangciLintVersion | default "v2.8.0"}}'
+      golangciPaths: '{{.golangciPaths | default "./..."}}'
+      paths: '{{.paths | default "."}}'
+      prettierPattern: '../crds/*.yaml'
+
 tasks:
   generate:
     desc: "Regenerate all"
     cmds:
       - ./scripts/update-codegen.sh all
-      - task: format:yaml
-
-  generate:v1alpha1:
-    desc: "Regenerate code for core components."
-    cmd: ./scripts/update-codegen.sh v1alpha1
+      - task: lint:prettier:yaml
 
   ci:generate:
     desc: "Run generations and check git diff to ensure all files are committed"
     cmds:
       - task: generate
-      - task: _ci:verify-gen
+      - task: ci:verify
+
+  generate:v1alpha1:
+    desc: "Regenerate code for core components."
+    cmd: ./scripts/update-codegen.sh v1alpha1
 
   generate:crds:
     desc: "Regenerate crds"
     cmds:
       - ./scripts/update-codegen.sh crds
-      # - task: format:yaml
 
-  format:yaml:
-    desc: "Format non-templated YAML files, e.g. CRDs"
-    cmds:
-      # TODO: replace prettier image
-      - |
-        cd ../ && docker run --rm \
-          -v "$(pwd):/tmp/operator-helm" ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
-          sh -c "cd /tmp/operator-helm ; prettier -w \"crds/*.yaml\""
-
-  _ci:verify-gen:
+  ci:verify:
     desc: "Check generated files are up-to-date."
-    internal: true
     cmds:
       - |
-        git diff --exit-code || (echo "Please run task gen:api and commit changes" && exit 1)
+        git diff --exit-code || (echo "Please run task generate:api and commit changes" && exit 1)

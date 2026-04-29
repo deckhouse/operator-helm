@@ -6,13 +6,67 @@ vars:
   deckhouse_lib_helm_ver: 1.71.2
   target: ""
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
+  golangciLintVersion: "v2.8.0"
 
 includes:
+  api:
+    taskfile: ./api/Taskfile.dist.yaml
+    dir: ./api
   e2e:
     taskfile: ./tests/e2e/Taskfile.dist.yaml
     dir: ./tests/e2e
+  hooks:
+    taskfile: ./images/hooks/Taskfile.dist.yaml
+    dir: ./images/hooks
+  artifact:
+    taskfile: ./images/operator-helm-artifact/Taskfile.dist.yaml
+    dir: ./images/operator-helm-artifact
+
+  deps:
+    taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
+    flatten: true
+    vars:
+      golangciLintVersion: "{{.golangciLintVersion}}"
 
 tasks:
+  deps:install:all:
+    desc: "Install development dependencies."
+    deps:
+      - deps:install:gci
+      - deps:install:gofumpt
+      - deps:install:golangci-lint
+      - e2e:deps:install:ginkgo
+
+  deps:install:e2e:
+    desc: "Install e2e test dependencies."
+    cmds:
+      - task: e2e:deps:install:ginkgo
+
+  generate:api:
+    desc: "Regenerate API artifacts."
+    cmds:
+      - task: api:generate
+
+  ci:generate:api:
+    desc: "Run API generation and verify committed files."
+    cmds:
+      - task: api:ci:generate
+
+  test:e2e:setup:
+    desc: "Setup environment for e2e tests."
+    cmds:
+      - task: e2e:kind:ci:setup
+
+  test:e2e:
+    desc: "Run e2e tests."
+    cmds:
+      - task: e2e:tests
+
+  test:e2e:cleanup:
+    desc: "Cleanup e2e environment."
+    cmds:
+      - task: e2e:kind:ci:cleanup
+
   check-werf:
     cmds:
       - which werf >/dev/null || (echo "werf not found."; exit 1)
@@ -54,37 +108,30 @@ tasks:
     cmds:
       - werf build {{ .target }}
 
-  dev:format:yaml:
-    desc: "Format non-templated YAML files, e.g. CRDs"
+  format:
+    desc: "Run formatters for Go and YAML."
     cmds:
-      # TODO: update image reference
-      - |
-        docker run --rm \
-          -v ./:/tmp/operator-helm ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
-          sh -c "cd /tmp/operator-helm ; prettier -w \"**/*.yaml\" \"**/*.yml\""
+      - task: api:format
+      - task: hooks:format
+      - task: artifact:format
+      - task: e2e:format
 
   lint:
     cmds:
+      - task: api:lint
+      - task: hooks:lint
+      - task: artifact:lint
+      - task: e2e:lint
       - task: lint:doc-ru
-      - task: lint:prettier:yaml
 
   lint:doc-ru:
     desc: "Check the correspondence between description fields in the original crd and the Russian language version"
     cmds:
       - |
         docker run \
-          --rm -it -v "$PWD:/src" docker.io/fl64/d8-doc-ru-linter:v0.0.1-dev0 \
+          --rm -v "$PWD:/src" docker.io/fl64/d8-doc-ru-linter:v0.0.1-dev0 \
           sh -c \
             'for crd in /src/crds/*.yaml; do [[ "$(basename "$crd")" =~ ^doc-ru ]] || (echo ${crd}; /d8-doc-ru-linter -s "$crd" -d "/src/crds/doc-ru-$(basename "$crd")" -n /dev/null); done'
-
-  lint:prettier:yaml:
-    desc: "Check if yaml files are prettier-formatted."
-    cmds:
-      # TODO: update image reference
-      - |
-        docker run --rm \
-          -v ./:/tmp/operator-nelm ghcr.io/deckhouse/virtualization/prettier:3.2.5 \
-          sh -c "cd /tmp/operator-nelm ; prettier -c \"**/*.yaml\" \"**/*.yml\""
 
   validation:doc-changes:
     desc: "Doc-changes"

@@ -3,6 +3,7 @@
 *.dll
 *.so
 *.dylib
+/bin
 
 # Test binary, build with `go test -c`
 *.test
@@ -42,4 +43,7 @@ __pycache__/
 # Go
 go.work
 go.work.sum
+
+# Task
+.task/
 
