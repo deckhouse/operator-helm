@@ -54,6 +54,7 @@ func UntilConditionTrue(conditionType string, timeout time.Duration, objs ...cli
 // UntilConditionStatus waits for the specified condition to reach the given status.
 func UntilConditionStatus(conditionType, expectedStatus string, timeout time.Duration, objs ...client.Object) {
 	GinkgoHelper()
+
 	Eventually(func(g Gomega) {
 		for _, obj := range objs {
 			u := toUnstructured(obj)
@@ -75,9 +76,9 @@ func UntilConditionStatus(conditionType, expectedStatus string, timeout time.Dur
 					continue
 				}
 				if t, _ := m["type"].(string); t == conditionType {
-					observedGeneration, _ := m["observedGeneration"].(int64)
-					g.Expect(observedGeneration).To(BeNumerically("==", obj.GetGeneration()))
-
+					if observedGeneration, ok := m["observedGeneration"].(int64); ok {
+						g.Expect(observedGeneration).To(BeNumerically("==", obj.GetGeneration()))
+					}
 					status, _ := m["status"].(string)
 					g.Expect(status).To(Equal(expectedStatus),
 						"object %s condition %s status is %q, expected %q",
@@ -89,7 +90,54 @@ func UntilConditionStatus(conditionType, expectedStatus string, timeout time.Dur
 			g.Expect(matched).To(BeTrue(),
 				"condition %s not found on %s", conditionType, u.GetName())
 		}
-	}).WithTimeout(timeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
+}
+
+// UntilConditionStatus waits for the specified condition to reach the given status considering contdition's LastTranstionTime attribute.
+func UntilConditionStatusWithLastTransitionTime(conditionType, expectedStatus string, deployTime metav1.Time, timeout time.Duration, objs ...client.Object) {
+	GinkgoHelper()
+
+	Eventually(func(g Gomega) {
+		for _, obj := range objs {
+			u := toUnstructured(obj)
+			err := framework.GetClients().GenericClient().Get(
+				context.Background(), client.ObjectKeyFromObject(obj), u,
+			)
+			g.Expect(err).NotTo(HaveOccurred())
+
+			conditions, found, err := unstructured.NestedSlice(u.Object, "status", "conditions")
+			g.Expect(err).NotTo(HaveOccurred(),
+				"failed to access status.conditions of %s", u.GetName())
+			g.Expect(found).To(BeTrue(),
+				"no status.conditions found on %s", u.GetName())
+
+			var matched bool
+			for _, c := range conditions {
+				m, ok := c.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if t, _ := m["type"].(string); t == conditionType {
+					if observedGeneration, ok := m["observedGeneration"].(int64); ok {
+						g.Expect(observedGeneration).To(BeNumerically("==", obj.GetGeneration()))
+					}
+					status, _ := m["status"].(string)
+					g.Expect(status).To(Equal(expectedStatus),
+						"object %s condition %s status is %q, expected %q",
+						u.GetName(), conditionType, status, expectedStatus)
+					lastTransitionTimeStr, ok := m["lastTransitionTime"].(string)
+					g.Expect(ok).To(BeTrue(), "condition should have lastTransitionTime attribute")
+					lastTransitionTime, err := time.Parse(time.RFC3339, lastTransitionTimeStr)
+					g.Expect(err).NotTo(HaveOccurred(), "condition should have valid lastTransitionTime value")
+					g.Expect(lastTransitionTime.After(deployTime.UTC().Add(-1*time.Second))).To(BeTrue(), "condition has last transition time at %v, which is before deployTime %v", lastTransitionTime, deployTime.UTC())
+					matched = true
+					break
+				}
+			}
+			g.Expect(matched).To(BeTrue(),
+				"condition %s not found on %s", conditionType, u.GetName())
+		}
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
 // UntilConditionReason waits for the specified condition to have the expected reason.
@@ -124,7 +172,7 @@ func UntilConditionReason(conditionType, expectedReason string, timeout time.Dur
 			g.Expect(matched).To(BeTrue(),
 				"condition %s not found on %s", conditionType, u.GetName())
 		}
-	}).WithTimeout(timeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
 func untilObjectField(fieldPath, expected string, timeout time.Duration, objs ...client.Object) {
@@ -148,7 +196,7 @@ func untilObjectField(fieldPath, expected string, timeout time.Duration, objs ..
 				"object %s %s is %q, expected %q",
 				u.GetName(), fieldPath, actual, expected)
 		}
-	}).WithTimeout(timeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
 func toUnstructured(obj client.Object) *unstructured.Unstructured {

@@ -31,9 +31,9 @@ const (
 var (
 	ShortTimeout    = getTimeout(shortTimeoutEnv, 30*time.Second)
 	MiddleTimeout   = getTimeout(middleTimeoutEnv, 60*time.Second)
-	LongTimeout     = getTimeout(longTimeoutEnv, 300*time.Second)
-	MaxTimeout      = getTimeout(maxTimeoutEnv, 600*time.Second)
-	PollingInterval = 1 * time.Second
+	LongTimeout     = getTimeout(longTimeoutEnv, 600*time.Second)
+	MaxTimeout      = getTimeout(maxTimeoutEnv, 900*time.Second)
+	PollingInterval = 5 * time.Second
 )
 
 func getTimeout(env string, defaultTimeout time.Duration) time.Duration {

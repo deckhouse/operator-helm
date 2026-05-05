@@ -42,9 +42,27 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			DeferCleanup(f.After)
 			f.Before()
 
+			deployAt := metav1.Now()
+
+			By("Creating ModuleConfig for operator-helm")
+			util.EnsureModuleConfig(f)
+
+			By("Waiting for module pods to be Running and Ready")
+			util.UntilModuleEnabled(deployAt, framework.LongTimeout)
+
 			By("Verifying all controllers are running")
 			for _, ctrl := range cfg.Controllers {
 				util.UntilControllerReady(ctrl.Namespace, ctrl.LabelSelector, framework.LongTimeout)
+			}
+		})
+
+		AfterAll(func() {
+			if framework.IsCleanUpNeeded() {
+				By("Cleaning up HelmClusterAddonRepositories")
+				util.DeleteHelmClusterAddonRepository(f, repoName, repoType, framework.LongTimeout)
+				By("Cleaning up module")
+				util.DisableModuleConfig(framework.LongTimeout)
+				util.UntilModuleDisabled(framework.LongTimeout)
 			}
 		})
 
@@ -114,15 +132,33 @@ var _ = Describe("HelmClusterAddonRepository lifecycle", Ordered, func() {
 
 var _ = Describe("Create HelmClusterAddonRepository with invalid url", Ordered, func() {
 	f := framework.NewFramework("repository-lifecycle")
+	repoName := "repo-with-invalid-url"
+
 	cfg := framework.GetConfig()
 
 	BeforeAll(func() {
 		DeferCleanup(f.After)
 		f.Before()
 
+		deployaAt := metav1.Now()
+
+		By("Creating ModuleConfig for operator-helm")
+		util.EnsureModuleConfig(f)
+
+		By("Waiting for module pods to be Running and Ready")
+		util.UntilModuleEnabled(deployaAt, framework.LongTimeout)
+
 		By("Verifying all controllers are running")
 		for _, ctrl := range cfg.Controllers {
 			util.UntilControllerReady(ctrl.Namespace, ctrl.LabelSelector, framework.LongTimeout)
+		}
+	})
+
+	AfterAll(func() {
+		if framework.IsCleanUpNeeded() {
+			By("Cleaning up module")
+			util.DisableModuleConfig(framework.LongTimeout)
+			util.UntilModuleDisabled(framework.LongTimeout)
 		}
 	})
 
@@ -135,7 +171,7 @@ var _ = Describe("Create HelmClusterAddonRepository with invalid url", Ordered, 
 		By("Creating HelmClusterAddonRepository with invalid url")
 		repo := &apiv1alpha1.HelmClusterAddonRepository{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "repo-with-invalid-url",
+				Name: repoName,
 			},
 			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
 				URL: "invalid-url",

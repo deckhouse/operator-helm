@@ -51,7 +51,7 @@ func UntilControllerReady(namespace, labelSelector string, timeout time.Duration
 					"container %s in pod %s has %d restarts", cs.Name, pod.Name, cs.RestartCount)
 			}
 		}
-	}).WithTimeout(timeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
 // AssertPodsExist verifies that at least minCount pods matching the selector
@@ -77,7 +77,7 @@ func UntilPodsExist(namespace, labelSelector string, minCount int, timeout time.
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(len(pods.Items)).To(BeNumerically(">=", minCount),
 			"waiting for >= %d pods, got %d", minCount, len(pods.Items))
-	}).WithTimeout(timeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
 // UntilPodCount waits for exactly expectedCount Running pods (excluding
@@ -100,7 +100,7 @@ func UntilPodCount(namespace, labelSelector string, expectedCount int, timeout t
 		g.Expect(runningCount).To(Equal(expectedCount),
 			"expected %d running pods, got %d (total listed: %d)",
 			expectedCount, runningCount, len(pods.Items))
-	}).WithTimeout(timeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
 // UntilAllPodsReady waits for exactly expectedCount pods to be Running and
@@ -123,5 +123,5 @@ func UntilAllPodsReady(namespace, labelSelector string, expectedCount int, timeo
 					"pod %s container %s not ready", pod.Name, cs.Name)
 			}
 		}
-	}).WithTimeout(timeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }

@@ -47,9 +47,29 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			DeferCleanup(f.After)
 			f.Before()
 
+			deployAt := metav1.Now()
+
+			By("Creating ModuleConfig for operator-helm")
+			util.EnsureModuleConfig(f)
+
+			By("Waiting for module pods to be Running and Ready")
+			util.UntilModuleEnabled(deployAt, framework.LongTimeout)
+
 			By("Verifying all controllers are running")
 			for _, ctrl := range cfg.Controllers {
 				util.UntilControllerReady(ctrl.Namespace, ctrl.LabelSelector, framework.LongTimeout)
+			}
+		})
+
+		AfterAll(func() {
+			if framework.IsCleanUpNeeded() {
+				By("Cleaning up HelmClusterAddon")
+				util.DeleteHelmClusterAddon(f, addonName, framework.LongTimeout)
+				By("Cleaning up HelmClusterAddonRepositories")
+				util.DeleteHelmClusterAddonRepository(f, repoName, repoType, framework.LongTimeout)
+				By("Cleaning up module")
+				util.DisableModuleConfig(framework.LongTimeout)
+				util.UntilModuleDisabled(framework.LongTimeout)
 			}
 		})
 

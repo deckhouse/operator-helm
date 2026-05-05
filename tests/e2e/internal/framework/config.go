@@ -71,8 +71,11 @@ func loadConfig() (*Config, error) {
 }
 
 type Config struct {
-	ClusterTransport ClusterTransport   `yaml:"clusterTransport"`
-	Controllers      []ControllerConfig `yaml:"controllers"`
+	ClusterTransport      ClusterTransport   `yaml:"clusterTransport"`
+	Controllers           []ControllerConfig `yaml:"controllers"`
+	ModuleSource          string
+	ModuleSourceDockerCfg string
+	ModuleTagName         string
 }
 
 type ControllerConfig struct {
@@ -140,6 +143,17 @@ func (c *Config) applyEnvOverrides() {
 		if err == nil {
 			c.ClusterTransport.InsecureTLS = v
 		}
+	}
+	if s, ok := os.LookupEnv("E2E_MODULE_TAG_NAME"); ok {
+		c.ModuleTagName = s
+	}
+	if s, ok := os.LookupEnv("E2E_MODULE_SOURCE"); ok {
+		c.ModuleSource = s
+	} else {
+		c.ModuleSource = "deckhouse"
+	}
+	if s, ok := os.LookupEnv("DEV_REGISTRY_DOCKER_CONFIG"); ok {
+		c.ModuleSourceDockerCfg = s
 	}
 }
 

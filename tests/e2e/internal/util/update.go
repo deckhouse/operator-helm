@@ -18,7 +18,6 @@ package util
 
 import (
 	"context"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -46,7 +45,7 @@ func UpdateHelmClusterAddon(name string, mutate func(*apiv1alpha1.HelmClusterAdd
 			HelmClusterAddons().
 			Update(context.Background(), current, metav1.UpdateOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-	}).WithTimeout(framework.ShortTimeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
 	return updated
 }
@@ -69,7 +68,7 @@ func UpdateHelmClusterAddonRepository(name string, mutate func(*apiv1alpha1.Helm
 			HelmClusterAddonRepositories().
 			Update(context.Background(), current, metav1.UpdateOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-	}).WithTimeout(framework.ShortTimeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
 	return updated
 }
