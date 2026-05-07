@@ -540,7 +540,7 @@ wait_until_pods_ready() {
 
   while true; do
     local pod_list
-    pod_list=$(kubectl get pods -n "$namespace" $label_flag -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+    pod_list=$(${KUBECTL_PATH} get pods -n "$namespace" $label_flag -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
 
     local actual_count
     actual_count=$(echo "$pod_list" | wc -w | xargs)
@@ -549,7 +549,7 @@ wait_until_pods_ready() {
       echo "Pending: Found $actual_count/$required_count pods..."
     else
       local statuses
-      statuses=$(kubectl get pods -n "$namespace" $label_flag -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
+      statuses=$(${KUBECTL_PATH} get pods -n "$namespace" $label_flag -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
 
       local not_ready_count
       not_ready_count=$(echo "$statuses" | tr ' ' '\n' | grep -v "True" | wc -l | xargs)
@@ -564,7 +564,7 @@ wait_until_pods_ready() {
 
     if [[ "$elapsed" -ge "$timeout" ]]; then
       echo "Error: Timed out waiting for pods in $namespace after ${timeout}s"
-      kubectl get pods -n "$namespace" $label_flag
+      ${KUBECTL_PATH} get pods -n "$namespace" $label_flag
       return 1
     fi
 
