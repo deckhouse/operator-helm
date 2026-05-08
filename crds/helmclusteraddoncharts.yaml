@@ -5,6 +5,7 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
   labels:
+    backup.deckhouse.io/cluster-config: "true"
     heritage: deckhouse
     module: operator-helm
   name: helmclusteraddoncharts.helm.deckhouse.io

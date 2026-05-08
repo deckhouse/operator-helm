@@ -24,25 +24,25 @@ NC='\033[0m'
 
 #  Checking OS and getting a chip name
 if uname -s | grep -q "Darwin"; then
-    chip_info=$(sysctl -n machdep.cpu.brand_string)
-    if [[ "$chip_info" == *"Apple M"* ]]; then
+  chip_info=$(sysctl -n machdep.cpu.brand_string)
+  if [[ "$chip_info" == *"Apple M"* ]]; then
     # Retrieving the processor generation for Apple on the M
     chip_model=$(echo "$chip_info" | awk -F'Apple ' '{print $2}' | cut -d' ' -f1-2 | sed 's/ / /')
     # Display an alert for Apple on M
     echo -e "${BOLD}${PURPLE}Warning. ${CYAN}Your computer has been identified as: ${GREEN}Apple $chip_model ${NC}
     ${YELLOW}Disable Rosetta support in Docker Desktop before installation.
     To do this, in Docker Desktop go to ${CYAN}Settings > General > Virtual Machine Options ${YELLOW}and uncheck the ${CYAN}Use Rosetta for x86_64/amd64 emulation on Apple Silicon ${YELLOW}option.${NC}"
-    fi
+  fi
 fi
 
-PARENT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." &> /dev/null && pwd)
+PARENT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." &>/dev/null && pwd)
 
 KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME:-d8-operator-helm}
 KIND_CONFIG_DIR=${KIND_CONFIG_DIR:-$PARENT_DIR/kind}/$KIND_CLUSTER_NAME
 KIND_IMAGE=kindest/node:v1.31.6@sha256:28b7cbb993dfe093c76641a0c95807637213c9109b761f1d422c2400e22b8e87
 
-D8_RELEASE_CHANNEL_TAG=stable
-D8_RELEASE_CHANNEL_NAME=Stable
+D8_RELEASE_CHANNEL_TAG=rock-solid
+D8_RELEASE_CHANNEL_NAME=RockSolid
 D8_REGISTRY_ADDRESS=registry.deckhouse.io
 D8_REGISTRY_PATH=${D8_REGISTRY_ADDRESS}/deckhouse/ce
 D8_LICENSE_KEY=
@@ -171,7 +171,7 @@ os_detect() {
   OS_NAME="${OS_NAME// /}"
 
   # Supported on ...
-  if [[ ("$OS_NAME" == "Ubuntu") || ("$OS_NAME" == "ubuntu") || ("$OS_NAME" == "Debian") || ("$OS_NAME" == "debian") ]]; then
+  if [[ ("$OS_NAME" == "Ubuntu") || ("$OS_NAME" == "ubuntu") || ("$OS_NAME" == "Debian") || ("$OS_NAME" == "debian") || ("$OS_NAME" == "cachyos") ]]; then
     OS_NAME=linux
   elif [[ ("$OS_NAME" != "mac") && ("$OS_NAME" != "linux") ]]; then
     OS_NAME=
@@ -345,6 +345,7 @@ spec:
     bundle: Minimal
     releaseChannel: EarlyAccess
     logLevel: Info
+    allowExperimentalModules: true
 ---
 apiVersion: deckhouse.io/v1alpha1
 kind: ModuleConfig
@@ -452,7 +453,7 @@ EOF
 
 cluster_deletion_info() {
 
-    printf "
+  printf "
 To delete created cluster use the following command:
 
     ${KIND_PATH} delete cluster --name "${KIND_CLUSTER_NAME}"
@@ -503,8 +504,8 @@ deckhouse_install() {
 }
 
 macos_force_qemu() {
-  if [ "$OS_NAME" = "mac" ]
-  then ${KUBECTL_PATH} --context kind-"${KIND_CLUSTER_NAME}" patch daemonset node-exporter -n d8-monitoring --type='json' -p='[{"op": "add", "path": "/spec/template/spec/containers/1/env/-", "value": {"name": "EXPERIMENTAL_DOCKER_DESKTOP_FORCE_QEMU", "value": "1"}}]' 2>/dev/null
+  if [ "$OS_NAME" = "mac" ]; then
+    ${KUBECTL_PATH} --context kind-"${KIND_CLUSTER_NAME}" patch daemonset node-exporter -n d8-monitoring --type='json' -p='[{"op": "add", "path": "/spec/template/spec/containers/1/env/-", "value": {"name": "EXPERIMENTAL_DOCKER_DESKTOP_FORCE_QEMU", "value": "1"}}]' 2>/dev/null
   fi
 }
 
@@ -519,43 +520,62 @@ generate_ee_access_string() {
   fi
 }
 
-setup_operator_helm() {
-  echo "Enabling operator-helm module..."
-
-  ${KUBECTL_PATH} --context "kind-${KIND_CLUSTER_NAME}" create -f - <<EOF
----
-apiVersion: deckhouse.io/v1alpha1
-kind: ModuleSource
-metadata:
-  name: operator-helm
-spec:
-  registry:
-    ca: ""
-    dockerCfg: ${DEV_REGISTRY_DOCKER_CONFIG}
-    repo: ${DEV_REGISTRY_URL}
-    scheme: HTTPS
----
-apiVersion: deckhouse.io/v1alpha2
-kind: ModulePullOverride
-metadata:
-  name: operator-helm
-spec:
-  imageTag: ${MODULE_TAG_NAME}
-  rollback: false
-  scanInterval: 15s
----
-apiVersion: deckhouse.io/v1alpha1
-kind: ModuleConfig
-metadata:
-  name: operator-helm
-spec:
-  enabled: true
-  source: operator-helm
-EOF
+extract_kubectl_context() {
+  ${KUBECTL_PATH} config view --context "kind-${KIND_CLUSTER_NAME}" --minify --flatten >"${KIND_CONFIG_DIR}/kubeconfig-external"
 }
 
-extract_kubectl_context() {
-  ${KUBECTL_PATH} config view --context "kind-${KIND_CLUSTER_NAME}" --minify --flatten > "${KIND_CONFIG_DIR}/kubeconfig-external"
+# Usage: wait_until_pods_ready <namespace> <required_count> [label_selector] [timeout_in_seconds]
+wait_until_pods_ready() {
+  local namespace="${1}"
+  local required_count="${2}"
+  local selector="${3:-}"
+  local timeout="${4:-900}"
+  local interval=5
+  local elapsed=0
+
+  local label_flag=""
+  [[ -n "$selector" ]] && label_flag="-l $selector"
+
+  echo "Waiting for $required_count pod(s) in '$namespace' ${selector:+with labels [$selector] }to be ready..."
+
+  while true; do
+    local pod_list
+    pod_list=$(${KUBECTL_PATH} get pods -n "$namespace" $label_flag -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+
+    local actual_count
+    actual_count=$(echo "$pod_list" | wc -w | xargs)
+
+    if [[ "$actual_count" -lt "$required_count" ]]; then
+      echo "Pending: Found $actual_count/$required_count pods..."
+    else
+      local statuses
+      statuses=$(${KUBECTL_PATH} get pods -n "$namespace" $label_flag -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
+
+      local not_ready_count
+      not_ready_count=$(echo "$statuses" | tr ' ' '\n' | grep -v "True" | wc -l | xargs)
+
+      if [[ "$not_ready_count" -eq 0 ]]; then
+        echo "Success: All $actual_count pods in '$namespace' are Ready!"
+        return 0
+      fi
+
+      echo "Pending: $not_ready_count pod(s) are not ready yet..."
+    fi
+
+    if [[ "$elapsed" -ge "$timeout" ]]; then
+      echo "Error: Timed out waiting for pods in $namespace after ${timeout}s"
+      ${KUBECTL_PATH} get pods -n "$namespace" $label_flag
+      return 1
+    fi
+
+    sleep "$interval"
+    ((elapsed += interval))
+  done
+}
+
+wait_until_deckhouse_ready() {
+  echo "Waiting until deckhouse ready..."
+  wait_until_pods_ready "d8-system" 2
 }
 
 main() {
@@ -567,8 +587,8 @@ main() {
   cluster_create
   deckhouse_install
   macos_force_qemu
-  setup_operator_helm
   extract_kubectl_context
+  wait_until_deckhouse_ready
 }
 
 main "$@"

@@ -19,7 +19,6 @@ package framework
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"time"
 
@@ -28,8 +27,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -41,10 +43,11 @@ const (
 type Framework struct {
 	Clients
 
-	namespacePrefix string
-	namespace       *corev1.Namespace
-	objectsToDelete []client.Object
-	deferredDeletes []func() error
+	namespacePrefix  string
+	namespace        *corev1.Namespace
+	objectsToDelete  []client.Object
+	trackedForDelete map[string]struct{}
+	deferredDeletes  []func() error
 }
 
 func NewFramework(prefix string) *Framework {
@@ -58,15 +61,18 @@ func NewFramework(prefix string) *Framework {
 // Pass empty prefix to NewFramework to skip namespace creation.
 func (f *Framework) Before() {
 	GinkgoHelper()
+
 	if f.namespacePrefix == "" {
 		return
 	}
+
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: fmt.Sprintf("%s-%s-", NamespacePrefix, f.namespacePrefix),
 			Labels:       map[string]string{E2ELabel: "true"},
 		},
 	}
+
 	err := f.generic.Create(context.Background(), ns)
 	Expect(err).NotTo(HaveOccurred())
 	By(fmt.Sprintf("Namespace %q has been created", ns.Name))
@@ -95,14 +101,6 @@ func (f *Framework) After() {
 		_ = f.generic.Delete(context.Background(), obj)
 	}
 	f.waitDeleted(f.objectsToDelete)
-
-	if f.namespace != nil {
-		By("Cleanup: delete namespace")
-		err := f.generic.Delete(context.Background(), f.namespace)
-		if err != nil && !k8serrors.IsNotFound(err) {
-			Expect(err).NotTo(HaveOccurred())
-		}
-	}
 }
 
 func (f *Framework) Namespace() *corev1.Namespace {
@@ -123,20 +121,101 @@ func (f *Framework) Create(ctx context.Context, objs ...client.Object) error {
 		if labels == nil {
 			labels = make(map[string]string)
 		}
-		maps.Copy(labels, map[string]string{E2ELabel: f.namespacePrefix})
 		obj.SetLabels(labels)
 
 		if err := f.generic.Create(ctx, obj); err != nil {
 			return err
 		}
-		f.objectsToDelete = append(f.objectsToDelete, obj)
+		f.appendForDelete(obj)
 	}
 	return nil
 }
 
+// EnsureCreate gets the object by key; if it exists, registers it for cleanup only.
+// If it is not found, creates it via Create (which registers for cleanup).
+func (f *Framework) EnsureCreate(ctx context.Context, obj client.Object) error {
+	GinkgoHelper()
+	key := client.ObjectKeyFromObject(obj)
+	clone := obj.DeepCopyObject().(client.Object)
+	err := f.generic.Get(ctx, key, clone)
+	if err == nil {
+		f.appendForDelete(clone)
+		return nil
+	}
+	if !k8serrors.IsNotFound(err) {
+		return err
+	}
+	return f.Create(ctx, obj)
+}
+
+// EnsureDynamic creates or updates an unstructured resource via the dynamic client,
+// then registers it for cleanup (once per resource key).
+func (f *Framework) EnsureDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string, desired *unstructured.Unstructured, clusterScoped bool) error {
+	return f.ensureDynamic(ctx, gvr, namespace, desired, clusterScoped, true)
+}
+
+// EnsureDynamicWithoutCleanup is like EnsureDynamic but does not register the object for Framework.After().
+func (f *Framework) EnsureDynamicWithoutCleanup(ctx context.Context, gvr schema.GroupVersionResource, namespace string, desired *unstructured.Unstructured, clusterScoped bool) error {
+	return f.ensureDynamic(ctx, gvr, namespace, desired, clusterScoped, false)
+}
+
+func (f *Framework) ensureDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string, desired *unstructured.Unstructured, clusterScoped, registerForCleanup bool) error {
+	name := desired.GetName()
+	var ri dynamic.ResourceInterface
+	if clusterScoped {
+		ri = f.DynamicClient().Resource(gvr)
+	} else {
+		ri = f.DynamicClient().Resource(gvr).Namespace(namespace)
+	}
+
+	existing, err := ri.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if !k8serrors.IsNotFound(err) {
+			return fmt.Errorf("get %s %q: %w", gvr.Resource, name, err)
+		}
+		_, err = ri.Create(ctx, desired, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("create %s %q: %w", gvr.Resource, name, err)
+		}
+		if registerForCleanup {
+			f.appendForDelete(desired)
+		}
+		return nil
+	}
+
+	desired.SetResourceVersion(existing.GetResourceVersion())
+	_, err = ri.Update(ctx, desired, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("update %s %q: %w", gvr.Resource, name, err)
+	}
+	if registerForCleanup {
+		f.appendForDelete(desired)
+	}
+	return nil
+}
+
+func (f *Framework) appendForDelete(obj client.Object) {
+	if f.trackedForDelete == nil {
+		f.trackedForDelete = make(map[string]struct{})
+	}
+	key := f.objectDeleteCacheKey(obj)
+	if _, ok := f.trackedForDelete[key]; ok {
+		return
+	}
+	f.trackedForDelete[key] = struct{}{}
+	f.objectsToDelete = append(f.objectsToDelete, obj)
+}
+
+func (f *Framework) objectDeleteCacheKey(obj client.Object) string {
+	gvk := obj.GetObjectKind().GroupVersionKind()
+	return fmt.Sprintf("%s/%s/%s/%s/%s", gvk.Group, gvk.Version, gvk.Kind, obj.GetNamespace(), obj.GetName())
+}
+
 // DeferDelete registers objects for cleanup in After().
 func (f *Framework) DeferDelete(objs ...client.Object) {
-	f.objectsToDelete = append(f.objectsToDelete, objs...)
+	for _, obj := range objs {
+		f.appendForDelete(obj)
+	}
 }
 
 // DeferDeleteFunc registers a custom cleanup function.

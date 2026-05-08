@@ -99,9 +99,9 @@ func AssertNoErrors() {
 
 	if len(allErrors) > 0 {
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("Found %d error(s) in controller logs:\n\n", len(allErrors)))
+		fmt.Fprintf(&sb, "Found %d error(s) in controller logs:\n\n", len(allErrors))
 		for i, e := range allErrors {
-			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, e.String()))
+			fmt.Fprintf(&sb, "  %d. %s\n", i+1, e.String())
 		}
 		Fail(sb.String())
 	}

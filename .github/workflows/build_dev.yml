@@ -134,13 +134,15 @@ jobs:
         run: task --yes -p test:e2e:setup
         env:
           KIND_CLUSTER_NAME: d8-operator-helm-${{ github.run_number }}
-          MODULE_TAG_NAME: ${{ needs.build_dev.outputs.modules_module_tag }}
           DEV_REGISTRY_DOCKER_CONFIG: ${{ secrets.DEV_REGISTRY_DOCKER_CONFIG }}
 
       - name: Run e2e tests
         run: task --yes -p test:e2e
         env:
           KIND_CLUSTER_NAME: d8-operator-helm-${{ github.run_number }}
+          DEV_REGISTRY_DOCKER_CONFIG: ${{ secrets.DEV_REGISTRY_DOCKER_CONFIG }}
+          E2E_MODULE_TAG_NAME: ${{ needs.build_dev.outputs.modules_module_tag }}
+          E2E_MODULE_SOURCE: operator-helm
 
       - name: Delete kind cluster
         run: task --yes -p test:e2e:cleanup

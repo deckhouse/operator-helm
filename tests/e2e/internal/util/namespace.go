@@ -46,7 +46,7 @@ func UntilNamespaceAbsent(name string, timeout time.Duration) {
 			Namespaces().Get(context.Background(), name, metav1.GetOptions{})
 		g.Expect(k8serrors.IsNotFound(err)).To(BeTrue(),
 			"namespace %q still exists", name)
-	}).WithTimeout(timeout).WithPolling(time.Second).Should(Succeed())
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
 // AssertNamespaceExists verifies the namespace exists.
