@@ -18,10 +18,9 @@ package util
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
-	"encoding/json"
-	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 )
 
 const (

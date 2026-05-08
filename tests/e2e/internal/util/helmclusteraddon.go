@@ -18,14 +18,16 @@ package util
 
 import (
 	"context"
-	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"time"
+
+	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 )
 
 var operatorHelmInternalHelmReleaseGVR = schema.GroupVersionResource{

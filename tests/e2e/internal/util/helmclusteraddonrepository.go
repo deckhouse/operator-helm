@@ -21,13 +21,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 )
 
 var operatorHelmInternalHelmRepositoryGVR = schema.GroupVersionResource{
@@ -42,7 +43,7 @@ var operatorHelmInternalOCIRepositoryGVR = schema.GroupVersionResource{
 	Resource: "internalnelmoperatorocirepositories",
 }
 
-func DeleteHelmClusterAddonRepository(f *framework.Framework, name string, repositoryType string, timeout time.Duration) {
+func DeleteHelmClusterAddonRepository(f *framework.Framework, name, repositoryType string, timeout time.Duration) {
 	GinkgoHelper()
 
 	err := f.OperatorClient().HelmV1alpha1().HelmClusterAddonRepositories().Delete(context.TODO(), name, metav1.DeleteOptions{})
@@ -51,7 +52,7 @@ func DeleteHelmClusterAddonRepository(f *framework.Framework, name string, repos
 	UntilHelmClusterAddonRepositoryDeleted(name, repositoryType, timeout)
 }
 
-func UntilHelmClusterAddonRepositoryDeleted(name string, repositoryType string, timeout time.Duration) {
+func UntilHelmClusterAddonRepositoryDeleted(name, repositoryType string, timeout time.Duration) {
 	repositoryType = strings.ToLower(repositoryType)
 	repositoryName := "hcar-" + name
 
