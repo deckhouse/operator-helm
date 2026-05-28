@@ -73,17 +73,17 @@ func GetHelmClusterAddonChartName(repoName, chartName string) string {
 	var result, postfix string
 
 	if len(repoName) > 20 {
-		result += repoName[:20]
+		result += repoName[:20] + "-chart-"
 		postfix = "-" + hash
 	} else {
-		result += repoName
+		result += repoName + "-chart-"
 	}
 
 	if len(chartName) > 20 {
-		result += "-" + chartName[:20]
+		result += chartName[:20]
 		postfix = "-" + hash
 	} else {
-		result += "-" + chartName
+		result += chartName
 	}
 
 	return strings.TrimRight(result, "-") + postfix
