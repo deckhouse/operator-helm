@@ -40,7 +40,7 @@ shell:
     {{- include "image-build.build" (set $ "BuildCommand" `go build -v -a -o kube-api-rewriter ./cmd/kube-api-rewriter`) | nindent 6 }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
-fromImage: builder/distroless
+fromImage: base/distroless
 git:
   {{- include "image mount points" . }}
 import:
