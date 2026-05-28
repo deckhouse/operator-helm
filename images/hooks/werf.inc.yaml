@@ -24,7 +24,7 @@ shell:
 ---
 image: {{ .ModuleNamePrefix }}go-hooks-artifact
 final: false
-fromImage: builder/golang-bookworm-1.25
+fromImage: builder/golang-bookworm
 import:
   - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
     add: /src
