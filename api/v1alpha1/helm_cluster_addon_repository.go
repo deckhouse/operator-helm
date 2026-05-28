@@ -33,7 +33,7 @@ const (
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
-// +kubebuilder:resource:categories={all,operator-helm},singular=helmclusteraddonrepository,scope=Cluster
+// +kubebuilder:resource:categories={operator-helm},singular=helmclusteraddonrepository,scope=Cluster
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the repository"
 // +genclient
 // +genclient:nonNamespaced

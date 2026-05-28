@@ -32,7 +32,7 @@ const (
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
-// +kubebuilder:resource:categories={all,operator-helm},singular=helmclusteraddonchart,scope=Cluster
+// +kubebuilder:resource:categories={operator-helm},singular=helmclusteraddonchart,scope=Cluster
 // +genclient
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
