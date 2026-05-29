@@ -8,7 +8,7 @@ git:
     stageDependencies:
       install:
         - "**/*"
-  - add: {{ .ModuleDir }}/images/operator-helm-artifact
+  - add: {{ .ModuleDir }}/images/operator-helm
     to: /src/images/operator-helm-artifact
     stageDependencies:
       install:
