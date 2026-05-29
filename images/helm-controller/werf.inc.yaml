@@ -1,6 +1,6 @@
 {{- $helmControllerTag := "v0.1.4" }}
 ---
-image: {{ .ModuleName }}/{{ .ImageName }}-src-artifact
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
 fromImage: builder/src
 secrets:
@@ -12,7 +12,7 @@ shell:
     - rm -rf /src/3p-helm-controller/.git
 ---
 
-image: {{ $.ModuleName }}/{{ $.ImageName }}-artifact
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
 final: false
 fromImage: builder/golang
 secrets:
@@ -21,7 +21,7 @@ secrets:
 - id: GOPROXY
   value: {{ .GOPROXY }}
 import:
-- image: {{ $.ModuleName }}/{{ $.ImageName }}-src-artifact
+- image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
   add: /src
   to: /src
   before: install
@@ -32,10 +32,10 @@ shell:
       export GOPROXY=$(cat /run/secrets/GOPROXY)
       {{- include "image-build.build" (set $ "BuildCommand" `go build -trimpath -a -o helm-controller main.go`) | indent 6 }}
 ---
-image: {{ .ModuleName }}/{{ .ImageName }}
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
 fromImage: base/distroless
 import:
-- image: {{ $.ModuleName }}/{{ $.ImageName }}-artifact
+- image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
   add: /src/3p-helm-controller/helm-controller
   to: /usr/bin/helm-controller
   before: install
