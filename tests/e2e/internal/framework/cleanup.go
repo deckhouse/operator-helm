@@ -18,7 +18,7 @@ package framework
 
 import "os"
 
-const PostCleanUpEnv = "POST_CLEANUP"
+const PostCleanUpEnv = "E2E_POST_CLEANUP"
 
 func IsCleanUpNeeded() bool {
 	return os.Getenv(PostCleanUpEnv) != "no"

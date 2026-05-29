@@ -23,6 +23,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	"github.com/werf/3p-fluxcd-pkg/chartutil"
 	helmchartutil "helm.sh/helm/v3/pkg/chartutil"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,7 +92,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	err := r.statusManager.InitializeConditions(ctx, addon,
+	err := r.statusManager.InitializeConditions(
+		ctx, addon,
 		helmv1alpha1.ConditionTypeReady,
 		helmv1alpha1.ConditionTypeManaged,
 		helmv1alpha1.ConditionTypeInstalled,
@@ -128,6 +130,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			addon,
 			helmv1alpha1.ReasonFailed,
 			fmt.Sprintf("Failed to parse repository type: %s", err.Error()),
+			err,
+		)})
+	}
+
+	if err := r.reconcileAddonNamespace(ctx, addon); err != nil {
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
+			addon,
+			helmv1alpha1.ReasonFailed,
+			fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
 			err,
 		)})
 	}
@@ -243,6 +254,33 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 	logger.Info("Cleanup complete")
 
 	return reconcile.Result{}, nil
+}
+
+func (r *Reconciler) reconcileAddonNamespace(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+	ns := &corev1.Namespace{}
+
+	err := r.Get(ctx, client.ObjectKey{Name: addon.Spec.Namespace}, ns)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("getting namespace: %w", err)
+		}
+
+		ns = &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: addon.Spec.Namespace,
+			},
+		}
+
+		err = r.Create(ctx, ns)
+		if err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return nil
+			}
+			return fmt.Errorf("creating namespace: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile.Request) error {
