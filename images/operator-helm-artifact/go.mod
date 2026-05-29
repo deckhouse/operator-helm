@@ -1,6 +1,6 @@
 module github.com/deckhouse/operator-helm
 
-go 1.26.0
+go 1.26.3
 
 replace github.com/deckhouse/operator-helm/api => ../../api
 
@@ -9,7 +9,6 @@ require (
 	github.com/deckhouse/operator-helm/api v0.0.0-00010101000000-000000000000
 	github.com/google/go-containerregistry v0.20.6
 	github.com/opencontainers/go-digest v1.0.0
-	github.com/stretchr/testify v1.11.1
 	github.com/werf/3p-fluxcd-pkg/apis/meta v1.23.0-nelm.1
 	github.com/werf/3p-fluxcd-pkg/chartutil v1.17.0-nelm.1
 	github.com/werf/3p-helm-controller/api v0.1.4
