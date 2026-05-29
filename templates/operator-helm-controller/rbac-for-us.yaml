@@ -29,6 +29,14 @@ metadata:
   name: d8:{{ .Chart.Name }}:operator-helm-controller
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - namespaces 
+  verbs:
+  - create
+  - get
+  - list
+- apiGroups:
   - authentication.k8s.io
   resources:
   - tokenreviews
