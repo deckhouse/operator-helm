@@ -7,7 +7,7 @@ secrets:
 - id: SOURCE_REPO
   value: {{ .SOURCE_REPO }}
 shell:
-  installCacheVersion: 1
+  installCacheVersion: 2
   install:
     - git clone --branch {{ $nelmSourceControllerTag }} --single-branch $(cat /run/secrets/SOURCE_REPO)/werf/nelm-source-controller.git /src/nelm-source-controller
     - rm -rf /src/nelm-source-controller/.git

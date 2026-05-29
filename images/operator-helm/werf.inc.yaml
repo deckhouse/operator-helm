@@ -20,7 +20,7 @@ git:
     setup:
     - "**/*.go"
 ---
-image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
 final: false
 fromImage: builder/golang
 import:
@@ -45,4 +45,17 @@ shell:
 
     {{-   $buildCommand := printf "go build -ldflags=\"-s -w\" -tags %s -v -a -o /out/operator-helm-controller ./cmd/operator-helm-controller" .MODULE_EDITION -}}
     {{-   include "image-build.build" (set $ "BuildCommand" $buildCommand) | nindent 4 }}
-
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+fromImage: base/distroless
+git:
+  {{- include "image mount points" . }}
+import:
+- image:  {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+  add: /out/operator-helm-controller
+  to: /app/operator-helm-controller
+  after: install
+imageSpec:
+  config:
+    workingDir: "/app"
+    entrypoint: ["/app/operator-helm-controller"]
