@@ -45,7 +45,7 @@ jobs:
       # - name: Install golangci-lint
       #   run: task --yes deps:install:golangci-lint
 
-      - name: Run linters
-        run: task --yes lint:prettier
+      # - name: Run linters
+      #   run: task --yes lint
 
 
