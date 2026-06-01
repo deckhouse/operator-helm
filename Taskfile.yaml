@@ -19,8 +19,8 @@ includes:
     taskfile: ./images/hooks/Taskfile.dist.yaml
     dir: ./images/hooks
   artifact:
-    taskfile: ./images/operator-helm/Taskfile.dist.yaml
-    dir: ./images/operator-helm
+    taskfile: ./images/operator-helm-controller/Taskfile.dist.yaml
+    dir: ./images/operator-helm-controller
 
   deps:
     taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml

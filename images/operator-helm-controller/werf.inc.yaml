@@ -12,7 +12,7 @@ git:
     setup:
       - "**/*.go"
 - add: {{ .ModuleDir }}/images/{{ .ImageName }}
-  to: /src/images/operator-helm-artifact
+  to: /src/images/operator-helm-controller-artifact
   stageDependencies:
     install:
     - go.mod
@@ -28,17 +28,20 @@ import:
   add: /src
   to: /src
   before: install
+secrets:
+- id: GOPROXY
+  value: {{ .GOPROXY }}
+mount:
+  - fromPath: ~/go-pkg-cache
+    to: /go/pkg
 shell:
   install:
-  - cd /src/images/operator-helm-artifact
-  - go mod download
-  setup:
-  - cd /src/images/operator-helm-artifact
+  - cd /src/images/operator-helm-controller-artifact
+  - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
   - mkdir /out
   - export GOOS=linux
   - export GOARCH=amd64
   - export CGO_ENABLED=0
-
   - |
     echo "Build operator-helm-controller binary"
     {{- $_ := set $ "ProjectName" (list $.ImageName "operator-helm-controller" | join "/") }}

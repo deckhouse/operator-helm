@@ -27,11 +27,9 @@ mount:
     to: /go/pkg
 shell:
   install:
-    - export GOPROXY=$(cat /run/secrets/GOPROXY)
     - cd /src/kube-api-rewriter
-    - go mod download
+    - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
   setup:
-    - cd /src/kube-api-rewriter
     - export GOOS=linux
     - export CGO_ENABLED=0
     - export GOARCH=amd64
