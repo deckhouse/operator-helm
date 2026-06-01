@@ -40,10 +40,12 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install golangci-lint
-        run: task --yes deps:install:golangci-lint
+      # waiting for golangci-lint for go 1.26
+      
+      # - name: Install golangci-lint
+      #   run: task --yes deps:install:golangci-lint
 
       - name: Run linters
-        run: task --yes lint
+        run: task --yes lint:prettier
 
 

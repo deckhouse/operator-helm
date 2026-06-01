@@ -11,8 +11,8 @@ require (
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/werf/3p-fluxcd-pkg/apis/meta v1.23.0-nelm.1
 	github.com/werf/3p-fluxcd-pkg/chartutil v1.17.0-nelm.1
-	github.com/werf/3p-helm-controller/api v0.1.4
-	github.com/werf/nelm-source-controller/api v0.1.4
+	github.com/werf/3p-helm-controller/api v0.1.5
+	github.com/werf/nelm-source-controller/api v0.1.5
 	go.yaml.in/yaml/v3 v3.0.4
 	helm.sh/helm/v3 v3.20.2
 	k8s.io/api v0.35.1

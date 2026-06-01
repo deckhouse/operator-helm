@@ -134,10 +134,10 @@ github.com/werf/3p-fluxcd-pkg/apis/meta v1.23.0-nelm.1 h1:rYX8cMeryBHH7sNPVSQm1I
 github.com/werf/3p-fluxcd-pkg/apis/meta v1.23.0-nelm.1/go.mod h1:14co1+Ub5rW0Bp3Qo4IzCHwEcaw06StyMu7Rv5pMVCY=
 github.com/werf/3p-fluxcd-pkg/chartutil v1.17.0-nelm.1 h1:ua0xt66rxKptzbG1zxy3u96qfV8XsFT9Jd2PU8L6mc8=
 github.com/werf/3p-fluxcd-pkg/chartutil v1.17.0-nelm.1/go.mod h1:fodaCyMGXGxYYSIdWvokrjki8e+DAhgu6BtzHbH2VJ8=
-github.com/werf/3p-helm-controller/api v0.1.4 h1:s7g9UQOrDMUzVE+JtWOP2xApnPOKYlNe1tXkkWCisAw=
-github.com/werf/3p-helm-controller/api v0.1.4/go.mod h1:tiPvDerlc5SwKIDmXB8L3kIMJHse+wigueoEGQq+588=
-github.com/werf/nelm-source-controller/api v0.1.4 h1:/k3RT+hHdwKHntoebdcjhO+zboJIlljHJZlbcumoY08=
-github.com/werf/nelm-source-controller/api v0.1.4/go.mod h1:++j7xw4YVDE8gR9x1HWhIagpo68jE1oEd4+6tMAgXgs=
+github.com/werf/3p-helm-controller/api v0.1.5 h1:3JY7qnhpoG8AA4mQ2VW8yMhOM60CLCXe6n+QMQgxh6Y=
+github.com/werf/3p-helm-controller/api v0.1.5/go.mod h1:cZTkWRxcZGaN1WS7OC2K5haplOV/EvdbnVs6V+9vxAw=
+github.com/werf/nelm-source-controller/api v0.1.5 h1:pxAyCjM4/MtD6KeSJg4FbnkpCXZ2A1AThUfmznspeDo=
+github.com/werf/nelm-source-controller/api v0.1.5/go.mod h1:S6nafnB16Bo+ftoRVDCBJEN0H5mWLfKAAvw7p51l5Yc=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
