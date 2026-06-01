@@ -1,4 +1,4 @@
-{{- $nelmSourceControllerTag := "chore/update-packages" }}
+{{- $nelmSourceControllerTag := "v0.1.5" }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false

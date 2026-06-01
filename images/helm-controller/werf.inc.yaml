@@ -1,4 +1,4 @@
-{{- $helmControllerTag := "chore/update-packages" }}
+{{- $helmControllerTag := "v0.1.5" }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
