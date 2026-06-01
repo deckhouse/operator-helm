@@ -23,29 +23,25 @@ jobs:
         env:
           DMT_METRICS_URL: ${{ secrets.DMT_METRICS_URL }}
           DMT_METRICS_TOKEN: ${{ secrets.DMT_METRICS_TOKEN }}
+# waiting for golangci-lint for go 1.26
+  # lint:
+  #   runs-on: [self-hosted, large]
+  #   name: Lint
+  #   steps:
+  #     - name: Set up Go ${{ vars.GO_VERSION }}
+  #       uses: actions/setup-go@v6
+  #       with:
+  #         go-version: "${{ vars.GO_VERSION }}"
 
-  lint:
-    runs-on: [self-hosted, large]
-    name: Lint
-    steps:
-      - name: Set up Go ${{ vars.GO_VERSION }}
-        uses: actions/setup-go@v6
-        with:
-          go-version: "${{ vars.GO_VERSION }}"
+  #     - uses: actions/checkout@v6
 
-      - uses: actions/checkout@v6
-
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      # waiting for golangci-lint for go 1.26
+  #     - name: Install Task
+  #       uses: arduino/setup-task@v2
+  #       with:
+  #         repo-token: ${{ secrets.GITHUB_TOKEN }}
       
-      # - name: Install golangci-lint
-      #   run: task --yes deps:install:golangci-lint
+  #     - name: Install golangci-lint
+  #       run: task --yes deps:install:golangci-lint
 
-      # - name: Run linters
-      #   run: task --yes lint
-
-
+  #     - name: Run linters
+  #       run: task --yes lint
