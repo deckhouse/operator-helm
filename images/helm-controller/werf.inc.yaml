@@ -29,6 +29,9 @@ shell:
   install:
     - cd /src/3p-helm-controller
     - |
+      export GOOS=linux
+      export GOARCH=amd64
+      export CGO_ENABLED=0
       export GOPROXY=$(cat /run/secrets/GOPROXY)
       {{- include "image-build.build" (set $ "BuildCommand" `go build -trimpath -a -o helm-controller main.go`) | indent 6 }}
 ---
