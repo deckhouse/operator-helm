@@ -40,4 +40,4 @@ import:
   before: install
 imageSpec:
   config:
-    entrypoint: ["source-controller"]
+    entrypoint: ["/usr/bin/source-controller"]

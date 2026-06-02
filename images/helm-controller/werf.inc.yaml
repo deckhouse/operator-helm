@@ -41,4 +41,4 @@ import:
   before: install
 imageSpec:
   config:
-    entrypoint: ["helm-controller"]
+    entrypoint: ["/usr/bin/helm-controller"]
