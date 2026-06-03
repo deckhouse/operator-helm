@@ -8,23 +8,13 @@ git:
     stageDependencies:
       install:
         - "**/*"
-  - add: {{ .ModuleDir }}/images/operator-helm-artifact
-    to: /src/images/operator-helm-artifact
-    stageDependencies:
-      install:
-        - "**/*"
-  - add: {{ .ModuleDir }}/api
-    to: /src/api
-    stageDependencies:
-      install:
-        - "**/*"
 shell:
   install:
     - cd /src
 ---
 image: {{ .ModuleNamePrefix }}go-hooks-artifact
 final: false
-fromImage: builder/golang-bookworm-1.25
+fromImage: builder/golang
 import:
   - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
     add: /src
@@ -38,11 +28,8 @@ secrets:
     value: {{ .GOPROXY }}
 shell:
   install:
-    - export GOPROXY=$(cat /run/secrets/GOPROXY)
     - cd /app/images/hooks
-    - go mod download
-  setup:
-    - cd /app/images/hooks
+    - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
     - |
       export GOOS=linux
       export GOARCH=amd64

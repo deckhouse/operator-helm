@@ -48,7 +48,7 @@ function generate::v1alpha1 {
 
 #  go tool openapi-gen \
 #    --output-pkg "openapi" \
-#    --output-dir "${ROOT}/images/operator-helm-artifact/pkg/api/openapi" \
+#    --output-dir "${ROOT}/images/operator-helm/pkg/api/openapi" \
 #    --output-file "zz_generated.openapi.go" \
 #    --go-header-file "${SCRIPT_DIR}/boilerplate.go.txt" \
 #    -r /dev/null \

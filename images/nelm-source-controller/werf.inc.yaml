@@ -1,3 +1,46 @@
+{{- $nelmSourceControllerTag := "v0.1.5" }}
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+final: false
+fromImage: builder/src
+secrets:
+- id: SOURCE_REPO
+  value: {{ .SOURCE_REPO }}
+shell:
+  install:
+    - git clone --branch {{ $nelmSourceControllerTag }} --single-branch $(cat /run/secrets/SOURCE_REPO)/werf/nelm-source-controller.git /src/nelm-source-controller
+    - rm -rf /src/nelm-source-controller/.git
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+final: false
+fromImage: builder/golang
+secrets:
+- id: SOURCE_REPO
+  value: {{ .SOURCE_REPO }}
+- id: GOPROXY
+  value: {{ .GOPROXY }}
+import:
+- image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+  add: /src
+  to: /src
+  before: install
+shell:
+  install:
+    - cd /src/nelm-source-controller
+    - |
+      export GOOS=linux
+      export GOARCH=amd64
+      export CGO_ENABLED=0
+      export GOPROXY=$(cat /run/secrets/GOPROXY)
+      {{- include "image-build.build" (set $ "BuildCommand" `go build -trimpath -a -o source-controller main.go`) | indent 6 }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
-from: registry.werf.io/nelm/source-controller:v0.1.4
+fromImage: base/distroless
+import:
+- image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+  add: /src/nelm-source-controller/source-controller
+  to: /usr/bin/source-controller
+  before: install
+imageSpec:
+  config:
+    entrypoint: ["/usr/bin/source-controller"]

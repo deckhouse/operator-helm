@@ -13,7 +13,7 @@ git:
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-builder
 final: false
-fromImage: builder/golang-bookworm-1.25
+fromImage: builder/golang
 import:
   - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
     add: /src
@@ -27,11 +27,8 @@ mount:
     to: /go/pkg
 shell:
   install:
-    - export GOPROXY=$(cat /run/secrets/GOPROXY)
     - cd /src/kube-api-rewriter
-    - go mod download
-  setup:
-    - cd /src/kube-api-rewriter
+    - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
     - export GOOS=linux
     - export CGO_ENABLED=0
     - export GOARCH=amd64
@@ -40,7 +37,7 @@ shell:
     {{- include "image-build.build" (set $ "BuildCommand" `go build -v -a -o kube-api-rewriter ./cmd/kube-api-rewriter`) | nindent 6 }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
-fromImage: builder/scratch
+fromImage: base/distroless
 git:
   {{- include "image mount points" . }}
 import:
@@ -57,6 +54,5 @@ import:
     after: install
 imageSpec:
   config:
-    user: "64535:64535"
     workingDir: "/app"
     entrypoint: ["/app/kube-api-rewriter"]
