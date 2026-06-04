@@ -27,15 +27,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 var OCIRepositoryDefaultClient ClientInterface = &ociRepositoryClient{}
 
 type ociRepositoryClient struct{}
 
-func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
+func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig) ([]Chart, error) {
 	url = trimSchemaPrefixes(url)
 	url = strings.TrimSuffix(url, "/")
 
@@ -82,21 +80,26 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 		return nil, fmt.Errorf("listing image tags: %w", err)
 	}
 
-	var chartVersions []helmv1alpha1.HelmClusterAddonChartVersion
+	var chartVersions []ChartVersion
 
 	for _, tag := range tags {
-		if isCosignTag(tag) || !isSemverCompliantTag(tag) {
+		if isCosignTag(tag) {
 			continue
 		}
 
-		// Do not obtain digests as they are currently not used and require a HEAD request per tag.
-		chartVersions = append(chartVersions, helmv1alpha1.HelmClusterAddonChartVersion{
-			Version: tag,
-		})
+		semVersion, err := semver.NewVersion(tag)
+		if err != nil {
+			continue
+		}
+
+		chartVersions = append(chartVersions, ChartVersion{Version: semVersion})
 	}
 
-	return map[string][]helmv1alpha1.HelmClusterAddonChartVersion{
-		chartName: chartVersions,
+	return []Chart{
+		{
+			Name:     chartName,
+			Versions: chartVersions,
+		},
 	}, nil
 }
 

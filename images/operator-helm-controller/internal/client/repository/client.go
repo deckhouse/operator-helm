@@ -23,12 +23,22 @@ import (
 	"fmt"
 	"net/http"
 
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/Masterminds/semver/v3"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+type Chart struct {
+	Name     string
+	Versions []ChartVersion
+}
+
+type ChartVersion struct {
+	Version *semver.Version
+	IconURL string
+}
+
 type ClientInterface interface {
-	FetchCharts(ctx context.Context, url string, config *RepoConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error)
+	FetchCharts(ctx context.Context, url string, config *RepoConfig) ([]Chart, error)
 }
 
 func NewClient(repoType utils.InternalRepositoryType) (ClientInterface, error) {

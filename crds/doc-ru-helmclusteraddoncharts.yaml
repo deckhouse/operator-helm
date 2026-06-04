@@ -12,6 +12,8 @@ spec:
           properties:
             status:
               properties:
+                iconURL:
+                  description: URL-адрес иконки Helm-чарта. Применимо только для чартов из Helm-репозиториев.
                 conditions:
                   description: Условия отражают последние наблюдения за состоянием репозитория.
                 observedGeneration:
