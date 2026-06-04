@@ -35,8 +35,6 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: HelmClusterAddon represents a Helm addon that is installed across
-          the whole cluster.
         properties:
           apiVersion:
             description: |-

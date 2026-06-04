@@ -27,8 +27,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: HelmClusterAddonRepository represents a Helm or an OCI compliant
-          repository with Helm charts.
+        description: HelmClusterAddonRepository represents a Helm or OCI-compliant
+          repository containing Helm charts that can be referenced by HelmClusterAddon
+          resources.
         properties:
           apiVersion:
             description: |-

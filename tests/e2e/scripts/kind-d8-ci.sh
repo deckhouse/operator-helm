@@ -47,6 +47,8 @@ D8_REGISTRY_ADDRESS=registry.deckhouse.io
 D8_REGISTRY_PATH=${D8_REGISTRY_ADDRESS}/deckhouse/ce
 D8_LICENSE_KEY=
 
+OS_NAME=${OS_NAME:-}
+
 KIND_INSTALL_DIRECTORY=$PARENT_DIR/kind/bin
 KIND_PATH=kind
 KIND_VERSION=v0.27.0
@@ -164,7 +166,8 @@ os_detect() {
       OS_NAME=mac
 
     else
-      noop # Unknown OS
+      echo "Failed to detect operating system. Use --os linux or --os mac."
+      exit 1
     fi
   fi
 
@@ -215,13 +218,13 @@ memory_check() {
     MEMORY_TOTAL_BYTES=$(sysctl -n hw.memsize 2>/dev/null)
   fi
 
-  if [[ ("$MEMORY_TOTAL_BYTES" -gt "0") && ("$MEMORY_TOTAL_BYTES" -lt "$REQUIRE_MEMORY_MIN_BYTES") ]]; then
+  if [[ -n "$MEMORY_TOTAL_BYTES" && ("$MEMORY_TOTAL_BYTES" -gt "0") && ("$MEMORY_TOTAL_BYTES" -lt "$REQUIRE_MEMORY_MIN_BYTES") ]]; then
     echo "Insufficient memory to install Deckhouse Kubernetes Platform."
     echo "Deckhouse Kubernetes Platform requires at least 4 gigabytes of memory."
     exit 1
   fi
 
-  if [[ ("$MEMORY_TOTAL_BYTES" -eq "0") || (-z "$MEMORY_TOTAL_BYTES") ]]; then
+  if [[ -z "$MEMORY_TOTAL_BYTES" || ("$MEMORY_TOTAL_BYTES" -eq "0") ]]; then
     echo "Can't get the total memory value."
     echo "Note, that Deckhouse Kubernetes Platform requires at least 4 gigabytes of memory."
     echo "Press enter to continue..."
@@ -428,6 +431,7 @@ spec:
 EOF
 
   if [[ -n "$D8_LICENSE_KEY" ]]; then
+    docker login -u license-token -p $D8_LICENSE_KEY
     generate_ee_access_string "$D8_LICENSE_KEY"
     cat <<EOF >>${KIND_CONFIG_DIR}/config.yml
 ---
