@@ -103,6 +103,10 @@ spec:
                   - type
                   type: object
                 type: array
+              iconURL:
+                description: IconURL is the URL to the Helm chart icon (applicable
+                  to Helm Chart repository charts only).
+                type: string
               observedGeneration:
                 description: Generation represents resource generation that was last
                   processed by the controller.

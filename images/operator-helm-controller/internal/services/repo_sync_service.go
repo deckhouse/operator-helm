@@ -34,6 +34,7 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
+	"github.com/samber/lo"
 )
 
 const (
@@ -125,8 +126,12 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 
 	desiredCharts := make(map[string]struct{}, len(charts))
 
-	for chart, versions := range charts {
-		addonChartName := utils.GetHelmClusterAddonChartName(repo.Name, chart)
+	for _, chart := range charts {
+		if len(chart.Versions) == 0 {
+			continue
+		}
+
+		addonChartName := utils.GetHelmClusterAddonChartName(repo.Name, chart.Name)
 		existing := &helmv1alpha1.HelmClusterAddonChart{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: addonChartName,
@@ -149,7 +154,7 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 			existing.Labels = map[string]string{
 				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
 				LabelRepositoryName:                 repo.Name,
-				LabelChartName:                      chart,
+				LabelChartName:                      chart.Name,
 			}
 			return nil
 		})
@@ -169,7 +174,11 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 		}
 
 		base := existing.DeepCopy()
-		existing.Status.Versions = versions
+
+		existing.Status.IconURL = chart.Versions[0].IconURL
+		existing.Status.Versions = lo.Map(chart.Versions, func(v repoclient.ChartVersion, _ int) helmv1alpha1.HelmClusterAddonChartVersion {
+			return helmv1alpha1.HelmClusterAddonChartVersion{Version: v.Version.Original()}
+		})
 
 		if err := s.Client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
 			return RepoSyncResult{

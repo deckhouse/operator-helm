@@ -20,20 +20,33 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
 	"k8s.io/apimachinery/pkg/util/wait"
 
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/Masterminds/semver/v3"
 )
 
 var HelmRepositoryDefaultClient ClientInterface = &helmRepositoryClient{}
 
 type helmRepositoryClient struct{}
 
-func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig) (map[string][]helmv1alpha1.HelmClusterAddonChartVersion, error) {
+type HelmRepositoryIndex struct {
+	APIVersion string                                  `json:"apiVersion"`
+	Entries    map[string][]HelmRepositoryChartVersion `json:"entries"`
+}
+
+type HelmRepositoryChartVersion struct {
+	Icon    string `json:"icon,omitempty"`
+	Version string `json:"version"`
+	Digest  string `json:"digest"`
+	Removed bool   `json:"removed,omitempty"`
+}
+
+func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig) ([]Chart, error) {
 	if !strings.HasSuffix(url, "/index.yaml") {
 		url += "/index.yaml"
 	}
@@ -89,32 +102,30 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 		return nil, fmt.Errorf("helm repository index.yaml request failed: %w", err)
 	}
 
-	charts := make(map[string][]helmv1alpha1.HelmClusterAddonChartVersion)
+	charts := make([]Chart, 0, len(indexFile.Entries))
 
 	for chartName, chartInfo := range indexFile.Entries {
-		charts[chartName] = make([]helmv1alpha1.HelmClusterAddonChartVersion, 0)
+		chart := Chart{Name: chartName, Versions: make([]ChartVersion, 0, len(chartInfo))}
 
 		for _, chartVersion := range chartInfo {
 			if chartVersion.Removed {
 				continue
 			}
 
-			charts[chartName] = append(charts[chartName], helmv1alpha1.HelmClusterAddonChartVersion{
-				Version: chartVersion.Version,
-			})
+			semVersion, err := semver.NewVersion(chartVersion.Version)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse chart %q version %q: %w", chartName, chartVersion.Version, err)
+			}
+
+			chart.Versions = append(chart.Versions, ChartVersion{Version: semVersion, IconURL: chartVersion.Icon})
 		}
+
+		sort.Slice(chart.Versions, func(i, j int) bool {
+			return chart.Versions[i].Version.GreaterThan(chart.Versions[j].Version)
+		})
+
+		charts = append(charts, chart)
 	}
 
 	return charts, nil
-}
-
-type HelmRepositoryIndex struct {
-	APIVersion string                                  `json:"apiVersion"`
-	Entries    map[string][]HelmRepositoryChartVersion `json:"entries"`
-}
-
-type HelmRepositoryChartVersion struct {
-	Version string `json:"version"`
-	Digest  string `json:"digest"`
-	Removed bool   `json:"removed,omitempty"`
 }

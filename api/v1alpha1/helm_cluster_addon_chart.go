@@ -64,6 +64,8 @@ func (r *HelmClusterAddonChart) GetConditionTypesForUpdate() []string {
 }
 
 type HelmClusterAddonChartStatus struct {
+	// IconURL is the URL to the Helm chart icon (applicable to Helm Chart repository charts only).
+	IconURL string `json:"iconURL,omitempty"`
 	// Conditions represent the latest available observations of the addon chart state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
