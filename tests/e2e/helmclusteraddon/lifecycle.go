@@ -84,8 +84,8 @@ func DefineLifecycleTests(repoType, repoURL string) {
 					Name: repoName,
 				},
 				Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
-					URL:       repoURL,
-					TLSVerify: true,
+					URL:                repoURL,
+					InsecureSkipVerify: false,
 				},
 			}
 

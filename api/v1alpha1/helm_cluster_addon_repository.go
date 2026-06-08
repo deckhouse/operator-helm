@@ -91,10 +91,9 @@ type HelmClusterAddonRepositorySpec struct {
 	// +optional
 	CACertificate string `json:"caCertificate,omitempty"`
 
-	// TLSVerify enables or disables TLS certificate verification.
-	// +kubebuilder:default=true
+	// InsecureSkipVerify enables or disables TLS certificate verification.
 	// +optional
-	TLSVerify bool `json:"tlsVerify,omitempty"`
+	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }
 
 type HelmClusterAddonRepositoryAuth struct {
