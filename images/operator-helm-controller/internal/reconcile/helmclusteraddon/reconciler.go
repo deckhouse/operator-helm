@@ -25,7 +25,6 @@ import (
 	helmchartutil "helm.sh/helm/v3/pkg/chartutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -159,14 +158,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 
 		chartRes = r.chartService.EnsureHelmChart(ctx, addon)
-		if !chartRes.IsPartiallyDegraded() {
-			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
-				Type:               helmv1alpha1.ConditionTypePartiallyDegraded,
-				Status:             metav1.ConditionFalse,
-				ObservedGeneration: addon.Generation,
-				Reason:             helmv1alpha1.ReasonSuccess,
-			})
-		}
 	case utils.InternalOCIRepository:
 		if err := r.chartService.CleanupHelmChart(ctx, addon); err != nil {
 			chartRes = services.ChartResult{
@@ -176,14 +167,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 
 		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo)
-		if !repoRes.IsPartiallyDegraded() {
-			apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
-				Type:               helmv1alpha1.ConditionTypePartiallyDegraded,
-				Status:             metav1.ConditionFalse,
-				ObservedGeneration: addon.Generation,
-				Reason:             helmv1alpha1.ReasonSuccess,
-			})
-		}
 	default:
 		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
 			addon,
@@ -217,7 +200,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		ctx,
 		addon,
 		setStatusAttrs(repoType, chartRes, repoRes, releaseRes),
-		mapResourceStatus(),
+		status.NoopStatusMapper,
 		chartRes,
 		repoRes,
 		releaseRes,
@@ -365,22 +348,5 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 		}
 
 		return obj, results
-	}
-}
-
-func mapResourceStatus() status.MapperFunc {
-	return func(conditionType string, status status.Status) status.Status {
-		if conditionType == helmv1alpha1.ConditionTypePartiallyDegraded {
-			switch status.Status {
-			// ConditionTrue means that HelmChartSucceeded, resetting status would exclude it from result.
-			case metav1.ConditionTrue:
-				status.Status = ""
-			//	ConditionFalse means that chart failed, change Status to True, to raise ConditionTypePartiallyDegraded condition.
-			case metav1.ConditionFalse:
-				status.Status = metav1.ConditionTrue
-			}
-		}
-
-		return status
 	}
 }
