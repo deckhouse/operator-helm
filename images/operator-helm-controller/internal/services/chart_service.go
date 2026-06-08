@@ -70,16 +70,12 @@ func (r ChartResult) IsReady() bool {
 	return r.Artifact != nil && r.Status.Observed && r.Status.Status == metav1.ConditionTrue
 }
 
-func (r ChartResult) IsPartiallyDegraded() bool {
-	return r.Artifact != nil && r.Status.Status != metav1.ConditionTrue && r.Status.Observed
-}
-
 func (r ChartResult) HasArtifact() bool {
 	return r.Artifact != nil && r.Status.Observed
 }
 
 func (r ChartResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypePartiallyDegraded
+	return helmv1alpha1.ConditionTypeReady
 }
 
 func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) ChartResult {
@@ -113,7 +109,6 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.
 	processedStatus := status.ProcessChildConditions(
 		existing.GetConditions(), existing.Generation, addon, helmChartErrorRules,
 	)
-	processedStatus.NotReflectable = existing.Status.Artifact != nil
 
 	if processedStatus.IsReady() {
 		logger.Info("Successfully reconciled helm chart", "operation", op, "chart", addon.Spec.Chart.HelmClusterAddonChartName)
@@ -142,7 +137,8 @@ func applyHelmChartSpec(addon *helmv1alpha1.HelmClusterAddon, existing *sourcev1
 	existing.Labels[helmv1alpha1.LabelManagedBy] = helmv1alpha1.LabelManagedByValue
 	existing.Labels[helmv1alpha1.HelmClusterAddonLabelSourceName] = addon.Name
 	existing.Labels[helmv1alpha1.HelmClusterAddonChartLabelSourceName] = utils.GetHelmClusterAddonChartName(
-		addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName)
+		addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName,
+	)
 
 	existing.Spec.Chart = addon.Spec.Chart.HelmClusterAddonChartName
 	existing.Spec.Version = addon.Spec.Chart.Version

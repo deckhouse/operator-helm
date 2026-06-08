@@ -38,6 +38,7 @@ import (
 
 var ociRepositoryErrorRules = []status.ErrorConditionRule{
 	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonOCIFetchFailed},
+	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: "OCIArtifactPullFailed"},
 	{Type: "IncludeUnavailable", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonOCIIncludeUnavailable},
 	{Type: "StorageOperationFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonOCIStorageFailed},
 	{Type: "SourceVerified", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonOCIVerificationFailed},
@@ -74,19 +75,12 @@ func (r OCIRepoResult) IsReady() bool {
 	return r.Artifact != nil && r.Status.Observed && r.Status.Status == metav1.ConditionTrue
 }
 
-func (r OCIRepoResult) IsPartiallyDegraded() bool {
-	return r.Artifact != nil && r.Status.Status != metav1.ConditionTrue && r.Status.Observed
-}
-
 func (r OCIRepoResult) HasArtifact() bool {
 	return r.Artifact != nil && r.Status.Observed
 }
 
 func (r OCIRepoResult) GetConditionType() string {
-	if r.Status.ConditionType == "" {
-		return helmv1alpha1.ConditionTypePartiallyDegraded
-	}
-	return r.Status.ConditionType
+	return helmv1alpha1.ConditionTypeReady
 }
 
 func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository) OCIRepoResult {
@@ -122,7 +116,6 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon 
 	processedStatus := status.ProcessChildConditions(
 		existing.Status.Conditions, existing.Generation, addon, ociRepositoryErrorRules,
 	)
-	processedStatus.NotReflectable = existing.Status.Artifact != nil
 
 	return OCIRepoResult{
 		Artifact: existing.Status.Artifact,

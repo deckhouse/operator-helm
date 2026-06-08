@@ -224,19 +224,6 @@ func DefineLifecycleTests(repoType, repoURL string) {
 		})
 
 		It("should not update chart version on invalid chart version", func() {
-			addon, err := f.OperatorClient().HelmV1alpha1().
-				HelmClusterAddons().
-				Get(context.Background(), addonName, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Should have PartiallyDegraded condition inactive")
-			util.UntilConditionStatus(
-				apiv1alpha1.ConditionTypePartiallyDegraded,
-				string(metav1.ConditionFalse),
-				framework.LongTimeout,
-				addon,
-			)
-
 			invalidChartVersion := "invalid-version"
 
 			By("Updating addon chart to invalid version")
@@ -244,15 +231,16 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				addon.Spec.Chart.Version = invalidChartVersion
 			})
 
-			By("Should have PartiallyDegraded condition active")
-			util.UntilConditionTrue(
-				apiv1alpha1.ConditionTypePartiallyDegraded,
+			By("Should have false ready condition")
+			util.UntilConditionStatus(
+				apiv1alpha1.ConditionTypeReady,
+				string(metav1.ConditionFalse),
 				framework.LongTimeout,
 				updated,
 			)
 
 			By("Should not update chart info")
-			updated, err = f.OperatorClient().HelmV1alpha1().
+			updated, err := f.OperatorClient().HelmV1alpha1().
 				HelmClusterAddons().
 				Get(context.Background(), addonName, metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred())
@@ -264,42 +252,23 @@ func DefineLifecycleTests(repoType, repoURL string) {
 		})
 
 		It("Should redeem on reverting chart version", func() {
-			addon, err := f.OperatorClient().HelmV1alpha1().
-				HelmClusterAddons().
-				Get(context.Background(), addonName, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Should have PartiallyDegraded condition active")
-			util.UntilConditionTrue(
-				apiv1alpha1.ConditionTypePartiallyDegraded,
-				framework.LongTimeout,
-				addon,
-			)
-
 			validChartVersion := "6.10.2"
 
-			By("Updating addon chart to invalid version")
+			By("Updating addon chart to valid version")
 			updated := util.UpdateHelmClusterAddon(addonName, func(addon *apiv1alpha1.HelmClusterAddon) {
 				addon.Spec.Chart.Version = validChartVersion
 			})
 
 			By("Waiting for addon to be upgraded")
-			util.UntilConditionTrue(
-				apiv1alpha1.ConditionTypeReady,
-				framework.LongTimeout,
-				updated,
-			)
-
-			By("Should have PartiallyDegraded condition inactive")
 			util.UntilConditionStatus(
-				apiv1alpha1.ConditionTypePartiallyDegraded,
-				string(metav1.ConditionFalse),
+				apiv1alpha1.ConditionTypeReady,
+				string(metav1.ConditionTrue),
 				framework.LongTimeout,
 				updated,
 			)
 
 			By("Should update chart info")
-			updated, err = f.OperatorClient().HelmV1alpha1().
+			updated, err := f.OperatorClient().HelmV1alpha1().
 				HelmClusterAddons().
 				Get(context.Background(), addonName, metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred())
