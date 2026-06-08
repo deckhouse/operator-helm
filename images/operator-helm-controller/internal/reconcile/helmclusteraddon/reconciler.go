@@ -194,7 +194,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if chartRes.HasArtifact() || repoRes.HasArtifact() {
-		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, repoType)
+		var artifactRevision string
+		switch repoType {
+		case utils.InternalHelmRepository:
+			if chartRes.Artifact != nil {
+				artifactRevision = chartRes.Artifact.Revision
+			}
+		case utils.InternalOCIRepository:
+			if repoRes.Artifact != nil {
+				artifactRevision = repoRes.Artifact.Revision
+			}
+		}
+
+		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, repoType, artifactRevision)
 	}
 
 	if err := r.reconcileForceAnnotation(ctx, req); err != nil {
@@ -313,20 +325,18 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 		results = status.DetermineConditions(obj, results...)
 		addon := obj.(*helmv1alpha1.HelmClusterAddon)
 
+		latestRelease := releaseRes.History.Latest()
+
 		var updateChart bool
 
 		switch repoType {
 		case utils.InternalHelmRepository:
-			if chartRes.HasArtifact() && releaseRes.IsReady() {
-				if addon.Status.LastAppliedChart == nil || (addon.IsChartStatusInfoOutdated() && chartRes.IsReady()) {
-					updateChart = true
-				}
+			if chartRes.HasArtifact() && releaseRes.IsReady() && addon.IsChartStatusInfoOutdated() {
+				updateChart = true
 			}
 		case utils.InternalOCIRepository:
-			if repoRes.HasArtifact() && releaseRes.IsReady() {
-				if addon.Status.LastAppliedChart == nil || (addon.IsChartStatusInfoOutdated() && repoRes.IsReady()) {
-					updateChart = true
-				}
+			if repoRes.HasArtifact() && releaseRes.IsReady() && addon.IsChartStatusInfoOutdated() {
+				updateChart = true
 			}
 		}
 
@@ -338,7 +348,6 @@ func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.Cha
 			}
 		}
 
-		latestRelease := releaseRes.History.Latest()
 		if releaseRes.IsReady() && latestRelease != nil {
 			rawValues := []byte(`{}`)
 			if addon.Spec.Values != nil {

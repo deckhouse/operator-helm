@@ -77,7 +77,7 @@ func (r ReleaseResult) GetConditionType() string {
 	return helmv1alpha1.ConditionTypeReady
 }
 
-func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repoType utils.InternalRepositoryType) ReleaseResult {
+func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repoType utils.InternalRepositoryType, artifactRevision string) ReleaseResult {
 	logger := log.FromContext(ctx)
 
 	existing := &helmv2.HelmRelease{
@@ -103,6 +103,16 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 		existing.GetConditions(), existing.Generation, addon, helmReleaseErrorRules,
 	)
 
+	// A chart-version change updates only the referenced HelmChart artifact, not
+	// the HelmRelease spec/generation. The HelmRelease can therefore still report
+	// the readiness of the previous revision until it observes the new artifact.
+	// Downgrade the status to Reconciling until the deployed revision actually
+	// reflects the requested chart, so downstream consumers (lastAppliedChart and
+	// the projected Ready/UpdateInstalled conditions) do not advance prematurely.
+	if processedStatus.IsReady() && !isDesiredChartDeployed(addon, existing.Status.History.Latest(), artifactRevision) {
+		processedStatus = status.Unknown(addon, helmv1alpha1.ReasonReconciling)
+	}
+
 	if processedStatus.IsReady() {
 		logger.Info("Successfully reconciled helm release", "operation", op)
 	}
@@ -111,6 +121,20 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 		History: existing.Status.History,
 		Status:  processedStatus,
 	}
+}
+
+// isDesiredChartDeployed reports whether the latest release revision in history
+// is actually deployed and corresponds to the chart requested by the addon spec.
+func isDesiredChartDeployed(addon *helmv1alpha1.HelmClusterAddon, latest *helmv2.Snapshot, artifactRevision string) bool {
+	if latest == nil || latest.Status != "deployed" {
+		return false
+	}
+
+	if addon.Spec.Chart.Version != "" {
+		return latest.ChartVersion == addon.Spec.Chart.Version
+	}
+
+	return artifactRevision != "" && latest.ChartVersion == artifactRevision
 }
 
 func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
