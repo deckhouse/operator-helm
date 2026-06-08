@@ -91,7 +91,7 @@ type HelmClusterAddonRepositorySpec struct {
 	// +optional
 	CACertificate string `json:"caCertificate,omitempty"`
 
-	// InsecureSkipVerify enables or disables TLS certificate verification.
+	// InsecureSkipVerify disable TLS certificate verification.
 	// +optional
 	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }

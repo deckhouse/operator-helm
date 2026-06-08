@@ -22,7 +22,7 @@ spec:
                 caCertificate:
                   description: CA-сертификат в формате PEM для проверки TLS.
                 insecureSkipVerify:
-                  description: Включает или выключает проверку TLS-сертификата.
+                  description: Выключить проверку TLS-сертификата.
                 url:
                   description: |
                     URL Helm-репозитория.
