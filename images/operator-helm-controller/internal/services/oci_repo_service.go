@@ -110,7 +110,8 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon 
 				addon,
 				helmv1alpha1.ReasonFailed,
 				"Failed to reconcile oci repository",
-				fmt.Errorf("creating oci repository: %w", err)),
+				fmt.Errorf("creating oci repository: %w", err),
+			),
 		}
 	}
 
@@ -220,7 +221,7 @@ func applyOCIRepositorySpec(addon *helmv1alpha1.HelmClusterAddon, repo *helmv1al
 		Tag: addon.Spec.Chart.Version,
 	}
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
-	existing.Spec.Insecure = !repo.Spec.TLSVerify
+	existing.Spec.Insecure = repo.Spec.InsecureSkipVerify
 	existing.Spec.CertSecretRef = nil
 	existing.Spec.SecretRef = nil
 

@@ -69,9 +69,9 @@ spec:
                 description: CACertificate is the PEM encoded CA certificate for TLS
                   verification.
                 type: string
-              tlsVerify:
-                default: true
-                description: TLSVerify enables or disables TLS certificate verification.
+              insecureSkipVerify:
+                description: InsecureSkipTLSVerify enables or disables TLS certificate
+                  verification.
                 type: boolean
               url:
                 description: URL of the Helm repository. Supports http(s):// and oci://

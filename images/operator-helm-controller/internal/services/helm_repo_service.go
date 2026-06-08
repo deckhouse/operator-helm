@@ -104,7 +104,8 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo
 				repo,
 				helmv1alpha1.ReasonFailed,
 				"Failed to reconcile helm repository",
-				fmt.Errorf("creating helm repository: %w", err)),
+				fmt.Errorf("creating helm repository: %w", err),
+			),
 		}
 	}
 
@@ -176,7 +177,7 @@ func applyHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, exis
 
 	existing.Spec.URL = repo.Spec.URL
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
-	existing.Spec.Insecure = !repo.Spec.TLSVerify
+	existing.Spec.Insecure = repo.Spec.InsecureSkipVerify
 	existing.Spec.CertSecretRef = nil
 	existing.Spec.SecretRef = nil
 

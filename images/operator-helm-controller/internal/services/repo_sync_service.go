@@ -99,9 +99,9 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 	}
 
 	var repoConfig *repoclient.RepoConfig
-	if repo.Spec.Auth != nil || repo.Spec.CACertificate != "" || !repo.Spec.TLSVerify {
+	if repo.Spec.Auth != nil || repo.Spec.CACertificate != "" || repo.Spec.InsecureSkipVerify {
 		repoConfig = &repoclient.RepoConfig{
-			Insecure: !repo.Spec.TLSVerify,
+			Insecure: repo.Spec.InsecureSkipVerify,
 		}
 		if repo.Spec.Auth != nil {
 			repoConfig.Username = repo.Spec.Auth.Username

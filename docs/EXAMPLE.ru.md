@@ -26,8 +26,8 @@ d8 k get helmclusteraddoncharts.helm.deckhouse.io -l repository=podinfo
 Пример вывода:
 
 ```text
-NAME              AGE
-podinfo-podinfo   56s
+NAME                                                AGE   LABELS
+podinfo-chart-podinfo                               11d   chart=podinfo,heritage=deckhouse,repository=podinfo
 ```
 
 Для просмотра списка версий, доступных для заданного чарта:
@@ -49,12 +49,8 @@ metadata:
   name: podinfo-podinfo
 status:
   versions:
-    - digest: a5c4b7381a0907128243354ab100d2eecc480d7dcac5014ff7272b0acef03780
-      pulled: false
-      version: 6.11.0
-    - digest: 9f1cdb52fc5a57848f377b146919f8eb2c4a2c0ab8815bd019ec41c1d1895c0c
-      pulled: false
-      version: 6.10.2
+    - version: 6.11.0
+    - version: 6.10.2
 ```
 
 ## Развёртывание приложения

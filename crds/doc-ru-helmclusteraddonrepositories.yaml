@@ -21,7 +21,7 @@ spec:
                       description: Имя пользователя для аутентификации в репозитории.
                 caCertificate:
                   description: CA-сертификат в формате PEM для проверки TLS.
-                tlsVerify:
+                insecureSkipVerify:
                   description: Включает или выключает проверку TLS-сертификата.
                 url:
                   description: |
