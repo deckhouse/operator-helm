@@ -70,8 +70,7 @@ spec:
                   verification.
                 type: string
               insecureSkipVerify:
-                description: InsecureSkipVerify enables or disables TLS certificate
-                  verification.
+                description: InsecureSkipVerify disable TLS certificate verification.
                 type: boolean
               url:
                 description: URL of the Helm repository. Supports http(s):// and oci://
