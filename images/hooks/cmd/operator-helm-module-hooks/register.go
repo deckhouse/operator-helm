@@ -17,5 +17,6 @@ limitations under the License.
 package main
 
 import (
+	_ "hooks/pkg/hooks/cleanup-finalizers"
 	_ "hooks/pkg/hooks/tls-certificates-controller"
 )

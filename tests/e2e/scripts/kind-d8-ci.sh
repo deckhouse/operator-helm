@@ -277,7 +277,7 @@ kind_check() {
 
     mkdir -p ${KIND_INSTALL_DIRECTORY}
 
-    curl -sLo ./kind-binary "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-${OS_NAME/mac/darwin}-${MACHINE_ARCH/x86_64/amd64}"
+    curl -sLo ./kind-binary "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-${OS_NAME/mac/darwin}-${MACHINE_ARCH/x86_64/amd64}"
 
     if [ "$?" -ne "0" ]; then
       echo "Unable to download kind."
