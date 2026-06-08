@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
@@ -123,20 +124,6 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 	}
 }
 
-// isDesiredChartDeployed reports whether the latest release revision in history
-// is actually deployed and corresponds to the chart requested by the addon spec.
-func isDesiredChartDeployed(addon *helmv1alpha1.HelmClusterAddon, latest *helmv2.Snapshot, artifactRevision string) bool {
-	if latest == nil || latest.Status != "deployed" {
-		return false
-	}
-
-	if addon.Spec.Chart.Version != "" {
-		return latest.ChartVersion == addon.Spec.Chart.Version
-	}
-
-	return artifactRevision != "" && latest.ChartVersion == artifactRevision
-}
-
 func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
 	nn := types.NamespacedName{Name: utils.GetInternalHelmReleaseName(addon.Name), Namespace: s.TargetNamespace}
 	if err := s.ensureResourceDeleted(ctx, nn, &helmv2.HelmRelease{}); err != nil {
@@ -191,4 +178,26 @@ func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2
 	}
 
 	return nil
+}
+
+// isDesiredChartDeployed reports whether the latest release revision in history
+// is actually deployed and corresponds to the chart requested by the addon spec.
+func isDesiredChartDeployed(addon *helmv1alpha1.HelmClusterAddon, latest *helmv2.Snapshot, artifactRevision string) bool {
+	if latest == nil || latest.Status != "deployed" {
+		return false
+	}
+
+	if latest.OCIDigest != "" {
+		ociDigestParts := strings.Split(artifactRevision, "@")
+		latestDigest := ociDigestParts[1]
+		desiredVersion := addon.Spec.Chart.Version + "+" + latestDigest[7:19]
+
+		return latest.OCIDigest == latestDigest && latest.ChartVersion == desiredVersion
+	}
+
+	if addon.Spec.Chart.Version != "" {
+		return latest.ChartVersion == addon.Spec.Chart.Version
+	}
+
+	return false
 }
