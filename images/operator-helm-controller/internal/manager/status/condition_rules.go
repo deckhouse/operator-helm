@@ -43,7 +43,7 @@ func ProcessChildConditions(
 	errorRules []ErrorConditionRule,
 ) Status {
 	reconcilingCond := meta.FindStatusCondition(conditions, "Reconciling")
-	if reconcilingCond != nil && reconcilingCond.Status == metav1.ConditionTrue {
+	if reconcilingCond != nil && reconcilingCond.Status == metav1.ConditionTrue && reconcilingCond.Reason != "ProgressingWithRetry" {
 		return Unknown(parentObj, helmv1alpha1.ReasonReconciling)
 	}
 
