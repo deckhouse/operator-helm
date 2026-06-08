@@ -42,16 +42,16 @@ func ProcessChildConditions(
 	parentObj client.Object,
 	errorRules []ErrorConditionRule,
 ) Status {
+	reconcilingCond := meta.FindStatusCondition(conditions, "Reconciling")
+	if reconcilingCond != nil && reconcilingCond.Status == metav1.ConditionTrue {
+		return Unknown(parentObj, helmv1alpha1.ReasonReconciling)
+	}
+
 	for _, rule := range errorRules {
 		cond := meta.FindStatusCondition(conditions, rule.Type)
 		if cond != nil && cond.Status == rule.TriggerStatus {
 			return Failed(parentObj, rule.Reason, cond.Message, nil)
 		}
-	}
-
-	reconcilingCond := meta.FindStatusCondition(conditions, "Reconciling")
-	if reconcilingCond != nil && reconcilingCond.Status == metav1.ConditionTrue {
-		return Unknown(parentObj, helmv1alpha1.ReasonReconciling)
 	}
 
 	cond, observed := IsConditionObserved(conditions, helmv1alpha1.ConditionTypeReady, generation)

@@ -20,6 +20,7 @@ import (
 	"reflect"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -83,11 +84,15 @@ func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
 		return append(conditionTypes, ConditionTypeInstalled)
 	}
 
-	if r.IsChartStatusInfoOutdated() {
+	if r.IsChartStatusInfoOutdated() ||
+		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeUpdateInstalled) ||
+		meta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeUpdateInstalled, metav1.ConditionUnknown) {
 		conditionTypes = append(conditionTypes, ConditionTypeUpdateInstalled)
 	}
 
-	if !reflect.DeepEqual(r.Spec.Values, r.Status.LastAppliedValues) {
+	if !reflect.DeepEqual(r.Spec.Values, r.Status.LastAppliedValues) ||
+		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeConfigurationApplied) ||
+		meta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeConfigurationApplied, metav1.ConditionUnknown) {
 		conditionTypes = append(conditionTypes, ConditionTypeConfigurationApplied)
 	}
 
