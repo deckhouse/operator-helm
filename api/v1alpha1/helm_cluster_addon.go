@@ -105,7 +105,7 @@ func (r *HelmClusterAddon) ConfigurationApplyInProgress() bool {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Message == "Reconciling"
+	return cond.Status == metav1.ConditionUnknown && cond.Reason == "Reconciling"
 }
 
 func (r *HelmClusterAddon) UpdateInstallInProgress() bool {
@@ -114,7 +114,7 @@ func (r *HelmClusterAddon) UpdateInstallInProgress() bool {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Message == "Reconciling"
+	return cond.Status == metav1.ConditionUnknown && cond.Reason == "Reconciling"
 }
 
 func (r *HelmClusterAddon) IsChartStatusInfoOutdated() bool {

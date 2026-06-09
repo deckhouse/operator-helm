@@ -176,6 +176,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		)})
 	}
 
+	if _, err := r.getHelmClusterAddonChart(ctx, addon); err != nil {
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
+			addon,
+			helmv1alpha1.ReasonFailed,
+			fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
+			err,
+		)})
+	}
+
 	if chartRes.HasArtifact() || repoRes.HasArtifact() {
 		var artifactRevision string
 		switch repoType {
@@ -301,6 +310,24 @@ func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile
 	}
 
 	return nil
+}
+
+func (r *Reconciler) getHelmClusterAddonChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*helmv1alpha1.HelmClusterAddonChart, error) {
+	addonChartName := utils.GetHelmClusterAddonChartName(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName)
+	addonChart := &helmv1alpha1.HelmClusterAddonChart{}
+
+	err := r.Get(ctx, types.NamespacedName{Name: addonChartName}, addonChart)
+	if err != nil {
+		return nil, fmt.Errorf("getting helm cluster addon chart: %w", err)
+	}
+
+	for _, version := range addonChart.Status.Versions {
+		if version.Version == addon.Spec.Chart.Version {
+			return addonChart, nil
+		}
+	}
+
+	return nil, fmt.Errorf("helm cluster addon chart does not have version %q", addon.Spec.Chart.Version)
 }
 
 func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.OCIRepoResult, releaseRes services.ReleaseResult) status.MutatorFunc {
