@@ -146,8 +146,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	var repoRes services.OCIRepoResult
 	var releaseRes services.ReleaseResult
 
+	_, addonChartErr := r.getHelmClusterAddonChart(ctx, addon)
+
 	switch repoType {
 	case utils.InternalHelmRepository:
+		if addonChartErr != nil {
+			chartRes = services.ChartResult{
+				Status: status.Failed(addon, helmv1alpha1.ReasonChartFetchFailed, "failed to get desired chart version", addonChartErr),
+			}
+
+			break
+		}
+
 		// URL change in the HelmClusterAddonRepository may lead to repository type change.
 		// If repository type changed from OCI to Helm, we need to remove previously created OCI repository.
 		if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil {
@@ -159,6 +169,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		chartRes = r.chartService.EnsureHelmChart(ctx, addon)
 	case utils.InternalOCIRepository:
+		if addonChartErr != nil {
+			repoRes = services.OCIRepoResult{
+				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "failed to get desired chart version", err),
+			}
+
+			break
+		}
+
 		if err := r.chartService.CleanupHelmChart(ctx, addon); err != nil {
 			chartRes = services.ChartResult{
 				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
@@ -173,15 +191,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			helmv1alpha1.ReasonFailed,
 			fmt.Sprintf("Unsupported repository type: %s", repoType),
 			fmt.Errorf("unsupported repository type: %s", repoType),
-		)})
-	}
-
-	if _, err := r.getHelmClusterAddonChart(ctx, addon); err != nil {
-		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
-			addon,
-			helmv1alpha1.ReasonFailed,
-			fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
-			err,
 		)})
 	}
 

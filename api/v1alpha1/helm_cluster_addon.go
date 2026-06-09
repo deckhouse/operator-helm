@@ -86,13 +86,13 @@ func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
 
 	if r.IsChartStatusInfoOutdated() ||
 		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeUpdateInstalled) ||
-		r.ConfigurationApplyInProgress() {
+		r.UpdateInstallInProgress() {
 		conditionTypes = append(conditionTypes, ConditionTypeUpdateInstalled)
 	}
 
 	if !reflect.DeepEqual(r.Spec.Values, r.Status.LastAppliedValues) ||
 		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeConfigurationApplied) ||
-		r.UpdateInstallInProgress() {
+		r.ConfigurationApplyInProgress() {
 		conditionTypes = append(conditionTypes, ConditionTypeConfigurationApplied)
 	}
 
