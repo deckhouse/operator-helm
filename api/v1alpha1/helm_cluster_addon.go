@@ -38,7 +38,7 @@ const (
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
-// +kubebuilder:resource:categories={operator-helm},singular=helmclusteraddon,scope=Cluster
+// +kubebuilder:resource:singular=helmclusteraddon,scope=Cluster
 // +kubebuilder:printcolumn:name="Chart Name",type="string",JSONPath=".spec.chart.helmClusterAddonChart",description="Helm release chart name."
 // +kubebuilder:printcolumn:name="Chart Version",type="string",JSONPath=".spec.chart.version",description="Helm release chart version."
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the addon"
@@ -172,8 +172,7 @@ type HelmClusterAddonChartRef struct {
 	// +kubebuilder:validation:MaxLength=63
 	HelmClusterAddonRepository string `json:"helmClusterAddonRepository"`
 	// Versions holds the HelmClusterAddon chart version.
-	// +optional
-	Version string `json:"version,omitempty"`
+	Version string `json:"version"`
 }
 
 type HelmClusterAddonStatus struct {
