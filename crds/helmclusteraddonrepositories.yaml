@@ -11,8 +11,6 @@ metadata:
 spec:
   group: helm.deckhouse.io
   names:
-    categories:
-    - operator-helm
     kind: HelmClusterAddonRepository
     listKind: HelmClusterAddonRepositoryList
     plural: helmclusteraddonrepositories

@@ -11,8 +11,6 @@ metadata:
 spec:
   group: helm.deckhouse.io
   names:
-    categories:
-    - operator-helm
     kind: HelmClusterAddon
     listKind: HelmClusterAddonList
     plural: helmclusteraddons
@@ -77,6 +75,7 @@ spec:
                 required:
                 - helmClusterAddonChart
                 - helmClusterAddonRepository
+                - version
                 type: object
               maintenance:
                 description: |-
