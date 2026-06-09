@@ -80,23 +80,41 @@ func (r *HelmClusterAddon) MaintenanceModeEnabled() bool {
 func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
 	conditionTypes := []string{"Ready"}
 
-	if r.Status.LastAppliedChart == nil {
+	if r.Status.LastAppliedChart == nil || !meta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue) {
 		return append(conditionTypes, ConditionTypeInstalled)
 	}
 
 	if r.IsChartStatusInfoOutdated() ||
 		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeUpdateInstalled) ||
-		meta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeUpdateInstalled, metav1.ConditionUnknown) {
+		r.ConfigurationApplyInProgress() {
 		conditionTypes = append(conditionTypes, ConditionTypeUpdateInstalled)
 	}
 
 	if !reflect.DeepEqual(r.Spec.Values, r.Status.LastAppliedValues) ||
 		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeConfigurationApplied) ||
-		meta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeConfigurationApplied, metav1.ConditionUnknown) {
+		r.UpdateInstallInProgress() {
 		conditionTypes = append(conditionTypes, ConditionTypeConfigurationApplied)
 	}
 
 	return conditionTypes
+}
+
+func (r *HelmClusterAddon) ConfigurationApplyInProgress() bool {
+	cond := meta.FindStatusCondition(r.Status.Conditions, ConditionTypeConfigurationApplied)
+	if cond == nil {
+		return false
+	}
+
+	return cond.Status == metav1.ConditionUnknown && cond.Message == "Reconciling"
+}
+
+func (r *HelmClusterAddon) UpdateInstallInProgress() bool {
+	cond := meta.FindStatusCondition(r.Status.Conditions, ConditionTypeUpdateInstalled)
+	if cond == nil {
+		return false
+	}
+
+	return cond.Status == metav1.ConditionUnknown && cond.Message == "Reconciling"
 }
 
 func (r *HelmClusterAddon) IsChartStatusInfoOutdated() bool {
