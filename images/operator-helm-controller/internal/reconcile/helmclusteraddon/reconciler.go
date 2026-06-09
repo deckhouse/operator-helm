@@ -146,8 +146,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	var repoRes services.OCIRepoResult
 	var releaseRes services.ReleaseResult
 
+	_, addonChartErr := r.getHelmClusterAddonChart(ctx, addon)
+
 	switch repoType {
 	case utils.InternalHelmRepository:
+		if addonChartErr != nil {
+			chartRes = services.ChartResult{
+				Status: status.Failed(addon, helmv1alpha1.ReasonChartFetchFailed, "failed to get desired chart version", addonChartErr),
+			}
+
+			break
+		}
+
 		// URL change in the HelmClusterAddonRepository may lead to repository type change.
 		// If repository type changed from OCI to Helm, we need to remove previously created OCI repository.
 		if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil {
@@ -159,6 +169,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		chartRes = r.chartService.EnsureHelmChart(ctx, addon)
 	case utils.InternalOCIRepository:
+		if addonChartErr != nil {
+			repoRes = services.OCIRepoResult{
+				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "failed to get desired chart version", err),
+			}
+
+			break
+		}
+
 		if err := r.chartService.CleanupHelmChart(ctx, addon); err != nil {
 			chartRes = services.ChartResult{
 				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
@@ -301,6 +319,24 @@ func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile
 	}
 
 	return nil
+}
+
+func (r *Reconciler) getHelmClusterAddonChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*helmv1alpha1.HelmClusterAddonChart, error) {
+	addonChartName := utils.GetHelmClusterAddonChartName(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName)
+	addonChart := &helmv1alpha1.HelmClusterAddonChart{}
+
+	err := r.Get(ctx, types.NamespacedName{Name: addonChartName}, addonChart)
+	if err != nil {
+		return nil, fmt.Errorf("getting helm cluster addon chart: %w", err)
+	}
+
+	for _, version := range addonChart.Status.Versions {
+		if version.Version == addon.Spec.Chart.Version {
+			return addonChart, nil
+		}
+	}
+
+	return nil, fmt.Errorf("helm cluster addon chart does not have version %q", addon.Spec.Chart.Version)
 }
 
 func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.OCIRepoResult, releaseRes services.ReleaseResult) status.MutatorFunc {

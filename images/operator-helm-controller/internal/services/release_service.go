@@ -37,6 +37,8 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+const releaseDriftDetectionInterval = 5 * time.Minute
+
 var helmReleaseErrorRules = []status.ErrorConditionRule{
 	{Type: "Released", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonReleaseFailed},
 	{Type: "TestSuccess", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonTestFailed},
@@ -158,6 +160,12 @@ func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2
 
 	if addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation) {
 		existing.Spec.Suspend = true
+	}
+
+	existing.Spec.Interval = metav1.Duration{Duration: releaseDriftDetectionInterval}
+
+	existing.Spec.DriftDetection = &helmv2.DriftDetection{
+		Mode: helmv2.DriftDetectionEnabled,
 	}
 
 	switch repoType {
