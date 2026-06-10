@@ -22,6 +22,10 @@ spec:
       jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Status
       type: string
+    - description: Repository synchronization status
+      jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: Synced
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
