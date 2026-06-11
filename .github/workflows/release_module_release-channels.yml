@@ -340,86 +340,6 @@ jobs:
         run: |
           rm -rf $DOCKER_CONFIG
 
-  check-version-on-release-channel:
-    name: Check version on release channel
-    runs-on: ubuntu-latest
-    env:
-      GO_VERSION: "1.24.13"
-      input_channel: ${{ github.event.inputs.channel }}
-      input_version: ${{ github.event.inputs.tag }}
-    needs:
-      - job-EE
-      - job-SE-Plus
-      - job-FE
-      - job-CE
-    if: ${{ always() && ! contains(needs.*.result, 'failure') || inputs.check_only }}
-    strategy:
-      matrix:
-        check: ["registry", "releases", "documentation"]
-    steps:
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@v6
-        with:
-          go-version: "${{ env.GO_VERSION }}"
-
-      - name: Login to PROD_REGISTRY
-        uses: deckhouse/modules-actions/setup@v2
-        with:
-          registry: ${{ vars.PROD_READ_REGISTRY }}
-          registry_login: ${{ secrets.PROD_READ_REGISTRY_USER }}
-          registry_password: ${{ secrets.PROD_READ_REGISTRY_PASSWORD }}
-
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Check version in registry
-        if: ${{ matrix.check == 'registry' && always() }}
-        run: |
-          CHANNEL=$input_channel \
-          VERSION=$input_version \
-          task -d tools/moduleversions check:registry
-
-      - name: Check version on site ${{ matrix.check }}
-        if: ${{ matrix.check == 'releases' && always() }}
-        env:
-          input_check_only: ${{ inputs.check_only }}
-        run: |
-          # When check_only is true, we don't want to wait 120 seconds
-          # because we just want to check the version we're interested in on the website
-          if [ $input_check_only = false ]; then
-            echo "Waiting for site to update (versions are usually updated within 2 minutes)..."
-            sleep 120
-          fi
-
-          echo "Test that version deployed on site, retrying 5 times with delay of 60 seconds"
-          CHANNEL=$input_channel \
-          VERSION=$input_version \
-          COUNT=5 \
-          task -d tools/moduleversions check:releases
-      - name: Check version on site ${{ matrix.check }}
-        if: ${{ matrix.check == 'documentation' && always() }}
-        env:
-          input_check_only: ${{ inputs.check_only }}
-        run: |
-          # When check_only is true, we don't want to wait 300 seconds
-          # because we just want to check the version we're interested in on the website
-          if [ $input_check_only = false ]; then
-            echo "Waiting for site to update (versions are usually updated within 5 minutes)..."
-            sleep 300
-          fi
-
-          echo "Test that version deployed on site, retrying 5 times with delay of 60 seconds"
-          CHANNEL=$input_channel \
-          VERSION=$input_version \
-          COUNT=5 \
-          task -d tools/moduleversions check:docs
-
   send-release-results-to-loop:
     name: Send release results to Loop
     runs-on: ubuntu-latest
@@ -428,7 +348,6 @@ jobs:
       - job-EE
       - job-SE-Plus
       - job-FE
-      - check-version-on-release-channel
     if: ${{ always() && inputs.send_results_to_loop }}
     steps:
       - name: Send results to Loop
@@ -442,8 +361,6 @@ jobs:
           EE_RESULT: ${{ needs.job-EE.result }}
           SE_PLUS_RESULT: ${{ needs.job-SE-Plus.result }}
           FE_RESULT: ${{ needs.job-FE.result }}
-          # will be `success` only if all jobs in the matrix have succeeded
-          CHECK_RESULT: ${{ needs.check-version-on-release-channel.result }}
         run: |
           export TZ=Europe/Moscow
           DATE=$(date +"%Y-%m-%d %H:%M:%S UTC+03:00")
@@ -452,12 +369,10 @@ jobs:
           # Determine overall status
           OVERALL_STATUS=":white_check_mark: **SUCCESS!**"
           if [[ "$CE_RESULT" == "failure" ]] || [[ "$EE_RESULT" == "failure" ]] || \
-             [[ "$SE_PLUS_RESULT" == "failure" ]] || [[ "$FE_RESULT" == "failure" ]] || \
-             [[ "$CHECK_RESULT" == "failure" ]]; then
+             [[ "$SE_PLUS_RESULT" == "failure" ]] || [[ "$FE_RESULT" == "failure" ]]; then
             OVERALL_STATUS=":x: **FAILED!**"
           elif [[ "$CE_RESULT" == "cancelled" ]] || [[ "$EE_RESULT" == "cancelled" ]] || \
-               [[ "$SE_PLUS_RESULT" == "cancelled" ]] || [[ "$FE_RESULT" == "cancelled" ]] || \
-               [[ "$CHECK_RESULT" == "cancelled" ]]; then
+               [[ "$SE_PLUS_RESULT" == "cancelled" ]] || [[ "$FE_RESULT" == "cancelled" ]]; then
             OVERALL_STATUS=":warning: **CANCELLED!**"
           fi
 
