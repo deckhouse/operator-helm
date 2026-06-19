@@ -17,12 +17,6 @@ The module controller monitors the state of HelmClusterAddon resources and autom
 - TLS verification and authentication support for private Helm and OCI repositories.
 - Management through CLI (`d8 k`) or the Deckhouse web interface.
 
-{{< alert level="info" >}}
-The module is under active development. Future plans include:
-
-- adding new custom resources to allow non-admin users to install charts;
-- migrating to chart deployment using [Nelm](https://github.com/werf/nelm).
-{{< /alert >}}
 
 ## Custom Resources
 
