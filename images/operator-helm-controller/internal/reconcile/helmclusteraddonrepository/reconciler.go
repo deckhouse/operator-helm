@@ -91,13 +91,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.requeueAtSyncInterval(&repo)
 	}
 
-	if err := r.statusManager.InitializeConditions(ctx, &repo,
-		helmv1alpha1.ConditionTypeReady,
-		helmv1alpha1.ConditionTypeSynced,
-	); err != nil {
-		return reconcile.Result{}, err
-	}
-
 	var helmRepoRes services.HelmRepoResult
 	var ociRepoRes services.OCIRepoResult
 	var chartSyncRes services.RepoSyncResult

@@ -91,19 +91,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	err := r.statusManager.InitializeConditions(
-		ctx, addon,
-		helmv1alpha1.ConditionTypeReady,
-		helmv1alpha1.ConditionTypeManaged,
-		helmv1alpha1.ConditionTypeInstalled,
-		helmv1alpha1.ConditionTypeUpdateInstalled,
-		helmv1alpha1.ConditionTypeConfigurationApplied,
-		helmv1alpha1.ConditionTypePartiallyDegraded,
-	)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-
 	if r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
 		maintenanceRes := r.maintenanceService.EnsureMaintenanceMode(ctx, addon)
 		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, maintenanceRes, status.AsCondition(maintenanceRes, "Ready"))
