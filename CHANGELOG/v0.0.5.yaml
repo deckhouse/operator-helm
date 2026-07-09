@@ -1,6 +1,5 @@
-features:
-  - do not mark possible status conditions as intitialized on reconcile
+features: []
 fixes: []
 security: []
 chore:
-  - add weight annotations to validation webhook
+  - minor documentation updates
