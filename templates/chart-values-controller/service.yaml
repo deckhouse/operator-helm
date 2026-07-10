@@ -1,0 +1,15 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chart-values-controller
+  namespace: d8-{{ .Chart.Name }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "chart-values-controller")) | nindent 2 }}
+spec:
+  ports:
+    - name: https-api
+      port: 443
+      targetPort: https-api
+      protocol: TCP
+  selector:
+    app: chart-values-controller

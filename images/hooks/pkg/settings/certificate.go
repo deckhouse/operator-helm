@@ -17,5 +17,6 @@ limitations under the License.
 package settings
 
 const (
-	ControllerCertCN string = "operator-helm-controller"
+	ControllerCertCN            string = "operator-helm-controller"
+	ChartValuesControllerCertCN string = "chart-values-controller"
 )

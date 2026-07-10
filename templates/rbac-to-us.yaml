@@ -8,7 +8,7 @@ metadata:
 rules:
 - apiGroups: ["apps"]
   resources: ["deployments/prometheus-metrics"]
-  resourceNames: ["operator-helm-controller", "helm-controller", "nelm-source-controller"]
+  resourceNames: ["operator-helm-controller", "chart-values-controller", "helm-controller", "nelm-source-controller"]
   verbs: ["get"]
 
 {{- if (.Values.global.enabledModules | has "prometheus") }}

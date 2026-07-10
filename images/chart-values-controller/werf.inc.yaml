@@ -1,0 +1,64 @@
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+final: false
+fromImage: builder/src
+git:
+- add: {{ .ModuleDir }}/api
+  to: /src/api
+  stageDependencies:
+    install:
+      - go.mod
+      - go.sum
+    setup:
+      - "**/*.go"
+- add: {{ .ModuleDir }}/images/{{ .ImageName }}
+  to: /src/images/{{ .ImageName }}-artifact
+  stageDependencies:
+    install:
+    - go.mod
+    - go.sum
+    setup:
+    - "**/*.go"
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+final: false
+fromImage: builder/golang
+import:
+- image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+  add: /src
+  to: /src
+  before: install
+secrets:
+- id: GOPROXY
+  value: {{ .GOPROXY }}
+mount:
+  - fromPath: ~/go-pkg-cache
+    to: /go/pkg
+shell:
+  install:
+  - cd /src/images/{{ .ImageName }}-artifact
+  - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
+  - mkdir /out
+  - export GOOS=linux
+  - export GOARCH=amd64
+  - export CGO_ENABLED=0
+  - |
+    echo "Build chart-values-controller binary"
+    {{- $_ := set $ "ProjectName" (list $.ImageName "chart-values-controller" | join "/") }}
+
+    {{-   $buildCommand := printf "go build -ldflags=\"-s -w\" -tags %s -v -a -o /out/chart-values-controller ./cmd/chart-values-controller" .MODULE_EDITION -}}
+    {{-   include "image-build.build" (set $ "BuildCommand" $buildCommand) | nindent 4 }}
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+fromImage: base/distroless
+git:
+  {{- include "image mount points" . }}
+import:
+- image:  {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+  add: /out/chart-values-controller
+  to: /app/chart-values-controller
+  after: install
+imageSpec:
+  config:
+    workingDir: "/app"
+    entrypoint: ["/app/chart-values-controller"]
