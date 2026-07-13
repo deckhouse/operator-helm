@@ -119,6 +119,8 @@ spec:
         {{- $kubeRbacProxySettings := dict }}
         {{- $_ := set $kubeRbacProxySettings "runAsUserNobody" false }}
         {{- $_ := set $kubeRbacProxySettings "ignorePaths" "/proxy/healthz,/proxy/readyz" }}
+        {{- $_ := set $kubeRbacProxySettings "listenPort" 8443 }}
+        {{- $_ := set $kubeRbacProxySettings "portName" "rbac-proxy" }}
         {{- $_ := set $kubeRbacProxySettings "upstreams" (list
             (dict "upstream" "http://127.0.0.1:8080/metrics" "path" "/metrics" "name" "operator-helm-controller")
             (dict "upstream" "http://127.0.0.1:9090/metrics" "path" "/proxy/metrics" "name" "kube-api-rewriter")

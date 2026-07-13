@@ -174,13 +174,13 @@ spec:
   livenessProbe:
     httpGet:
       path: /proxy/healthz
-      port: 8082
+      port: 8443
       scheme: HTTPS
     initialDelaySeconds: 10
   readinessProbe:
     httpGet:
       path: /proxy/readyz
-      port: 8082
+      port: 8443
       scheme: HTTPS
     initialDelaySeconds: 10
   terminationMessagePath: /dev/termination-log

@@ -10,7 +10,7 @@ spec:
     - name: metrics
       port: 8080
       protocol: TCP
-      targetPort: https-metrics
+      targetPort: rbac-proxy
   selector:
     app: operator-helm-controller
 
