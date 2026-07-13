@@ -141,7 +141,8 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{
-		"error": map[string]string{"code": code, "message": message},
+		"error": message,
+		"code":  code,
 	})
 }
 
