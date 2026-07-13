@@ -24,8 +24,10 @@ import (
 
 var dns1123 = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
 
+const testKind = "HelmClusterAddonRepository"
+
 func TestAuxResourceNameReadableHints(t *testing.T) {
-	name := AuxResourceName("GitHub", "Pod.Info", "6.7.1")
+	name := AuxResourceName(testKind, "GitHub", "Pod.Info", "6.7.1")
 	if !strings.HasPrefix(name, "tmp-") {
 		t.Fatalf("expected tmp- prefix, got %q", name)
 	}
@@ -35,24 +37,25 @@ func TestAuxResourceNameReadableHints(t *testing.T) {
 }
 
 func TestAuxResourceNameDeterministic(t *testing.T) {
-	a := AuxResourceName("github", "podinfo", "6.7.1")
-	b := AuxResourceName("github", "podinfo", "6.7.1")
+	a := AuxResourceName(testKind, "github", "podinfo", "6.7.1")
+	b := AuxResourceName(testKind, "github", "podinfo", "6.7.1")
 	if a != b {
 		t.Fatalf("expected deterministic name, got %q and %q", a, b)
 	}
 }
 
 func TestAuxResourceNameDistinct(t *testing.T) {
-	cases := [][3]string{
-		{"github", "podinfo", "6.7.1"},
-		{"github", "podinfo", "6.7.2"},
-		{"github", "nginx", "6.7.1"},
-		{"gitlab", "podinfo", "6.7.1"},
+	cases := [][4]string{
+		{testKind, "github", "podinfo", "6.7.1"},
+		{testKind, "github", "podinfo", "6.7.2"},
+		{testKind, "github", "nginx", "6.7.1"},
+		{testKind, "gitlab", "podinfo", "6.7.1"},
+		{"FutureRepository", "github", "podinfo", "6.7.1"}, // same name/chart/version, different kind
 	}
 
 	seen := map[string]bool{}
 	for _, c := range cases {
-		name := AuxResourceName(c[0], c[1], c[2])
+		name := AuxResourceName(c[0], c[1], c[2], c[3])
 		if seen[name] {
 			t.Fatalf("name collision for %v: %q", c, name)
 		}
@@ -61,7 +64,7 @@ func TestAuxResourceNameDistinct(t *testing.T) {
 }
 
 func TestAuxResourceNameValidDNS1123(t *testing.T) {
-	name := AuxResourceName("really-long-repository-name", "really-long-chart-name", "1.2.3-alpha.1+build")
+	name := AuxResourceName(testKind, "really-long-repository-name", "really-long-chart-name", "1.2.3-alpha.1+build")
 	if len(name) > 63 {
 		t.Fatalf("name too long (%d): %q", len(name), name)
 	}

@@ -46,22 +46,36 @@ import (
 // packaged Helm chart.
 const helmChartLayerMediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
+// RepositoryKind identifies the kind of repository a chart lives in. New
+// repository kinds are added as new constants plus a case in Resolve.
+type RepositoryKind string
+
+const (
+	// RepositoryKindHelmClusterAddon is a chart referenced by a
+	// HelmClusterAddonRepository custom resource. Kind values are stored and
+	// compared in lower case, so the request casing does not matter.
+	RepositoryKindHelmClusterAddon RepositoryKind = "helmclusteraddonrepository"
+)
+
 // Outcome enumerates the possible results of resolving a chart-values request.
 type Outcome string
 
 const (
-	OutcomeReady              Outcome = "ready"
-	OutcomePending            Outcome = "pending"
-	OutcomeRepositoryNotFound Outcome = "repository_not_found"
-	OutcomeFetchFailed        Outcome = "fetch_failed"
-	OutcomeValuesNotFound     Outcome = "values_not_found"
+	OutcomeReady                     Outcome = "ready"
+	OutcomePending                   Outcome = "pending"
+	OutcomeRepositoryNotFound        Outcome = "repository_not_found"
+	OutcomeUnsupportedRepositoryKind Outcome = "unsupported_repository_kind"
+	OutcomeFetchFailed               Outcome = "fetch_failed"
+	OutcomeValuesNotFound            Outcome = "values_not_found"
 )
 
-// Request identifies a chart by repository, name and version.
+// Request identifies a chart by repository kind, repository name, chart name and
+// chart version.
 type Request struct {
-	Repository string
-	Chart      string
-	Version    string
+	Kind           RepositoryKind
+	RepositoryName string
+	Chart          string
+	Version        string
 }
 
 // Result is the outcome of a Resolve call. Values is populated only when
@@ -94,12 +108,29 @@ func New(c client.Client, valuesCache *cache.Cache, httpClient *http.Client, nam
 	}
 }
 
-// Resolve ensures the auxiliary source resource for req exists, inspects its
-// status and, when the artifact is ready, returns the chart's values.yaml.
-// A returned error indicates an internal failure (HTTP 500); all expected
-// states are reported via Result.Outcome.
+// Resolve dispatches on the repository kind and, when the artifact is ready,
+// returns the chart's values.yaml. A returned error indicates an internal
+// failure (HTTP 500); all expected states are reported via Result.Outcome.
 func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
-	name := naming.AuxResourceName(req.Repository, req.Chart, req.Version)
+	// Kind is case-insensitive: normalize to lower case so it dispatches and
+	// contributes to the resource name hash consistently. The original casing is
+	// kept only for the error message.
+	requested := req.Kind
+	req.Kind = RepositoryKind(strings.ToLower(string(req.Kind)))
+
+	switch req.Kind {
+	case RepositoryKindHelmClusterAddon:
+		return r.resolveHelmClusterAddon(ctx, req)
+	default:
+		return Result{Outcome: OutcomeUnsupportedRepositoryKind, Message: fmt.Sprintf("unsupported repository kind %q", requested)}, nil
+	}
+}
+
+// resolveHelmClusterAddon ensures the auxiliary source resource for a chart from
+// a HelmClusterAddonRepository exists, inspects its status and returns the
+// chart's values.yaml once the artifact is ready.
+func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Result, error) {
+	name := naming.AuxResourceName(string(req.Kind), req.RepositoryName, req.Chart, req.Version)
 
 	// Fast path: the cache (keyed by the auxiliary resource name) is kept fresh by
 	// the auxiliary-resource controller via a watch with a revision-change predicate,
@@ -109,9 +140,9 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 	}
 
 	repo := &helmv1alpha1.HelmClusterAddonRepository{}
-	if err := r.client.Get(ctx, types.NamespacedName{Name: req.Repository}, repo); err != nil {
+	if err := r.client.Get(ctx, types.NamespacedName{Name: req.RepositoryName}, repo); err != nil {
 		if apierrors.IsNotFound(err) {
-			return Result{Outcome: OutcomeRepositoryNotFound, Message: fmt.Sprintf("repository %q not found", req.Repository)}, nil
+			return Result{Outcome: OutcomeRepositoryNotFound, Message: fmt.Sprintf("repository %q not found", req.RepositoryName)}, nil
 		}
 		return Result{}, fmt.Errorf("getting repository: %w", err)
 	}
@@ -123,13 +154,13 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 
 	switch {
 	case isOCI(repo.Spec.URL):
-		ociRepo, err := r.ensureOCIRepository(ctx, repo, req, expiresAt)
+		ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt)
 		if err != nil {
 			return Result{}, err
 		}
 		conditions, art = ociRepo.Status.Conditions, ociRepo.Status.Artifact
 	case isHelm(repo.Spec.URL):
-		chart, pending, err := r.ensureHelmChart(ctx, repo, req, expiresAt)
+		chart, pending, err := r.ensureHelmChart(ctx, repo, req, name, expiresAt)
 		if err != nil {
 			return Result{}, err
 		}
@@ -167,7 +198,7 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 	return Result{Outcome: OutcomeReady, Values: values}, nil
 }
 
-func (r *Resolver) ensureHelmChart(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, req Request, expiresAt string) (*sourcev1.HelmChart, bool, error) {
+func (r *Resolver) ensureHelmChart(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, req Request, name, expiresAt string) (*sourcev1.HelmChart, bool, error) {
 	helmRepoName, err := r.findHelmRepositoryName(ctx, repo.Name)
 	if err != nil {
 		return nil, false, err
@@ -180,7 +211,7 @@ func (r *Resolver) ensureHelmChart(ctx context.Context, repo *helmv1alpha1.HelmC
 
 	chart := &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      naming.AuxResourceName(req.Repository, req.Chart, req.Version),
+			Name:      name,
 			Namespace: r.namespace,
 		},
 	}
@@ -203,7 +234,7 @@ func (r *Resolver) ensureHelmChart(ctx context.Context, repo *helmv1alpha1.HelmC
 	return chart, false, nil
 }
 
-func (r *Resolver) ensureOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, req Request, expiresAt string) (*sourcev1.OCIRepository, error) {
+func (r *Resolver) ensureOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, req Request, name, expiresAt string) (*sourcev1.OCIRepository, error) {
 	authSecret, tlsSecret, err := r.findRepositorySecretNames(ctx, repo.Name)
 	if err != nil {
 		return nil, err
@@ -211,7 +242,7 @@ func (r *Resolver) ensureOCIRepository(ctx context.Context, repo *helmv1alpha1.H
 
 	ociRepo := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      naming.AuxResourceName(req.Repository, req.Chart, req.Version),
+			Name:      name,
 			Namespace: r.namespace,
 		},
 	}

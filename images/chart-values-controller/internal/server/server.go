@@ -80,9 +80,10 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 type chartValuesRequest struct {
-	HelmClusterAddonChartName  string `json:"helmClusterAddonChartName"`
-	HelmClusterAddonRepository string `json:"helmClusterAddonRepository"`
-	ChartVersion               string `json:"chartVersion"`
+	RepositoryKind string `json:"repositoryKind"`
+	RepositoryName string `json:"repositoryName"`
+	Chart          string `json:"chart"`
+	Version        string `json:"version"`
 }
 
 func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
@@ -94,16 +95,17 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.HelmClusterAddonChartName == "" || req.HelmClusterAddonRepository == "" || req.ChartVersion == "" {
+	if req.RepositoryKind == "" || req.RepositoryName == "" || req.Chart == "" || req.Version == "" {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
-			"helmClusterAddonChartName, helmClusterAddonRepository and chartVersion are required")
+			"repositoryKind, repositoryName, chart and version are required")
 		return
 	}
 
 	result, err := s.resolver.Resolve(r.Context(), resolver.Request{
-		Repository: req.HelmClusterAddonRepository,
-		Chart:      req.HelmClusterAddonChartName,
-		Version:    req.ChartVersion,
+		Kind:           resolver.RepositoryKind(req.RepositoryKind),
+		RepositoryName: req.RepositoryName,
+		Chart:          req.Chart,
+		Version:        req.Version,
 	})
 	if err != nil {
 		logger.Error(err, "failed to resolve chart values")
@@ -125,6 +127,8 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 		})
 	case resolver.OutcomeRepositoryNotFound:
 		writeError(w, http.StatusNotFound, "REPOSITORY_NOT_FOUND", result.Message)
+	case resolver.OutcomeUnsupportedRepositoryKind:
+		writeError(w, http.StatusBadRequest, "UNSUPPORTED_REPOSITORY_KIND", result.Message)
 	case resolver.OutcomeValuesNotFound:
 		writeError(w, http.StatusUnprocessableEntity, "VALUES_NOT_FOUND", result.Message)
 	case resolver.OutcomeFetchFailed:

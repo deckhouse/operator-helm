@@ -47,7 +47,7 @@ func do(t *testing.T, res chartValuesResolver, body string) *httptest.ResponseRe
 	return rec
 }
 
-const validBody = `{"helmClusterAddonChartName":"podinfo","helmClusterAddonRepository":"github","chartVersion":"6.7.1"}`
+const validBody = `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"podinfo","version":"6.7.1"}`
 
 func TestHandleReady(t *testing.T) {
 	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady, Values: []byte("a: b\n")}}, validBody)
@@ -86,6 +86,7 @@ func TestHandleOutcomeStatusCodes(t *testing.T) {
 		wantCode   string
 	}{
 		{resolver.OutcomeRepositoryNotFound, http.StatusNotFound, "REPOSITORY_NOT_FOUND"},
+		{resolver.OutcomeUnsupportedRepositoryKind, http.StatusBadRequest, "UNSUPPORTED_REPOSITORY_KIND"},
 		{resolver.OutcomeValuesNotFound, http.StatusUnprocessableEntity, "VALUES_NOT_FOUND"},
 		{resolver.OutcomeFetchFailed, http.StatusBadGateway, "CHART_FETCH_FAILED"},
 	}
@@ -108,7 +109,7 @@ func TestHandleInvalidJSON(t *testing.T) {
 }
 
 func TestHandleMissingFields(t *testing.T) {
-	rec := do(t, fakeResolver{}, `{"helmClusterAddonChartName":"podinfo"}`)
+	rec := do(t, fakeResolver{}, `{"repositoryName":"github","chart":"podinfo"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}

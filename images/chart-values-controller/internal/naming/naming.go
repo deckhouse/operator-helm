@@ -32,13 +32,14 @@ const (
 )
 
 // AuxResourceName returns a deterministic DNS-1123 name (<=63 chars) for the
-// auxiliary source resource backing a (repository, chart, version) triple:
-// "tmp-<repo>-<chart>-<hash>". The same triple always maps to the same name,
+// auxiliary source resource backing a (kind, repository, chart, version) tuple:
+// "tmp-<repo>-<chart>-<hash>". The same tuple always maps to the same name,
 // which makes polling requests idempotent and lets concurrent requests converge
 // on one resource. The repo/chart parts are only human-readable hints; the hash
-// over the full triple guarantees uniqueness even if those parts collide.
-func AuxResourceName(repository, chart, version string) string {
-	sum := sha256.Sum256([]byte(repository + "/" + chart + "@" + version))
+// over the full tuple (including kind) guarantees uniqueness even if those parts
+// collide across repository kinds.
+func AuxResourceName(kind, repository, chart, version string) string {
+	sum := sha256.Sum256([]byte(kind + "\x00" + repository + "/" + chart + "@" + version))
 
 	return fmt.Sprintf("%s-%s-%s-%x", resourcePrefix, sanitizePart(repository), sanitizePart(chart), sum[:8])
 }
