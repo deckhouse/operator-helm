@@ -18,10 +18,9 @@ package tls_certificates_controller
 
 import (
 	"fmt"
+	"hooks/pkg/settings"
 
 	tlscertificate "github.com/deckhouse/module-sdk/common-hooks/tls-certificate"
-
-	"hooks/pkg/settings"
 )
 
 var _ = tlscertificate.RegisterInternalTLSHookEM(tlscertificate.GenSelfSignedTLSHookConf{
@@ -37,21 +36,5 @@ var _ = tlscertificate.RegisterInternalTLSHookEM(tlscertificate.GenSelfSignedTLS
 	}),
 
 	FullValuesPathPrefix: fmt.Sprintf("%s.internal.controller.cert", settings.ModuleName),
-	CommonCAValuesPath:   fmt.Sprintf("%s.internal.rootCA", settings.ModuleName),
-})
-
-var _ = tlscertificate.RegisterInternalTLSHookEM(tlscertificate.GenSelfSignedTLSHookConf{
-	CN:            settings.ChartValuesControllerCertCN,
-	TLSSecretName: "chart-values-controller-tls",
-	Namespace:     settings.ModuleNamespace,
-	SANs: tlscertificate.DefaultSANs([]string{
-		"localhost",
-		"127.0.0.1",
-		settings.ChartValuesControllerCertCN,
-		fmt.Sprintf("%s.%s", settings.ChartValuesControllerCertCN, settings.ModuleNamespace),
-		fmt.Sprintf("%s.%s.svc", settings.ChartValuesControllerCertCN, settings.ModuleNamespace),
-	}),
-
-	FullValuesPathPrefix: fmt.Sprintf("%s.internal.chartValuesController.cert", settings.ModuleName),
 	CommonCAValuesPath:   fmt.Sprintf("%s.internal.rootCA", settings.ModuleName),
 })

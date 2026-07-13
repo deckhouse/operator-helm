@@ -24,7 +24,6 @@ spec:
     containerPolicies:
     {{- include "kube_api_rewriter.vpa_container_policy" . | nindent 4 }}
     {{- include "kube_rbac_proxy.vpa_container_policy" . | nindent 4 }}
-    {{- include "kube_rbac_proxy.vpa_container_policy" (dict "containerName" "kube-rbac-proxy-api") | nindent 4 }}
     - containerName: chart-values-controller
       minAllowed:
         {{- include "operator_helm_chart_values_controller_resources" . | nindent 8 }}
@@ -32,6 +31,19 @@ spec:
         cpu: 1000m
         memory: 1Gi
 {{- end }}
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: chart-values-controller
+  namespace: d8-{{ .Chart.Name }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "chart-values-controller" )) | nindent 2 }}
+spec:
+  minAvailable: {{ include "helm_lib_is_ha_to_value" (list . 1 0) }}
+  selector:
+    matchLabels:
+      app: chart-values-controller
 
 ---
 apiVersion: apps/v1
@@ -76,6 +88,9 @@ spec:
             - containerPort: 8080
               name: metrics
               protocol: TCP
+            - containerPort: 8081 
+              name: api
+              protocol: TCP
             - containerPort: 9440
               name: healthz
               protocol: TCP
@@ -102,62 +117,16 @@ spec:
         {{- $kubeRbacProxySettings := dict }}
         {{- $_ := set $kubeRbacProxySettings "runAsUserNobody" false }}
         {{- $_ := set $kubeRbacProxySettings "ignorePaths" "/proxy/healthz,/proxy/readyz" }}
+        {{- $_ := set $kubeRbacProxySettings "listenPort" 8443 }}
+        {{- $_ := set $kubeRbacProxySettings "portName" "rbac-proxy" }}
         {{- $_ := set $kubeRbacProxySettings "upstreams" (list
-            (dict "upstream" "http://127.0.0.1:8080/metrics" "path" "/metrics" "name" "chart-values-controller")
-            (dict "upstream" "http://127.0.0.1:9090/metrics" "path" "/proxy/metrics" "name" "kube-api-rewriter")
-            (dict "upstream" "http://127.0.0.1:9090/healthz" "path" "/proxy/healthz" "name" "kube-api-rewriter")
-            (dict "upstream" "http://127.0.0.1:9090/readyz" "path" "/proxy/readyz" "name" "kube-api-rewriter")
+           (dict "upstream" "http://127.0.0.1:8080/metrics" "path" "/metrics" "name" "chart-values-controller")
+           (dict "upstream" "http://127.0.0.1:8081/v1/chart-values" "path" "/v1/chart-values" "name" "chart-values-controller" "subresource" "api")
+           (dict "upstream" "http://127.0.0.1:9090/metrics" "path" "/proxy/metrics" "name" "kube-api-rewriter")
+           (dict "upstream" "http://127.0.0.1:9090/healthz" "path" "/proxy/healthz" "name" "kube-api-rewriter")
+           (dict "upstream" "http://127.0.0.1:9090/readyz" "path" "/proxy/readyz" "name" "kube-api-rewriter")
         ) }}
         {{- include "kube_rbac_proxy.sidecar_container" (tuple . $kubeRbacProxySettings) | nindent 8 }}
-        # Dedicated kube-rbac-proxy for the chart-values API. It terminates TLS with the
-        # rootCA-signed serving certificate so in-cluster clients can verify the connection,
-        # and authorizes callers via SubjectAccessReview. kube-rbac-proxy derives the verb
-        # from the HTTP method, so a POST maps to `create` on helmclusteraddoncharts/chart-values.
-        - name: kube-rbac-proxy-api
-          {{- include "helm_lib_module_container_security_context_read_only_root_filesystem_capabilities_drop_all_pss_restricted" . | nindent 10 }}
-          image: {{ include "helm_lib_module_common_image" (list . "kubeRbacProxy") }}
-          imagePullPolicy: IfNotPresent
-          args:
-            - "--secure-listen-address=$(KUBE_RBAC_PROXY_LISTEN_ADDRESS):8443"
-            - "--tls-cert-file=/etc/tls/tls.crt"
-            - "--tls-private-key-file=/etc/tls/tls.key"
-            - "--v=2"
-            - "--logtostderr=true"
-            - "--stale-cache-interval=1h30m"
-          env:
-            - name: KUBE_RBAC_PROXY_LISTEN_ADDRESS
-              valueFrom:
-                fieldRef:
-                  apiVersion: v1
-                  fieldPath: status.podIP
-            - name: KUBE_RBAC_PROXY_CONFIG
-              value: |
-                upstreams:
-                  - upstream: http://127.0.0.1:8081/v1/chart-values
-                    path: /v1/chart-values
-                    authorization:
-                      resourceAttributes:
-                        namespace: d8-{{ .Chart.Name }}
-                        apiGroup: helm.deckhouse.io
-                        apiVersion: v1alpha1
-                        resource: helmclusteraddoncharts
-                        subresource: chart-values
-          volumeMounts:
-            - mountPath: /etc/tls
-              name: api-tls
-              readOnly: true
-          ports:
-            - containerPort: 8443
-              name: https-api
-              protocol: TCP
-          livenessProbe:
-            tcpSocket:
-              port: https-api
-            initialDelaySeconds: 10
-          readinessProbe:
-            tcpSocket:
-              port: https-api
-            initialDelaySeconds: 10
       dnsPolicy: ClusterFirst
       serviceAccountName: chart-values-controller
       {{- include "helm_lib_module_pod_security_context_run_as_user_deckhouse" . | nindent 6 }}
@@ -167,7 +136,4 @@ spec:
       volumes:
         - name: cache
           emptyDir: {}
-        - name: api-tls
-          secret:
-            secretName: chart-values-controller-tls
         {{- include "kube_api_rewriter.kubeconfig_volume" . | nindent 8 }}
