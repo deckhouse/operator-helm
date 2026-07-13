@@ -7,9 +7,9 @@ metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 rules:
 - apiGroups: ["apps"]
-  resources: ["deployments/prometheus-metrics"]
+  resources: ["deployments/prometheus-metrics", "deployments/api"]
   resourceNames: ["operator-helm-controller", "chart-values-controller", "helm-controller", "nelm-source-controller"]
-  verbs: ["get"]
+  verbs: ["get", "create"]
 
 {{- if (.Values.global.enabledModules | has "prometheus") }}
 ---

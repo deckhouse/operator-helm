@@ -44,6 +44,7 @@ spec:
           "system:serviceaccount:d8-operator-helm:operator-helm-controller",
           "system:serviceaccount:d8-operator-helm:nelm-source-controller",
           "system:serviceaccount:d8-operator-helm:helm-controller",
+          "system:serviceaccount:d8-operator-helm:chart-values-controller",
         ]
       message: "Operation forbidden for this user."
 ---
