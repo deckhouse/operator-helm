@@ -76,19 +76,24 @@ spec:
           args:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:9440
-            - --api-bind-address=127.0.0.1:8081
+            - --api-bind-address=:9443
+            - --api-tls-cert-file=/etc/chart-values-controller/tls/tls.crt
+            - --api-tls-key-file=/etc/chart-values-controller/tls/tls.key
             - --cache-dir=/cache
             - --chart-values-cache-ttl=1h
             - --max-chart-size-mb=100
           volumeMounts:
             - mountPath: /cache
               name: cache
+            - mountPath: /etc/chart-values-controller/tls
+              name: api-tls
+              readOnly: true
             {{- include "kube_api_rewriter.kubeconfig_volume_mount" . | nindent 12 }}
           ports:
             - containerPort: 8080
               name: metrics
               protocol: TCP
-            - containerPort: 8081 
+            - containerPort: 9443
               name: api
               protocol: TCP
             - containerPort: 9440
@@ -121,7 +126,6 @@ spec:
         {{- $_ := set $kubeRbacProxySettings "portName" "rbac-proxy" }}
         {{- $_ := set $kubeRbacProxySettings "upstreams" (list
            (dict "upstream" "http://127.0.0.1:8080/metrics" "path" "/metrics" "name" "chart-values-controller")
-           (dict "upstream" "http://127.0.0.1:8081/v1/chart-values" "path" "/v1/chart-values" "name" "chart-values-controller" "subresource" "api")
            (dict "upstream" "http://127.0.0.1:9090/metrics" "path" "/proxy/metrics" "name" "kube-api-rewriter")
            (dict "upstream" "http://127.0.0.1:9090/healthz" "path" "/proxy/healthz" "name" "kube-api-rewriter")
            (dict "upstream" "http://127.0.0.1:9090/readyz" "path" "/proxy/readyz" "name" "kube-api-rewriter")
@@ -136,4 +140,7 @@ spec:
       volumes:
         - name: cache
           emptyDir: {}
+        - name: api-tls
+          secret:
+            secretName: chart-values-controller-tls
         {{- include "kube_api_rewriter.kubeconfig_volume" . | nindent 8 }}

@@ -39,7 +39,7 @@ func (f fakeResolver) Resolve(_ context.Context, _ resolver.Request) (resolver.R
 func do(t *testing.T, res chartValuesResolver, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	srv := New("", res)
+	srv := New("", res, NewOptions{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chart-values", strings.NewReader(body))
 	srv.handleChartValues(rec, req)
@@ -96,7 +96,7 @@ func TestHandleOutcomeStatusCodes(t *testing.T) {
 		if rec.Code != c.wantStatus {
 			t.Fatalf("outcome %s: status = %d, want %d", c.outcome, rec.Code, c.wantStatus)
 		}
-		assertErrorCode(t, rec.Body.Bytes(), c.wantCode)
+		assertCode(t, rec.Body.Bytes(), "code", c.wantCode)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestHandleInvalidJSON(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
-	assertErrorCode(t, rec.Body.Bytes(), "INVALID_REQUEST")
+	assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
 }
 
 func TestHandleMissingFields(t *testing.T) {
@@ -113,7 +113,7 @@ func TestHandleMissingFields(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
-	assertErrorCode(t, rec.Body.Bytes(), "INVALID_REQUEST")
+	assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
 }
 
 func TestHandleInternalError(t *testing.T) {
@@ -121,23 +121,7 @@ func TestHandleInternalError(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
-	assertErrorCode(t, rec.Body.Bytes(), "INTERNAL")
-}
-
-func assertErrorCode(t *testing.T, body []byte, want string) {
-	t.Helper()
-
-	var resp struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Error.Code != want {
-		t.Fatalf("error code = %q, want %q", resp.Error.Code, want)
-	}
+	assertCode(t, rec.Body.Bytes(), "code", "INTERNAL")
 }
 
 func assertCode(t *testing.T, body []byte, field, want string) {

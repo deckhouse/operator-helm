@@ -38,3 +38,20 @@ var _ = tlscertificate.RegisterInternalTLSHookEM(tlscertificate.GenSelfSignedTLS
 	FullValuesPathPrefix: fmt.Sprintf("%s.internal.controller.cert", settings.ModuleName),
 	CommonCAValuesPath:   fmt.Sprintf("%s.internal.rootCA", settings.ModuleName),
 })
+
+var _ = tlscertificate.RegisterInternalTLSHookEM(tlscertificate.GenSelfSignedTLSHookConf{
+	CN:            settings.ChartValuesControllerCertCN,
+	TLSSecretName: "chart-values-controller-tls",
+	Namespace:     settings.ModuleNamespace,
+	SANs: tlscertificate.DefaultSANs([]string{
+		"localhost",
+		"127.0.0.1",
+		settings.ChartValuesControllerCertCN,
+		settings.ChartValuesAPIServiceName,
+		fmt.Sprintf("%s.%s", settings.ChartValuesAPIServiceName, settings.ModuleNamespace),
+		fmt.Sprintf("%s.%s.svc", settings.ChartValuesAPIServiceName, settings.ModuleNamespace),
+	}),
+
+	FullValuesPathPrefix: fmt.Sprintf("%s.internal.chartValuesController.cert", settings.ModuleName),
+	CommonCAValuesPath:   fmt.Sprintf("%s.internal.rootCA", settings.ModuleName),
+})

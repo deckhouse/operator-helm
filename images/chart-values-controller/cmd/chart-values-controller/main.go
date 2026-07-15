@@ -55,6 +55,8 @@ func main() {
 		metricsAddr     string
 		healthProbeAddr string
 		apiAddr         string
+		apiTLSCertFile  string
+		apiTLSKeyFile   string
 		cacheDir        string
 		cacheTTL        time.Duration
 		sourceInterval  time.Duration
@@ -64,6 +66,8 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":9440", "The address the health probe endpoint binds to.")
 	flag.StringVar(&apiAddr, "api-bind-address", "127.0.0.1:8081", "The address the chart-values HTTP API binds to.")
+	flag.StringVar(&apiTLSCertFile, "api-tls-cert-file", "", "Path to the PEM-encoded certificate for the chart-values HTTP API; enables TLS together with --api-tls-key-file.")
+	flag.StringVar(&apiTLSKeyFile, "api-tls-key-file", "", "Path to the PEM-encoded private key for the chart-values HTTP API; enables TLS together with --api-tls-cert-file.")
 	flag.StringVar(&cacheDir, "cache-dir", "/cache", "Directory used to cache extracted values.yaml files.")
 	flag.DurationVar(&cacheTTL, "chart-values-cache-ttl", time.Hour, "Lifetime of auxiliary source resources and their cache entries; refreshed on each request.")
 	flag.DurationVar(&sourceInterval, "source-interval", 10*time.Minute, "Reconcile interval set on auxiliary source resources.")
@@ -80,6 +84,11 @@ func main() {
 		os.Exit(1)
 	}
 	maxArtifactBytes := int64(maxChartSizeMB) << 20
+
+	if (apiTLSCertFile == "") != (apiTLSKeyFile == "") {
+		logger.Error(nil, "--api-tls-cert-file and --api-tls-key-file must be set together")
+		os.Exit(1)
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
@@ -107,7 +116,11 @@ func main() {
 		maxArtifactBytes,
 	)
 
-	if err := mgr.Add(server.New(apiAddr, res)); err != nil {
+	apiServer := server.New(apiAddr, res, server.NewOptions{
+		TLSCertFile: apiTLSCertFile,
+		TLSKeyFile:  apiTLSKeyFile,
+	})
+	if err := mgr.Add(apiServer); err != nil {
 		logger.Error(err, "unable to add HTTP server")
 		os.Exit(1)
 	}

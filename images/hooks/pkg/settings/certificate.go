@@ -19,4 +19,5 @@ package settings
 const (
 	ControllerCertCN            string = "operator-helm-controller"
 	ChartValuesControllerCertCN string = "chart-values-controller"
+	ChartValuesAPIServiceName   string = "chart-values-api"
 )

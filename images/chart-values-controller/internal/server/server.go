@@ -40,12 +40,26 @@ type chartValuesResolver interface {
 // Server exposes the chart-values HTTP API as a controller-runtime Runnable.
 // It does not require leader election so it can serve from any replica.
 type Server struct {
-	addr     string
-	resolver chartValuesResolver
+	addr        string
+	resolver    chartValuesResolver
+	tlsCertFile string
+	tlsKeyFile  string
 }
 
-func New(addr string, res chartValuesResolver) *Server {
-	return &Server{addr: addr, resolver: res}
+// NewOptions carries optional server configuration. When both TLSCertFile and
+// TLSKeyFile are set the API is served over TLS.
+type NewOptions struct {
+	TLSCertFile string
+	TLSKeyFile  string
+}
+
+func New(addr string, res chartValuesResolver, opts NewOptions) *Server {
+	return &Server{
+		addr:        addr,
+		resolver:    res,
+		tlsCertFile: opts.TLSCertFile,
+		tlsKeyFile:  opts.TLSKeyFile,
+	}
 }
 
 // NeedLeaderElection reports that the HTTP server runs on every replica.
@@ -72,7 +86,14 @@ func (s *Server) Start(ctx context.Context) error {
 		_ = srv.Shutdown(shutdownCtx) //nolint:contextcheck // parent ctx is done, a fresh one is required for graceful shutdown
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	serve := srv.ListenAndServe
+	if s.tlsCertFile != "" && s.tlsKeyFile != "" {
+		serve = func() error {
+			return srv.ListenAndServeTLS(s.tlsCertFile, s.tlsKeyFile)
+		}
+	}
+
+	if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 
