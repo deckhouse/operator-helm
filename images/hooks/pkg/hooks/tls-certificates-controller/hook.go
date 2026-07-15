@@ -35,8 +35,9 @@ var _ = tlscertificate.RegisterInternalTLSHookEM(tlscertificate.GenSelfSignedTLS
 		fmt.Sprintf("%s.%s.svc", settings.ControllerCertCN, settings.ModuleNamespace),
 	}),
 
-	FullValuesPathPrefix: fmt.Sprintf("%s.internal.controller.cert", settings.ModuleName),
-	CommonCAValuesPath:   fmt.Sprintf("%s.internal.rootCA", settings.ModuleName),
+	FullValuesPathPrefix:  fmt.Sprintf("%s.internal.controller.cert", settings.ModuleName),
+	CommonCAValuesPath:    fmt.Sprintf("%s.internal.rootCA", settings.ModuleName),
+	CommonCACanonicalName: settings.CommonCACanonicalName,
 })
 
 var _ = tlscertificate.RegisterInternalTLSHookEM(tlscertificate.GenSelfSignedTLSHookConf{
@@ -52,6 +53,7 @@ var _ = tlscertificate.RegisterInternalTLSHookEM(tlscertificate.GenSelfSignedTLS
 		fmt.Sprintf("%s.%s.svc", settings.ChartValuesAPIServiceName, settings.ModuleNamespace),
 	}),
 
-	FullValuesPathPrefix: fmt.Sprintf("%s.internal.chartValuesController.cert", settings.ModuleName),
-	CommonCAValuesPath:   fmt.Sprintf("%s.internal.rootCA", settings.ModuleName),
+	FullValuesPathPrefix:  fmt.Sprintf("%s.internal.chartValuesController.cert", settings.ModuleName),
+	CommonCAValuesPath:    fmt.Sprintf("%s.internal.rootCA", settings.ModuleName),
+	CommonCACanonicalName: settings.CommonCACanonicalName,
 })

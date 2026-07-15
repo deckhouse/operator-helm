@@ -17,6 +17,7 @@ limitations under the License.
 package settings
 
 const (
+	CommonCACanonicalName       string = "operator-helm"
 	ControllerCertCN            string = "operator-helm-controller"
 	ChartValuesControllerCertCN string = "chart-values-controller"
 	ChartValuesAPIServiceName   string = "chart-values-api"
