@@ -1,0 +1,88 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chart-values-controller
+  namespace: d8-{{ .Chart.Name }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "chart-values-controller")) | nindent 2 }}
+imagePullSecrets:
+- name: operator-helm-module-registry
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: d8:{{ .Chart.Name }}:chart-values-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: d8:{{ .Chart.Name }}:chart-values-controller
+subjects:
+- kind: ServiceAccount
+  name: chart-values-controller
+  namespace: d8-{{ .Chart.Name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: d8:{{ .Chart.Name }}:chart-values-controller
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddonrepositories
+  - helmclusteraddonrepositories/status
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - source.internal.operator-helm.deckhouse.io
+  resources:
+  - internalnelmoperatorhelmcharts
+  - internalnelmoperatorhelmrepositories
+  - internalnelmoperatorocirepositories
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - source.internal.operator-helm.deckhouse.io
+  resources:
+  - internalnelmoperatorhelmcharts/status
+  - internalnelmoperatorhelmrepositories/status
+  - internalnelmoperatorocirepositories/status
+  verbs:
+  - get

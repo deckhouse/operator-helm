@@ -13,7 +13,7 @@
   terminationMessagePath: /dev/termination-log
   terminationMessagePolicy: File
   args:
-  - "--secure-listen-address=$(KUBE_RBAC_PROXY_LISTEN_ADDRESS):{{ $settings.listenPort | default "8082" }}"
+  - "--secure-listen-address=0.0.0.0:{{ $settings.listenPort | default "8082" }}"
   - "--v={{ $settings.logLevel | default "2" }}"
   - "--logtostderr=true"
   - "--stale-cache-interval={{ $settings.staleCacheInterval | default "1h30m" }}"
@@ -21,11 +21,6 @@
   - "--ignore-paths={{ $settings.ignorePaths }}"
   {{- end }}
   env:
-  - name: KUBE_RBAC_PROXY_LISTEN_ADDRESS
-    valueFrom:
-      fieldRef:
-        apiVersion: v1
-        fieldPath: status.podIP
   - name: KUBE_RBAC_PROXY_CONFIG
     value: |
       excludePaths:

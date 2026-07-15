@@ -1,7 +1,7 @@
 {{- $priorityClassName := include "priorityClassName" . }}
 
-{{- define "helm_controller_resources" }}
-cpu: 100m
+{{- define "operator_helm_chart_values_controller_resources" }}
+cpu: 50m
 memory: 64Mi
 {{- end }}
 
@@ -10,23 +10,23 @@ memory: 64Mi
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:
-  name: helm-controller
+  name: chart-values-controller
   namespace: d8-{{ .Chart.Name }}
-  {{- include "helm_lib_module_labels" (list . (dict "app" "helm-controller" "workload-resource-policy.deckhouse.io" "master")) | nindent 2 }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "chart-values-controller" "workload-resource-policy.deckhouse.io" "master")) | nindent 2 }}
 spec:
   targetRef:
     apiVersion: "apps/v1"
     kind: Deployment
-    name: helm-controller
+    name: chart-values-controller
   updatePolicy:
     updateMode: {{ include "vpa.policyUpdateMode" . }}
   resourcePolicy:
     containerPolicies:
     {{- include "kube_api_rewriter.vpa_container_policy" . | nindent 4 }}
     {{- include "kube_rbac_proxy.vpa_container_policy" . | nindent 4 }}
-    - containerName: helm-controller
+    - containerName: chart-values-controller
       minAllowed:
-        {{- include "helm_controller_resources" . | nindent 8 }}
+        {{- include "operator_helm_chart_values_controller_resources" . | nindent 8 }}
       maxAllowed:
         cpu: 1000m
         memory: 1Gi
@@ -36,71 +36,77 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: helm-controller
+  name: chart-values-controller
   namespace: d8-{{ .Chart.Name }}
-  {{- include "helm_lib_module_labels" (list . (dict "app" "helm-controller" )) | nindent 2 }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "chart-values-controller" )) | nindent 2 }}
 spec:
   minAvailable: {{ include "helm_lib_is_ha_to_value" (list . 1 0) }}
   selector:
     matchLabels:
-      app: helm-controller
+      app: chart-values-controller
 
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: helm-controller
+  name: chart-values-controller
   namespace: d8-{{ .Chart.Name }}
-  {{- include "helm_lib_module_labels" (list . (dict "app" "helm-controller")) | nindent 2 }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "chart-values-controller")) | nindent 2 }}
 spec:
-  replicas: {{ include "helm_lib_is_ha_to_value" (list . 3 1) }}
-  {{- if (include "helm_lib_ha_enabled" .) }}
+  replicas: 1
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 0
-      maxUnavailable: 1
-  {{- end }}
+    type: Recreate
   revisionHistoryLimit: 2
   selector:
     matchLabels:
-      app: helm-controller
+      app: chart-values-controller
   template:
     metadata:
       labels:
-        app: helm-controller
+        app: chart-values-controller
       annotations:
-        kubectl.kubernetes.io/default-container: helm-controller
+        kubectl.kubernetes.io/default-container: chart-values-controller
     spec:
       containers:
         {{- include "kube_api_rewriter.sidecar_container" . | nindent 8 }}
-        - name: helm-controller
+        - name: chart-values-controller
           {{- include "helm_lib_module_container_security_context_read_only_root_filesystem_capabilities_drop_all_pss_restricted" . | nindent 10 }}
-          image: {{ include "helm_lib_module_image" (list . "helmController") }}
+          image: {{ include "helm_lib_module_image" (list . "chartValuesController") }}
           imagePullPolicy: IfNotPresent
           args:
-            - --watch-all-namespaces
-            - --log-encoding=json
-            - --enable-leader-election
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:9440
+            - --api-bind-address=:9443
+            - --api-tls-cert-file=/etc/chart-values-controller/tls/tls.crt
+            - --api-tls-key-file=/etc/chart-values-controller/tls/tls.key
+            - --cache-dir=/cache
+            - --chart-values-cache-ttl=1h
+            - --max-chart-size-mb=100
           volumeMounts:
-            - mountPath: /tmp
-              name: temp
+            - mountPath: /cache
+              name: cache
+            - mountPath: /etc/chart-values-controller/tls
+              name: api-tls
+              readOnly: true
             {{- include "kube_api_rewriter.kubeconfig_volume_mount" . | nindent 12 }}
           ports:
             - containerPort: 8080
               name: metrics
               protocol: TCP
+            - containerPort: 9443
+              name: api
+              protocol: TCP
             - containerPort: 9440
               name: healthz
+              protocol: TCP
           resources:
             requests:
               {{- include "helm_lib_module_ephemeral_storage_only_logs" . | nindent 14 }}
               {{- if not ( .Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
-              {{- include "helm_controller_resources" . | nindent 14 }}
+              {{- include "operator_helm_chart_values_controller_resources" . | nindent 14 }}
               {{- end }}
           env:
             {{- include "kube_api_rewriter.kubeconfig_env" . | nindent 12 }}
-            {{- include "helm-controller.envs" . | nindent 12 }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -119,20 +125,22 @@ spec:
         {{- $_ := set $kubeRbacProxySettings "listenPort" 8443 }}
         {{- $_ := set $kubeRbacProxySettings "portName" "rbac-proxy" }}
         {{- $_ := set $kubeRbacProxySettings "upstreams" (list
-            (dict "upstream" "http://127.0.0.1:8080/metrics" "path" "/metrics" "name" "helm-controller")
-            (dict "upstream" "http://127.0.0.1:9090/metrics" "path" "/proxy/metrics" "name" "kube-api-rewriter")
-            (dict "upstream" "http://127.0.0.1:9090/healthz" "path" "/proxy/healthz" "name" "kube-api-rewriter")
-            (dict "upstream" "http://127.0.0.1:9090/readyz" "path" "/proxy/readyz" "name" "kube-api-rewriter")
+           (dict "upstream" "http://127.0.0.1:8080/metrics" "path" "/metrics" "name" "chart-values-controller")
+           (dict "upstream" "http://127.0.0.1:9090/metrics" "path" "/proxy/metrics" "name" "kube-api-rewriter")
+           (dict "upstream" "http://127.0.0.1:9090/healthz" "path" "/proxy/healthz" "name" "kube-api-rewriter")
+           (dict "upstream" "http://127.0.0.1:9090/readyz" "path" "/proxy/readyz" "name" "kube-api-rewriter")
         ) }}
         {{- include "kube_rbac_proxy.sidecar_container" (tuple . $kubeRbacProxySettings) | nindent 8 }}
       dnsPolicy: ClusterFirst
-      serviceAccountName: helm-controller
+      serviceAccountName: chart-values-controller
       {{- include "helm_lib_module_pod_security_context_run_as_user_deckhouse" . | nindent 6 }}
       {{- include "helm_lib_priority_class" (tuple . $priorityClassName) | nindent 6 }}
       {{- include "helm_lib_node_selector" (tuple . "system") | nindent 6 }}
       {{- include "helm_lib_tolerations" (tuple . "system") | nindent 6 }}
-      {{- include "helm_lib_pod_anti_affinity_for_ha" (list . (dict "app" "helm-controller")) | nindent 6 }}
       volumes:
-        - emptyDir: {}
-          name: temp
+        - name: cache
+          emptyDir: {}
+        - name: api-tls
+          secret:
+            secretName: chart-values-controller-tls
         {{- include "kube_api_rewriter.kubeconfig_volume" . | nindent 8 }}

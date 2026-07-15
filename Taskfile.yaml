@@ -21,6 +21,9 @@ includes:
   artifact:
     taskfile: ./images/operator-helm-controller/Taskfile.dist.yaml
     dir: ./images/operator-helm-controller
+  chart-values-artifact:
+    taskfile: ./images/chart-values-controller/Taskfile.dist.yaml
+    dir: ./images/chart-values-controller
 
   deps:
     taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
@@ -114,6 +117,7 @@ tasks:
       - task: api:format
       - task: hooks:format
       - task: artifact:format
+      - task: chart-values-artifact:format
       - task: e2e:format
 
   lint:
@@ -121,6 +125,7 @@ tasks:
       - task: api:lint
       - task: hooks:lint
       - task: artifact:lint
+      - task: chart-values-artifact:lint
       - task: e2e:lint
       - task: lint:doc-ru
 

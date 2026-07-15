@@ -1,0 +1,5 @@
+features:
+  - add ability to review chart default values in console during addon creation
+fixes: []
+security: []
+chore: []

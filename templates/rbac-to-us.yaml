@@ -1,28 +1,27 @@
+{{- if (.Values.global.enabledModules | has "prometheus") }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: access-to-operator-helm
+  name: prometheus-access-to-operator-helm
   namespace: d8-{{ .Chart.Name }}
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 rules:
 - apiGroups: ["apps"]
   resources: ["deployments/prometheus-metrics"]
-  resourceNames: ["operator-helm-controller", "helm-controller", "nelm-source-controller"]
+  resourceNames: ["operator-helm-controller", "chart-values-controller", "helm-controller", "nelm-source-controller"]
   verbs: ["get"]
-
-{{- if (.Values.global.enabledModules | has "prometheus") }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: access-to-operator-helm
+  name: prometheus-access-to-operator-helm
   namespace: d8-{{ .Chart.Name }}
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: access-to-operator-helm
+  name: prometheus-access-to-operator-helm
 subjects:
 - kind: User
   name: d8-monitoring:scraper

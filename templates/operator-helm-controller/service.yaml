@@ -11,9 +11,5 @@ spec:
       port: 443
       targetPort: controller
       protocol: TCP
-    - name: controller
-      port: 9443
-      targetPort: controller
-      protocol: TCP
   selector:
     app: operator-helm-controller
