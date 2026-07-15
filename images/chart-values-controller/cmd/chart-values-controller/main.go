@@ -24,6 +24,7 @@ import (
 
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/deckhouse/chart-values-controller/internal/auth"
 	"github.com/deckhouse/chart-values-controller/internal/cache"
 	"github.com/deckhouse/chart-values-controller/internal/controller"
 	"github.com/deckhouse/chart-values-controller/internal/resolver"
@@ -103,6 +105,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		logger.Error(err, "unable to create kubernetes clientset")
+		os.Exit(1)
+	}
+	reviewer := auth.New(
+		clientset.AuthenticationV1().TokenReviews(),
+		clientset.AuthorizationV1().SubjectAccessReviews(),
+	)
+
 	valuesCache := cache.New(cacheDir)
 	httpClient := &http.Client{Timeout: artifactDownloadTimeout}
 
@@ -116,7 +128,7 @@ func main() {
 		maxArtifactBytes,
 	)
 
-	apiServer := server.New(apiAddr, res, server.NewOptions{
+	apiServer := server.New(apiAddr, res, reviewer, server.NewOptions{
 		TLSCertFile: apiTLSCertFile,
 		TLSKeyFile:  apiTLSKeyFile,
 	})

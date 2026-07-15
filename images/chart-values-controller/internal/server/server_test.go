@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/deckhouse/chart-values-controller/internal/auth"
 	"github.com/deckhouse/chart-values-controller/internal/resolver"
 )
 
@@ -36,12 +37,31 @@ func (f fakeResolver) Resolve(_ context.Context, _ resolver.Request) (resolver.R
 	return f.result, f.err
 }
 
+type fakeReviewer struct {
+	result auth.Result
+	err    error
+}
+
+func (f fakeReviewer) Review(_ context.Context, _ string, _ auth.Access) (auth.Result, error) {
+	return f.result, f.err
+}
+
+// authorized is the default reviewer for tests unconcerned with authorization.
+var authorized = fakeReviewer{result: auth.Result{Authenticated: true, Authorized: true}}
+
 func do(t *testing.T, res chartValuesResolver, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	srv := New("", res, NewOptions{})
+	return doAuth(t, res, authorized, body)
+}
+
+func doAuth(t *testing.T, res chartValuesResolver, rev tokenReviewer, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	srv := New("", res, rev, NewOptions{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/chart-values", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
 	srv.handleChartValues(rec, req)
 
 	return rec
@@ -118,6 +138,45 @@ func TestHandleMissingFields(t *testing.T) {
 
 func TestHandleInternalError(t *testing.T) {
 	rec := do(t, fakeResolver{err: context.DeadlineExceeded}, validBody)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "INTERNAL")
+}
+
+func TestHandleMissingToken(t *testing.T) {
+	srv := New("", fakeResolver{}, authorized, NewOptions{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chart-values", strings.NewReader(validBody))
+	srv.handleChartValues(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "UNAUTHENTICATED")
+}
+
+func TestHandleUnauthenticated(t *testing.T) {
+	rec := doAuth(t, fakeResolver{}, fakeReviewer{result: auth.Result{Authenticated: false}}, validBody)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "UNAUTHENTICATED")
+}
+
+func TestHandleForbidden(t *testing.T) {
+	rec := doAuth(t, fakeResolver{}, fakeReviewer{result: auth.Result{Authenticated: true, Authorized: false}}, validBody)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "FORBIDDEN")
+}
+
+func TestHandleReviewError(t *testing.T) {
+	rec := doAuth(t, fakeResolver{}, fakeReviewer{err: context.DeadlineExceeded}, validBody)
+
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
