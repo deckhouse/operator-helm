@@ -18,6 +18,8 @@ package cleanup_finalizers
 
 import (
 	"context"
+	"fmt"
+	"hooks/pkg/kube"
 	"hooks/pkg/settings"
 
 	"github.com/deckhouse/module-sdk/pkg"
@@ -42,7 +44,7 @@ type resource struct {
 
 var _ = registry.RegisterFunc(&pkg.HookConfig{
 	OnAfterDeleteHelm: &pkg.OrderedConfig{Order: 10},
-	AllowFailure:      true,
+	AllowFailure:      false,
 	Kubernetes: []pkg.KubernetesConfig{
 		{
 			Name:       internalHelmReleaseSnapshotName,
@@ -100,6 +102,20 @@ var _ = registry.RegisterFunc(&pkg.HookConfig{
 }, cleanupFinalizer)
 
 func cleanupFinalizer(ctx context.Context, input *pkg.HookInput) error {
+	client, err := input.DC.GetK8sClient()
+	if err != nil {
+		return fmt.Errorf("getting k8s client: %w", err)
+	}
+
+	hasWorkloads, err := kube.NamespaceHasWorkloads(ctx, client.Dynamic(), settings.ModuleNamespace)
+	if err != nil {
+		return fmt.Errorf("checking workloads in namespace %s: %w", settings.ModuleNamespace, err)
+	}
+
+	if hasWorkloads {
+		return fmt.Errorf("namespace %s still has running deployments or pods, retrying before removing finalizers", settings.ModuleNamespace)
+	}
+
 	removeFinalizers := func(apiVersion, kind, name string) {
 		input.PatchCollector.PatchWithJSON(
 			[]map[string]any{
