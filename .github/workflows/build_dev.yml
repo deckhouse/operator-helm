@@ -111,7 +111,7 @@ jobs:
 
   e2e_tests:
     name: Run e2e tests
-    runs-on: [self-hosted, large]
+    runs-on: operator-helm-e2e
     needs: build_dev
     steps:
       - uses: actions/checkout@v6
@@ -164,3 +164,4 @@ jobs:
       loopNotificationGroup: ${{ secrets.LOOP_NOTIFICATION_GROUP }}
       webhook: ${{ secrets.LOOP_NOTIFICATION_WEBHOOK }}
       notificationChannel: ${{ secrets.LOOP_NOTIFICATION_CHANNEL }}
+
