@@ -126,13 +126,22 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 	}
 }
 
-func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+// CleanupHelmRelease issues a delete for the internal HelmRelease and returns it
+// while it is still present, so the caller can inspect its conditions and wait
+// for helm-controller to finish uninstalling before proceeding. It returns nil
+// once the HelmRelease is gone.
+func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*helmv2.HelmRelease, error) {
 	nn := types.NamespacedName{Name: utils.GetInternalHelmReleaseName(addon.Name), Namespace: s.TargetNamespace}
-	if err := s.ensureResourceDeleted(ctx, nn, &helmv2.HelmRelease{}); err != nil {
-		return fmt.Errorf("failed to delete helm release: %w", err)
+	release := &helmv2.HelmRelease{}
+	exists, err := s.deleteAndCheck(ctx, nn, release)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete helm release: %w", err)
+	}
+	if !exists {
+		return nil, nil
 	}
 
-	return nil
+	return release, nil
 }
 
 func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2.HelmRelease, repoType utils.InternalRepositoryType, targetNamespace string) error {

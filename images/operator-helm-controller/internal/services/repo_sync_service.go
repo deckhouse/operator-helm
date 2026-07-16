@@ -77,6 +77,14 @@ func (r RepoSyncResult) GetConditionType() string {
 	return helmv1alpha1.ConditionTypeSynced
 }
 
+// InProgress reports the first phase of the sync state machine: the Synced
+// condition has just been marked Reconciling and the actual chart fetch still
+// needs to run. The caller performs that fetch in the same reconcile so progress
+// does not depend on a status-update watch event.
+func (r RepoSyncResult) InProgress() bool {
+	return r.Status.Status == metav1.ConditionUnknown && r.Status.Reason == helmv1alpha1.ReasonReconciling
+}
+
 func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) RepoSyncResult {
 	logger := log.FromContext(ctx)
 
