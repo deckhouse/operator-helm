@@ -18,5 +18,6 @@ package main
 
 import (
 	_ "hooks/pkg/hooks/cleanup-finalizers"
+	_ "hooks/pkg/hooks/delete-namespace"
 	_ "hooks/pkg/hooks/tls-certificates-controller"
 )
