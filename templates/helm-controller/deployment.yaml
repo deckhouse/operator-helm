@@ -99,10 +99,6 @@ spec:
               {{- include "helm_controller_resources" . | nindent 14 }}
               {{- end }}
           env:
-            - name: RUNTIME_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
             {{- include "kube_api_rewriter.kubeconfig_env" . | nindent 12 }}
             {{- include "helm-controller.envs" . | nindent 12 }}
           livenessProbe:
