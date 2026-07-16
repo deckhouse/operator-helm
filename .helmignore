@@ -10,3 +10,16 @@ openapi
 release.yaml
 werf*.yaml
 NOTES.txt
+.git/
+.werf/
+api/
+.dmtlint.yaml
+.github/
+.gitignore
+tools/
+LICENSE
+tests/
+Taskfile.yaml
+CHANGELOG/
+build/
+requirements.lock
