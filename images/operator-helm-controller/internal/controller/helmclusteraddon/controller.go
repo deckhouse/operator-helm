@@ -51,7 +51,13 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
-		For(&helmv1alpha1.HelmClusterAddon{}).
+		For(
+			&helmv1alpha1.HelmClusterAddon{},
+			builder.WithPredicates(predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				predicate.AnnotationChangedPredicate{},
+			)),
+		).
 		Watches(
 			&sourcev1.HelmChart{},
 			handler.EnqueueRequestsFromMapFunc(
