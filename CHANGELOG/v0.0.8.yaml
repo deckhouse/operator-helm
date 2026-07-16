@@ -1,0 +1,6 @@
+features: []
+fixes:
+  - resolve race on module disable which could lead to application distruption
+security: []
+chore:
+  - watch shadow custom resources in module namespace only

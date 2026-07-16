@@ -79,7 +79,7 @@ spec:
           image: {{ include "helm_lib_module_image" (list . "helmController") }}
           imagePullPolicy: IfNotPresent
           args:
-            - --watch-all-namespaces
+            - --watch-all-namespaces=false
             - --log-encoding=json
             - --enable-leader-election
           volumeMounts:
