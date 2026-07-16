@@ -79,7 +79,7 @@ spec:
           image: {{ include "helm_lib_module_image" (list . "helmController") }}
           imagePullPolicy: IfNotPresent
           args:
-            - --watch-all-namespaces
+            - --watch-all-namespaces=false
             - --log-encoding=json
             - --enable-leader-election
           volumeMounts:
@@ -99,6 +99,10 @@ spec:
               {{- include "helm_controller_resources" . | nindent 14 }}
               {{- end }}
           env:
+            - name: RUNTIME_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             {{- include "kube_api_rewriter.kubeconfig_env" . | nindent 12 }}
             {{- include "helm-controller.envs" . | nindent 12 }}
           livenessProbe:
