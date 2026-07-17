@@ -248,6 +248,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		return reconcile.Result{}, err
 	}
 	if release != nil {
+		// The addon is a facade over the HelmRelease: a bad spec parameter that
+		// blocks helm uninstall is propagated into the release. Keep re-applying
+		// the (possibly corrected) addon spec to the still-present release so the
+		// uninstall can be fixed via the addon even while it is being deleted.
+		if err := r.releaseService.SyncReleaseSpec(ctx, addon, release); err != nil {
+			return reconcile.Result{}, err
+		}
 		return r.awaitInternalResourceDeletion(ctx, addon, "internal release", release)
 	}
 

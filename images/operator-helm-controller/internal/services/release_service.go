@@ -144,14 +144,46 @@ func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1al
 	return release, nil
 }
 
+// SyncReleaseSpec re-applies the addon-derived fields onto an existing HelmRelease
+// while the addon is being deleted, without ever creating it, and always requests
+// a reconcile. A spec error propagated into the HelmRelease can make helm
+// uninstall fail, and helm-controller re-reads the spec on every deletion
+// reconcile, so re-applying the (possibly corrected) addon spec lets it retry
+// with the fix. The reconcile request is stamped unconditionally: the cause of a
+// failed uninstall may be external (e.g. kube-apiserver issues) and leave the
+// spec unchanged, so helm-controller must be nudged out of its error backoff to
+// retry on every pass regardless.
+func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, release *helmv2.HelmRelease) error {
+	base := release.DeepCopy()
+
+	release.Spec.TargetNamespace = addon.Spec.Namespace
+	release.Spec.Values = addon.Spec.Values
+	release.Spec.Suspend = addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation)
+
+	setReconcileRequestAnnotations(release)
+
+	if err := s.Client.Patch(ctx, release, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("syncing helm release spec during deletion: %w", err)
+	}
+
+	return nil
+}
+
+// setReconcileRequestAnnotations stamps the flux reconcile/force request
+// annotations so helm-controller reconciles the release immediately.
+func setReconcileRequestAnnotations(release *helmv2.HelmRelease) {
+	if release.Annotations == nil {
+		release.Annotations = map[string]string{}
+	}
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	release.Annotations[meta.ForceRequestAnnotation] = ts
+	release.Annotations[meta.ReconcileRequestAnnotation] = ts
+}
+
 func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2.HelmRelease, repoType utils.InternalRepositoryType, targetNamespace string) error {
 	if addon.ForceReconcileRequired() {
-		if existing.Annotations == nil {
-			existing.Annotations = map[string]string{}
-		}
-		ts := time.Now().UTC().Format(time.RFC3339)
-		existing.Annotations[meta.ForceRequestAnnotation] = ts
-		existing.Annotations[meta.ReconcileRequestAnnotation] = ts
+		setReconcileRequestAnnotations(existing)
 	}
 
 	if existing.Labels == nil {
