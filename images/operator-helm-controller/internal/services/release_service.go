@@ -162,7 +162,10 @@ func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, addon *helmv1alpha
 
 	setReconcileRequestAnnotations(release)
 
-	if err := s.Client.Patch(ctx, release, client.MergeFrom(base)); err != nil {
+	// The release may finish deleting between the caller's get and this patch;
+	// a NotFound then simply means the uninstall completed, so there is nothing
+	// left to sync.
+	if err := s.Client.Patch(ctx, release, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("syncing helm release spec during deletion: %w", err)
 	}
 
