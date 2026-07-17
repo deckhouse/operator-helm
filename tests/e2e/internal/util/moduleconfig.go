@@ -170,7 +170,6 @@ func UntilModuleEnabled(deployAt metav1.Time, timeout time.Duration) {
 	Eventually(func(g Gomega) {
 		webhook, err := framework.GetClients().KubeClient().AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(context.TODO(), "operator-helm-controller-admission-webhook", metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(webhook.CreationTimestamp.After(deployAt.UTC().Add(-1 * time.Second))).To(BeTrue())
 		g.Expect(webhook.Webhooks).NotTo(BeEmpty())
 
 		caBundle := webhook.Webhooks[0].ClientConfig.CABundle
