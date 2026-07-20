@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  {{- include "helm_lib_module_labels" (list . (dict "prometheus.deckhouse.io/rules-watcher-enabled" "true")) | nindent 2 }}
+  {{- include "helm_lib_module_labels" (list . (dict "prometheus.deckhouse.io/rules-watcher-enabled" "true" "security.deckhouse.io/enable-security-policy-check" "true" "security.deckhouse.io/pod-policy" "restricted" "security.deckhouse.io/pod-policy-action" "deny")) | nindent 2 }}
   annotations:
     helm.sh/resource-policy: keep
     werf.io/ownership: anyone

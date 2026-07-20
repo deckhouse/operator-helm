@@ -19,3 +19,29 @@ controllers:
         - "Failed to watch"
         - "Failed to list"
       excludeRegexp: []
+  - name: "chart-values-controller"
+    namespace: "d8-operator-helm"
+    labelSelector: "app=chart-values-controller"
+    containers:
+      - "chart-values-controller"
+    logFilters:
+      exclude: []
+      excludeRegexp: []
+  - name: "nelm-source-controller"
+    namespace: "d8-operator-helm"
+    labelSelector: "app=nelm-source-controller"
+    containers:
+      - "nelm-source-controller"
+    logFilters:
+      exclude: []
+      excludeRegexp:
+        - ".*"
+  - name: "helm-controller"
+    namespace: "d8-operator-helm"
+    labelSelector: "app=helm-controller"
+    containers:
+      - "helm-controller"
+    logFilters:
+      exclude: []
+      excludeRegexp:
+        - ".*"
