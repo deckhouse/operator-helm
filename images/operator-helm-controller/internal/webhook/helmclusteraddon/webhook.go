@@ -71,8 +71,14 @@ func (v *UniqRepositoryAndChartNameWebhookValidator) ValidateCreate(ctx context.
 	return nil, v.checkUniqueness(ctx, addon)
 }
 
-func (v *UniqRepositoryAndChartNameWebhookValidator) ValidateUpdate(ctx context.Context, _, newObj *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
-	return nil, v.checkUniqueness(ctx, newObj)
+// ValidateUpdate intentionally does not check chart/repo uniqueness. Uniqueness is
+// enforced authoritatively by the chart claim in the reconciler; the webhook only
+// fast-rejects the obvious duplicate on CREATE. Validating it on UPDATE would be
+// actively harmful: once a race has let several addons with the same chart/repo
+// exist, every one of them lists the others and would reject any update — including
+// the finalizer the reconciler must add before it can ever resolve the conflict.
+func (v *UniqRepositoryAndChartNameWebhookValidator) ValidateUpdate(_ context.Context, _, _ *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+	return nil, nil
 }
 
 func (v *UniqRepositoryAndChartNameWebhookValidator) ValidateDelete(_ context.Context, _ *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {

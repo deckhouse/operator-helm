@@ -46,12 +46,19 @@ import (
 // whose deletion is stuck and stops emitting events.
 const internalResourceDeletionRequeueInterval = 30 * time.Second
 
+// chartClaimConflictRequeueInterval bounds how often an addon that lost the claim
+// on its repository/chart pair re-checks whether the owner has released it. There
+// is no watch on the claim Lease, so this periodic requeue is what lets a duplicate
+// recover once the conflicting addon is deleted or repointed at another chart.
+const chartClaimConflictRequeueInterval = 30 * time.Second
+
 func New(
 	client client.Client,
 	chartService *services.ChartService,
 	ociRepositoryService *services.OCIRepoService,
 	releaseService *services.ReleaseService,
 	maintenanceService *services.MaintenanceService,
+	claimService *services.ClaimService,
 	statusManager *status.Manager,
 ) *Reconciler {
 	return &Reconciler{
@@ -60,6 +67,7 @@ func New(
 		ociRepositoryService: ociRepositoryService,
 		releaseService:       releaseService,
 		maintenanceService:   maintenanceService,
+		claimService:         claimService,
 		statusManager:        statusManager,
 	}
 }
@@ -71,6 +79,7 @@ type Reconciler struct {
 	ociRepositoryService *services.OCIRepoService
 	releaseService       *services.ReleaseService
 	maintenanceService   *services.MaintenanceService
+	claimService         *services.ClaimService
 	statusManager        *status.Manager
 }
 
@@ -90,6 +99,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.reconcileDelete(ctx, addon)
 	}
 
+	// Claim the repository/chart pair before anything else, including adding the
+	// finalizer. The claim is the authoritative, race-free guard on uniqueness (the
+	// webhook only fast-rejects the obvious duplicate on CREATE and cannot stop
+	// concurrent creates from racing past it). It must run before the finalizer
+	// because a duplicate that loses the race must not accrue a finalizer it would
+	// otherwise have to clean up: it simply surfaces the conflict on its status and
+	// requeues, recovering on its own once the owner releases the pair.
+	acquired, holder, err := r.claimService.Acquire(ctx, addon)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("acquiring chart claim: %w", err)
+	}
+	if !acquired {
+		return reconcile.Result{RequeueAfter: chartClaimConflictRequeueInterval}, r.statusManager.Update(
+			ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper,
+			services.ReleaseResult{Status: status.Failed(
+				addon,
+				helmv1alpha1.ReasonChartClaimConflict,
+				fmt.Sprintf("chart %q is already used by helmclusteraddon/%s", addon.Spec.Chart.HelmClusterAddonChartName, holder),
+				nil,
+			)},
+		)
+	}
+
 	if !controllerutil.ContainsFinalizer(addon, helmv1alpha1.FinalizerName) {
 		controllerutil.AddFinalizer(addon, helmv1alpha1.FinalizerName)
 		if err := r.Update(ctx, addon); err != nil {
@@ -99,6 +131,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// metadata-only change that does not bump generation, so the resulting
 		// update event is dropped by the generation/annotation predicates and
 		// would not trigger a follow-up reconcile.
+	}
+
+	if err := r.claimService.ReleaseStale(ctx, addon); err != nil {
+		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
 	}
 
 	if r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
@@ -272,6 +308,14 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 	}
 	if ociRepo != nil {
 		return r.awaitInternalResourceDeletion(ctx, addon, "internal repository", ociRepo)
+	}
+
+	// Release the claim only once every downstream resource is gone: releasing it
+	// earlier would let another addon start reconciling the same chart while this
+	// one's release is still being uninstalled — exactly the collision the claim
+	// prevents.
+	if err := r.claimService.Release(ctx, addon); err != nil {
+		return reconcile.Result{}, fmt.Errorf("releasing chart claim: %w", err)
 	}
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {

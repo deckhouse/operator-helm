@@ -127,6 +127,18 @@ func GetInternalOCIRepositoryName(addonName string) string {
 	return strings.TrimRight(result, "-") + postfix
 }
 
+// GetChartClaimLeaseName derives the name of the Lease that guards uniqueness of a
+// repository/chart pair across HelmClusterAddon objects. The name is a pure hash of
+// the pair: repository and chart names may contain characters that are invalid in an
+// object name (uppercase, dots for OCI references), and the hash is always a valid
+// DNS subdomain.
+func GetChartClaimLeaseName(repoName, chartName string) string {
+	prefix := "hca-claim"
+	hash := GetHash(fmt.Sprintf("%s-%s-%s", prefix, repoName, chartName))
+
+	return prefix + "-" + hash
+}
+
 func GetInternalHelmRepositoryName(addonRepositoryName string) string {
 	prefix := "hcar"
 	hash := GetHash(fmt.Sprintf("%s-%s", prefix, addonRepositoryName))

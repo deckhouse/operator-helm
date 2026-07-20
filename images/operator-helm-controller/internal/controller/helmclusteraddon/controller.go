@@ -45,6 +45,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
 		status.NewManager(client),
 	)
 

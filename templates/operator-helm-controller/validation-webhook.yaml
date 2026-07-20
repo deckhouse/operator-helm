@@ -11,7 +11,7 @@ webhooks:
     rules:
       - apiGroups:   ["helm.deckhouse.io"]
         apiVersions: ["v1alpha1"]
-        operations:  ["CREATE", "UPDATE", "DELETE"]
+        operations:  ["CREATE", "DELETE"]
         resources:   ["helmclusteraddons"]
         scope:       "Cluster"
     clientConfig:
