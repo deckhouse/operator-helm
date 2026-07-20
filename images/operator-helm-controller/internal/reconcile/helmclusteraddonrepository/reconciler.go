@@ -35,6 +35,12 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+// internalResourceDeletionRequeueInterval bounds how often reconcileDelete
+// re-checks whether the internal resources have finished being deleted. Watches
+// on those resources drive most requeues; this is the safety net for a resource
+// whose deletion is stuck and stops emitting events.
+const internalResourceDeletionRequeueInterval = 30 * time.Second
+
 func New(
 	client client.Client,
 	helmRepositoryService *services.HelmRepoService,
@@ -88,7 +94,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		if err := r.Update(ctx, &repo); err != nil {
 			return reconcile.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
-		return r.requeueAtSyncInterval(&repo)
+		// Continue reconciling in the same pass: adding a finalizer is a
+		// metadata-only change that does not bump generation, so the resulting
+		// update event is dropped by the generation/annotation predicates and
+		// would not trigger a follow-up reconcile.
 	}
 
 	var helmRepoRes services.HelmRepoResult
@@ -133,6 +142,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
+	// EnsureAddonCharts is a two-phase state machine: the first pass only marks
+	// the Synced condition Reconciling, the second pass performs the actual chart
+	// fetch. Run the second pass in the same reconcile (the status update above
+	// already persisted the Reconciling state and advanced the condition's
+	// LastTransitionTime) instead of relying on the status-update watch event to
+	// trigger it — otherwise predicates that ignore status-only changes would
+	// stall the scheduled sync.
+	if chartSyncRes.InProgress() {
+		chartSyncRes = r.chartSyncService.EnsureAddonCharts(ctx, &repo, repoType)
+		if err := r.statusManager.Update(
+			ctx,
+			&repo,
+			status.NoopStatusMutator,
+			status.NoopStatusMapper,
+			chartSyncRes,
+		); client.IgnoreNotFound(err) != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to update sync status: %w", err)
+		}
+	}
+
 	return r.requeueAtSyncInterval(&repo)
 }
 
@@ -145,17 +174,17 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 
 	switch repoType {
 	case utils.InternalHelmRepository:
-		if err := r.helmRepositoryService.CleanupHelmRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
-			_ = r.statusManager.Update(ctx, repo, status.NoopStatusMutator, status.NoopStatusMapper, services.HelmRepoResult{
-				Status: status.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to remove dependencies", err),
-			})
+		helmRepo, err := r.helmRepositoryService.CleanupHelmRepository(ctx, repo.Name)
+		if err != nil && !apierrors.IsNotFound(err) {
+			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
 			return reconcile.Result{}, err
+		}
+		if helmRepo != nil {
+			return r.awaitInternalResourceDeletion(ctx, repo, "internal repository", helmRepo)
 		}
 	case utils.InternalOCIRepository:
 		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
-			_ = r.statusManager.Update(ctx, repo, status.NoopStatusMutator, status.NoopStatusMapper, services.HelmRepoResult{
-				Status: status.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to remove dependencies", err),
-			})
+			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
 			return reconcile.Result{}, err
 		}
 	}
@@ -179,6 +208,20 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 	logger.Info("Cleanup complete")
 
 	return reconcile.Result{}, nil
+}
+
+// awaitInternalResourceDeletion surfaces that an internal resource is still being
+// deleted on the repository's status (via the shared status manager) and requeues
+// without removing the finalizer. The resource name is kept abstract so its
+// internal type is not leaked to the user.
+func (r *Reconciler) awaitInternalResourceDeletion(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, name string, resource status.DeletingResource) (reconcile.Result, error) {
+	log.FromContext(ctx).Info("Waiting for internal resource to be deleted before removing finalizer", "resource", name)
+
+	if err := r.statusManager.MarkDeletionPending(ctx, repo, name, resource); client.IgnoreNotFound(err) != nil {
+		return reconcile.Result{}, fmt.Errorf("updating deletion status: %w", err)
+	}
+
+	return reconcile.Result{RequeueAfter: internalResourceDeletionRequeueInterval}, nil
 }
 
 func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile.Request) error {

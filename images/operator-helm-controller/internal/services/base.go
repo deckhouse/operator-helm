@@ -37,16 +37,25 @@ type BaseService struct {
 }
 
 func (s *BaseService) ensureResourceDeleted(ctx context.Context, nn types.NamespacedName, obj client.Object) error {
-	err := s.Client.Get(ctx, nn, obj)
-	if err != nil {
-		return client.IgnoreNotFound(err)
+	_, err := s.deleteAndCheck(ctx, nn, obj)
+	return err
+}
+
+// deleteAndCheck issues a delete for the object if it is still present and reports
+// whether it still exists. A deletion may stay pending because a downstream
+// controller (helm-controller, nelm-source-controller) holds a finalizer and has
+// not finished tearing the resource down yet, so callers that must not proceed
+// until the resource is actually gone should keep requeuing while exists is true.
+func (s *BaseService) deleteAndCheck(ctx context.Context, nn types.NamespacedName, obj client.Object) (exists bool, err error) {
+	if err := s.Client.Get(ctx, nn, obj); err != nil {
+		return false, client.IgnoreNotFound(err)
 	}
 
 	if err := s.Client.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
-		return fmt.Errorf("failed to delete resource %s/%s: %w", nn.Namespace, nn.Name, err)
+		return true, fmt.Errorf("failed to delete resource %s/%s: %w", nn.Namespace, nn.Name, err)
 	}
 
-	return nil
+	return true, nil
 }
 
 type BaseRepoService struct {

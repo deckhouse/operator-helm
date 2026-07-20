@@ -126,23 +126,67 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 	}
 }
 
-func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+// CleanupHelmRelease issues a delete for the internal HelmRelease and returns it
+// while it is still present, so the caller can inspect its conditions and wait
+// for helm-controller to finish uninstalling before proceeding. It returns nil
+// once the HelmRelease is gone.
+func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*helmv2.HelmRelease, error) {
 	nn := types.NamespacedName{Name: utils.GetInternalHelmReleaseName(addon.Name), Namespace: s.TargetNamespace}
-	if err := s.ensureResourceDeleted(ctx, nn, &helmv2.HelmRelease{}); err != nil {
-		return fmt.Errorf("failed to delete helm release: %w", err)
+	release := &helmv2.HelmRelease{}
+	exists, err := s.deleteAndCheck(ctx, nn, release)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete helm release: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	return release, nil
+}
+
+// SyncReleaseSpec re-applies the addon-derived fields onto an existing HelmRelease
+// while the addon is being deleted, without ever creating it, and always requests
+// a reconcile. A spec error propagated into the HelmRelease can make helm
+// uninstall fail, and helm-controller re-reads the spec on every deletion
+// reconcile, so re-applying the (possibly corrected) addon spec lets it retry
+// with the fix. The reconcile request is stamped unconditionally: the cause of a
+// failed uninstall may be external (e.g. kube-apiserver issues) and leave the
+// spec unchanged, so helm-controller must be nudged out of its error backoff to
+// retry on every pass regardless.
+func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, release *helmv2.HelmRelease) error {
+	base := release.DeepCopy()
+
+	release.Spec.TargetNamespace = addon.Spec.Namespace
+	release.Spec.Values = addon.Spec.Values
+	release.Spec.Suspend = addon.Spec.Maintenance == string(helmv1alpha1.NoResourceReconciliation)
+
+	setReconcileRequestAnnotations(release)
+
+	// The release may finish deleting between the caller's get and this patch;
+	// a NotFound then simply means the uninstall completed, so there is nothing
+	// left to sync.
+	if err := s.Client.Patch(ctx, release, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("syncing helm release spec during deletion: %w", err)
 	}
 
 	return nil
 }
 
+// setReconcileRequestAnnotations stamps the flux reconcile/force request
+// annotations so helm-controller reconciles the release immediately.
+func setReconcileRequestAnnotations(release *helmv2.HelmRelease) {
+	if release.Annotations == nil {
+		release.Annotations = map[string]string{}
+	}
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	release.Annotations[meta.ForceRequestAnnotation] = ts
+	release.Annotations[meta.ReconcileRequestAnnotation] = ts
+}
+
 func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2.HelmRelease, repoType utils.InternalRepositoryType, targetNamespace string) error {
 	if addon.ForceReconcileRequired() {
-		if existing.Annotations == nil {
-			existing.Annotations = map[string]string{}
-		}
-		ts := time.Now().UTC().Format(time.RFC3339)
-		existing.Annotations[meta.ForceRequestAnnotation] = ts
-		existing.Annotations[meta.ReconcileRequestAnnotation] = ts
+		setReconcileRequestAnnotations(existing)
 	}
 
 	if existing.Labels == nil {

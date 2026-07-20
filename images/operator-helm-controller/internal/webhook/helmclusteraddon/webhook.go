@@ -30,7 +30,8 @@ import (
 const addonChartIndex = ".spec.chart.repoAndChart"
 
 func SetupIndexes(mgr ctrl.Manager) error {
-	return mgr.GetFieldIndexer().IndexField(context.Background(), &helmv1alpha1.HelmClusterAddon{}, addonChartIndex,
+	return mgr.GetFieldIndexer().IndexField(
+		context.Background(), &helmv1alpha1.HelmClusterAddon{}, addonChartIndex,
 		func(obj client.Object) []string {
 			addon := obj.(*helmv1alpha1.HelmClusterAddon)
 			return []string{addon.Spec.Chart.HelmClusterAddonRepository + "/" + addon.Spec.Chart.HelmClusterAddonChartName}
@@ -41,7 +42,25 @@ func SetupIndexes(mgr ctrl.Manager) error {
 func SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &helmv1alpha1.HelmClusterAddon{}).
 		WithValidator(&UniqRepositoryAndChartNameWebhookValidator{Client: mgr.GetClient()}).
+		WithValidator(&DeleteWithActiveMaintenanceModeWebhookValidator{}).
 		Complete()
+}
+
+type DeleteWithActiveMaintenanceModeWebhookValidator struct{}
+
+func (v *DeleteWithActiveMaintenanceModeWebhookValidator) ValidateCreate(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+	return nil, nil
+}
+
+func (v *DeleteWithActiveMaintenanceModeWebhookValidator) ValidateUpdate(ctx context.Context, _, newObj *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+	return nil, nil
+}
+
+func (v *DeleteWithActiveMaintenanceModeWebhookValidator) ValidateDelete(_ context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+	if addon.Spec.Maintenance == "NoResourceReconciliation" {
+		return nil, fmt.Errorf("helmclusteraddon/%s cannot be deleted while maintenance mode is active", addon.Name)
+	}
+	return nil, nil
 }
 
 type UniqRepositoryAndChartNameWebhookValidator struct {

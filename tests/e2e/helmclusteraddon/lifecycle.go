@@ -35,7 +35,6 @@ import (
 func DefineLifecycleTests(repoType, repoURL string) {
 	Describe(fmt.Sprintf("Using %s repository", repoType), Ordered, func() {
 		f := framework.NewFramework("addon-lifecycle")
-		cfg := framework.GetConfig()
 
 		repoName := "e2e-test-repo-" + strings.ToLower(repoType)
 		addonName := "e2e-test-addon-" + strings.ToLower(repoType)
@@ -46,31 +45,6 @@ func DefineLifecycleTests(repoType, repoURL string) {
 		BeforeAll(func() {
 			DeferCleanup(f.After)
 			f.Before()
-
-			deployAt := metav1.Now()
-
-			By("Creating ModuleConfig for operator-helm")
-			util.EnsureModuleConfig(f)
-
-			By("Waiting for module pods to be Running and Ready")
-			util.UntilModuleEnabled(deployAt, framework.LongTimeout)
-
-			By("Verifying all controllers are running")
-			for _, ctrl := range cfg.Controllers {
-				util.UntilControllerReady(ctrl.Namespace, ctrl.LabelSelector, framework.LongTimeout)
-			}
-		})
-
-		AfterAll(func() {
-			if framework.IsCleanUpNeeded() {
-				By("Cleaning up HelmClusterAddon")
-				util.DeleteHelmClusterAddon(f, addonName, framework.LongTimeout)
-				By("Cleaning up HelmClusterAddonRepositories")
-				util.DeleteHelmClusterAddonRepository(f, repoName, repoType, framework.LongTimeout)
-				By("Cleaning up module")
-				util.DisableModuleConfig(framework.LongTimeout)
-				util.UntilModuleDisabled(framework.LongTimeout)
-			}
 		})
 
 		AfterEach(func() {
@@ -94,11 +68,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				Create(context.Background(), repo, metav1.CreateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 
-			f.DeferDeleteFunc(func() error {
-				return f.OperatorClient().HelmV1alpha1().
-					HelmClusterAddonRepositories().
-					Delete(context.Background(), created.Name, metav1.DeleteOptions{})
-			})
+			f.DeferDelete(created)
 
 			By("Waiting for repository to become Ready")
 			util.UntilConditionTrue(
@@ -146,11 +116,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				Create(context.Background(), addon, metav1.CreateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 
-			f.DeferDeleteFunc(func() error {
-				return f.OperatorClient().HelmV1alpha1().
-					HelmClusterAddons().
-					Delete(context.Background(), created.Name, metav1.DeleteOptions{})
-			})
+			f.DeferDelete(created)
 
 			By("Waiting for addon to be installed")
 			util.UntilConditionTrue(

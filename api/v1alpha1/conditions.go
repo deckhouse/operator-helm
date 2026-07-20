@@ -24,6 +24,7 @@ const (
 	ConditionTypePartiallyDegraded    = "PartiallyDegraded"
 	ConditionTypeReady                = "Ready"
 	ConditionTypeSynced               = "Synced"
+	ConditionTypeUninstallFailed      = "UninstallFailed"
 
 	ReasonMaintenanceModeActive   = "MaintenanceModeActive"
 	ReasonMaintenanceModeInactive = "MaintenanceModeInactive"
@@ -32,6 +33,7 @@ const (
 	ReasonReconciling             = "Reconciling"
 	ReasonSuccess                 = "Success"
 	ReasonFailed                  = "Failed"
+	ReasonUninstallFailed         = "UninstallFailed"
 
 	// HelmRelease error reasons
 	ReasonReleaseFailed = "ReleaseFailed"

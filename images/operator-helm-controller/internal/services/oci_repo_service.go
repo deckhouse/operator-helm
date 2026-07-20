@@ -189,14 +189,23 @@ func (s *OCIRepoService) CleanupOCIRepository(ctx context.Context, repoName stri
 	return nil
 }
 
-func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+// RemoveOCIRepository issues a delete for the internal OCIRepository and returns
+// it while it is still present, so the caller can inspect its conditions and wait
+// for nelm-source-controller to finish removing it. It returns nil once the
+// OCIRepository is gone.
+func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*sourcev1.OCIRepository, error) {
 	name := utils.GetInternalOCIRepositoryName(addon.Name)
 	nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
-	if err := s.ensureResourceDeleted(ctx, nn, &sourcev1.OCIRepository{}); err != nil {
-		return fmt.Errorf("removing oci repository: %w", err)
+	ociRepo := &sourcev1.OCIRepository{}
+	exists, err := s.deleteAndCheck(ctx, nn, ociRepo)
+	if err != nil {
+		return nil, fmt.Errorf("removing oci repository: %w", err)
+	}
+	if !exists {
+		return nil, nil
 	}
 
-	return nil
+	return ociRepo, nil
 }
 
 func applyOCIRepositorySpec(addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.OCIRepository) {

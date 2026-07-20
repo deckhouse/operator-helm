@@ -34,36 +34,12 @@ import (
 func DefineLifecycleTests(repoType, repoURL string) {
 	Describe(fmt.Sprintf("Testing %s repository", repoType), Ordered, func() {
 		f := framework.NewFramework("repository-lifecycle")
-		cfg := framework.GetConfig()
 
 		repoName := "e2e-test-repo-" + strings.ToLower(repoType)
 
 		BeforeAll(func() {
 			DeferCleanup(f.After)
 			f.Before()
-
-			deployAt := metav1.Now()
-
-			By("Creating ModuleConfig for operator-helm")
-			util.EnsureModuleConfig(f)
-
-			By("Waiting for module pods to be Running and Ready")
-			util.UntilModuleEnabled(deployAt, framework.LongTimeout)
-
-			By("Verifying all controllers are running")
-			for _, ctrl := range cfg.Controllers {
-				util.UntilControllerReady(ctrl.Namespace, ctrl.LabelSelector, framework.LongTimeout)
-			}
-		})
-
-		AfterAll(func() {
-			if framework.IsCleanUpNeeded() {
-				By("Cleaning up HelmClusterAddonRepositories")
-				util.DeleteHelmClusterAddonRepository(f, repoName, repoType, framework.LongTimeout)
-				By("Cleaning up module")
-				util.DisableModuleConfig(framework.LongTimeout)
-				util.UntilModuleDisabled(framework.LongTimeout)
-			}
 		})
 
 		AfterEach(func() {
@@ -87,11 +63,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				Create(context.Background(), repo, metav1.CreateOptions{})
 			Expect(err).NotTo(HaveOccurred())
 
-			f.DeferDeleteFunc(func() error {
-				return f.OperatorClient().HelmV1alpha1().
-					HelmClusterAddonRepositories().
-					Delete(context.Background(), created.Name, metav1.DeleteOptions{})
-			})
+			f.DeferDelete(created)
 
 			By("Waiting for repository to become Ready")
 			util.UntilConditionTrue(
@@ -134,32 +106,9 @@ var _ = Describe("Create HelmClusterAddonRepository with invalid url", Ordered, 
 	f := framework.NewFramework("repository-lifecycle")
 	repoName := "repo-with-invalid-url"
 
-	cfg := framework.GetConfig()
-
 	BeforeAll(func() {
 		DeferCleanup(f.After)
 		f.Before()
-
-		deployaAt := metav1.Now()
-
-		By("Creating ModuleConfig for operator-helm")
-		util.EnsureModuleConfig(f)
-
-		By("Waiting for module pods to be Running and Ready")
-		util.UntilModuleEnabled(deployaAt, framework.LongTimeout)
-
-		By("Verifying all controllers are running")
-		for _, ctrl := range cfg.Controllers {
-			util.UntilControllerReady(ctrl.Namespace, ctrl.LabelSelector, framework.LongTimeout)
-		}
-	})
-
-	AfterAll(func() {
-		if framework.IsCleanUpNeeded() {
-			By("Cleaning up module")
-			util.DisableModuleConfig(framework.LongTimeout)
-			util.UntilModuleDisabled(framework.LongTimeout)
-		}
 	})
 
 	AfterEach(func() {

@@ -11,4 +11,11 @@ controllers:
       exclude:
         # On cascade deletion after tests, HelmClusterAddon reconcile can be triggered after repository removal.
         - "Failed to get internal repository"
+        # Expected in the negative test that sets an invalid chart version; surfaced via status.
+        - "failed to get desired chart version"
+        # Transient controller-runtime cache reflector reconnects (watch/list drop,
+        # unexpected EOF); self-recovering, not a real failure.
+        - "Unexpected error when reading response body"
+        - "Failed to watch"
+        - "Failed to list"
       excludeRegexp: []

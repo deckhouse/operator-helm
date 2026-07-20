@@ -120,13 +120,22 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.
 	}
 }
 
-func (s *ChartService) CleanupHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+// CleanupHelmChart issues a delete for the internal HelmChart and returns it
+// while it is still present, so the caller can inspect its conditions and wait
+// for nelm-source-controller to finish removing it. It returns nil once the
+// HelmChart is gone.
+func (s *ChartService) CleanupHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*sourcev1.HelmChart, error) {
 	nn := types.NamespacedName{Name: utils.GetInternalHelmChartName(addon.Name), Namespace: s.TargetNamespace}
-	if err := s.ensureResourceDeleted(ctx, nn, &sourcev1.HelmChart{}); err != nil {
-		return fmt.Errorf("failed to delete helm chart: %w", err)
+	chart := &sourcev1.HelmChart{}
+	exists, err := s.deleteAndCheck(ctx, nn, chart)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete helm chart: %w", err)
+	}
+	if !exists {
+		return nil, nil
 	}
 
-	return nil
+	return chart, nil
 }
 
 func applyHelmChartSpec(addon *helmv1alpha1.HelmClusterAddon, existing *sourcev1.HelmChart) {

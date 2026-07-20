@@ -136,33 +136,35 @@ func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, repoName str
 	return nil
 }
 
-func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName string) error {
-	resources := []struct {
-		name string
-		obj  client.Object
-	}{
-		{
-			name: utils.GetInternalRepositoryAuthSecretName(repoName),
-			obj:  &corev1.Secret{},
-		},
-		{
-			name: utils.GetInternalRepositoryTLSSecretName(repoName),
-			obj:  &corev1.Secret{},
-		},
-		{
-			name: utils.GetInternalHelmRepositoryName(repoName),
-			obj:  &sourcev1.HelmRepository{},
-		},
+// CleanupHelmRepository removes the auth/TLS secrets (which have no finalizers
+// and disappear immediately) and issues a delete for the internal HelmRepository,
+// returning it while it is still present so the caller can inspect its conditions
+// and wait for nelm-source-controller to finish removing it. It returns nil once
+// the HelmRepository is gone.
+func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName string) (*sourcev1.HelmRepository, error) {
+	secrets := []string{
+		utils.GetInternalRepositoryAuthSecretName(repoName),
+		utils.GetInternalRepositoryTLSSecretName(repoName),
 	}
 
-	for _, r := range resources {
-		nn := types.NamespacedName{Name: r.name, Namespace: s.TargetNamespace}
-		if err := s.ensureResourceDeleted(ctx, nn, r.obj); err != nil {
-			return fmt.Errorf("cleaning up %T %s: %w", r.obj, r.name, err)
+	for _, name := range secrets {
+		nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
+		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {
+			return nil, fmt.Errorf("cleaning up secret %s: %w", name, err)
 		}
 	}
 
-	return nil
+	nn := types.NamespacedName{Name: utils.GetInternalHelmRepositoryName(repoName), Namespace: s.TargetNamespace}
+	helmRepo := &sourcev1.HelmRepository{}
+	exists, err := s.deleteAndCheck(ctx, nn, helmRepo)
+	if err != nil {
+		return nil, fmt.Errorf("cleaning up helm repository: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	return helmRepo, nil
 }
 
 func applyHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.HelmRepository) {

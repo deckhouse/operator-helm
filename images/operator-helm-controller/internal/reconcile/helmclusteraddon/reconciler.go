@@ -19,6 +19,7 @@ package helmclusteraddon
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/opencontainers/go-digest"
 	"github.com/werf/3p-fluxcd-pkg/chartutil"
@@ -38,6 +39,12 @@ import (
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
+
+// internalResourceDeletionRequeueInterval bounds how often reconcileDelete
+// re-checks whether the internal resources have finished being deleted. Watches
+// on those resources drive most requeues; this is the safety net for a resource
+// whose deletion is stuck and stops emitting events.
+const internalResourceDeletionRequeueInterval = 30 * time.Second
 
 func New(
 	client client.Client,
@@ -88,7 +95,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		if err := r.Update(ctx, addon); err != nil {
 			return reconcile.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
-		return reconcile.Result{}, nil
+		// Continue reconciling in the same pass: adding a finalizer is a
+		// metadata-only change that does not bump generation, so the resulting
+		// update event is dropped by the generation/annotation predicates and
+		// would not trigger a follow-up reconcile.
 	}
 
 	if r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
@@ -147,7 +157,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		// URL change in the HelmClusterAddonRepository may lead to repository type change.
 		// If repository type changed from OCI to Helm, we need to remove previously created OCI repository.
-		if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil {
+		if _, err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil {
 			chartRes = services.ChartResult{
 				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
 			}
@@ -164,7 +174,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			break
 		}
 
-		if err := r.chartService.CleanupHelmChart(ctx, addon); err != nil {
+		if _, err := r.chartService.CleanupHelmChart(ctx, addon); err != nil {
 			chartRes = services.ChartResult{
 				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
 			}
@@ -223,16 +233,45 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		return reconcile.Result{}, nil
 	}
 
-	if err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); client.IgnoreNotFound(err) != nil {
+	// The finalizer must stay until the internal resources are actually gone.
+	// A Delete only sets a deletion timestamp; the downstream controllers keep
+	// their finalizers until they finish tearing the underlying release/source
+	// down. Removing our finalizer earlier would delete the HelmClusterAddon and
+	// orphan a HelmRelease that helm-controller never managed to uninstall.
+	//
+	// The release is uninstalled first; only once it is gone do we remove the
+	// chart/repository sources it referenced. Each step waits for the resource to
+	// actually disappear and surfaces the blocking resource's readiness on the
+	// addon so the reason a deletion stalls is observable.
+	release, err := r.releaseService.CleanupHelmRelease(ctx, addon)
+	if err != nil {
 		return reconcile.Result{}, err
 	}
-
-	if err := r.chartService.CleanupHelmChart(ctx, addon); client.IgnoreNotFound(err) != nil {
-		return reconcile.Result{}, err
+	if release != nil {
+		// The addon is a facade over the HelmRelease: a bad spec parameter that
+		// blocks helm uninstall is propagated into the release. Keep re-applying
+		// the (possibly corrected) addon spec to the still-present release so the
+		// uninstall can be fixed via the addon even while it is being deleted.
+		if err := r.releaseService.SyncReleaseSpec(ctx, addon, release); err != nil {
+			return reconcile.Result{}, err
+		}
+		return r.awaitInternalResourceDeletion(ctx, addon, "internal release", release)
 	}
 
-	if err := r.releaseService.CleanupHelmRelease(ctx, addon); client.IgnoreNotFound(err) != nil {
+	chart, err := r.chartService.CleanupHelmChart(ctx, addon)
+	if err != nil {
 		return reconcile.Result{}, err
+	}
+	if chart != nil {
+		return r.awaitInternalResourceDeletion(ctx, addon, "internal chart", chart)
+	}
+
+	ociRepo, err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if ociRepo != nil {
+		return r.awaitInternalResourceDeletion(ctx, addon, "internal repository", ociRepo)
 	}
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -254,6 +293,20 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 	logger.Info("Cleanup complete")
 
 	return reconcile.Result{}, nil
+}
+
+// awaitInternalResourceDeletion surfaces that an internal resource is still being
+// deleted on the addon's status (via the shared status manager) and requeues
+// without removing the finalizer. The resource name is kept abstract so its
+// internal type is not leaked to the user.
+func (r *Reconciler) awaitInternalResourceDeletion(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, name string, resource status.DeletingResource) (reconcile.Result, error) {
+	log.FromContext(ctx).Info("Waiting for internal resource to be deleted before removing finalizer", "resource", name)
+
+	if err := r.statusManager.MarkUninstallPending(ctx, addon, name, resource); client.IgnoreNotFound(err) != nil {
+		return reconcile.Result{}, fmt.Errorf("updating deletion status: %w", err)
+	}
+
+	return reconcile.Result{RequeueAfter: internalResourceDeletionRequeueInterval}, nil
 }
 
 func (r *Reconciler) reconcileAddonNamespace(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
