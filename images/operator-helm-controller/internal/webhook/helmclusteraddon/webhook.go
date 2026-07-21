@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 const addonChartIndex = ".spec.chart.repoAndChart"
@@ -41,45 +42,49 @@ func SetupIndexes(mgr ctrl.Manager) error {
 
 func SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &helmv1alpha1.HelmClusterAddon{}).
-		WithValidator(&UniqRepositoryAndChartNameWebhookValidator{Client: mgr.GetClient()}).
-		WithValidator(&DeleteWithActiveMaintenanceModeWebhookValidator{}).
+		WithValidator(&HelmClusterAddonWebhookValidator{Client: mgr.GetClient()}).
 		Complete()
 }
 
-type DeleteWithActiveMaintenanceModeWebhookValidator struct{}
+var _ admission.Validator[*helmv1alpha1.HelmClusterAddon] = (*HelmClusterAddonWebhookValidator)(nil)
 
-func (v *DeleteWithActiveMaintenanceModeWebhookValidator) ValidateCreate(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
-	return nil, nil
-}
-
-func (v *DeleteWithActiveMaintenanceModeWebhookValidator) ValidateUpdate(ctx context.Context, _, newObj *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
-	return nil, nil
-}
-
-func (v *DeleteWithActiveMaintenanceModeWebhookValidator) ValidateDelete(_ context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
-	if addon.Spec.Maintenance == "NoResourceReconciliation" {
-		return nil, fmt.Errorf("helmclusteraddon/%s cannot be deleted while maintenance mode is active", addon.Name)
-	}
-	return nil, nil
-}
-
-type UniqRepositoryAndChartNameWebhookValidator struct {
+type HelmClusterAddonWebhookValidator struct {
 	Client client.Client
 }
 
-func (v *UniqRepositoryAndChartNameWebhookValidator) ValidateCreate(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+func (v *HelmClusterAddonWebhookValidator) ValidateCreate(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+	if err := validateNotSystemNamespace(addon); err != nil {
+		return nil, err
+	}
+
 	return nil, v.checkUniqueness(ctx, addon)
 }
 
-func (v *UniqRepositoryAndChartNameWebhookValidator) ValidateUpdate(ctx context.Context, _, newObj *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+func (v *HelmClusterAddonWebhookValidator) ValidateUpdate(ctx context.Context, _, newObj *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+	if err := validateNotSystemNamespace(newObj); err != nil {
+		return nil, err
+	}
+
 	return nil, v.checkUniqueness(ctx, newObj)
 }
 
-func (v *UniqRepositoryAndChartNameWebhookValidator) ValidateDelete(_ context.Context, _ *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+func (v *HelmClusterAddonWebhookValidator) ValidateDelete(_ context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+	if addon.Spec.Maintenance == "NoResourceReconciliation" {
+		return nil, fmt.Errorf("helmclusteraddon/%s cannot be deleted while maintenance mode is active", addon.Name)
+	}
+
 	return nil, nil
 }
 
-func (v *UniqRepositoryAndChartNameWebhookValidator) checkUniqueness(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+func validateNotSystemNamespace(addon *helmv1alpha1.HelmClusterAddon) error {
+	if utils.IsSystemNamespace(addon.Spec.Namespace) {
+		return fmt.Errorf("helmclusteraddon/%s cannot use system namespace %s as target namespace", addon.Name, addon.Spec.Namespace)
+	}
+
+	return nil
+}
+
+func (v *HelmClusterAddonWebhookValidator) checkUniqueness(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
 	list := &helmv1alpha1.HelmClusterAddonList{}
 	indexValue := addon.Spec.Chart.HelmClusterAddonRepository + "/" + addon.Spec.Chart.HelmClusterAddonChartName
 
