@@ -90,6 +90,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.reconcileDelete(ctx, addon)
 	}
 
+	if utils.IsSystemNamespace(addon.Spec.Namespace) {
+		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
+			addon,
+			helmv1alpha1.ReasonFailed,
+			"Target namespace cannot be a system namespace",
+			fmt.Errorf("target namespace %q is a system namespace", addon.Spec.Namespace),
+		)})
+	}
+
 	if !controllerutil.ContainsFinalizer(addon, helmv1alpha1.FinalizerName) {
 		controllerutil.AddFinalizer(addon, helmv1alpha1.FinalizerName)
 		if err := r.Update(ctx, addon); err != nil {
