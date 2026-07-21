@@ -105,6 +105,22 @@ func (s *ClaimService) Acquire(ctx context.Context, addon *helmv1alpha1.HelmClus
 	return true, addon.Name, nil
 }
 
+// OwnedBy reports whether the addon currently holds the claim Lease for its
+// repository/chart pair. It reads through the direct reader for the same reason
+// Acquire does: an ownership decision must not be made against stale cache data.
+func (s *ClaimService) OwnedBy(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (bool, error) {
+	lease := &coordinationv1.Lease{}
+	err := s.reader.Get(ctx, s.leaseKey(addon), lease)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("getting chart claim lease: %w", err)
+	}
+
+	return leaseHolder(lease) == addon.Name, nil
+}
+
 // Release deletes the claim Lease, but only if this addon still owns it, so a
 // duplicate addon that never acquired the pair cannot free the real owner's claim.
 func (s *ClaimService) Release(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {

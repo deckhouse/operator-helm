@@ -428,6 +428,13 @@ metadata:
   name: monitoring-kubernetes-control-plane
 spec:
   enabled: true
+---
+apiVersion: deckhouse.io/v1alpha1
+kind: ModuleConfig
+metadata:
+  name: admission-policy-engine
+spec:
+  enabled: true
 EOF
 
   if [[ -n "$D8_LICENSE_KEY" ]]; then
@@ -580,6 +587,9 @@ wait_until_pods_ready() {
 wait_until_deckhouse_ready() {
   echo "Waiting until deckhouse ready..."
   wait_until_pods_ready "d8-system" 2
+  echo "Waiting until deckhouse admission-policy-engine module ready..."
+  wait_until_pods_ready "d8-admission-policy-engine" 1 "app=gatekeeper,control-plane=audit-controller"
+  wait_until_pods_ready "d8-admission-policy-engine" 1 "app=gatekeeper,control-plane=controller-manager"
 }
 
 main() {
