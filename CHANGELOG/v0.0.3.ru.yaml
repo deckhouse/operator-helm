@@ -1,0 +1,5 @@
+features:
+  - выпущен первый публичный альфа-релиз с поддержкой CRD HelmClusterAddon, HelmClusterAddonChart и HelmClusterAddonRepository
+fixes: []
+security: []
+chore: []
