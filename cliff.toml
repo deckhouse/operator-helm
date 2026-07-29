@@ -1,0 +1,74 @@
+# git-cliff configuration: generates CHANGELOG/vX.Y.Z.yaml for the unreleased version.
+# Usage:
+#   version="$(git cliff --unreleased --bumped-version)"
+#   git cliff --unreleased -o "CHANGELOG/${version}.yaml"
+
+[changelog]
+header = ""
+footer = ""
+trim = false
+# Emit the module changelog yaml: all four categories are always present,
+# empty ones are rendered as [].
+body = """
+{%- set feats = commits | filter(attribute="group", value="features") -%}
+{%- set fixes = commits | filter(attribute="group", value="fixes") -%}
+{%- set security = commits | filter(attribute="group", value="security") -%}
+{%- set chores = commits | filter(attribute="group", value="chore") -%}
+features:
+{%- if feats | length == 0 %} []
+{%- else %}
+{%- for c in feats %}
+  - "{{ c.message | split(pat="\n") | first | trim | replace(from="\\", to="\\\\") | replace(from='"', to='\\"') }}"
+{%- endfor %}
+{%- endif %}
+fixes:
+{%- if fixes | length == 0 %} []
+{%- else %}
+{%- for c in fixes %}
+  - "{{ c.message | split(pat="\n") | first | trim | replace(from="\\", to="\\\\") | replace(from='"', to='\\"') }}"
+{%- endfor %}
+{%- endif %}
+security:
+{%- if security | length == 0 %} []
+{%- else %}
+{%- for c in security %}
+  - "{{ c.message | split(pat="\n") | first | trim | replace(from="\\", to="\\\\") | replace(from='"', to='\\"') }}"
+{%- endfor %}
+{%- endif %}
+chore:
+{%- if chores | length == 0 %} []
+{%- else %}
+{%- for c in chores %}
+  - "{{ c.message | split(pat="\n") | first | trim | replace(from="\\", to="\\\\") | replace(from='"', to='\\"') }}"
+{%- endfor %}
+{%- endif %}
+"""
+
+[git]
+conventional_commits = true
+# Keep unconventional commits too: they fall through to the "chore" bucket
+# instead of silently disappearing from the changelog.
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = true
+# Release tags look like v0.4.17
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+commit_parsers = [
+  # noise: merge commits and generated-changelog commits
+  { message = "^Merge", skip = true },
+  { message = "^internal\\(changelog\\)", skip = true },
+  # security first: explicit type or CVE/vex mentions
+  { message = "^security", group = "security" },
+  { message = "(?i)\\bcve-\\d{4}-\\d+", group = "security" },
+  { message = "(?i)\\b(cve|vex)s?\\b", group = "security" },
+  # standard buckets
+  { message = "^feat", group = "features" },
+  { message = "^(fix|bug)", group = "fixes" },
+  # everything else (chore, ci, docs, refactor, unconventional...) is chore
+  { message = ".*", group = "chore" },
+]
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = true

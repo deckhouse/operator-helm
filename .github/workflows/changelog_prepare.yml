@@ -1,26 +1,23 @@
 name: Changelog prepare
 
+# Manual step of the release flow: translates changelogs missing a .ru.yaml
+# counterpart (calls the GPT API) and regenerates release notes.
+# Run it on the release-next branch after reviewing the english changelog.
+
 on:
-  pull_request:
-    types: [opened, reopened, synchronize]
-    paths:
-      - "CHANGELOG/*.yaml"
+  workflow_dispatch:
 
 jobs:
   changelog-prepare:
     name: Translate changelog and update release notes
-    # Secrets and push-back are unavailable for fork PRs; also keeps
-    # untrusted fork code off the self-hosted runner.
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, large]
     permissions:
       contents: write
     steps:
-      - name: Checkout PR branch
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
-          token: ${{ secrets.CHANGELOG_PUSH_TOKEN || github.token }}
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
 
       - name: Translate changelogs missing a .ru.yaml counterpart
         env:
@@ -42,8 +39,6 @@ jobs:
           hack/chlog.py -o docs/RELEASE_NOTES.ru.md release-notes -d CHANGELOG/ -l ru
 
       - name: Commit and push changes
-        env:
-          HEAD_REF: ${{ github.head_ref }}
         run: |
           if [ -z "$(git status --porcelain)" ]; then
             echo "nothing to commit, translations and release notes are up to date"
@@ -53,4 +48,4 @@ jobs:
           git config user.email "ci-changelog@users.noreply.github.com"
           git add CHANGELOG/ docs/
           git commit -m "internal(changelog): Add translations and update release notes"
-          git push origin "HEAD:${HEAD_REF}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
