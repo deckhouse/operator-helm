@@ -1,0 +1,51 @@
+name: Changelog prepare
+
+# Manual step of the release flow: translates changelogs missing a .ru.yaml
+# counterpart (calls the GPT API) and regenerates release notes.
+# Run it on the release-next branch after reviewing the english changelog.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  changelog-prepare:
+    name: Translate changelog and update release notes
+    runs-on: [self-hosted, large]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Translate changelogs missing a .ru.yaml counterpart
+        env:
+          GPT_API_TOKEN: ${{ secrets.GPT_API_TOKEN }}
+          GPT_API_URL: ${{ secrets.GPT_API_URL }}
+        run: |
+          for f in CHANGELOG/v*.yaml; do
+            case "$f" in *.ru.yaml) continue;; esac
+            ru="${f%.yaml}.ru.yaml"
+            if [ ! -f "$ru" ]; then
+              echo "translating $f -> $ru"
+              hack/chlog.py -o "$ru" translate -f "$f" -l ru
+            fi
+          done
+
+      - name: Generate release notes
+        run: |
+          hack/chlog.py -o docs/RELEASE_NOTES.md release-notes -d CHANGELOG/ -l en
+          hack/chlog.py -o docs/RELEASE_NOTES.ru.md release-notes -d CHANGELOG/ -l ru
+
+      - name: Commit and push changes
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "nothing to commit, translations and release notes are up to date"
+            exit 0
+          fi
+          git config user.name "ci-changelog"
+          git config user.email "ci-changelog@users.noreply.github.com"
+          git add CHANGELOG/ docs/
+          git commit -m "internal(changelog): Add translations and update release notes"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

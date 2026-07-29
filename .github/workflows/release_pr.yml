@@ -1,0 +1,78 @@
+name: Release PR
+
+# Release-please-like flow: on every push to main, (re)create the release
+# branch with the generated changelog and release notes, and open/update
+# the release PR. Translation is a manual step ("Changelog prepare" workflow
+# dispatched on the release branch) to keep API calls controlled.
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  RELEASE_BRANCH: release-next
+
+jobs:
+  release-pr:
+    name: Create or update release PR
+    runs-on: operator-helm-e2e
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          # git-cliff needs full history and tags
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Generate changelog for the next version
+        id: changelog
+        run: |
+          VERSION="$(git cliff --unreleased --bumped-version)"
+          echo "next version: ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          # changelog already merged to main -> release awaits tagging
+          if [ -f "CHANGELOG/${VERSION}.yaml" ]; then
+            echo "CHANGELOG/${VERSION}.yaml already in main, release is awaiting tag"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+          git cliff --unreleased -o "CHANGELOG/${VERSION}.yaml"
+
+          # keep the translation already made in the release branch (manual step result)
+          if git fetch origin "${RELEASE_BRANCH}" 2>/dev/null; then
+            if git show "origin/${RELEASE_BRANCH}:CHANGELOG/${VERSION}.ru.yaml" > /tmp/prev_ru.yaml 2>/dev/null; then
+              echo "keeping existing translation from ${RELEASE_BRANCH}"
+              cp /tmp/prev_ru.yaml "CHANGELOG/${VERSION}.ru.yaml"
+            fi
+          fi
+
+          # release-notes generation is local-only (yq), no API calls
+          hack/chlog.py -o docs/RELEASE_NOTES.md release-notes -d CHANGELOG/ -l en
+          hack/chlog.py -o docs/RELEASE_NOTES.ru.md release-notes -d CHANGELOG/ -l ru
+
+      - name: Create or update release PR
+        if: steps.changelog.outputs.skip == 'false'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          branch: ${{ env.RELEASE_BRANCH }}
+          base: main
+          title: "Release ${{ steps.changelog.outputs.version }}"
+          body: |
+            Automated release PR. Review `CHANGELOG/${{ steps.changelog.outputs.version }}.yaml` and its translation before merging.
+
+            To generate the translation, run the "Changelog prepare" workflow on the `release-next` branch.
+          commit-message: "internal(changelog): Release ${{ steps.changelog.outputs.version }}"
+          committer: "ci-changelog <ci-changelog@users.noreply.github.com>"
+          author: "ci-changelog <ci-changelog@users.noreply.github.com>"
+          add-paths: |
+            CHANGELOG/
+            docs/
+          delete-branch: true
