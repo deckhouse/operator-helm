@@ -46,6 +46,10 @@ chore:
 
 [git]
 conventional_commits = true
+# strip PR references appended by squash merge, e.g. "fix something (#53)"
+commit_preprocessors = [
+  { pattern = " *\\(#[0-9]+\\)", replace = "" },
+]
 # Keep unconventional commits too: they fall through to the "chore" bucket
 # instead of silently disappearing from the changelog.
 filter_unconventional = false
