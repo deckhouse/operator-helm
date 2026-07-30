@@ -34,6 +34,7 @@ const (
 	ReasonSuccess                 = "Success"
 	ReasonFailed                  = "Failed"
 	ReasonUninstallFailed         = "UninstallFailed"
+	ReasonChartClaimConflict      = "ChartClaimConflict"
 
 	// HelmRelease error reasons
 	ReasonReleaseFailed = "ReleaseFailed"
