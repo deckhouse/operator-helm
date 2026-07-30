@@ -1,0 +1,13 @@
+
+features:
+  - "enforce restricted pss"
+fixes:
+  - "forbid to use system namespaces"
+  - "enforce chart uniqueness via lease claim"
+security: []
+chore:
+  - "run e2e on a dedicated runner"
+  - "safe internal resource deletion"
+  - "add changelog and release notes generation"
+  - "strip PR references"
+
