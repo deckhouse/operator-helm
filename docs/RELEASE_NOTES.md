@@ -3,6 +3,20 @@ title: "Release Notes"
 description: "Release notes for Deckhouse operator-helm."
 ---
 
+## v0.1.0
+
+### New Features
+
+* enforce restricted pss
+
+### Bug Fixes
+
+* forbid to use system namespaces
+
+### Chore
+
+* add changelog and release notes generation
+
 ## v0.0.8
 
 ### Bug Fixes

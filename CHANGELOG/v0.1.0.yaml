@@ -1,0 +1,7 @@
+features:
+  - "enforce restricted pss"
+fixes:
+  - "forbid to use system namespaces"
+security: []
+chore:
+  - "add changelog and release notes generation"
