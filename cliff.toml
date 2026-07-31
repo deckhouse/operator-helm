@@ -10,10 +10,18 @@ trim = false
 # Emit the module changelog yaml: all four categories are always present,
 # empty ones are rendered as [].
 body = """
+{%- set breaking = commits | filter(attribute="group", value="breaking") -%}
 {%- set feats = commits | filter(attribute="group", value="features") -%}
 {%- set fixes = commits | filter(attribute="group", value="fixes") -%}
 {%- set security = commits | filter(attribute="group", value="security") -%}
 {%- set chores = commits | filter(attribute="group", value="chore") -%}
+breaking:
+{%- if breaking | length == 0 %} []
+{%- else %}
+{%- for c in breaking %}
+  - "{{ c.message | split(pat="\n") | first | trim | replace(from="\\", to="\\\\") | replace(from='"', to='\\"') }}"
+{%- endfor %}
+{%- endif %}
 features:
 {%- if feats | length == 0 %} []
 {%- else %}
@@ -59,9 +67,12 @@ protect_breaking_commits = true
 tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
 
 commit_parsers = [
-  # noise: merge commits and generated-changelog commits
+  # noise: merge commits and internal (developer-only) changes: ci, templates, tooling
   { message = "^Merge", skip = true },
-  { message = "^internal\\(changelog\\)", skip = true },
+  { message = "^internal", skip = true },
+  # breaking changes: "type!: ..." or BREAKING CHANGE footer
+  { message = "^[a-z]+(\\([^)]*\\))?!:", group = "breaking" },
+  { body = "(?s).*BREAKING CHANGE.*", group = "breaking" },
   # security first: explicit type or CVE/vex mentions
   { message = "^security", group = "security" },
   { message = "(?i)\\bcve-\\d{4}-\\d+", group = "security" },

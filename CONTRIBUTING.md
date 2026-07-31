@@ -61,10 +61,16 @@ Must be one of the following:
 
 * **feat**: new features or capabilities that enhance the user's experience.
 * **fix**: bug fixes that enhance the user's experience.
+* **security**: CVE fixes, vulnerability mitigations, VEX updates.
 * **refactor**: a code changes that neither fixes a bug nor adds a feature.
 * **docs**: updates or improvements to documentation.
 * **test**: additions or corrections to tests.
-* **chore**: updates that don't fit into other types.
+* **chore**: other changes that still affect users in some way and don't fit into other types (e.g. dependency or base image updates).
+* **internal**: developer-only changes that users never notice: CI, templates, tooling. Excluded from the changelog and release notes.
+
+Rule of thumb: if a user of the module can notice the change in any way — it is **chore**
+(or a more specific type); if the change is visible only to developers of this
+repository — it is **internal**.
 
 #### Scope
 
