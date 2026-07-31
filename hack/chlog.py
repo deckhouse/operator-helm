@@ -29,6 +29,7 @@ TRANSLATIONS = {
     "fixes": {"en": "Bug Fixes", "ru": "Исправления"},
     "security": {"en": "Security Fixes", "ru": "Исправления безопасности"},
     "chore": {"en": "Chore", "ru": "Прочее"},
+    "breaking": {"en": "Breaking Changes", "ru": "Несовместимые изменения"},
 }
 
 
@@ -279,6 +280,7 @@ def release_notes_handler(changelog_dir: str, lang: str, output: str = "") -> in
 
     headers = {
         "title": TRANSLATIONS["title"][lang],
+        "breaking": TRANSLATIONS["breaking"][lang],
         "features": TRANSLATIONS["features"][lang],
         "fixes": TRANSLATIONS["fixes"][lang],
         "security": TRANSLATIONS["security"][lang],
@@ -292,6 +294,7 @@ def release_notes_handler(changelog_dir: str, lang: str, output: str = "") -> in
             "version": os.path.basename(filename).replace(
                 ".ru.yaml" if lang == "ru" else ".yaml", ""
             ),
+            "breaking": "",
             "features": "",
             "fixes": "",
             "security": "",
@@ -301,10 +304,15 @@ def release_notes_handler(changelog_dir: str, lang: str, output: str = "") -> in
         for category, changes in changelog.items():
             logging.debug("processing category: %s", category)
             if changes:
+                if lang == "en" and isinstance(changes, list):
+                    changes = [
+                        to_past_tense(c) if isinstance(c, str) else c
+                        for c in changes
+                    ]
                 entries[category] = yaml_to_markdown(changes)
 
         markdown += f"\n## {entries['version']}\n"
-        for category in ["features", "fixes", "security", "chore"]:
+        for category in ["breaking", "features", "fixes", "security", "chore"]:
             if entries[category]:
                 markdown += f"\n### {headers[category]}\n{entries[category]}"
 
@@ -315,6 +323,46 @@ def release_notes_handler(changelog_dir: str, lang: str, output: str = "") -> in
         print(markdown)
 
     return 0
+
+
+# Leading verbs converted to past tense when rendering release notes.
+# Changelog yaml files keep the original (imperative) wording.
+PAST_TENSE = {
+    "add": "added",
+    "allow": "allowed",
+    "apply": "applied",
+    "bump": "bumped",
+    "change": "changed",
+    "create": "created",
+    "delete": "deleted",
+    "disable": "disabled",
+    "drop": "dropped",
+    "enable": "enabled",
+    "enforce": "enforced",
+    "fix": "fixed",
+    "forbid": "forbidden",
+    "improve": "improved",
+    "introduce": "introduced",
+    "mark": "marked",
+    "move": "moved",
+    "remove": "removed",
+    "rename": "renamed",
+    "replace": "replaced",
+    "resolve": "resolved",
+    "rework": "reworked",
+    "update": "updated",
+    "upgrade": "upgraded",
+}
+
+
+def to_past_tense(entry: str) -> str:
+    words = entry.split(maxsplit=1)
+    if not words:
+        return entry
+    verb = PAST_TENSE.get(words[0].lower())
+    if not verb:
+        return entry
+    return verb + (" " + words[1] if len(words) > 1 else "")
 
 
 def openwebui_translate_handler(file: str, lang: str, output: str = "") -> int:
@@ -339,7 +387,13 @@ def openwebui_translate_handler(file: str, lang: str, output: str = "") -> int:
 
     target = "Russian" if lang == "ru" else "English"
 
-    text = f"Translate the following YAML to {target}. Preserve YAML formatting.\n\n```{content}```"
+    text = (
+        f"Translate the following YAML to {target}. Preserve YAML formatting.\n"
+        "Do not translate YAML keys. Keep technical terms, product names, CVE ids\n"
+        "and file paths in English. Describe changes as already done: use past\n"
+        "tense passive forms (e.g. \u00abисправлено\u00bb, \u00abдобавлена\u00bb, \u00abобновлены\u00bb).\n"
+        f"\n```{content}```"
+    )
 
     data = {
         "model": "gpt-4o",
