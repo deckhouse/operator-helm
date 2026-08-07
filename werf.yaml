@@ -1,6 +1,9 @@
 project: operator-helm
 configVersion: 1
 build:
+  sbom:
+    enable: true
+    standard: cyclonedx@1.6
   imageSpec:
     author: "Deckhouse Kubernetes Platform <contact@deckhouse.io>"
     clearHistory: true
@@ -33,7 +36,7 @@ build:
 {{- end }}
 ---
 image: images-digests
-fromImage: builder/alpine
+fromImage: builder/distroless
 dependencies:
   {{- range $ImageID := $.ImagesIDList }}
   {{- $ImageNameCamel  := $ImageID | splitList "/" | last  | camelcase | untitle }}
@@ -43,9 +46,11 @@ dependencies:
     - type: ImageDigest
       targetEnv: MODULE_IMAGE_DIGEST_{{ $ImageNameCamel }}
   {{- end }}
+packages:
+  - type: os-pm
+    spec:
+      - jq
 shell:
-  beforeInstall:
-    - apk add --no-cache jq
   setup:
     - |
       env | grep MODULE_IMAGE_DIGEST | jq -Rn '

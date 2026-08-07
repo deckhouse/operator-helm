@@ -28,16 +28,17 @@ import:
   add: /src
   to: /src
   before: install
-secrets:
-- id: GOPROXY
-  value: {{ .GOPROXY }}
 mount:
   - fromPath: ~/go-pkg-cache
     to: /go/pkg
+packages:
+  - type: go-mod
+    workdir: /src/images/{{ .ImageName }}-artifact
+    env:
+      GOPROXY: "{{ .GOPROXY }}"
 shell:
   install:
   - cd /src/images/{{ .ImageName }}-artifact
-  - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
   - mkdir /out
   - export GOOS=linux
   - export GOARCH=amd64
@@ -46,7 +47,7 @@ shell:
     echo "Build chart-values-controller binary"
     {{- $_ := set $ "ProjectName" (list $.ImageName "chart-values-controller" | join "/") }}
 
-    {{-   $buildCommand := printf "go build -ldflags=\"-s -w\" -tags %s -v -a -o /out/chart-values-controller ./cmd/chart-values-controller" .MODULE_EDITION -}}
+    {{-   $buildCommand := printf "go build -mod=readonly -ldflags=\"-s -w\" -tags %s -v -a -o /out/chart-values-controller ./cmd/chart-values-controller" .MODULE_EDITION -}}
     {{-   include "image-build.build" (set $ "BuildCommand" $buildCommand) | nindent 4 }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
