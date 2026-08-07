@@ -23,17 +23,18 @@ import:
 mount:
   - fromPath: ~/go-pkg-cache
     to: /go/pkg
-secrets:
-  - id: GOPROXY
-    value: {{ .GOPROXY }}
+packages:
+  - type: go-mod
+    workdir: /app/images/hooks
+    env:
+      GOPROXY: "{{ .GOPROXY }}"
 shell:
   install:
     - cd /app/images/hooks
-    - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
     - |
       export GOOS=linux
       export GOARCH=amd64
       export CGO_ENABLED=0
       export TAGS="{{ printf "-tags %s" .MODULE_EDITION }}"
       {{- $_ := set $ "ProjectName" (list $.ImageName "hooks" | join "/") }}
-      {{- include "image-build.build" (set $ "BuildCommand" `go build -ldflags="-s -w" $TAGS -a -o /go-hooks/operator-helm-module-hooks ./cmd/operator-helm-module-hooks`) | nindent 6 }}
+      {{- include "image-build.build" (set $ "BuildCommand" `go build -mod=readonly -ldflags="-s -w" $TAGS -a -o /go-hooks/operator-helm-module-hooks ./cmd/operator-helm-module-hooks`) | nindent 6 }}
