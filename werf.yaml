@@ -37,6 +37,12 @@ build:
 ---
 image: images-digests
 fromImage: builder/distroless
+git:
+  - add: /
+    to: /
+    includePaths:
+      - pm.yaml
+      - pm.lock
 dependencies:
   {{- range $ImageID := $.ImagesIDList }}
   {{- $ImageNameCamel  := $ImageID | splitList "/" | last  | camelcase | untitle }}
@@ -48,8 +54,8 @@ dependencies:
   {{- end }}
 packages:
   - type: os-pm
-    spec:
-      - jq
+    spec: "pm.yaml"
+    lock: "pm.lock"
 shell:
   setup:
     - |
