@@ -24,6 +24,8 @@ on:
 
 env:
   TASK_X_REMOTE_TASKFILES: 1
+  WERF_VERSION: "v2.75.4-dk.2"
+  WERF_EXTERNAL_REFS_SERVER_URL: ${{secrets.WERF_EXTERNAL_REFS_SERVER_URL}}
 
 jobs:
   build_dev:
@@ -57,6 +59,37 @@ jobs:
           registry: ${{ vars.DEV_REGISTRY }}
           registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
           registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
+
+      - name: Install werf-dk CLI
+        run: |
+          if [[ -z "${WERF_VERSION:-}" ]]; then
+            echo "::error title=WERF version::WERF_VERSION is not set. Run read_werf_version_step before werf_install_step."
+            exit 1
+          fi
+          if [[ ${WERF_VERSION} =~ v[0-9]+\.[0-9]+\.[0-9]+-dk(\.*)? ]]; then
+            werf_fallback=false
+          elif [[ ${WERF_VERSION} =~ v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            werf_fallback=true
+          else
+            echo "::error title=WERF version::Invalid WERF_VERSION '${WERF_VERSION}' in ${WERF_ENVS_FILE}, expected format vX.Y.Z or vX.Y.Z-dk.W"
+            exit 1
+          fi
+          WERF_PATH="$RUNNER_TOOL_CACHE/werf-dk/${WERF_VERSION}"
+          echo "$WERF_PATH" >> "$GITHUB_PATH"
+          CACHED_VERSION=$($WERF_PATH/werf version | tr -d '\n')
+          if [[ "${WERF_VERSION}" != "$CACHED_VERSION" && $werf_fallback == "false" ]]; then
+            echo "Current werf is $CACHED_VERSION, downloading ${WERF_VERSION}";
+            mkdir -p "$WERF_PATH"
+            curl -Lsfo "$WERF_PATH/werf" https://github.com/deckhouse/delivery-kit/releases/download/${WERF_VERSION}/werf
+            chmod +x "$WERF_PATH/werf"
+          elif [[ "${WERF_VERSION}" != "$CACHED_VERSION" && $werf_fallback == "true" ]]; then
+            echo "Current werf is $CACHED_VERSION, fallback to ${WERF_VERSION}";
+            mkdir -p "$WERF_PATH"
+            curl -Lsfo "$WERF_PATH/werf" https://tuf.werf.io/targets/releases/${WERF_VERSION#v}/linux-amd64/bin/werf
+            chmod +x "$WERF_PATH/werf"
+          else
+            echo "Current werf is $CACHED_VERSION, skipping download"
+          fi
 
       - uses: deckhouse/modules-actions/build@main
         with:
