@@ -1,4 +1,4 @@
-# version=v2.0.0
+# version=v2.0.2
 # REGISTRY_PATH is a special key which is concatenated with other base images
 REGISTRY_PATH: registry.deckhouse.io/container-factory
 abseil-cpp-20230125: "sha256:aa593f246d6a281c6c12d6dbf06018af77fbb068a2bdff33aa0b89bec7b56f59" # from: base/scratch
@@ -96,6 +96,8 @@ bzip2-1.0.8: "sha256:f6443e722975e329043d26776261be189d354c8e066843c02ede843cd35
 bzip2-devel-1.0.8: "sha256:b8771669132bcb51dbc4b95efca377fcf4da26bcce48194af6e4ea4f748dde57" # from: base/scratch
 bzip2-devel: "sha256:b8771669132bcb51dbc4b95efca377fcf4da26bcce48194af6e4ea4f748dde57" # from: base/scratch
 bzip2: "sha256:f6443e722975e329043d26776261be189d354c8e066843c02ede843cd35b9818" # from: base/scratch
+ca-certificates-2025.09.09: "sha256:5fc7ab6dba24f5697e4c89391520e887f3b05dd316c4343f61c2df4e4801db75" # from: base/scratch
+ca-certificates: "sha256:5fc7ab6dba24f5697e4c89391520e887f3b05dd316c4343f61c2df4e4801db75" # from: base/scratch
 c-ares-1.34.5: "sha256:1797192f780f18245420c21e3f76c338b697542695173983984f3ab9223be485" # from: base/scratch
 c-ares-devel-1.34.5: "sha256:226d26015b0c797eb3e2b0baf1ddd52308d5d47c1ade7681d8e18907cadd23d0" # from: base/scratch
 c-ares-devel: "sha256:226d26015b0c797eb3e2b0baf1ddd52308d5d47c1ade7681d8e18907cadd23d0" # from: base/scratch
@@ -282,7 +284,7 @@ icu-devel: "sha256:d2d75c86b45caf77bd69152785e520e2728e82b50778227e6b5d51ef0092d
 icu: "sha256:d0520b2a135a14a87c1440bcea494d0ee6bbaae6d620e3a52d767e8e22479be3" # from: base/scratch
 ignition-2.26.0: "sha256:1b9c9e41fb31a4c51320cd5914fbc7103b6ee922359a446e615bd510600012b4" # from: base/scratch
 ignition: "sha256:1b9c9e41fb31a4c51320cd5914fbc7103b6ee922359a446e615bd510600012b4" # from: base/scratch
-index: "sha256:4ac854e9b33e18d9a552c74d6604bbd6c26d0051c127492bdbdafd72ce6b525c" # from: base/scratch
+index: "sha256:7fe8420552ccc3118849f93fd490ef06f49595d0f3164185f6a7ef1be1fe785c" # from: base/scratch
 iproute2-7.0.0: "sha256:fc390c349f2483e185172f4275353854c0ccf41c85d13fa72588b3566296ce34" # from: base/scratch
 iproute2-devel-7.0.0: "sha256:fe22519f343c843c595f325c10c7399ef73b3e4dff8cd40b21d577ac9e1f1893" # from: base/scratch
 iproute2-devel: "sha256:fe22519f343c843c595f325c10c7399ef73b3e4dff8cd40b21d577ac9e1f1893" # from: base/scratch
@@ -887,8 +889,8 @@ python-devel: "sha256:0a67397a85ec2dae450bffb977bbc0ae9e28864c3d5734189ffb83b599
 python: "sha256:9c06b137261070655837ca3057c7b7a888d121ccb43543fc9bcca250dec37141" # from: base/scratch
 python-wheel-0.7: "sha256:9b09fe735eddba54716ad75ee92f920c519f2c2825d89898282e8ed9918a8b9d" # from: base/scratch
 python-wheel: "sha256:9b09fe735eddba54716ad75ee92f920c519f2c2825d89898282e8ed9918a8b9d" # from: base/scratch
-qemu-9.2.4: "sha256:c8f4ddc46c6ae765cf66145b781d4befa39350f321c1d07fc53e0f042b5048e1" # from: base/scratch
-qemu: "sha256:c8f4ddc46c6ae765cf66145b781d4befa39350f321c1d07fc53e0f042b5048e1" # from: base/scratch
+qemu-9.2.4: "sha256:808e855bc8e6975b93d6a3c97380d5b3ef5ebc015719ba7fc6b3b2f6c3a6555a" # from: base/scratch
+qemu: "sha256:808e855bc8e6975b93d6a3c97380d5b3ef5ebc015719ba7fc6b3b2f6c3a6555a" # from: base/scratch
 ragel-6.10: "sha256:3a4524a9f405c0e51a9e0086c493291b90e3771219cb65343401a28e2c907c3c" # from: base/scratch
 ragel: "sha256:3a4524a9f405c0e51a9e0086c493291b90e3771219cb65343401a28e2c907c3c" # from: base/scratch
 rbd-19.2.5: "sha256:c2c875c91ef32d2af76a9b24a58a227e69e04d7147cb7b9ad1b88aec81e44a64" # from: base/scratch
@@ -1022,12 +1024,10 @@ zstd-1.5.7: "sha256:fd327e1eb154277e85da08d65a84653e28d637f23329a3430392a6770a3f
 zstd-devel-1.5.7: "sha256:909c35b4dd06f901be676c39bdfd8ce431c5c700ce04c1f00aa9f37221990efe" # from: base/scratch
 zstd-devel: "sha256:909c35b4dd06f901be676c39bdfd8ce431c5c700ce04c1f00aa9f37221990efe" # from: base/scratch
 zstd: "sha256:fd327e1eb154277e85da08d65a84653e28d637f23329a3430392a6770a3f3624" # from: base/scratch
-base/distroless: "sha256:6391339b65795a94c79eb9d7d311da74e768f5288fce699a8098165313bfc206" # from: base/scratch
-builder/distroless: "sha256:bff2101de1f82bf58d206910794f952b2f8c536e7c429f71c235833603eea818" # from: base/scratch
-builder/golang: "sha256:e62c852f80bfae4548e068a8c364f01f1cae150ca77eafc827164dcd3fbf6ae0" # from: builder/distroless
-builder/golang-1.25: "sha256:e62c852f80bfae4548e068a8c364f01f1cae150ca77eafc827164dcd3fbf6ae0" # from: builder/distroless
-builder/golang-1.26: "sha256:e62c852f80bfae4548e068a8c364f01f1cae150ca77eafc827164dcd3fbf6ae0" # from: builder/distroless
-ca-certificates: "sha256:5fc7ab6dba24f5697e4c89391520e887f3b05dd316c4343f61c2df4e4801db75" # from: base/scratch
-ca-certificates-2025.09.09: "sha256:5fc7ab6dba24f5697e4c89391520e887f3b05dd316c4343f61c2df4e4801db75" # from: base/scratch
+base/distroless: "sha256:4ad8cec42020ee1fafce1b73672f91d43487d753b826ae19dfcd37b7582d9339" # from: base/scratch
+builder/distroless: "sha256:55f867c1fdc3df868f2954f1e294c1ed2d4d3048d772b4a3d312b6f94e95d739" # from: base/scratch
+builder/golang: "sha256:4a7df18cd80f2974858278a2fdc907a006867650052aa58c8fc67f500f7e1bae" # from: builder/distroless
+builder/golang-1.25: "sha256:4a7df18cd80f2974858278a2fdc907a006867650052aa58c8fc67f500f7e1bae" # from: builder/distroless
+builder/golang-1.26: "sha256:4a7df18cd80f2974858278a2fdc907a006867650052aa58c8fc67f500f7e1bae" # from: builder/distroless
 pm: "sha256:0ef9bb2cc637b2304673bdb0cd157e324b1fc55a1372e217ce9ba03fd364d0dc" # from: base/scratch
 pm-0.1.6: "sha256:0ef9bb2cc637b2304673bdb0cd157e324b1fc55a1372e217ce9ba03fd364d0dc" # from: base/scratch
