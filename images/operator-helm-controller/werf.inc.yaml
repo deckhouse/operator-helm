@@ -5,20 +5,8 @@ fromImage: builder/src
 git:
 - add: {{ .ModuleDir }}/api
   to: /src/api
-  stageDependencies:
-    install:
-      - go.mod
-      - go.sum
-    setup:
-      - "**/*.go"
 - add: {{ .ModuleDir }}/images/{{ .ImageName }}
   to: /src/images/operator-helm-controller-artifact
-  stageDependencies:
-    install:
-    - go.mod
-    - go.sum
-    setup:
-    - "**/*.go"
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
 final: false

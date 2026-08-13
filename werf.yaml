@@ -95,9 +95,6 @@ import:
 git:
   - add: /
     to: /prep-bundle
-    stageDependencies:
-      install:
-      - '**/*'
     includePaths:
       - CHANGELOG
       - charts
