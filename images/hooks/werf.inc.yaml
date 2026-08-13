@@ -5,12 +5,6 @@ fromImage: builder/src
 git:
   - add: {{ .ModuleDir }}/images/{{ .ImageName }}
     to: /src/images/hooks
-    stageDependencies:
-      install:
-        - "**/*"
-shell:
-  install:
-    - cd /src
 ---
 image: {{ .ModuleNamePrefix }}go-hooks-artifact
 final: false

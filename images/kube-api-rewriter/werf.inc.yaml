@@ -5,11 +5,6 @@ fromImage: builder/src
 git:
   - add: {{ .ModuleDir }}/images/{{ .ImageName }}
     to: /src/kube-api-rewriter
-    stageDependencies:
-      install:
-        - go.mod
-        - go.sum
-        - "**/*.go"
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-builder
 final: false

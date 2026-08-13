@@ -95,9 +95,6 @@ import:
 git:
   - add: /
     to: /prep-bundle
-    stageDependencies:
-      install:
-      - '**/*'
     includePaths:
       - charts
       - crds
@@ -114,9 +111,6 @@ git:
       - docs/images/*.drawio
       - docs/images/*.sh
       - docs/internal
-shell:
-  install:
-    - ls -la /prep-bundle
 ---
 image: release-channel-version
 fromImage: builder/scratch
