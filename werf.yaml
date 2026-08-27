@@ -88,6 +88,7 @@ git:
       install:
       - '**/*'
     includePaths:
+      - CHANGELOG
       - charts
       - crds
       - build/components
@@ -105,6 +106,10 @@ git:
       - docs/internal
 shell:
   install:
+    - |
+      apk add --no-cache jq
+      jq -n --arg version "{{ env "MODULES_MODULE_TAG" "dev"}}" '{"version": $version}' > /prep-bundle/version.json
+      cp -f CHANGELOG/{{ env "MODULES_MODULE_TAG" "dev" }}.yaml /prep-bundle/changelog.yaml || touch /prep-bundle/changelog.yaml
     - ls -la /prep-bundle
 ---
 image: release-channel-version
@@ -116,6 +121,12 @@ import:
   after: install
   includePaths:
     - module.yaml
-shell:
-  install:
-    - echo  '{"version":"{{ env "MODULES_MODULE_TAG" "dev" }}"}' > version.json
+    - version.json
+    - changelog.yaml
+    - docs
+    - crds
+    - openapi
+  excludePaths:
+    - docs/internal
+    - docs/images/*.drawio
+    - docs/images/*.sh
