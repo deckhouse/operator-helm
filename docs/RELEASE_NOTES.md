@@ -3,25 +3,35 @@ title: "Release Notes"
 description: "Release notes for Deckhouse operator-helm."
 ---
 
+## v0.1.1
+
+### Bug Fixes
+
+* Fixed authentication issue when working with a private OCI repository
+
+### Chore
+
+* Documentation is now available to the AI agent built into the platform
+
 ## v0.1.0
 
 ### New Features
 
-* enforce restricted pss
+* enforced restricted pss
 
 ### Bug Fixes
 
-* forbid to use system namespaces
+* forbidden to use system namespaces
 
 ### Chore
 
-* add changelog and release notes generation
+* added changelog and release notes generation
 
 ## v0.0.8
 
 ### Bug Fixes
 
-* resolve race on module disable which could lead to application disruption
+* resolved race on module disable which could lead to application disruption
 
 ### Chore
 
@@ -31,7 +41,7 @@ description: "Release notes for Deckhouse operator-helm."
 
 ### New Features
 
-* add ability to review chart default values in console during addon creation
+* added ability to review chart default values in console during addon creation
 
 ## v0.0.6
 
@@ -41,7 +51,7 @@ description: "Release notes for Deckhouse operator-helm."
 
 ### Chore
 
-* add weight annotations to validation webhook
+* added weight annotations to validation webhook
 
 ## v0.0.5
 
@@ -53,7 +63,7 @@ description: "Release notes for Deckhouse operator-helm."
 
 ### Chore
 
-* update main documentation page alerts formatting
+* updated main documentation page alerts formatting
 
 ## v0.0.3
 
@@ -65,7 +75,7 @@ description: "Release notes for Deckhouse operator-helm."
 
 ### New Features
 
-* apply deckhouse runtime time review recommendations
+* applied deckhouse runtime time review recommendations
 
 ## v0.0.1
 
