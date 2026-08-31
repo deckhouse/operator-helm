@@ -1,9 +1,7 @@
-
 breaking: []
 features: []
 fixes:
-  - "use docker-registry secret for oci repository auth"
+  - "Fixed authentication issue when working with a private OCI repository"
 security: []
 chore:
-  - "make module ai doc capable"
-
+  - "Documentation is now available to the AI agent built into the platform"

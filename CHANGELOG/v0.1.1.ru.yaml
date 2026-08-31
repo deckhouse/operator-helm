@@ -1,7 +1,0 @@
-breaking: []
-features: []
-fixes:
-  - "для аутентификации репозитория OCI использован секрет docker-registry"
-security: []
-chore:
-  - "модуль сделан способным на AI документацию"
