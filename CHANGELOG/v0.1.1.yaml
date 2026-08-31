@@ -1,0 +1,9 @@
+
+breaking: []
+features: []
+fixes:
+  - "use docker-registry secret for oci repository auth"
+security: []
+chore:
+  - "make module ai doc capable"
+
