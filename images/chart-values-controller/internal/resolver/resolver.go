@@ -304,8 +304,13 @@ func (r *Resolver) findRepositorySecretNames(ctx context.Context, repoName strin
 
 	for i := range list.Items {
 		secret := &list.Items[i]
-		if _, ok := secret.Data["username"]; ok {
+		// The auth secret is Opaque with username/password for HelmRepository and
+		// kubernetes.io/dockerconfigjson for OCIRepository, so either key marks it.
+		_, hasBasicAuth := secret.Data["username"]
+		_, hasDockerConfig := secret.Data[corev1.DockerConfigJsonKey]
+		if hasBasicAuth || hasDockerConfig {
 			auth = secret.Name
+			continue
 		}
 		if _, ok := secret.Data["ca.crt"]; ok {
 			tls = secret.Name
