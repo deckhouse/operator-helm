@@ -124,7 +124,7 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon 
 }
 
 func (s *OCIRepoService) EnsureRepositorySecrets(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) OCIRepoResult {
-	if err := s.reconcileAuthSecret(ctx, repo); err != nil {
+	if err := s.reconcileDockerConfigAuthSecret(ctx, repo); err != nil {
 		return OCIRepoResult{
 			Status: status.Status{
 				ConditionType:      helmv1alpha1.ConditionTypeReady,

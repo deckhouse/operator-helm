@@ -78,7 +78,7 @@ func (r HelmRepoResult) GetConditionType() string {
 func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) HelmRepoResult {
 	logger := log.FromContext(ctx)
 
-	if err := s.reconcileAuthSecret(ctx, repo); err != nil {
+	if err := s.reconcileBasicAuthSecret(ctx, repo); err != nil {
 		return HelmRepoResult{Status: status.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile auth secret", err)}
 	}
 
