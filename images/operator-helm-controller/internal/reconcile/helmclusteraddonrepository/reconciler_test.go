@@ -46,11 +46,13 @@ type stubRepoClient struct {
 	err    error
 }
 
-func (s stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig) ([]repoclient.Chart, error) {
+// The receiver is a pointer so a test can change what the repository returns
+// between reconcile passes.
+func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig) ([]repoclient.Chart, error) {
 	return s.charts, s.err
 }
 
-func newReconciler(t *testing.T, stub stubRepoClient, objects ...client.Object) (*Reconciler, client.Client) {
+func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object) (*Reconciler, client.Client) {
 	t.Helper()
 
 	scheme := runtime.NewScheme()
@@ -116,7 +118,7 @@ func reconcileUntilStable(t *testing.T, r *Reconciler, name string) reconcile.Re
 
 func TestReconcileOCIRepositoryBecomesReady(t *testing.T) {
 	repo := ociRepository()
-	stub := stubRepoClient{charts: []repoclient.Chart{{
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
 		Name:     "podinfo",
 		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
 	}}}
@@ -152,7 +154,7 @@ func TestReconcileOCIRepositoryBecomesReady(t *testing.T) {
 
 func TestReconcileSkipsFetchBeforeSchedule(t *testing.T) {
 	repo := ociRepository()
-	stub := stubRepoClient{charts: []repoclient.Chart{{
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
 		Name:     "podinfo",
 		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
 	}}}
@@ -185,7 +187,7 @@ func TestReconcileSkipsFetchBeforeSchedule(t *testing.T) {
 
 func TestReconcileTerminalFetchFailureStalls(t *testing.T) {
 	repo := ociRepository()
-	stub := stubRepoClient{err: &repoclient.TerminalError{
+	stub := &stubRepoClient{err: &repoclient.TerminalError{
 		Reason:  helmv1alpha1.ReasonAuthenticationFailed,
 		Message: "repository rejected the credentials (HTTP 401)",
 	}}
@@ -212,6 +214,67 @@ func TestReconcileTerminalFetchFailureStalls(t *testing.T) {
 	// the live object rather than with the fixture.
 	if updated.Status.ObservedGeneration != updated.Generation {
 		t.Fatalf("observedGeneration is %d, want %d", updated.Status.ObservedGeneration, updated.Generation)
+	}
+}
+
+// TestReconcileRemovesStalledOnRecovery pins that an abnormal-true condition is
+// removed from the STORED object and not merely from the in-memory status.
+// Removal rides on the JSON merge patch client.MergeFrom produces, which
+// replaces the whole conditions array; were that ever to stop holding, a
+// repository would keep reporting Failed to kstatus forever after one stall.
+func TestReconcileRemovesStalledOnRecovery(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{err: &repoclient.TerminalError{
+		Reason:  helmv1alpha1.ReasonSourceNotFound,
+		Message: "repository not found (HTTP 404)",
+	}}
+
+	r, c := newReconciler(t, stub, repo)
+	reconcileUntilStable(t, r, repo.Name)
+
+	stalled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), stalled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if apimeta.FindStatusCondition(stalled.Status.Conditions, helmv1alpha1.ConditionTypeStalled) == nil {
+		t.Fatalf("the fixture must reach Stalled first, conditions: %v", stalled.Status.Conditions)
+	}
+
+	// The source recovers. The force annotation makes the next pass attempt
+	// regardless of the schedule the stall left behind.
+	stub.err = nil
+	stub.charts = []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}
+
+	stalled.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+	if err := c.Update(context.Background(), stalled); err != nil {
+		t.Fatalf("annotating repository: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	recovered := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), recovered); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	if cond := apimeta.FindStatusCondition(recovered.Status.Conditions, helmv1alpha1.ConditionTypeStalled); cond != nil {
+		t.Fatalf("Stalled must be gone from the stored object, got %+v", cond)
+	}
+	if !apimeta.IsStatusConditionTrue(recovered.Status.Conditions, helmv1alpha1.ConditionTypeReady) {
+		t.Fatalf("Ready must be True after recovery, conditions: %v", recovered.Status.Conditions)
+	}
+	if apimeta.FindStatusCondition(recovered.Status.Conditions, helmv1alpha1.ConditionTypeReconciling) != nil {
+		t.Fatal("Reconciling must be absent on a recovered repository")
+	}
+	if _, found := recovered.Annotations[helmv1alpha1.AnnotationForceReconcile]; found {
+		t.Fatal("the force annotation must be consumed by the pass it triggered")
 	}
 }
 
@@ -249,7 +312,7 @@ func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
 		Namespace: helmv1alpha1.TargetNamespace,
 	}}
 
-	r, c := newReconciler(t, stubRepoClient{}, repo, internalRepo, authSecret, tlsSecret)
+	r, c := newReconciler(t, &stubRepoClient{}, repo, internalRepo, authSecret, tlsSecret)
 
 	// The first pass deletes the internal objects and waits for the internal
 	// repository to disappear; the second removes the finalizer.
