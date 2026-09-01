@@ -216,6 +216,26 @@ func TestPassWithoutAttemptKeepsSchedule(t *testing.T) {
 	}
 }
 
+func TestOverdueScheduleWithoutAttemptFloorsRequeue(t *testing.T) {
+	overdue := metav1.NewTime(testNow.Add(-time.Minute))
+
+	got := Evaluate(Inputs{
+		Generation: 1,
+		Now:        testNow,
+		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+			ObservedGeneration: 1,
+			NextSyncTime:       &overdue,
+		},
+		// SecretsErr blocks the attempt: the reconciler never gets to Fetch/Catalog,
+		// so Attempted stays false while the schedule is already due.
+		SecretsErr: errors.New("failed to reconcile secret"),
+	})
+
+	if got.RequeueAfter != minRequeue {
+		t.Fatalf("requeue after %s, want the floor %s", got.RequeueAfter, minRequeue)
+	}
+}
+
 func TestShouldAttempt(t *testing.T) {
 	future := metav1.NewTime(testNow.Add(time.Minute))
 	past := metav1.NewTime(testNow.Add(-time.Minute))
@@ -251,6 +271,12 @@ func TestShouldAttempt(t *testing.T) {
 			name:       "spec change beats the schedule",
 			current:    helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1, NextSyncTime: &future},
 			generation: 2,
+			want:       true,
+		},
+		{
+			name:       "schedule never set on a matching generation",
+			current:    helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1, NextSyncTime: nil},
+			generation: 1,
 			want:       true,
 		},
 	}
