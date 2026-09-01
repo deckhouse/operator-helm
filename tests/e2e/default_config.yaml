@@ -13,6 +13,9 @@ controllers:
         - "Failed to get internal repository"
         # Expected in the negative test that sets an invalid chart version; surfaced via status.
         - "failed to get desired chart version"
+        # Expected in the stall scenario that points a repository at a missing
+        # source; the reconciler logs every failed read with the repository name.
+        - "repo-source-not-found"
         # Transient controller-runtime cache reflector reconnects (watch/list drop,
         # unexpected EOF); self-recovering, not a real failure.
         - "Unexpected error when reading response body"
