@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
@@ -26,6 +27,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -161,5 +163,102 @@ func TestEnsureInternalRepositoryStateReportsStalled(t *testing.T) {
 	}
 	if state.Reason != "InvalidSecretRef" {
 		t.Fatalf("state reason is %q, want %q", state.Reason, "InvalidSecretRef")
+	}
+}
+
+// TestEnsureInternalRepositoryStateStalledPrecedesReady pins the precedence rule:
+// Stalled=True must win even when a healthy, observed Ready=True condition sits
+// right next to it. The fixture's spec and labels already match what
+// applyHelmRepositorySpec writes (same reason as the mirroring test above), so
+// CreateOrPatch is a no-op and the internal object's generation stays at 1 -
+// which is what lets the Ready condition below count as observed.
+func TestEnsureInternalRepositoryStateStalledPrecedesReady(t *testing.T) {
+	repo := testRepository()
+	internal := &sourcev1.HelmRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       utils.GetInternalHelmRepositoryName(repo.Name),
+			Namespace:  testNamespace,
+			Generation: 1,
+			Labels: map[string]string{
+				helmv1alpha1.LabelManagedBy:                            helmv1alpha1.LabelManagedByValue,
+				helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repo.Name,
+			},
+		},
+		Spec: sourcev1.HelmRepositorySpec{
+			URL:      repo.Spec.URL,
+			Interval: metav1.Duration{Duration: InternalRepositoryInterval},
+		},
+		Status: sourcev1.HelmRepositoryStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               helmv1alpha1.ConditionTypeReady,
+					Status:             metav1.ConditionTrue,
+					Reason:             "Succeeded",
+					Message:            "index fetched",
+					ObservedGeneration: 1,
+					LastTransitionTime: metav1.Now(),
+				},
+				{
+					Type:               helmv1alpha1.ConditionTypeStalled,
+					Status:             metav1.ConditionTrue,
+					Reason:             "InvalidSecretRef",
+					Message:            "secret not found",
+					ObservedGeneration: 1,
+					LastTransitionTime: metav1.Now(),
+				},
+			},
+		},
+	}
+
+	service := newHelmRepoService(t, repo, internal)
+
+	state, err := service.EnsureInternalRepositoryState(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("EnsureInternalRepositoryState returned %v", err)
+	}
+	if !state.Stalled {
+		t.Fatal("Stalled=True must take precedence even when an observed Ready=True is also present")
+	}
+	if state.Ready {
+		t.Fatal("state must not report Ready when Stalled=True takes precedence")
+	}
+	if state.Reason != "InvalidSecretRef" {
+		t.Fatalf("state reason is %q, want the Stalled reason %q, not the Ready reason", state.Reason, "InvalidSecretRef")
+	}
+}
+
+// TestEnsureInternalRepositoryStateReturnsAPIError verifies the split this task
+// exists to create: an API failure while reconciling the internal object is the
+// caller's problem and comes back as a non-nil error (still with Present: true,
+// since the internal object does exist as far as the caller is concerned), not
+// swallowed into the state. The failure is injected on Create because the fixture
+// has no pre-existing internal HelmRepository, so CreateOrPatch's Get finds
+// nothing and falls through to Create.
+func TestEnsureInternalRepositoryStateReturnsAPIError(t *testing.T) {
+	repo := testRepository()
+	scheme := sourceScheme(t)
+
+	sentinel := errors.New("synthetic create failure")
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(repo).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, _ client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				return sentinel
+			},
+		}).
+		Build()
+
+	service := NewHelmRepoService(c, scheme, testNamespace)
+
+	state, err := service.EnsureInternalRepositoryState(context.Background(), repo)
+	if err == nil {
+		t.Fatal("EnsureInternalRepositoryState must return an error when the API call fails")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("returned error must wrap the underlying API failure, got %v", err)
+	}
+	if !state.Present {
+		t.Fatal("state must still report Present: true even when reconciling failed")
 	}
 }
