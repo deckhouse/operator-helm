@@ -125,31 +125,20 @@ func (s *Manager) Update(ctx context.Context, obj ObjectWithConditions, mutatorF
 	return s.Status().Patch(ctx, obj, client.MergeFrom(oldObj))
 }
 
-func (s *Manager) InitializeConditions(ctx context.Context, obj ObjectWithConditions, conditionTypes ...string) error {
+// PatchStatus applies mutate to the object and patches the status subresource
+// when it actually changed. It is the thin apply path used by reconcilers that
+// compute the whole desired status themselves.
+func (s *Manager) PatchStatus(ctx context.Context, obj ObjectWithConditions, mutate func()) error {
 	oldObj := obj.DeepCopyObject().(ObjectWithConditions)
-	patchBase := client.MergeFrom(oldObj)
 
-	conditions := obj.GetConditions()
-	changed := false
+	mutate()
 
-	for _, t := range conditionTypes {
-		if meta.FindStatusCondition(*conditions, t) == nil {
-			meta.SetStatusCondition(conditions, metav1.Condition{
-				Type:   t,
-				Status: metav1.ConditionUnknown,
-				Reason: "Initialized",
-			})
-			changed = true
-		}
+	if reflect.DeepEqual(obj.GetStatus(), oldObj.GetStatus()) {
+		return nil
 	}
 
-	if changed {
-		logger := log.FromContext(ctx)
-		logger.Info("Initializing conditions", "name", obj.GetName(), "types", conditionTypes)
-
-		if err := s.Client.Status().Patch(ctx, obj, patchBase); err != nil {
-			return fmt.Errorf("initializing conditions: %w", err)
-		}
+	if err := s.Status().Patch(ctx, obj, client.MergeFrom(oldObj)); err != nil {
+		return fmt.Errorf("patching status: %w", err)
 	}
 
 	return nil

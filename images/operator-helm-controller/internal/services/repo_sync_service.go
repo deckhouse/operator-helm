@@ -19,10 +19,8 @@ package services
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/samber/lo"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,7 +31,6 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -67,51 +64,6 @@ func NewRepoSyncService(client client.Client, scheme *runtime.Scheme, factory Re
 			Scheme: scheme,
 		},
 		clientFactory: factory,
-	}
-}
-
-var _ status.Provider = (*RepoSyncResult)(nil)
-
-type RepoSyncResult struct {
-	Status status.Status
-}
-
-func (r RepoSyncResult) GetStatus() status.Status {
-	return r.Status
-}
-
-func (r RepoSyncResult) IsReady() bool {
-	return r.Status.IsReady()
-}
-
-func (r RepoSyncResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeSynced
-}
-
-// InProgress reports the first phase of the sync state machine: the Synced
-// condition has just been marked Reconciling and the actual chart fetch still
-// needs to run. The caller performs that fetch in the same reconcile so progress
-// does not depend on a status-update watch event.
-func (r RepoSyncResult) InProgress() bool {
-	return r.Status.Status == metav1.ConditionUnknown && r.Status.Reason == helmv1alpha1.ReasonReconciling
-}
-
-func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) RepoSyncResult {
-	if !isRepoSyncRequired(repo) {
-		return RepoSyncResult{Status: status.Empty()}
-	} else if !isRepoSyncInProgress(repo) {
-		return RepoSyncResult{Status: status.Unknown(repo, helmv1alpha1.ReasonReconciling)}
-	}
-
-	outcome := s.Sync(ctx, repo, repoType)
-
-	switch {
-	case outcome.Fetch.Err != nil:
-		return RepoSyncResult{Status: status.Failed(repo, helmv1alpha1.ReasonSyncFailed, outcome.Fetch.Message, outcome.Fetch.Err)}
-	case outcome.Catalog.Err != nil:
-		return RepoSyncResult{Status: status.Failed(repo, helmv1alpha1.ReasonSyncFailed, "Failed to update the chart catalog", outcome.Catalog.Err)}
-	default:
-		return RepoSyncResult{Status: status.Success(repo)}
 	}
 }
 
@@ -261,25 +213,4 @@ func (s *RepoSyncService) reconcileCatalog(
 	}
 
 	return CatalogOutcome{}
-}
-
-func isRepoSyncRequired(repo *helmv1alpha1.HelmClusterAddonRepository) bool {
-	if repo.ForceReconcileRequired() {
-		return true
-	}
-
-	syncCond := apimeta.FindStatusCondition(repo.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
-	if syncCond != nil && syncCond.Status == metav1.ConditionTrue && syncCond.LastTransitionTime.UTC().Add(ChartsSyncInterval).After(time.Now().UTC()) {
-		return false
-	}
-	return true
-}
-
-func isRepoSyncInProgress(repo *helmv1alpha1.HelmClusterAddonRepository) bool {
-	syncCond := apimeta.FindStatusCondition(repo.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
-	if syncCond != nil && syncCond.Status == metav1.ConditionUnknown && syncCond.Reason == helmv1alpha1.ReasonReconciling {
-		return true
-	}
-
-	return false
 }
