@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/samber/lo"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,7 +35,6 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
-	"github.com/samber/lo"
 )
 
 const (
@@ -48,14 +48,25 @@ const (
 
 type RepoSyncService struct {
 	BaseService
+
+	clientFactory RepoClientFactory
 }
 
-func NewRepoSyncService(client client.Client, scheme *runtime.Scheme) *RepoSyncService {
+// RepoClientFactory builds the client used to read a repository catalog. It is
+// injected so the synchronization can be tested without a live repository.
+type RepoClientFactory func(repoType utils.InternalRepositoryType) (repoclient.ClientInterface, error)
+
+func NewRepoSyncService(client client.Client, scheme *runtime.Scheme, factory RepoClientFactory) *RepoSyncService {
+	if factory == nil {
+		factory = repoclient.NewClient
+	}
+
 	return &RepoSyncService{
 		BaseService: BaseService{
 			Client: client,
 			Scheme: scheme,
 		},
+		clientFactory: factory,
 	}
 }
 
@@ -86,51 +97,100 @@ func (r RepoSyncResult) InProgress() bool {
 }
 
 func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) RepoSyncResult {
-	logger := log.FromContext(ctx)
-
 	if !isRepoSyncRequired(repo) {
 		return RepoSyncResult{Status: status.Empty()}
 	} else if !isRepoSyncInProgress(repo) {
 		return RepoSyncResult{Status: status.Unknown(repo, helmv1alpha1.ReasonReconciling)}
 	}
 
-	repoClient, err := repoclient.NewClient(repoType)
+	outcome := s.Sync(ctx, repo, repoType)
+
+	switch {
+	case outcome.Fetch.Err != nil:
+		return RepoSyncResult{Status: status.Failed(repo, helmv1alpha1.ReasonSyncFailed, outcome.Fetch.Message, outcome.Fetch.Err)}
+	case outcome.Catalog.Err != nil:
+		return RepoSyncResult{Status: status.Failed(repo, helmv1alpha1.ReasonSyncFailed, "Failed to update the chart catalog", outcome.Catalog.Err)}
+	default:
+		return RepoSyncResult{Status: status.Success(repo)}
+	}
+}
+
+// Sync reads the repository catalog and reconciles the HelmClusterAddonChart
+// resources that mirror it. The two phases are reported separately: a fetch
+// failure is about the remote, a catalog failure is about this cluster.
+func (s *RepoSyncService) Sync(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	repoType utils.InternalRepositoryType,
+) SyncOutcome {
+	charts, fetch := s.fetchCharts(ctx, repo, repoType)
+	if fetch.Err != nil {
+		return SyncOutcome{Fetch: fetch}
+	}
+
+	return SyncOutcome{Fetch: fetch, Catalog: s.reconcileCatalog(ctx, repo, charts)}
+}
+
+func (s *RepoSyncService) fetchCharts(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	repoType utils.InternalRepositoryType,
+) ([]repoclient.Chart, FetchOutcome) {
+	repoClient, err := s.clientFactory(repoType)
 	if err != nil {
-		return RepoSyncResult{
-			Status: status.Failed(
-				repo,
-				helmv1alpha1.ReasonSyncFailed,
-				"Failed to get repository client on chart sync",
-				fmt.Errorf("getting repository client: %w", err),
-			),
+		return nil, FetchOutcome{
+			Err:      err,
+			Terminal: true,
+			Reason:   helmv1alpha1.ReasonUnsupportedRepositoryType,
+			Message:  "Unsupported repository type",
 		}
 	}
 
-	var repoConfig *repoclient.RepoConfig
-	if repo.Spec.Auth != nil || repo.Spec.CACertificate != "" || repo.Spec.InsecureSkipVerify {
-		repoConfig = &repoclient.RepoConfig{
-			Insecure: repo.Spec.InsecureSkipVerify,
-		}
-		if repo.Spec.Auth != nil {
-			repoConfig.Username = repo.Spec.Auth.Username
-			repoConfig.Password = repo.Spec.Auth.Password
-		}
-		if repo.Spec.CACertificate != "" {
-			repoConfig.CACertificate = repo.Spec.CACertificate
+	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, buildRepoConfig(repo))
+	if err == nil {
+		return charts, FetchOutcome{}
+	}
+
+	if terminal, ok := repoclient.AsTerminal(err); ok {
+		return nil, FetchOutcome{
+			Err:      err,
+			Terminal: true,
+			Reason:   terminal.Reason,
+			Message:  terminal.Message,
 		}
 	}
 
-	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, repoConfig)
-	if err != nil {
-		return RepoSyncResult{
-			Status: status.Failed(
-				repo,
-				helmv1alpha1.ReasonSyncFailed,
-				"Failed to fetch charts from repository",
-				fmt.Errorf("fetching charts: %w", err),
-			),
-		}
+	return nil, FetchOutcome{
+		Err:     err,
+		Reason:  helmv1alpha1.ReasonSyncFailed,
+		Message: "Failed to read the repository catalog: " + err.Error(),
 	}
+}
+
+func buildRepoConfig(repo *helmv1alpha1.HelmClusterAddonRepository) *repoclient.RepoConfig {
+	if repo.Spec.Auth == nil && repo.Spec.CACertificate == "" && !repo.Spec.InsecureSkipVerify {
+		return nil
+	}
+
+	config := &repoclient.RepoConfig{
+		Insecure:      repo.Spec.InsecureSkipVerify,
+		CACertificate: repo.Spec.CACertificate,
+	}
+
+	if repo.Spec.Auth != nil {
+		config.Username = repo.Spec.Auth.Username
+		config.Password = repo.Spec.Auth.Password
+	}
+
+	return config
+}
+
+func (s *RepoSyncService) reconcileCatalog(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	charts []repoclient.Chart,
+) CatalogOutcome {
+	logger := log.FromContext(ctx)
 
 	desiredCharts := make(map[string]struct{}, len(charts))
 
@@ -141,9 +201,7 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 
 		addonChartName := utils.GetHelmClusterAddonChartName(repo.Name, chart.Name)
 		existing := &helmv1alpha1.HelmClusterAddonChart{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: addonChartName,
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: addonChartName},
 		}
 
 		desiredCharts[existing.Name] = struct{}{}
@@ -164,17 +222,11 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 				LabelRepositoryName:                 repo.Name,
 				LabelChartName:                      chart.Name,
 			}
+
 			return nil
 		})
 		if err != nil {
-			return RepoSyncResult{
-				Status: status.Failed(
-					repo,
-					helmv1alpha1.ReasonSyncFailed,
-					fmt.Sprintf("Failed to create HelmClusterAddonChart %q", addonChartName),
-					fmt.Errorf("cannot create or update HelmClusterAddonChart: %w", err),
-				),
-			}
+			return CatalogOutcome{Err: fmt.Errorf("creating or updating chart %q: %w", addonChartName, err)}
 		}
 
 		if op != controllerutil.OperationResultNone {
@@ -189,29 +241,13 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 		})
 
 		if err := s.Client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
-			return RepoSyncResult{
-				Status: status.Failed(
-					repo,
-					helmv1alpha1.ReasonSyncFailed,
-					fmt.Sprintf("Failed to update HelmClusterAddonChart %q versions", addonChartName),
-					fmt.Errorf("updating chart versions: %w", err),
-				),
-			}
+			return CatalogOutcome{Err: fmt.Errorf("updating versions of chart %q: %w", addonChartName, err)}
 		}
-
-		logger.Info("Successfully synced HelmClusterAddonChart versions", "operation", op, "addonChartName", addonChartName)
 	}
 
 	var existingCharts helmv1alpha1.HelmClusterAddonChartList
 	if err := s.Client.List(ctx, &existingCharts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
-		return RepoSyncResult{
-			Status: status.Failed(
-				repo,
-				helmv1alpha1.ReasonSyncFailed,
-				"Failed to list stale charts for pruning",
-				fmt.Errorf("listing existing charts for pruning: %w", err),
-			),
-		}
+		return CatalogOutcome{Err: fmt.Errorf("listing charts for pruning: %w", err)}
 	}
 
 	for _, chart := range existingCharts.Items {
@@ -220,22 +256,11 @@ func (s *RepoSyncService) EnsureAddonCharts(ctx context.Context, repo *helmv1alp
 		}
 
 		if err := s.ensureResourceDeleted(ctx, types.NamespacedName{Name: chart.Name}, &chart); err != nil {
-			return RepoSyncResult{
-				Status: status.Failed(
-					repo,
-					helmv1alpha1.ReasonSyncFailed,
-					"Failed to delete stale charts",
-					fmt.Errorf("deleting stale charts: %w", err),
-				),
-			}
+			return CatalogOutcome{Err: fmt.Errorf("deleting stale charts: %w", err)}
 		}
 	}
 
-	logger.Info(fmt.Sprintf("Scheduling next repo sync in %s", ChartsSyncInterval))
-
-	return RepoSyncResult{
-		Status: status.Success(repo),
-	}
+	return CatalogOutcome{}
 }
 
 func isRepoSyncRequired(repo *helmv1alpha1.HelmClusterAddonRepository) bool {
