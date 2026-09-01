@@ -257,7 +257,10 @@ func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, key client.Ob
 		return fmt.Errorf("getting helm cluster addon repository: %w", err)
 	}
 
-	if repo.Annotations == nil {
+	if _, found := repo.Annotations[helmv1alpha1.AnnotationForceReconcile]; !found {
+		// Guard on the annotation itself, not on the map: a repository carrying
+		// any unrelated annotation would otherwise take an empty PATCH on every
+		// attempted pass.
 		return nil
 	}
 
