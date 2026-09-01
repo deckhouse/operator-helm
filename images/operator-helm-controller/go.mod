@@ -9,6 +9,7 @@ require (
 	github.com/deckhouse/operator-helm/api v0.0.0-00010101000000-000000000000
 	github.com/google/go-containerregistry v0.20.6
 	github.com/opencontainers/go-digest v1.0.0
+	github.com/samber/lo v1.53.0
 	github.com/werf/3p-fluxcd-pkg/apis/meta v1.23.0-nelm.1
 	github.com/werf/3p-fluxcd-pkg/chartutil v1.17.0-nelm.1
 	github.com/werf/3p-helm-controller/api v0.1.5
@@ -19,6 +20,7 @@ require (
 	k8s.io/apimachinery v0.35.1
 	k8s.io/client-go v0.35.1
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4
+	sigs.k8s.io/cli-utils v0.37.2
 	sigs.k8s.io/controller-runtime v0.23.1
 )
 
@@ -61,7 +63,6 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
-	github.com/samber/lo v1.53.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
