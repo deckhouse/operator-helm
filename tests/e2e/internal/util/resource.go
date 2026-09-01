@@ -175,6 +175,37 @@ func UntilConditionReason(conditionType, expectedReason string, timeout time.Dur
 	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
+// UntilConditionAbsent waits until the specified condition is not present on the
+// objects. Abnormal-true conditions are removed rather than set to False, so
+// absence is the assertion that matters.
+func UntilConditionAbsent(conditionType string, timeout time.Duration, objs ...client.Object) {
+	GinkgoHelper()
+
+	Eventually(func(g Gomega) {
+		for _, obj := range objs {
+			u := toUnstructured(obj)
+			err := framework.GetClients().GenericClient().Get(
+				context.Background(), client.ObjectKeyFromObject(obj), u,
+			)
+			g.Expect(err).NotTo(HaveOccurred())
+
+			conditions, _, err := unstructured.NestedSlice(u.Object, "status", "conditions")
+			g.Expect(err).NotTo(HaveOccurred(),
+				"failed to access status.conditions of %s", u.GetName())
+
+			for _, c := range conditions {
+				m, ok := c.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				t, _ := m["type"].(string)
+				g.Expect(t).NotTo(Equal(conditionType),
+					"condition %s must be absent on %s", conditionType, u.GetName())
+			}
+		}
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
+}
+
 func untilObjectField(fieldPath, expected string, timeout time.Duration, objs ...client.Object) {
 	GinkgoHelper()
 	Eventually(func(g Gomega) {

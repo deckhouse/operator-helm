@@ -79,6 +79,29 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				created,
 			)
 
+			By("Healthy repository must carry no abnormal-true conditions")
+			util.UntilConditionAbsent(
+				apiv1alpha1.ConditionTypeReconciling,
+				framework.LongTimeout,
+				created,
+			)
+			util.UntilConditionAbsent(
+				apiv1alpha1.ConditionTypeStalled,
+				framework.LongTimeout,
+				created,
+			)
+
+			By("Repository must report its synchronization schedule")
+			Eventually(func(g Gomega) {
+				current, err := f.OperatorClient().HelmV1alpha1().
+					HelmClusterAddonRepositories().
+					Get(context.Background(), repoName, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(current.Status.LastSuccessfulSyncTime).NotTo(BeNil())
+				g.Expect(current.Status.NextSyncTime).NotTo(BeNil())
+				g.Expect(current.Status.ConsecutiveFetchFailures).To(BeZero())
+			}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
 			By("Should have existing HelmClusterAddonChart")
 			labelSelector := fmt.Sprintf("repository=%s", repoName)
 			charts, err := f.OperatorClient().
@@ -132,5 +155,75 @@ var _ = Describe("Create HelmClusterAddonRepository with invalid url", Ordered, 
 			Create(context.Background(), repo, metav1.CreateOptions{})
 		Expect(err).To(HaveOccurred())
 		Expect(err).To(MatchError(ContainSubstring("is invalid: spec.url")))
+	})
+})
+
+var _ = Describe("HelmClusterAddonRepository with an unreachable source", Ordered, func() {
+	f := framework.NewFramework("repository-lifecycle")
+	repoName := "repo-source-not-found"
+
+	BeforeAll(func() {
+		DeferCleanup(f.After)
+		f.Before()
+	})
+
+	// No AssertNoErrorsFor here on purpose: this scenario breaks the repository
+	// deliberately, so error-level log lines from the controller are expected.
+
+	It("should stall on a missing source and recover after the url is fixed", func() {
+		repo := &apiv1alpha1.HelmClusterAddonRepository{
+			ObjectMeta: metav1.ObjectMeta{Name: repoName},
+			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+				URL: "https://stefanprodan.github.io/podinfo-does-not-exist",
+			},
+		}
+
+		created, err := f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddonRepositories().
+			Create(context.Background(), repo, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		f.DeferDelete(created)
+
+		By("Waiting for the repository to become Stalled")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypeStalled,
+			framework.LongTimeout,
+			created,
+		)
+
+		By("Reconciling must be absent while Stalled")
+		util.UntilConditionAbsent(
+			apiv1alpha1.ConditionTypeReconciling,
+			framework.LongTimeout,
+			created,
+		)
+
+		By("Fixing the url")
+		Eventually(func(g Gomega) {
+			current, err := f.OperatorClient().HelmV1alpha1().
+				HelmClusterAddonRepositories().
+				Get(context.Background(), repoName, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+
+			current.Spec.URL = "https://stefanprodan.github.io/podinfo"
+
+			_, err = f.OperatorClient().HelmV1alpha1().
+				HelmClusterAddonRepositories().
+				Update(context.Background(), current, metav1.UpdateOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
+		By("Waiting for the repository to recover")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypeReady,
+			framework.LongTimeout,
+			created,
+		)
+		util.UntilConditionAbsent(
+			apiv1alpha1.ConditionTypeStalled,
+			framework.LongTimeout,
+			created,
+		)
 	})
 })
