@@ -53,6 +53,22 @@ func readyStatus(generation int64) helmv1alpha1.HelmClusterAddonRepositoryStatus
 	}
 }
 
+// stalledStatus builds a status like readyStatus, plus a Stalled=True condition
+// recorded for staleGeneration — used to test that a generation bump voids a
+// carried-forward Stalled reason that described the previous spec.
+func stalledStatus(generation, staleGeneration int64, reason string) helmv1alpha1.HelmClusterAddonRepositoryStatus {
+	status := readyStatus(generation)
+	status.Conditions = append(status.Conditions, metav1.Condition{
+		Type:               helmv1alpha1.ConditionTypeStalled,
+		Status:             metav1.ConditionTrue,
+		Reason:             reason,
+		ObservedGeneration: staleGeneration,
+		LastTransitionTime: metav1.NewTime(testNow.Add(-time.Hour)),
+	})
+
+	return status
+}
+
 func conditionOf(t *testing.T, status helmv1alpha1.HelmClusterAddonRepositoryStatus, conditionType string) *metav1.Condition {
 	t.Helper()
 
@@ -227,6 +243,17 @@ func TestEvaluateConditions(t *testing.T) {
 			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
 			wantSynced: metav1.ConditionTrue,
 		},
+		{
+			name: "generation bump voids a stale stalled reason when no attempt runs",
+			in: Inputs{
+				Generation: 2, Now: testNow,
+				Current:    stalledStatus(1, 1, helmv1alpha1.ReasonAuthenticationFailed),
+				SecretsErr: writeErr,
+			},
+			wantReady: metav1.ConditionFalse, wantReadyReason: helmv1alpha1.ReasonAuxiliaryResourcesFailed,
+			wantSynced:      metav1.ConditionTrue,
+			wantReconciling: helmv1alpha1.ReasonProgressingWithRetry,
+		},
 	}
 
 	for _, tc := range cases {
@@ -278,6 +305,84 @@ func TestEvaluateConditions(t *testing.T) {
 			}
 			if !healthy && abnormal != 1 {
 				t.Fatalf("unhealthy repository must carry exactly one abnormal-true condition, got %d", abnormal)
+			}
+		})
+	}
+}
+
+// TestEvaluateDecisionErr pins the filter behind Decision.Err: only failures that
+// belong on the controller-runtime work queue reach it (auxiliary resources,
+// the internal repository object, the chart catalog write). Repository-read
+// failures (Fetch, ConfigErr) are deliberately excluded — their retry is
+// scheduled through nextSyncTime instead, and routing them into the work queue
+// as well would double-schedule the retry.
+func TestEvaluateDecisionErr(t *testing.T) {
+	secretsErr := errors.New("failed to reconcile secret")
+	internalErr := errors.New("failed to reconcile internal repository object")
+	catalogWriteErr := errors.New("etcdserver: request timed out")
+	fetchErr := errors.New("connection refused")
+
+	cases := []struct {
+		name    string
+		in      Inputs
+		wantErr error
+	}{
+		{
+			name: "auxiliary resource failure reaches Decision.Err",
+			in: Inputs{
+				Generation: 1, Now: testNow, Current: readyStatus(1),
+				SecretsErr: secretsErr,
+			},
+			wantErr: secretsErr,
+		},
+		{
+			name: "internal repository reconcile failure reaches Decision.Err",
+			in: Inputs{
+				Generation: 1, Now: testNow, Current: readyStatus(1),
+				InternalRepositoryErr: internalErr,
+			},
+			wantErr: internalErr,
+		},
+		{
+			name: "chart catalog write failure reaches Decision.Err",
+			in: Inputs{
+				Generation: 1, Now: testNow, Current: readyStatus(1),
+				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				Attempted:          true,
+				Fetch:              &services.FetchOutcome{},
+				Catalog:            &services.CatalogOutcome{Err: catalogWriteErr},
+			},
+			wantErr: catalogWriteErr,
+		},
+		{
+			name: "repository read failure never reaches Decision.Err",
+			in: Inputs{
+				Generation: 1, Now: testNow, Current: readyStatus(1),
+				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				Attempted:          true,
+				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "configuration failure never reaches Decision.Err",
+			in: Inputs{
+				Generation: 1, Now: testNow, Current: readyStatus(1),
+				ConfigErr: &services.ConfigOutcome{
+					Reason:  helmv1alpha1.ReasonUnsupportedRepositoryType,
+					Message: "unsupported repository schema in use: ftp",
+				},
+			},
+			wantErr: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Evaluate(tc.in)
+
+			if got.Err != tc.wantErr {
+				t.Fatalf("Decision.Err is %v, want %v", got.Err, tc.wantErr)
 			}
 		})
 	}

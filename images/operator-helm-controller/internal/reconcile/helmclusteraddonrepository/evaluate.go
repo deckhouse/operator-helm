@@ -176,9 +176,11 @@ func evaluateStalled(
 		return abnormalCondition{set: true, reason: internal.Reason, message: internal.Message}
 	case !in.Attempted:
 		// A pass without an attempt carries the previous verdict forward so the
-		// specific reason is not replaced by a generic one.
+		// specific reason is not replaced by a generic one. Only carry it forward
+		// when it was set for the current generation: a generation bump voids
+		// evidence about the previous spec, mirroring hasEvidence.
 		if cond := apimeta.FindStatusCondition(in.Current.Conditions, helmv1alpha1.ConditionTypeStalled); cond != nil &&
-			cond.Status == metav1.ConditionTrue {
+			cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == in.Generation {
 			return abnormalCondition{set: true, reason: cond.Reason, message: cond.Message}
 		}
 
