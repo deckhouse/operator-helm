@@ -69,6 +69,66 @@ func stalledStatus(generation, staleGeneration int64, reason string) helmv1alpha
 	return status
 }
 
+// syncedNotReadyStatus builds the status left behind by the pass on which the
+// first fetch succeeded while the internal repository was still unhealthy:
+// Synced records the successful read, but Ready was written False by the
+// higher-priority internal-repository rule, so Ready alone carries no evidence.
+func syncedNotReadyStatus(generation int64) helmv1alpha1.HelmClusterAddonRepositoryStatus {
+	return helmv1alpha1.HelmClusterAddonRepositoryStatus{
+		ObservedGeneration: generation,
+		Conditions: []metav1.Condition{
+			{
+				Type:               helmv1alpha1.ConditionTypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             "FetchFailed",
+				Message:            "failed to fetch index",
+				ObservedGeneration: generation,
+				LastTransitionTime: metav1.NewTime(testNow.Add(-time.Minute)),
+			},
+			{
+				Type:               helmv1alpha1.ConditionTypeSynced,
+				Status:             metav1.ConditionTrue,
+				Reason:             helmv1alpha1.ReasonSuccess,
+				ObservedGeneration: generation,
+				LastTransitionTime: metav1.NewTime(testNow.Add(-time.Minute)),
+			},
+			{
+				Type:               helmv1alpha1.ConditionTypeReconciling,
+				Status:             metav1.ConditionTrue,
+				Reason:             helmv1alpha1.ReasonReconciling,
+				Message:            "failed to fetch index",
+				ObservedGeneration: generation,
+				LastTransitionTime: metav1.NewTime(testNow.Add(-time.Minute)),
+			},
+		},
+	}
+}
+
+// catalogFailedStatus builds the status left behind by a pass whose fetch
+// succeeded and whose catalog write failed: Ready stays latched True, Synced is
+// False with CatalogUpdateFailed and Reconciling carries the retry.
+func catalogFailedStatus(generation int64) helmv1alpha1.HelmClusterAddonRepositoryStatus {
+	status := readyStatus(generation)
+	apimeta.SetStatusCondition(&status.Conditions, metav1.Condition{
+		Type:               helmv1alpha1.ConditionTypeSynced,
+		Status:             metav1.ConditionFalse,
+		Reason:             helmv1alpha1.ReasonCatalogUpdateFailed,
+		Message:            "Failed to update the chart catalog: etcdserver: request timed out",
+		ObservedGeneration: generation,
+		LastTransitionTime: metav1.NewTime(testNow.Add(-time.Minute)),
+	})
+	apimeta.SetStatusCondition(&status.Conditions, metav1.Condition{
+		Type:               helmv1alpha1.ConditionTypeReconciling,
+		Status:             metav1.ConditionTrue,
+		Reason:             helmv1alpha1.ReasonProgressingWithRetry,
+		Message:            "Retrying after a chart catalog update failure",
+		ObservedGeneration: generation,
+		LastTransitionTime: metav1.NewTime(testNow.Add(-time.Minute)),
+	})
+
+	return status
+}
+
 func conditionOf(t *testing.T, status helmv1alpha1.HelmClusterAddonRepositoryStatus, conditionType string) *metav1.Condition {
 	t.Helper()
 
@@ -242,6 +302,34 @@ func TestEvaluateConditions(t *testing.T) {
 			},
 			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
 			wantSynced: metav1.ConditionTrue,
+		},
+		{
+			// The fetch succeeded on an earlier pass, but the internal repository
+			// was unhealthy then, so the higher-priority rule owned Ready and wrote
+			// it False. Ready alone therefore carries no evidence; Synced=True on
+			// this generation does, and must keep the repository from falling back
+			// to Unknown/AwaitingInitialSync until the next scheduled sync.
+			name: "synced carries the evidence when Ready was owned by another rule",
+			in: Inputs{
+				Generation: 1, Now: testNow, Current: syncedNotReadyStatus(1),
+				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+			},
+			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
+			wantSynced: metav1.ConditionTrue,
+		},
+		{
+			// The work-queue retry after a catalog write failure runs a pass with no
+			// attempt. Without a carry-forward the repository would show Ready=True,
+			// Synced=False and no abnormal-true condition at all — Current to
+			// kstatus — and ConsecutiveFetchFailures never escalates it to Stalled.
+			name: "catalog write failure keeps Reconciling on a pass with no attempt",
+			in: Inputs{
+				Generation: 1, Now: testNow, Current: catalogFailedStatus(1),
+				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+			},
+			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
+			wantSynced:      metav1.ConditionFalse,
+			wantReconciling: helmv1alpha1.ReasonProgressingWithRetry,
 		},
 		{
 			name: "generation bump voids a stale stalled reason when no attempt runs",

@@ -242,6 +242,19 @@ func evaluateReconciling(
 			reason:  helmv1alpha1.ReasonProgressingWithRetry,
 			message: "Retrying after a chart catalog update failure",
 		}
+	case !in.Attempted && carriesCatalogFailure(in):
+		// The catalog write failure is handed to the work queue, whose immediate
+		// retry runs a pass with no attempt, so the case above cannot see it. Carry
+		// the retry forward the way evaluateStalled carries its verdict: without it
+		// the object would show Ready=True, Synced=False and no abnormal-true
+		// condition at all, which kstatus reads as healthy, and the fetch-failure
+		// counter — which deliberately ignores catalog failures — would never
+		// escalate it to Stalled either.
+		return abnormalCondition{
+			set:     true,
+			reason:  helmv1alpha1.ReasonProgressingWithRetry,
+			message: "Retrying after a chart catalog update failure",
+		}
 	case failures > 0:
 		return abnormalCondition{
 			set:     true,
@@ -259,12 +272,35 @@ func evaluateReconciling(
 	}
 }
 
-// hasEvidence reports whether the repository is already proven usable on the
-// current generation: the previous verdict was True and was made for this spec.
-func hasEvidence(current helmv1alpha1.HelmClusterAddonRepositoryStatus, generation int64) bool {
-	cond := apimeta.FindStatusCondition(current.Conditions, helmv1alpha1.ConditionTypeReady)
+// carriesCatalogFailure reports whether the current status still records an
+// unresolved chart catalog write failure. Only a record made for the current
+// generation counts: a generation bump voids evidence about the previous spec,
+// mirroring hasEvidence and the carry-forward in evaluateStalled.
+func carriesCatalogFailure(in Inputs) bool {
+	cond := apimeta.FindStatusCondition(in.Current.Conditions, helmv1alpha1.ConditionTypeSynced)
 
-	return cond != nil && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == generation
+	return cond != nil && cond.Status == metav1.ConditionFalse &&
+		cond.Reason == helmv1alpha1.ReasonCatalogUpdateFailed &&
+		cond.ObservedGeneration == in.Generation
+}
+
+// hasEvidence reports whether the repository is already proven usable on the
+// current generation: a fetch succeeded for this spec.
+func hasEvidence(current helmv1alpha1.HelmClusterAddonRepositoryStatus, generation int64) bool {
+	// Evidence is "a fetch succeeded on this spec". Ready alone cannot carry it:
+	// a higher-priority rule (an unhealthy internal repository, a failed secret)
+	// owns Ready on the very pass where the fetch succeeded, overwriting it.
+	// Synced is written only on a pass that attempted, and is True only when the
+	// fetch and the catalog write both succeeded, so Synced=True on the current
+	// generation means exactly that.
+	for _, conditionType := range []string{helmv1alpha1.ConditionTypeReady, helmv1alpha1.ConditionTypeSynced} {
+		if cond := apimeta.FindStatusCondition(current.Conditions, conditionType); cond != nil &&
+			cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == generation {
+			return true
+		}
+	}
+
+	return false
 }
 
 func setCondition(

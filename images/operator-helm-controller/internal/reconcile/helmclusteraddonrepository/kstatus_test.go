@@ -93,6 +93,18 @@ func TestKstatusVerdicts(t *testing.T) {
 			want: status.FailedStatus,
 		},
 		{
+			// The work-queue retry after a catalog write failure runs a pass with no
+			// attempt. Without the carry-forward in evaluateReconciling the object
+			// would carry no abnormal-true condition and kstatus would call a
+			// permanently broken catalog write Current.
+			name: "catalog write failure stays in progress between attempts",
+			in: Inputs{
+				Generation: 1, Now: testNow, Current: catalogFailedStatus(1),
+				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+			},
+			want: status.InProgressStatus,
+		},
+		{
 			name: "stalled is not masked by a lagging observedGeneration",
 			in: Inputs{
 				Generation: 3, Now: testNow, Current: readyStatus(1),
