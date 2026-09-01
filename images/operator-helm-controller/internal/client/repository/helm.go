@@ -26,6 +26,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/Masterminds/semver/v3"
 )
@@ -88,8 +89,8 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 			return false, nil
 		}
 
-		if resp.StatusCode >= 400 {
-			return true, fmt.Errorf("fatal client error: received status %d", resp.StatusCode)
+		if terminal := TerminalFromStatusCode(resp.StatusCode, url); terminal != nil {
+			return true, terminal
 		}
 
 		if err := yaml.NewDecoder(resp.Body).Decode(&indexFile); err != nil {
@@ -114,7 +115,13 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 
 			semVersion, err := semver.NewVersion(chartVersion.Version)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse chart %q version %q: %w", chartName, chartVersion.Version, err)
+				// A single malformed entry must not cost the whole catalog: the OCI
+				// client already skips such tags, and the repository owner may publish
+				// non-semver artifacts we simply cannot address.
+				log.FromContext(ctx).V(1).Info("Skipping chart version that is not valid semver",
+					"chart", chartName, "version", chartVersion.Version)
+
+				continue
 			}
 
 			chart.Versions = append(chart.Versions, ChartVersion{Version: semVersion, IconURL: chartVersion.Icon})
