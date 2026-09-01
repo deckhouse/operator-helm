@@ -332,6 +332,14 @@ func (in *HelmClusterAddonRepositoryStatus) DeepCopyInto(out *HelmClusterAddonRe
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.LastSuccessfulSyncTime != nil {
+		in, out := &in.LastSuccessfulSyncTime, &out.LastSuccessfulSyncTime
+		*out = (*in).DeepCopy()
+	}
+	if in.NextSyncTime != nil {
+		in, out := &in.NextSyncTime, &out.NextSyncTime
+		*out = (*in).DeepCopy()
+	}
 	return
 }
 
