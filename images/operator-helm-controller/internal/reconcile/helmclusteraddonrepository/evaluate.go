@@ -17,6 +17,7 @@ limitations under the License.
 package helmclusteraddonrepository
 
 import (
+	"math/rand/v2"
 	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -107,9 +108,27 @@ func Evaluate(in Inputs) Decision {
 
 	status.ConsecutiveFetchFailures = failures
 
+	if in.Attempted {
+		if fetchSucceeded && !catalogFailed {
+			status.LastSuccessfulSyncTime = &metav1.Time{Time: in.Now}
+		}
+
+		next := in.Now.Add(withJitter(syncDelay(failures), in.Jitter))
+		status.NextSyncTime = &metav1.Time{Time: next}
+	}
+
+	requeueAfter := time.Duration(0)
+	if in.ConfigErr == nil && status.NextSyncTime != nil {
+		requeueAfter = status.NextSyncTime.Sub(in.Now)
+		if requeueAfter < minRequeue {
+			requeueAfter = minRequeue
+		}
+	}
+
 	return Decision{
-		Status: status,
-		Err:    firstErr(in.SecretsErr, in.InternalRepositoryErr, catalogErr(in)),
+		Status:       status,
+		RequeueAfter: requeueAfter,
+		Err:          firstErr(in.SecretsErr, in.InternalRepositoryErr, catalogErr(in)),
 	}
 }
 
@@ -298,10 +317,71 @@ func catalogErr(in Inputs) error {
 	return in.Catalog.Err
 }
 
-// MaxFetchFailures is the number of consecutive read failures after which the
-// repository is reported as Stalled. Reaching it does not stop the retries:
-// the cause may disappear on the remote side.
-const MaxFetchFailures = 5
+const (
+	// SyncInterval is the normal catalog synchronization cadence and the base of
+	// the retry backoff, so a broken repository is never polled more often than a
+	// healthy one.
+	SyncInterval = 5 * time.Minute
+	// MaxSyncBackoff caps the retry delay.
+	MaxSyncBackoff = 1 * time.Hour
+	// MaxFetchFailures is the number of consecutive read failures after which the
+	// repository is reported as Stalled. Reaching it does not stop the retries:
+	// the cause may disappear on the remote side. Moved here from task 4's
+	// standalone declaration — the value does not change.
+	MaxFetchFailures = 5
+	// SyncBackoffJitter spreads the schedule of repositories that share a remote.
+	SyncBackoffJitter = 0.1
+	// minRequeue keeps a due schedule from being reported as "no requeue",
+	// which is what a zero RequeueAfter means to controller-runtime.
+	minRequeue = time.Second
+)
+
+// ShouldAttempt reports whether a synchronization attempt is due. The caller
+// additionally requires the auxiliary resources to be in place.
+func ShouldAttempt(
+	current helmv1alpha1.HelmClusterAddonRepositoryStatus,
+	generation int64,
+	now time.Time,
+	forced bool,
+) bool {
+	switch {
+	case forced:
+		return true
+	case generation != current.ObservedGeneration:
+		return true
+	case current.NextSyncTime == nil:
+		return true
+	default:
+		return !now.Before(current.NextSyncTime.Time)
+	}
+}
+
+// NewJitter returns the random factor Evaluate applies to the computed delay.
+// It lives outside Evaluate to keep that function deterministic.
+func NewJitter() float64 {
+	return (rand.Float64()*2 - 1) * SyncBackoffJitter
+}
+
+func syncDelay(failures int32) time.Duration {
+	if failures <= 0 {
+		return SyncInterval
+	}
+
+	delay := SyncInterval << (failures - 1)
+	if delay > MaxSyncBackoff || delay <= 0 {
+		return MaxSyncBackoff
+	}
+
+	return delay
+}
+
+func withJitter(delay time.Duration, jitter float64) time.Duration {
+	if jitter == 0 {
+		return delay
+	}
+
+	return delay + time.Duration(float64(delay)*jitter)
+}
 
 func nextFailureCount(failures int32, attempted, fetchFailed bool, fetch *services.FetchOutcome) int32 {
 	if !attempted {
