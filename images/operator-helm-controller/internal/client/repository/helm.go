@@ -69,6 +69,13 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
+	// lastErr keeps the cause of the most recent retriable failure. The backoff
+	// helper reports only its own timeout once the steps are exhausted, and a
+	// transient read failure — 5xx, DNS, connection refused, TLS — is the most
+	// common one there is: without this the operator would surface "timed out
+	// waiting for the condition" as the whole diagnostic.
+	var lastErr error
+
 	err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (done bool, err error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
@@ -81,11 +88,15 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
+			lastErr = err
+
 			return false, nil
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("repository %s is unavailable (HTTP %d)", url, resp.StatusCode)
+
 			return false, nil
 		}
 
@@ -100,6 +111,14 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 		return true, nil
 	})
 	if err != nil {
+		if lastErr != nil && wait.Interrupted(err) {
+			// The loop ran out of steps or the context ended with every attempt
+			// failing retriably, so err is the bare timeout. Report the cause
+			// instead. A terminal error never reaches here: it stops the loop as
+			// the callback's own error and stays reachable through errors.As.
+			return nil, fmt.Errorf("helm repository index.yaml request failed: %w", lastErr)
+		}
+
 		return nil, fmt.Errorf("helm repository index.yaml request failed: %w", err)
 	}
 

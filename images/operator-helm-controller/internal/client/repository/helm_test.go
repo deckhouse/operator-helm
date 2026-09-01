@@ -20,6 +20,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -81,6 +82,11 @@ func TestFetchChartsServerErrorIsNotTerminal(t *testing.T) {
 	}
 	if _, ok := AsTerminal(err); ok {
 		t.Fatalf("5xx must stay retriable, got terminal error: %v", err)
+	}
+	// The exhausted backoff must report what actually went wrong rather than the
+	// bare "timed out waiting for the condition" the wait helper returns.
+	if !strings.Contains(err.Error(), "500") {
+		t.Fatalf("expected the status code in the reported cause, got %v", err)
 	}
 }
 
