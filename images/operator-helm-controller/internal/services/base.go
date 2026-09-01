@@ -64,6 +64,21 @@ type BaseRepoService struct {
 	TargetNamespace string
 }
 
+// EnsureSecrets reconciles every auxiliary secret the repository needs, for both
+// repository types. Its success is the gate for attempting a catalog
+// synchronization: without credentials there is nothing to try.
+func (s *BaseRepoService) EnsureSecrets(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+	if err := s.reconcileAuthSecret(ctx, repo); err != nil {
+		return fmt.Errorf("reconciling auth secret: %w", err)
+	}
+
+	if err := s.reconcileTLSSecret(ctx, repo); err != nil {
+		return fmt.Errorf("reconciling tls secret: %w", err)
+	}
+
+	return nil
+}
+
 func (s *BaseRepoService) reconcileAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
 	secretName := utils.GetInternalRepositoryAuthSecretName(repo.Name)
 
