@@ -61,4 +61,9 @@ weight: 10
 переводится в `Stalled` с причиной `RetriesExceeded`. Повторы при этом
 продолжаются, потому что причина может уйти на стороне репозитория. Расписание
 видно в `status.nextSyncTime` и через
-`kubectl get helmclusteraddonrepository -o wide`.
+`kubectl get helmclusteraddonrepository -o wide`. `kubectl get
+helmclusteraddonrepository` по умолчанию показывает колонки `Last Sync` и
+`Age`, а `-o wide` добавляет `Next Sync` и сообщение из `Ready`. Те же
+значения лежат в самом статусе — `lastSuccessfulSyncTime` и `nextSyncTime`, —
+рядом с `consecutiveFetchFailures`, который считает подряд идущие неудачные
+чтения, определяющие задержку повтора.

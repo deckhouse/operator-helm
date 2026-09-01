@@ -33,7 +33,7 @@ The following custom resources are used to manage Helm charts in the module:
 
 See [usage examples](example.html) for practical scenarios.
 
-## Repository status
+## Repository Status
 
 `HelmClusterAddonRepository` reports four conditions.
 
@@ -61,4 +61,9 @@ Synchronization runs every 5 minutes. After a failed read the delay doubles —
 with reason `RetriesExceeded` once the delay reaches the cap. Retries continue
 at that cadence, because the cause may disappear on the repository side. The
 schedule is visible in `status.nextSyncTime` and with
-`kubectl get helmclusteraddonrepository -o wide`.
+`kubectl get helmclusteraddonrepository -o wide`. `kubectl get
+helmclusteraddonrepository` shows the `Last Sync` and `Age` columns by
+default, and `-o wide` adds `Next Sync` and the `Ready` message. The same
+values are in the status itself as `lastSuccessfulSyncTime` and
+`nextSyncTime`, alongside `consecutiveFetchFailures`, which counts the
+consecutive failed reads driving the backoff.
