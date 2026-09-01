@@ -24,6 +24,7 @@ import (
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -124,6 +125,62 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo
 	}
 
 	return HelmRepoResult{Status: status.Unknown(repo, helmv1alpha1.ReasonReconciling)}
+}
+
+// EnsureInternalRepositoryState reconciles the internal HelmRepository and
+// reports its observed state. The returned error is an API failure that the
+// caller must surface to the work queue; an unhealthy internal object is not an
+// error and is reported through the state instead.
+func (s *HelmRepoService) EnsureInternalRepositoryState(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+) (InternalRepositoryState, error) {
+	logger := log.FromContext(ctx)
+
+	existing := &sourcev1.HelmRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalHelmRepositoryName(repo.Name),
+			Namespace: s.TargetNamespace,
+		},
+	}
+
+	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
+		applyHelmRepositorySpec(repo, existing)
+
+		return nil
+	})
+	if err != nil {
+		return InternalRepositoryState{Present: true}, fmt.Errorf("creating helm repository: %w", err)
+	}
+
+	if op != controllerutil.OperationResultNone {
+		logger.Info("Reconciled helm repository", "operation", op)
+	}
+
+	state := InternalRepositoryState{Present: true}
+
+	if stalled := apimeta.FindStatusCondition(existing.Status.Conditions, helmv1alpha1.ConditionTypeStalled); stalled != nil &&
+		stalled.Status == metav1.ConditionTrue {
+		state.Stalled = true
+		state.Reason = stalled.Reason
+		state.Message = stalled.Message
+
+		return state, nil
+	}
+
+	cond, observed := status.IsConditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation)
+	if !observed {
+		state.Reason = helmv1alpha1.ReasonReconciling
+		state.Message = "Waiting for the internal repository to be reconciled"
+
+		return state, nil
+	}
+
+	state.Ready = cond.Status == metav1.ConditionTrue
+	state.Reason = cond.Reason
+	state.Message = cond.Message
+
+	return state, nil
 }
 
 func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, repoName string) error {
