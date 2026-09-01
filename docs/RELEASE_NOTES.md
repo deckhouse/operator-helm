@@ -3,22 +3,6 @@ title: "Release Notes"
 description: "Release notes for Deckhouse operator-helm."
 ---
 
-## Unreleased
-
-### Breaking Changes
-
-* `HelmClusterAddonRepository` condition `Ready` changed its meaning. It now reports whether the repository is usable as a whole — auxiliary resources, the internal source object and a confirmed catalog read on the current spec — instead of only the readiness of the internal source object. Alerting and dashboards that treat `Ready` as "the internal source object is ready" must be reviewed.
-
-### New Features
-
-* `HelmClusterAddonRepository` reports `Reconciling` and `Stalled` conditions following the kstatus convention. They are present only while applicable.
-* `HelmClusterAddonRepository` status carries `lastSuccessfulSyncTime`, `nextSyncTime` and `consecutiveFetchFailures`, and `kubectl get` shows `Last Sync`, `Age` and, with `-o wide`, `Next Sync` and the `Ready` message.
-* Repository reads that fail are retried with an exponential backoff — 5m, 10m, 20m, 40m, up to one hour — instead of a fixed 5 minute interval.
-
-### Bug Fixes
-
-* A single chart version that is not valid semver no longer fails the whole repository synchronization; the version is skipped.
-
 ## v0.1.0
 
 ### New Features
