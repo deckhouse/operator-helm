@@ -153,10 +153,16 @@ func (r *Reconciler) finish(
 ) (reconcile.Result, error) {
 	decision := Evaluate(in)
 
+	if in.Fetch != nil && in.Fetch.Err != nil {
+		// A repository read failure is not returned to the work queue — its retry
+		// is carried by nextSyncTime — so this is the only place it is logged.
+		log.FromContext(ctx).Error(in.Fetch.Err, in.Fetch.Message, "repository", repo.Name)
+	}
+
 	if err := r.statusManager.PatchStatus(ctx, repo, func() {
 		repo.Status = decision.Status
 	}); client.IgnoreNotFound(err) != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
+		return reconcile.Result{}, err
 	}
 
 	if attempted {
@@ -182,7 +188,19 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 	}
 
 	switch repoType {
-	case utils.InternalHelmRepository:
+	case utils.InternalOCIRepository:
+		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
+			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
+			return reconcile.Result{}, err
+		}
+	default:
+		// The helm path is the default rather than a case of its own because an
+		// unknown repository type is a state a real repository can reach: the url
+		// validation regex on the CRD is looser than url.Parse, so a repository
+		// whose internal objects already exist can be edited to a url that no
+		// longer parses and then deleted. Cleaning up the helm way is safe for
+		// either type — it removes both auxiliary secrets and tolerates a missing
+		// internal repository — and leaving it out would orphan them.
 		helmRepo, err := r.helmRepositoryService.CleanupHelmRepository(ctx, repo.Name)
 		if err != nil && !apierrors.IsNotFound(err) {
 			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
@@ -190,11 +208,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 		}
 		if helmRepo != nil {
 			return r.awaitInternalResourceDeletion(ctx, repo, "internal repository", helmRepo)
-		}
-	case utils.InternalOCIRepository:
-		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
-			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
-			return reconcile.Result{}, err
 		}
 	}
 

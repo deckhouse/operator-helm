@@ -23,6 +23,8 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -140,6 +142,9 @@ func TestReconcileOCIRepositoryBecomesReady(t *testing.T) {
 	if apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeReconciling) != nil {
 		t.Fatal("Reconciling must be absent on a healthy repository")
 	}
+	if apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeStalled) != nil {
+		t.Fatal("Stalled must be absent on a healthy repository")
+	}
 	if updated.Status.LastSuccessfulSyncTime == nil || updated.Status.NextSyncTime == nil {
 		t.Fatal("sync timestamps must be recorded")
 	}
@@ -197,6 +202,9 @@ func TestReconcileTerminalFetchFailureStalls(t *testing.T) {
 	if stalled == nil || stalled.Reason != helmv1alpha1.ReasonAuthenticationFailed {
 		t.Fatalf("expected Stalled=AuthenticationFailed, got %v", stalled)
 	}
+	if !apimeta.IsStatusConditionFalse(updated.Status.Conditions, helmv1alpha1.ConditionTypeReady) {
+		t.Fatalf("Ready must be False while Stalled, conditions: %v", updated.Status.Conditions)
+	}
 	if apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeReconciling) != nil {
 		t.Fatal("Reconciling and Stalled must be mutually exclusive")
 	}
@@ -204,5 +212,53 @@ func TestReconcileTerminalFetchFailureStalls(t *testing.T) {
 	// the live object rather than with the fixture.
 	if updated.Status.ObservedGeneration != updated.Generation {
 		t.Fatalf("observedGeneration is %d, want %d", updated.Status.ObservedGeneration, updated.Generation)
+	}
+}
+
+// TestReconcileDeleteCleansUpWhenURLNoLongerParses covers a repository whose url
+// satisfies the CRD's validation regex but is rejected by url.Parse, so the
+// repository type cannot be determined. Its internal objects were created while
+// the url still parsed, so the deletion path must still remove them.
+func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
+	now := metav1.Now()
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "example",
+			Generation:        1,
+			Finalizers:        []string{helmv1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		// Passes the CRD rule ^(https?|oci)://.+$ and fails url.Parse.
+		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://exa mple.invalid/charts"},
+	}
+
+	if _, err := utils.GetRepositoryType(repo.Spec.URL); err == nil {
+		t.Fatal("the fixture url must be unparsable, otherwise the test proves nothing")
+	}
+
+	internalRepo := &sourcev1.HelmRepository{ObjectMeta: metav1.ObjectMeta{
+		Name:      utils.GetInternalHelmRepositoryName(repo.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}}
+	authSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:      utils.GetInternalRepositoryAuthSecretName(repo.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}}
+	tlsSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:      utils.GetInternalRepositoryTLSSecretName(repo.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}}
+
+	r, c := newReconciler(t, stubRepoClient{}, repo, internalRepo, authSecret, tlsSecret)
+
+	// The first pass deletes the internal objects and waits for the internal
+	// repository to disappear; the second removes the finalizer.
+	reconcileUntilStable(t, r, repo.Name)
+
+	for _, obj := range []client.Object{internalRepo, authSecret, tlsSecret} {
+		key := client.ObjectKeyFromObject(obj)
+		if err := c.Get(context.Background(), key, obj.DeepCopyObject().(client.Object)); !apierrors.IsNotFound(err) {
+			t.Fatalf("%s must be deleted, got %v", key, err)
+		}
 	}
 }

@@ -381,7 +381,7 @@ func TestEvaluateDecisionErr(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := Evaluate(tc.in)
 
-			if got.Err != tc.wantErr {
+			if !errors.Is(got.Err, tc.wantErr) {
 				t.Fatalf("Decision.Err is %v, want %v", got.Err, tc.wantErr)
 			}
 		})
