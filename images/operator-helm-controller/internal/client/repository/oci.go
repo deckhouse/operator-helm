@@ -27,6 +27,9 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 var OCIRepositoryDefaultClient ClientInterface = &ociRepositoryClient{}
@@ -38,19 +41,29 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 	url = strings.TrimSuffix(url, "/")
 
 	if !strings.Contains(url, "/") {
-		return nil, errors.New("url must contain chart/image name")
+		return nil, &TerminalError{
+			Reason:  helmv1alpha1.ReasonInvalidRepositoryURL,
+			Message: "repository url must contain the chart image name",
+		}
 	}
 
 	urlParts := strings.Split(url, "/")
 	chartName := urlParts[len(urlParts)-1]
 
 	if len(chartName) == 0 {
-		return nil, errors.New("failed to parse chart/image name from the url")
+		return nil, &TerminalError{
+			Reason:  helmv1alpha1.ReasonInvalidRepositoryURL,
+			Message: "cannot parse the chart image name from the repository url",
+		}
 	}
 
 	repo, err := name.NewRepository(url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse repository url: %w", err)
+		return nil, &TerminalError{
+			Reason:  helmv1alpha1.ReasonInvalidRepositoryURL,
+			Message: "cannot parse the repository url",
+			Err:     err,
+		}
 	}
 
 	options := []remote.Option{
@@ -77,7 +90,7 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 
 	tags, err := remote.List(repo, options...)
 	if err != nil {
-		return nil, fmt.Errorf("listing image tags: %w", err)
+		return nil, classifyRemoteError(err, url)
 	}
 
 	var chartVersions []ChartVersion
@@ -124,4 +137,20 @@ func isCosignTag(tag string) bool {
 	}
 
 	return false
+}
+
+// classifyRemoteError maps a registry rejection to a terminal error and leaves
+// transport-level failures retriable. The original error is always wrapped so
+// callers keep the full cause.
+func classifyRemoteError(err error, url string) error {
+	var transportErr *transport.Error
+	if errors.As(err, &transportErr) {
+		if terminal := TerminalFromStatusCode(transportErr.StatusCode, url); terminal != nil {
+			terminal.Err = err
+
+			return terminal
+		}
+	}
+
+	return fmt.Errorf("listing image tags: %w", err)
 }
