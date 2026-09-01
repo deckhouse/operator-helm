@@ -200,6 +200,14 @@ var _ = Describe("HelmClusterAddonRepository with an unreachable source", Ordere
 		)
 
 		By("Fixing the url")
+		// The waits below must use the object as it exists AFTER the update:
+		// correcting the url bumps metadata.generation, and UntilConditionStatus
+		// compares the condition's observedGeneration against the generation of
+		// the object handed to it. Reusing `created`, frozen at generation 1 by
+		// the Create call, would compare 2 against 1 on every poll and fail the
+		// spec deterministically even though recovery worked.
+		var recovered *apiv1alpha1.HelmClusterAddonRepository
+
 		Eventually(func(g Gomega) {
 			current, err := f.OperatorClient().HelmV1alpha1().
 				HelmClusterAddonRepositories().
@@ -208,22 +216,24 @@ var _ = Describe("HelmClusterAddonRepository with an unreachable source", Ordere
 
 			current.Spec.URL = "https://stefanprodan.github.io/podinfo"
 
-			_, err = f.OperatorClient().HelmV1alpha1().
+			updated, err := f.OperatorClient().HelmV1alpha1().
 				HelmClusterAddonRepositories().
 				Update(context.Background(), current, metav1.UpdateOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
+
+			recovered = updated
 		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
 		By("Waiting for the repository to recover")
 		util.UntilConditionTrue(
 			apiv1alpha1.ConditionTypeReady,
 			framework.LongTimeout,
-			created,
+			recovered,
 		)
 		util.UntilConditionAbsent(
 			apiv1alpha1.ConditionTypeStalled,
 			framework.LongTimeout,
-			created,
+			recovered,
 		)
 	})
 })
