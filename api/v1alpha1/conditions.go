@@ -26,6 +26,10 @@ const (
 	ConditionTypeSynced               = "Synced"
 	ConditionTypeUninstallFailed      = "UninstallFailed"
 
+	// kstatus abnormal-true conditions. Present only while applicable.
+	ConditionTypeReconciling = "Reconciling"
+	ConditionTypeStalled     = "Stalled"
+
 	ReasonMaintenanceModeActive   = "MaintenanceModeActive"
 	ReasonMaintenanceModeInactive = "MaintenanceModeInactive"
 	ReasonSyncFailed              = "SyncFailed"
@@ -35,6 +39,18 @@ const (
 	ReasonFailed                  = "Failed"
 	ReasonUninstallFailed         = "UninstallFailed"
 	ReasonChartClaimConflict      = "ChartClaimConflict"
+
+	// HelmClusterAddonRepository condition reasons.
+	ReasonAuxiliaryResourcesFailed  = "AuxiliaryResourcesFailed"
+	ReasonCatalogUpdateFailed       = "CatalogUpdateFailed"
+	ReasonAwaitingInitialSync       = "AwaitingInitialSync"
+	ReasonProgressingWithRetry      = "ProgressingWithRetry"
+	ReasonRetriesExceeded           = "RetriesExceeded"
+	ReasonAuthenticationFailed      = "AuthenticationFailed"
+	ReasonSourceNotFound            = "SourceNotFound"
+	ReasonSourceRejectedRequest     = "SourceRejectedRequest"
+	ReasonInvalidRepositoryURL      = "InvalidRepositoryURL"
+	ReasonUnsupportedRepositoryType = "UnsupportedRepositoryType"
 
 	// HelmRelease error reasons
 	ReasonReleaseFailed = "ReleaseFailed"
