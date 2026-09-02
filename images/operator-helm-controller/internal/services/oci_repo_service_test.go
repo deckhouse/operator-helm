@@ -108,3 +108,75 @@ func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
 		t.Fatal("a removed version must be explained in the message")
 	}
 }
+
+// TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion covers the
+// complement of TestEnsureInternalOCIRepositoryReportsRemovedVersion: a version can
+// still carry UnavailableReasonRemovedFromRepository after the tag reappears (the
+// marker is only dropped on the next synchronization), and by then the child
+// OCIRepository may already be healthy again. The override must not fire in that
+// case - a ready addon must not be relabeled with a failure reason.
+//
+// The internal object is seeded with the exact spec and labels applyOCIRepositorySpec
+// writes (same trick as TestEnsureInternalHelmRepositoryStalledPrecedesReady in
+// helm_repo_service_test.go): that makes CreateOrPatch a no-op, so the object's
+// generation stays at 1 and the seeded Ready condition (ObservedGeneration: 1) counts
+// as observed.
+func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version:           "6.7.1",
+		MediaType:         "application/tar+gzip",
+		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
+	}
+
+	internal := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       utils.GetInternalOCIRepositoryName(addon.Name),
+			Namespace:  testNamespace,
+			Generation: 1,
+			Labels: map[string]string{
+				helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
+				helmv1alpha1.HelmClusterAddonLabelSourceName: addon.Name,
+			},
+		},
+		Spec: sourcev1.OCIRepositorySpec{
+			URL:       repo.Spec.URL,
+			Reference: &sourcev1.OCIRepositoryRef{Tag: addon.Spec.Chart.Version},
+			Interval:  metav1.Duration{Duration: InternalRepositoryInterval},
+			LayerSelector: &sourcev1.OCILayerSelector{
+				MediaType: version.MediaType,
+				Operation: "copy",
+			},
+		},
+		Status: sourcev1.OCIRepositoryStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               helmv1alpha1.ConditionTypeReady,
+					Status:             metav1.ConditionTrue,
+					Reason:             "Succeeded",
+					Message:            "stored artifact for revision 6.7.1",
+					ObservedGeneration: 1,
+					LastTransitionTime: metav1.Now(),
+				},
+			},
+		},
+	}
+
+	service, _ := newOCIRepoService(t, addon, repo, internal)
+
+	result := service.EnsureInternalOCIRepository(context.Background(), addon, repo, version)
+
+	if result.Status.Status != metav1.ConditionTrue {
+		t.Fatalf("expected the ready child's status to be mirrored as True, got %v", result.Status.Status)
+	}
+	if result.Status.Reason == helmv1alpha1.ReasonChartVersionRemoved {
+		t.Fatalf("a ready child must not be relabeled with %q", helmv1alpha1.ReasonChartVersionRemoved)
+	}
+	if result.Status.Reason != "Succeeded" {
+		t.Fatalf("reason is %q, want the child's own %q untouched", result.Status.Reason, "Succeeded")
+	}
+	if result.Status.Message != "stored artifact for revision 6.7.1" {
+		t.Fatalf("message is %q, want the child's own message untouched", result.Status.Message)
+	}
+}
