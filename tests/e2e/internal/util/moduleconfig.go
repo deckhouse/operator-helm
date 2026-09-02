@@ -66,6 +66,15 @@ func EnsureModuleConfig(f *framework.Framework) {
 
 	c := framework.GetConfig()
 
+	// An unknown digest fails the run instead of skipping the check. A skipped
+	// verification is indistinguishable from a passing one in the output, which is
+	// exactly how a suite ends up silently exercising whatever an older build left
+	// behind a mutable tag.
+	Expect(c.ModuleDigest).NotTo(BeEmpty(),
+		"E2E_MODULE_DIGEST is not set, so the suite cannot tell which module artifact the cluster will pull. "+
+			"In CI the build job supplies it; locally resolve it with "+
+			"crane digest dev-registry.deckhouse.io/sys/deckhouse-oss/modules/operator-helm:$E2E_MODULE_TAG_NAME")
+
 	moduleSource := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "deckhouse.io/v1alpha1",
@@ -109,26 +118,23 @@ func EnsureModuleConfig(f *framework.Framework) {
 		g.Expect(f.EnsureDynamicWithoutCleanup(context.Background(), modulePullOverrideGVR, "", mpo, true)).To(Succeed())
 	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
-	// When the caller knows which artifact it wants tested — in CI the digest the
-	// build job just pushed — verify the cluster resolved the tag to exactly that.
-	// A tag is mutable, so without this the suite can silently exercise an older
-	// build that happens to still sit behind it.
-	if c.ModuleDigest != "" {
-		By("Verifying the module pull override resolved to digest " + c.ModuleDigest)
+	// Verify the cluster resolved the tag to the artifact under test. The tag is
+	// mutable, so without this the suite can exercise an older build that happens
+	// to still sit behind it.
+	By("Verifying the module pull override resolved to digest " + c.ModuleDigest)
 
-		Eventually(func(g Gomega) {
-			override, err := framework.GetClients().DynamicClient().
-				Resource(modulePullOverrideGVR).
-				Get(context.TODO(), moduleName, metav1.GetOptions{})
-			g.Expect(err).NotTo(HaveOccurred())
+	Eventually(func(g Gomega) {
+		override, err := framework.GetClients().DynamicClient().
+			Resource(modulePullOverrideGVR).
+			Get(context.TODO(), moduleName, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
 
-			digest, found, err := unstructured.NestedString(override.Object, "status", "imageDigest")
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(found).To(BeTrue(), "module pull override has no status.imageDigest yet")
-			g.Expect(digest).To(Equal(c.ModuleDigest),
-				"cluster is running module digest %s, expected %s", digest, c.ModuleDigest)
-		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
-	}
+		digest, found, err := unstructured.NestedString(override.Object, "status", "imageDigest")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue(), "module pull override has no status.imageDigest yet")
+		g.Expect(digest).To(Equal(c.ModuleDigest),
+			"cluster is running module digest %s, expected %s", digest, c.ModuleDigest)
+	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
 	mc := &unstructured.Unstructured{
 		Object: map[string]interface{}{
