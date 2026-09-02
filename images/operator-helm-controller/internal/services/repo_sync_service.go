@@ -354,6 +354,15 @@ func (s *RepoSyncService) inUseVersions(ctx context.Context, repoName, chartName
 // unless an addon still references it: then it is retained with RemovedFromRepository
 // and keeps its media type, without which the addon's internal OCIRepository could not
 // be built at all.
+//
+// The same protection applies to a version that is still listed but whose tag was
+// re-pushed as a non-chart artifact: the fresh verdict carries no media type, but if an
+// addon still references the version, its previously recorded media type is carried
+// forward alongside the fresh UnsupportedMediaType reason and message. Without the old
+// media type the internal OCIRepository could not be built at all, which would block
+// every change to the running addon (values, maintenance mode, ...) rather than just
+// the pull that the new artifact actually breaks; the real pull failure is reported by
+// the source controller instead.
 func mergeChartVersions(
 	fetched []repoclient.ChartVersion,
 	current []helmv1alpha1.HelmClusterAddonChartVersion,
@@ -362,13 +371,27 @@ func mergeChartVersions(
 	merged := make([]helmv1alpha1.HelmClusterAddonChartVersion, 0, len(fetched)+len(current))
 	listed := make(map[string]struct{}, len(fetched))
 
+	currentByVersion := make(map[string]helmv1alpha1.HelmClusterAddonChartVersion, len(current))
+	for _, version := range current {
+		currentByVersion[version.Version] = version
+	}
+
 	for _, version := range fetched {
 		name := version.Version.Original()
 		listed[name] = struct{}{}
 
+		mediaType := version.MediaType
+		if mediaType == "" {
+			if _, referenced := inUse[name]; referenced {
+				if old, recorded := currentByVersion[name]; recorded && old.MediaType != "" {
+					mediaType = old.MediaType
+				}
+			}
+		}
+
 		merged = append(merged, helmv1alpha1.HelmClusterAddonChartVersion{
 			Version:            name,
-			MediaType:          version.MediaType,
+			MediaType:          mediaType,
 			UnavailableReason:  version.UnavailableReason,
 			UnavailableMessage: version.UnavailableMessage,
 		})

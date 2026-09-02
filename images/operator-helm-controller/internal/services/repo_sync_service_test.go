@@ -312,6 +312,73 @@ func TestSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
 	}
 }
 
+// TestSyncRetainsMediaTypeForReferencedUnsupportedVersion covers D4's fourth row: a
+// version whose tag was re-pushed as a non-chart artifact must keep its previously
+// recorded media type as long as an addon still references it, so the addon's internal
+// OCIRepository can still be built and the pull failure surfaces from the source
+// controller instead of the deploy gate. The same version, unreferenced, must not carry
+// the old media type forward: retention is scoped to in-use versions only.
+func TestSyncRetainsMediaTypeForReferencedUnsupportedVersion(t *testing.T) {
+	repo := testRepository()
+	chart := existingChart(repo.Name, "podinfo",
+		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
+	)
+	addon := addonUsing(repo.Name, "podinfo", "6.7.1")
+
+	stub := stubRepoClient{charts: []repoclient.Chart{{
+		Name: "podinfo",
+		Versions: []repoclient.ChartVersion{
+			{
+				Version:            semver.MustParse("6.7.1"),
+				UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+				UnavailableMessage: "layer media type \"application/vnd.oci.image.layer.v1.tar\" is not a helm chart layer",
+			},
+			{
+				Version:            semver.MustParse("6.7.0"),
+				UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+				UnavailableMessage: "layer media type \"application/vnd.oci.image.layer.v1.tar\" is not a helm chart layer",
+			},
+		},
+	}}}
+
+	service, c := newRepoSyncService(t, stub, repo, chart, addon)
+	if outcome := service.Sync(context.Background(), repo, utils.InternalOCIRepository); outcome.Catalog.Err != nil {
+		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
+	}
+
+	status := chartStatus(t, c, repo.Name, "podinfo")
+
+	var sawReferenced, sawUnreferenced bool
+	for _, version := range status.Versions {
+		switch version.Version {
+		case "6.7.1":
+			sawReferenced = true
+			if version.UnavailableReason != helmv1alpha1.UnavailableReasonUnsupportedMediaType {
+				t.Fatalf("referenced version reason is %q, want UnsupportedMediaType", version.UnavailableReason)
+			}
+			if version.MediaType != "application/tar+gzip" {
+				t.Fatalf("referenced version lost its media type: %q", version.MediaType)
+			}
+		case "6.7.0":
+			sawUnreferenced = true
+			if version.MediaType != "" {
+				t.Fatalf("unreferenced version must not carry its old media type forward: %q", version.MediaType)
+			}
+			if version.UnavailableReason != helmv1alpha1.UnavailableReasonUnsupportedMediaType {
+				t.Fatalf("unreferenced version reason is %q, want UnsupportedMediaType", version.UnavailableReason)
+			}
+		}
+	}
+
+	if !sawReferenced {
+		t.Fatal("referenced version 6.7.1 must be present")
+	}
+	if !sawUnreferenced {
+		t.Fatal("unreferenced version 6.7.0 must be present")
+	}
+}
+
 func TestSyncOrdersVersionsBySemverDescending(t *testing.T) {
 	repo := testRepository()
 	stub := stubRepoClient{charts: []repoclient.Chart{{

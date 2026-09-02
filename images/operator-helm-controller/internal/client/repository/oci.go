@@ -121,8 +121,18 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 
 // resolveChartVersions turns the listed tags into one version entry per tag. A tag
 // whose verdict is already recorded is carried through without a request; the rest are
-// examined concurrently. The only error returned is a terminal one: a per-tag failure
-// becomes a ResolvePending entry so the rest of the pass is still published.
+// examined concurrently. A per-tag failure becomes a ResolvePending entry, not a
+// returned error, so the rest of the pass is still published. resolveChartVersions
+// itself returns an error in three cases, none of them a per-tag verdict, and all of
+// them a failure of the whole pass rather than of one tag:
+//   - building the shared puller fails: a transport/auth setup step that happens once
+//     for the repository, not per tag, so its failure cannot be attributed to any tag;
+//   - a per-tag request is rejected with 401/403: credentials rejected for one tag are
+//     rejected for all of them, so resolveChartVersion escalates it to a terminal
+//     error instead of a ResolvePending verdict, and group.Wait propagates it here;
+//   - the parent context is cancelled while tags are still in flight, which would
+//     otherwise make every in-flight remote.Get fail and be misreported as a pass full
+//     of fabricated ResolvePending verdicts instead of the abandoned pass it is.
 func resolveChartVersions(
 	ctx context.Context,
 	repo name.Repository,
