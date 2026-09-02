@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -151,7 +152,7 @@ func (s *RepoSyncService) reconcileCatalog(
 			continue
 		}
 
-		addonChartName := utils.GetHelmClusterAddonChartName(repo.Name, chart.Name)
+		addonChartName := naming.HelmClusterAddonChartName(repo.Name, chart.Name)
 		existing := &helmv1alpha1.HelmClusterAddonChart{
 			ObjectMeta: metav1.ObjectMeta{Name: addonChartName},
 		}

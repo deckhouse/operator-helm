@@ -19,8 +19,14 @@ spec:
                 observedGeneration:
                   description: Поколение ресурса, обработанное контроллером последним.
                 versions:
-                  description: Доступные версии Helm-чарта.
+                  description: Список всех версий Helm-чарта, изученных контроллером. Версия пригодна к использованию, если у неё нет unavailableReason; для OCI-репозитория у пригодной версии также заполнен media type слоя, который её содержит.
                   items:
                     properties:
                       version:
                         description: Версия Helm-чарта.
+                      mediaType:
+                        description: "OCI media type слоя, содержащего эту версию чарта. Заполняется только для версий из OCI-репозитория и только когда слой поддерживается: пустое значение означает, что версию нельзя задеплоить."
+                      unavailableReason:
+                        description: Причина, по которой версию нельзя задеплоить. Отсутствие поля означает, что версия пригодна.
+                      unavailableMessage:
+                        description: Человекочитаемые подробности к unavailableReason.

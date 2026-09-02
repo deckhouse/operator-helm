@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -77,7 +78,7 @@ func TestSyncCreatesChartsAndRecordsVersions(t *testing.T) {
 	}
 
 	chart := &helmv1alpha1.HelmClusterAddonChart{}
-	key := client.ObjectKey{Name: utils.GetHelmClusterAddonChartName(repo.Name, "podinfo")}
+	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
 	if err := c.Get(context.Background(), key, chart); err != nil {
 		t.Fatalf("chart was not created: %v", err)
 	}
@@ -90,7 +91,7 @@ func TestSyncPrunesStaleCharts(t *testing.T) {
 	repo := testRepository()
 	stale := &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   utils.GetHelmClusterAddonChartName(repo.Name, "removed"),
+			Name:   naming.HelmClusterAddonChartName(repo.Name, "removed"),
 			Labels: map[string]string{LabelRepositoryName: repo.Name, LabelChartName: "removed"},
 		},
 	}

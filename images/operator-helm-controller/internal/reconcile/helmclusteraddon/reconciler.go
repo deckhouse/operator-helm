@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
@@ -415,7 +416,7 @@ func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile
 }
 
 func (r *Reconciler) getHelmClusterAddonChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*helmv1alpha1.HelmClusterAddonChart, error) {
-	addonChartName := utils.GetHelmClusterAddonChartName(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName)
+	addonChartName := naming.HelmClusterAddonChartName(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName)
 	addonChart := &helmv1alpha1.HelmClusterAddonChart{}
 
 	err := r.Get(ctx, types.NamespacedName{Name: addonChartName}, addonChart)

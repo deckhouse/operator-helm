@@ -67,28 +67,6 @@ func GetInternalRepositoryTLSSecretName(internalRepoName string) string {
 	return strings.TrimRight(result, "-") + postfix
 }
 
-func GetHelmClusterAddonChartName(repoName, chartName string) string {
-	hash := GetHash(fmt.Sprintf("%s-chart-%s", repoName, chartName))
-
-	var result, postfix string
-
-	if len(repoName) > 20 {
-		result += repoName[:20] + "-chart-"
-		postfix = "-" + hash
-	} else {
-		result += repoName + "-chart-"
-	}
-
-	if len(chartName) > 20 {
-		result += chartName[:20]
-		postfix = "-" + hash
-	} else {
-		result += chartName
-	}
-
-	return strings.TrimRight(result, "-") + postfix
-}
-
 func GetInternalHelmReleaseName(addonName string) string {
 	prefix := "hca"
 	hash := GetHash(fmt.Sprintf("%s-%s", prefix, addonName))
