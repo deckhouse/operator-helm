@@ -175,9 +175,6 @@ func UntilConditionReason(conditionType, expectedReason string, timeout time.Dur
 	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
-// UntilConditionAbsent waits until the specified condition is not present on the
-// objects. Abnormal-true conditions are removed rather than set to False, so
-// absence is the assertion that matters.
 func UntilConditionAbsent(conditionType string, timeout time.Duration, objs ...client.Object) {
 	GinkgoHelper()
 

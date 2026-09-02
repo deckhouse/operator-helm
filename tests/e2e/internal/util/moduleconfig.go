@@ -114,28 +114,6 @@ func EnsureModuleConfig(f *framework.Framework) {
 		},
 	}
 
-	Eventually(func(g Gomega) {
-		g.Expect(f.EnsureDynamicWithoutCleanup(context.Background(), modulePullOverrideGVR, "", mpo, true)).To(Succeed())
-	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
-
-	// Verify the cluster resolved the tag to the artifact under test. The tag is
-	// mutable, so without this the suite can exercise an older build that happens
-	// to still sit behind it.
-	By("Verifying the module pull override resolved to digest " + c.ModuleDigest)
-
-	Eventually(func(g Gomega) {
-		override, err := framework.GetClients().DynamicClient().
-			Resource(modulePullOverrideGVR).
-			Get(context.TODO(), moduleName, metav1.GetOptions{})
-		g.Expect(err).NotTo(HaveOccurred())
-
-		digest, found, err := unstructured.NestedString(override.Object, "status", "imageDigest")
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(found).To(BeTrue(), "module pull override has no status.imageDigest yet")
-		g.Expect(digest).To(Equal(c.ModuleDigest),
-			"cluster is running module digest %s, expected %s", digest, c.ModuleDigest)
-	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
-
 	mc := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "deckhouse.io/v1alpha1",
@@ -152,6 +130,10 @@ func EnsureModuleConfig(f *framework.Framework) {
 
 	Eventually(func(g Gomega) {
 		g.Expect(f.EnsureDynamicWithoutCleanup(context.Background(), moduleConfigGVR, "", mc, true)).To(Succeed())
+	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
+	Eventually(func(g Gomega) {
+		g.Expect(f.EnsureDynamicWithoutCleanup(context.Background(), modulePullOverrideGVR, "", mpo, true)).To(Succeed())
 	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
@@ -194,10 +176,27 @@ func UntilModuleEnabled(deployAt metav1.Time, timeout time.Duration) {
 	UntilConditionStatusWithLastTransitionTime("EnabledByModuleManager", string(metav1.ConditionTrue), deployAt, framework.LongTimeout, module)
 	UntilConditionStatusWithLastTransitionTime("IsReady", string(metav1.ConditionTrue), deployAt, framework.MaxTimeout, module)
 
-	// The webhook configuration and the TLS secret are checked for existence and
-	// mutual consistency, not for freshness: whether enabling the module recreated
-	// them depends on whether the module was already deployed in the cluster, which
-	// is a property of the environment rather than of the code under test.
+	// Only now is the digest meaningful: Deckhouse records which artifact the tag
+	// resolved to when it actually pulls the module, and it pulls it once the
+	// module is enabled. Checked here rather than right after the pull override is
+	// created, where status.imageDigest is still empty.
+	digestCfg := framework.GetConfig()
+
+	By("Verifying the module pull override resolved to digest " + digestCfg.ModuleDigest)
+
+	Eventually(func(g Gomega) {
+		override, err := framework.GetClients().DynamicClient().
+			Resource(modulePullOverrideGVR).
+			Get(context.TODO(), moduleName, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+
+		digest, found, err := unstructured.NestedString(override.Object, "status", "imageDigest")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue(), "module pull override has no status.imageDigest yet")
+		g.Expect(digest).To(Equal(digestCfg.ModuleDigest),
+			"cluster is running module digest %q, expected %q", digest, digestCfg.ModuleDigest)
+	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
 	Eventually(func(g Gomega) {
 		webhook, err := framework.GetClients().KubeClient().AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(context.TODO(), "operator-helm-controller-admission-webhook", metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
