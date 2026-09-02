@@ -138,6 +138,24 @@ func TestChartVersionMediaType(t *testing.T) {
 		}
 	})
 
+	t.Run("a pre-upgrade version with no verdict at all is pending, not values_not_found", func(t *testing.T) {
+		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
+			// Neither MediaType nor UnavailableReason set: the shape a version entry had
+			// before this controller started recording verdicts. The migration path
+			// (client.KnownVersions) treats this exactly like ResolvePending and
+			// re-resolves it on the next normal synchronization.
+			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1"},
+		))
+
+		_, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if done == nil || done.Outcome != OutcomePending {
+			t.Fatalf("outcome is %+v, want pending: an empty verdict is the pre-upgrade migration state and must be retried, not reported as a permanent failure", done)
+		}
+	})
+
 	t.Run("a removed version keeps its media type usable", func(t *testing.T) {
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
 			helmv1alpha1.HelmClusterAddonChartVersion{
