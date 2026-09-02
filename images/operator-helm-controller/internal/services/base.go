@@ -65,6 +65,41 @@ type BaseRepoService struct {
 	TargetNamespace string
 }
 
+// EnsureSecrets reconciles every auxiliary secret the repository needs. Its
+// success is the gate for attempting a catalog synchronization: without
+// credentials there is nothing to try.
+//
+// The auth secret's shape depends on the repository kind and the two are not
+// interchangeable: HelmRepository resolves HTTP basic auth from an Opaque
+// secret, while OCIRepository accepts only a kubernetes.io/dockerconfigjson
+// one. An unknown type is treated as helm, mirroring the deletion path — it is
+// unreachable here anyway, because an unparsable url is reported before any
+// secret is touched.
+func (s *BaseRepoService) EnsureSecrets(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	repoType utils.InternalRepositoryType,
+) error {
+	var err error
+
+	switch repoType {
+	case utils.InternalOCIRepository:
+		err = s.reconcileDockerConfigAuthSecret(ctx, repo)
+	default:
+		err = s.reconcileBasicAuthSecret(ctx, repo)
+	}
+
+	if err != nil {
+		return fmt.Errorf("reconciling auth secret: %w", err)
+	}
+
+	if err := s.reconcileTLSSecret(ctx, repo); err != nil {
+		return fmt.Errorf("reconciling tls secret: %w", err)
+	}
+
+	return nil
+}
+
 // reconcileBasicAuthSecret reconciles the internal auth secret as an Opaque secret
 // holding username/password keys, the shape HelmRepository expects for HTTP basic
 // auth.

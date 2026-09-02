@@ -127,7 +127,7 @@ func isUniquenessBypassed(ctx context.Context) bool {
 func (v *HelmClusterAddonWebhookValidator) checkUniqueness(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
 	owned, err := v.claimService.OwnedBy(ctx, addon)
 	if err != nil {
-		return fmt.Errorf("failed to check if helmclusteraddon/%s owns chart claim: %w", err)
+		return fmt.Errorf("failed to check if helmclusteraddon/%s owns chart claim: %w", addon.Name, err)
 	}
 	if owned {
 		return nil

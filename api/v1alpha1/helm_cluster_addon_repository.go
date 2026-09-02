@@ -28,6 +28,13 @@ const (
 	HelmClusterAddonRepositoryLabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 )
 
+// The "Next Sync" print column below is a string, not a date, on purpose: a date
+// column prints how long ago its value was, and kubectl renders any instant more
+// than a second in the future as <invalid>. nextSyncTime is always in the future.
+//
+// This note is deliberately outside the doc comment below — controller-gen folds
+// every non-marker line of that block into the resource's API description.
+
 // HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
 //
 // +kubebuilder:object:root=true
@@ -36,6 +43,10 @@ const (
 // +kubebuilder:resource:singular=helmclusteraddonrepository,scope=Cluster
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the repository"
 // +kubebuilder:printcolumn:name="Synced",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status",description="Repository synchronization status"
+// +kubebuilder:printcolumn:name="Last Sync",type="date",JSONPath=".status.lastSuccessfulSyncTime",description="Time of the last successful catalog synchronization"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Next Sync",type="string",JSONPath=".status.nextSyncTime",priority=1,description="Scheduled time of the next synchronization attempt"
+// +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].message",priority=1
 // +genclient
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -108,10 +119,31 @@ type HelmClusterAddonRepositoryAuth struct {
 
 type HelmClusterAddonRepositoryStatus struct {
 	// Conditions represent the latest available observations of the repository state.
+	//
+	// Ready reports whether the repository is usable: auxiliary resources are in place,
+	// the internal source object is healthy and the repository has responded to a catalog
+	// read on the current spec. A transient read failure does not flip Ready to False.
+	//
+	// Synced reports whether the chart catalog is up to date.
+	//
+	// Reconciling and Stalled follow the kstatus convention: they are present only while
+	// applicable. Reconciling means work is in progress or a retry is scheduled; Stalled
+	// means the repository will not recover without a change.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// LastSuccessfulSyncTime is the last time the chart catalog was fully brought up to date,
+	// including creating and pruning chart resources.
+	// +optional
+	LastSuccessfulSyncTime *metav1.Time `json:"lastSuccessfulSyncTime,omitempty"`
+	// NextSyncTime is the scheduled time of the next synchronization attempt.
+	// +optional
+	NextSyncTime *metav1.Time `json:"nextSyncTime,omitempty"`
+	// ConsecutiveFetchFailures counts consecutive failures to read from the repository.
+	// It drives the retry backoff and resets on the first success.
+	// +optional
+	ConsecutiveFetchFailures int32 `json:"consecutiveFetchFailures,omitempty"`
 }
 
 // HelmClusterAddonRepositoryList contains a list of HelmClusterAddonRepositories.

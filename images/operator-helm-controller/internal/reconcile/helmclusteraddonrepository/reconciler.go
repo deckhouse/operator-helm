@@ -22,7 +22,6 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -75,14 +74,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		if apierrors.IsNotFound(err) {
 			return reconcile.Result{}, nil
 		}
+
 		return reconcile.Result{}, fmt.Errorf("getting helm cluster addon repository: %w", err)
 	}
 
-	repoType, err := utils.GetRepositoryType(repo.Spec.URL)
-	if err != nil {
-		logger.Error(err, "failed to determine repository type")
-		return reconcile.Result{}, err
-	}
+	repoType, repoTypeErr := utils.GetRepositoryType(repo.Spec.URL)
 
 	if !repo.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &repo, repoType)
@@ -100,69 +96,88 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// would not trigger a follow-up reconcile.
 	}
 
-	var helmRepoRes services.HelmRepoResult
-	var ociRepoRes services.OCIRepoResult
-	var chartSyncRes services.RepoSyncResult
+	in := Inputs{
+		Generation: repo.Generation,
+		Now:        time.Now().UTC(),
+		Jitter:     NewJitter(),
+		Current:    *repo.Status.DeepCopy(),
+	}
 
-	switch repoType {
-	case utils.InternalHelmRepository:
-		helmRepoRes = r.helmRepositoryService.EnsureInternalHelmRepository(ctx, &repo)
-	case utils.InternalOCIRepository:
-		if err := r.helmRepositoryService.RemoveHelmRepository(ctx, repo.Name); err != nil {
-			ociRepoRes = services.OCIRepoResult{
-				Status: status.Failed(&repo, helmv1alpha1.ReasonFailed, "Repository change failed", err),
-			}
-			break
+	if repoTypeErr != nil {
+		in.ConfigErr = &services.ConfigOutcome{
+			Reason:  helmv1alpha1.ReasonUnsupportedRepositoryType,
+			Message: repoTypeErr.Error(),
+			Err:     repoTypeErr,
 		}
-		ociRepoRes = r.ociRepositoryService.EnsureRepositorySecrets(ctx, &repo)
-	default:
-		err := fmt.Errorf("unsupported repository type: %q", repoType)
-		helmRepoRes = services.HelmRepoResult{Status: status.Failed(&repo, "UnsupportedRepositoryType", err.Error(), err)}
+
+		return r.finish(ctx, &repo, in, false)
 	}
 
-	if helmRepoRes.IsReady() || ociRepoRes.IsReady() {
-		chartSyncRes = r.chartSyncService.EnsureAddonCharts(ctx, &repo, repoType)
-	} else {
-		chartSyncRes = services.RepoSyncResult{Status: status.Failed(&repo, helmv1alpha1.ReasonRepositoryNotReady, helmRepoRes.Status.Message, nil)}
-	}
+	// Both services embed the same BaseRepoService with the same target namespace,
+	// so one of them reconciles the auxiliary secrets for either repository type.
+	in.SecretsErr = r.helmRepositoryService.EnsureSecrets(ctx, &repo, repoType)
 
-	if err := r.reconcileForceAnnotation(ctx, req); err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
-	}
-
-	if err := r.statusManager.Update(
-		ctx,
-		&repo,
-		status.NoopStatusMutator,
-		status.NoopStatusMapper,
-		helmRepoRes,
-		ociRepoRes,
-		chartSyncRes,
-	); client.IgnoreNotFound(err) != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
-	}
-
-	// EnsureAddonCharts is a two-phase state machine: the first pass only marks
-	// the Synced condition Reconciling, the second pass performs the actual chart
-	// fetch. Run the second pass in the same reconcile (the status update above
-	// already persisted the Reconciling state and advanced the condition's
-	// LastTransitionTime) instead of relying on the status-update watch event to
-	// trigger it — otherwise predicates that ignore status-only changes would
-	// stall the scheduled sync.
-	if chartSyncRes.InProgress() {
-		chartSyncRes = r.chartSyncService.EnsureAddonCharts(ctx, &repo, repoType)
-		if err := r.statusManager.Update(
-			ctx,
-			&repo,
-			status.NoopStatusMutator,
-			status.NoopStatusMapper,
-			chartSyncRes,
-		); client.IgnoreNotFound(err) != nil {
-			return reconcile.Result{}, fmt.Errorf("failed to update sync status: %w", err)
+	if in.SecretsErr == nil {
+		switch repoType {
+		case utils.InternalHelmRepository:
+			in.InternalRepository, in.InternalRepositoryErr = r.helmRepositoryService.EnsureInternalHelmRepository(ctx, &repo)
+		case utils.InternalOCIRepository:
+			// The url may have changed from helm to oci: drop the internal object
+			// that is no longer used. OCI repositories have none of their own.
+			in.InternalRepositoryErr = r.helmRepositoryService.RemoveHelmRepository(ctx, repo.Name)
 		}
 	}
 
-	return r.requeueAtSyncInterval(&repo)
+	forced := repo.ForceReconcileRequired()
+
+	if in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
+		ShouldAttempt(in.Current, in.Generation, in.Now, forced) {
+		outcome := r.chartSyncService.Sync(ctx, &repo, repoType)
+
+		in.Attempted = true
+		in.Fetch = &outcome.Fetch
+		in.Catalog = &outcome.Catalog
+	}
+
+	return r.finish(ctx, &repo, in, in.Attempted)
+}
+
+// finish applies the decision and consumes the force annotation when an attempt
+// actually ran. The annotation is removed after the status patch so a conflict
+// does not lose the request.
+func (r *Reconciler) finish(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	in Inputs,
+	attempted bool,
+) (reconcile.Result, error) {
+	decision := Evaluate(in)
+
+	if in.Fetch != nil && in.Fetch.Err != nil {
+		// A repository read failure is not returned to the work queue — its retry
+		// is carried by nextSyncTime — so this is the only place it is logged.
+		log.FromContext(ctx).Error(in.Fetch.Err, in.Fetch.Message, "repository", repo.Name)
+	}
+
+	if err := r.statusManager.PatchStatus(ctx, repo, func() {
+		repo.Status = decision.Status
+	}); client.IgnoreNotFound(err) != nil {
+		return reconcile.Result{}, err
+	}
+
+	if attempted {
+		if err := r.reconcileForceAnnotation(ctx, client.ObjectKeyFromObject(repo)); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
+		}
+	}
+
+	if decision.Err != nil {
+		// Cluster write failures are handed to the work queue rate limiter; the
+		// schedule is re-established on the next pass.
+		return reconcile.Result{}, decision.Err
+	}
+
+	return reconcile.Result{RequeueAfter: decision.RequeueAfter}, nil
 }
 
 func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
@@ -173,7 +188,19 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 	}
 
 	switch repoType {
-	case utils.InternalHelmRepository:
+	case utils.InternalOCIRepository:
+		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
+			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
+			return reconcile.Result{}, err
+		}
+	default:
+		// The helm path is the default rather than a case of its own because an
+		// unknown repository type is a state a real repository can reach: the url
+		// validation regex on the CRD is looser than url.Parse, so a repository
+		// whose internal objects already exist can be edited to a url that no
+		// longer parses and then deleted. Cleaning up the helm way is safe for
+		// either type — it removes both auxiliary secrets and tolerates a missing
+		// internal repository — and leaving it out would orphan them.
 		helmRepo, err := r.helmRepositoryService.CleanupHelmRepository(ctx, repo.Name)
 		if err != nil && !apierrors.IsNotFound(err) {
 			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
@@ -181,11 +208,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 		}
 		if helmRepo != nil {
 			return r.awaitInternalResourceDeletion(ctx, repo, "internal repository", helmRepo)
-		}
-	case utils.InternalOCIRepository:
-		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
-			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
-			return reconcile.Result{}, err
 		}
 	}
 
@@ -224,17 +246,21 @@ func (r *Reconciler) awaitInternalResourceDeletion(ctx context.Context, repo *he
 	return reconcile.Result{RequeueAfter: internalResourceDeletionRequeueInterval}, nil
 }
 
-func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile.Request) error {
+func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, key client.ObjectKey) error {
 	var repo helmv1alpha1.HelmClusterAddonRepository
 
-	if err := r.Get(ctx, req.NamespacedName, &repo); err != nil {
+	if err := r.Get(ctx, key, &repo); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
+
 		return fmt.Errorf("getting helm cluster addon repository: %w", err)
 	}
 
-	if repo.Annotations == nil {
+	if _, found := repo.Annotations[helmv1alpha1.AnnotationForceReconcile]; !found {
+		// Guard on the annotation itself, not on the map: a repository carrying
+		// any unrelated annotation would otherwise take an empty PATCH on every
+		// attempted pass.
 		return nil
 	}
 
@@ -247,16 +273,4 @@ func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile
 	}
 
 	return nil
-}
-
-func (r *Reconciler) requeueAtSyncInterval(repo *helmv1alpha1.HelmClusterAddonRepository) (reconcile.Result, error) {
-	repoSyncCond := apimeta.FindStatusCondition(repo.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
-	if repoSyncCond != nil {
-		remaining := time.Until(repoSyncCond.LastTransitionTime.Add(services.ChartsSyncInterval))
-		if remaining > 0 {
-			return reconcile.Result{RequeueAfter: remaining}, nil
-		}
-	}
-
-	return reconcile.Result{RequeueAfter: services.ChartsSyncInterval}, nil
 }

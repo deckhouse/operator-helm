@@ -66,6 +66,15 @@ func EnsureModuleConfig(f *framework.Framework) {
 
 	c := framework.GetConfig()
 
+	// An unknown digest fails the run instead of skipping the check. A skipped
+	// verification is indistinguishable from a passing one in the output, which is
+	// exactly how a suite ends up silently exercising whatever an older build left
+	// behind a mutable tag.
+	Expect(c.ModuleDigest).NotTo(BeEmpty(),
+		"E2E_MODULE_DIGEST is not set, so the suite cannot tell which module artifact the cluster will pull. "+
+			"In CI the build job supplies it; locally resolve it with "+
+			"crane digest dev-registry.deckhouse.io/sys/deckhouse-oss/modules/operator-helm:$E2E_MODULE_TAG_NAME")
+
 	moduleSource := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "deckhouse.io/v1alpha1",
@@ -105,10 +114,6 @@ func EnsureModuleConfig(f *framework.Framework) {
 		},
 	}
 
-	Eventually(func(g Gomega) {
-		g.Expect(f.EnsureDynamicWithoutCleanup(context.Background(), modulePullOverrideGVR, "", mpo, true)).To(Succeed())
-	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
-
 	mc := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "deckhouse.io/v1alpha1",
@@ -125,6 +130,10 @@ func EnsureModuleConfig(f *framework.Framework) {
 
 	Eventually(func(g Gomega) {
 		g.Expect(f.EnsureDynamicWithoutCleanup(context.Background(), moduleConfigGVR, "", mc, true)).To(Succeed())
+	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
+	Eventually(func(g Gomega) {
+		g.Expect(f.EnsureDynamicWithoutCleanup(context.Background(), modulePullOverrideGVR, "", mpo, true)).To(Succeed())
 	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
@@ -167,17 +176,36 @@ func UntilModuleEnabled(deployAt metav1.Time, timeout time.Duration) {
 	UntilConditionStatusWithLastTransitionTime("EnabledByModuleManager", string(metav1.ConditionTrue), deployAt, framework.LongTimeout, module)
 	UntilConditionStatusWithLastTransitionTime("IsReady", string(metav1.ConditionTrue), deployAt, framework.MaxTimeout, module)
 
+	// Only now is the digest meaningful: Deckhouse records which artifact the tag
+	// resolved to when it actually pulls the module, and it pulls it once the
+	// module is enabled. Checked here rather than right after the pull override is
+	// created, where status.imageDigest is still empty.
+	digestCfg := framework.GetConfig()
+
+	By("Verifying the module pull override resolved to digest " + digestCfg.ModuleDigest)
+
+	Eventually(func(g Gomega) {
+		override, err := framework.GetClients().DynamicClient().
+			Resource(modulePullOverrideGVR).
+			Get(context.TODO(), moduleName, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+
+		digest, found, err := unstructured.NestedString(override.Object, "status", "imageDigest")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue(), "module pull override has no status.imageDigest yet")
+		g.Expect(digest).To(Equal(digestCfg.ModuleDigest),
+			"cluster is running module digest %q, expected %q", digest, digestCfg.ModuleDigest)
+	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
 	Eventually(func(g Gomega) {
 		webhook, err := framework.GetClients().KubeClient().AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(context.TODO(), "operator-helm-controller-admission-webhook", metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(webhook.CreationTimestamp.After(deployAt.UTC().Add(-1 * time.Second))).To(BeTrue())
 		g.Expect(webhook.Webhooks).NotTo(BeEmpty())
 
 		caBundle := webhook.Webhooks[0].ClientConfig.CABundle
 
 		secret, err := framework.GetClients().KubeClient().CoreV1().Secrets(moduleNamespace).Get(context.TODO(), "operator-helm-controller-tls", metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(secret.CreationTimestamp.After(deployAt.UTC().Add(-1 * time.Second))).To(BeTrue())
 
 		caCert, found := secret.Data["ca.crt"]
 		g.Expect(found).To(BeTrue())

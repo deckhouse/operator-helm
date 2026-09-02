@@ -76,6 +76,7 @@ type Config struct {
 	ModuleSource          string
 	ModuleSourceDockerCfg string
 	ModuleTagName         string
+	ModuleDigest          string
 }
 
 type ControllerConfig struct {
@@ -146,6 +147,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if s, ok := os.LookupEnv("E2E_MODULE_TAG_NAME"); ok {
 		c.ModuleTagName = s
+	}
+	if s, ok := os.LookupEnv("E2E_MODULE_DIGEST"); ok {
+		c.ModuleDigest = s
 	}
 	if s, ok := os.LookupEnv("E2E_MODULE_SOURCE"); ok {
 		c.ModuleSource = s

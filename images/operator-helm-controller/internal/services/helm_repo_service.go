@@ -24,6 +24,7 @@ import (
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,10 +37,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-const (
-	InternalRepositoryInterval = 5 * time.Minute
-	ChartsSyncInterval         = 5 * time.Minute
-)
+const InternalRepositoryInterval = 5 * time.Minute
 
 type HelmRepoService struct {
 	BaseRepoService
@@ -57,34 +55,15 @@ func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace 
 	}
 }
 
-var _ status.Provider = (*HelmRepoResult)(nil)
-
-type HelmRepoResult struct {
-	Status status.Status
-}
-
-func (r HelmRepoResult) GetStatus() status.Status {
-	return r.Status
-}
-
-func (r HelmRepoResult) IsReady() bool {
-	return r.Status.IsReady()
-}
-
-func (r HelmRepoResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeReady
-}
-
-func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) HelmRepoResult {
+// EnsureInternalHelmRepository reconciles the internal HelmRepository and
+// reports its observed state. The returned error is an API failure that the
+// caller must surface to the work queue; an unhealthy internal object is not an
+// error and is reported through the state instead.
+func (s *HelmRepoService) EnsureInternalHelmRepository(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+) (InternalRepositoryState, error) {
 	logger := log.FromContext(ctx)
-
-	if err := s.reconcileBasicAuthSecret(ctx, repo); err != nil {
-		return HelmRepoResult{Status: status.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile auth secret", err)}
-	}
-
-	if err := s.reconcileTLSSecret(ctx, repo); err != nil {
-		return HelmRepoResult{Status: status.Failed(repo, helmv1alpha1.ReasonFailed, "Failed to reconcile tls secret", err)}
-	}
 
 	existing := &sourcev1.HelmRepository{
 		ObjectMeta: metav1.ObjectMeta{
@@ -99,31 +78,37 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(ctx context.Context, repo
 		return nil
 	})
 	if err != nil {
-		return HelmRepoResult{
-			Status: status.Failed(
-				repo,
-				helmv1alpha1.ReasonFailed,
-				"Failed to reconcile helm repository",
-				fmt.Errorf("creating helm repository: %w", err),
-			),
-		}
+		return InternalRepositoryState{Present: true}, fmt.Errorf("creating helm repository: %w", err)
 	}
 
 	if op != controllerutil.OperationResultNone {
 		logger.Info("Reconciled helm repository", "operation", op)
 	}
 
-	if cond, ok := status.IsConditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation); ok {
-		return HelmRepoResult{Status: status.Status{
-			Observed:           ok,
-			Status:             cond.Status,
-			ObservedGeneration: repo.Generation,
-			Reason:             cond.Reason,
-			Message:            cond.Message,
-		}}
+	state := InternalRepositoryState{Present: true}
+
+	if stalled := apimeta.FindStatusCondition(existing.Status.Conditions, helmv1alpha1.ConditionTypeStalled); stalled != nil &&
+		stalled.Status == metav1.ConditionTrue {
+		state.Stalled = true
+		state.Reason = stalled.Reason
+		state.Message = stalled.Message
+
+		return state, nil
 	}
 
-	return HelmRepoResult{Status: status.Unknown(repo, helmv1alpha1.ReasonReconciling)}
+	cond, observed := status.IsConditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation)
+	if !observed {
+		state.Reason = helmv1alpha1.ReasonReconciling
+		state.Message = "Waiting for the internal repository to be reconciled"
+
+		return state, nil
+	}
+
+	state.Ready = cond.Status == metav1.ConditionTrue
+	state.Reason = cond.Reason
+	state.Message = cond.Message
+
+	return state, nil
 }
 
 func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, repoName string) error {

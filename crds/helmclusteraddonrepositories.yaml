@@ -26,6 +26,22 @@ spec:
       jsonPath: .status.conditions[?(@.type=='Synced')].status
       name: Synced
       type: string
+    - description: Time of the last successful catalog synchronization
+      jsonPath: .status.lastSuccessfulSyncTime
+      name: Last Sync
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - description: Scheduled time of the next synchronization attempt
+      jsonPath: .status.nextSyncTime
+      name: Next Sync
+      priority: 1
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].message
+      name: Message
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -88,8 +104,18 @@ spec:
           status:
             properties:
               conditions:
-                description: Conditions represent the latest available observations
-                  of the repository state.
+                description: |-
+                  Conditions represent the latest available observations of the repository state.
+
+                  Ready reports whether the repository is usable: auxiliary resources are in place,
+                  the internal source object is healthy and the repository has responded to a catalog
+                  read on the current spec. A transient read failure does not flip Ready to False.
+
+                  Synced reports whether the chart catalog is up to date.
+
+                  Reconciling and Stalled follow the kstatus convention: they are present only while
+                  applicable. Reconciling means work is in progress or a retry is scheduled; Stalled
+                  means the repository will not recover without a change.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -145,6 +171,23 @@ spec:
                   - type
                   type: object
                 type: array
+              consecutiveFetchFailures:
+                description: |-
+                  ConsecutiveFetchFailures counts consecutive failures to read from the repository.
+                  It drives the retry backoff and resets on the first success.
+                format: int32
+                type: integer
+              lastSuccessfulSyncTime:
+                description: |-
+                  LastSuccessfulSyncTime is the last time the chart catalog was fully brought up to date,
+                  including creating and pruning chart resources.
+                format: date-time
+                type: string
+              nextSyncTime:
+                description: NextSyncTime is the scheduled time of the next synchronization
+                  attempt.
+                format: date-time
+                type: string
               observedGeneration:
                 description: Generation represents resource generation that was last
                   processed by the controller.
