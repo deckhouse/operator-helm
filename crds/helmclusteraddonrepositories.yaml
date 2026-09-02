@@ -37,7 +37,7 @@ spec:
       jsonPath: .status.nextSyncTime
       name: Next Sync
       priority: 1
-      type: date
+      type: string
     - jsonPath: .status.conditions[?(@.type=='Ready')].message
       name: Message
       priority: 1
@@ -45,9 +45,11 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: HelmClusterAddonRepository represents a Helm or OCI-compliant
-          repository containing Helm charts that can be referenced by HelmClusterAddon
-          resources.
+        description: |-
+          HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
+
+          Rendered as an absolute timestamp on purpose: a "date" column prints how long
+          ago the value was, and kubectl renders any future instant as <invalid>.
         properties:
           apiVersion:
             description: |-

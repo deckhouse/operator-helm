@@ -38,7 +38,9 @@ const (
 // +kubebuilder:printcolumn:name="Synced",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status",description="Repository synchronization status"
 // +kubebuilder:printcolumn:name="Last Sync",type="date",JSONPath=".status.lastSuccessfulSyncTime",description="Time of the last successful catalog synchronization"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-// +kubebuilder:printcolumn:name="Next Sync",type="date",JSONPath=".status.nextSyncTime",priority=1,description="Scheduled time of the next synchronization attempt"
+// Rendered as an absolute timestamp on purpose: a "date" column prints how long
+// ago the value was, and kubectl renders any future instant as <invalid>.
+// +kubebuilder:printcolumn:name="Next Sync",type="string",JSONPath=".status.nextSyncTime",priority=1,description="Scheduled time of the next synchronization attempt"
 // +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].message",priority=1
 // +genclient
 // +genclient:nonNamespaced
