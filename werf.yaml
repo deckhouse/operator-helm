@@ -106,10 +106,13 @@ git:
       - docs/images/*.drawio
       - docs/images/*.sh
       - docs/internal
+packages:
+  - type: os-pm
+    spec:
+      - jq==1.8.1
 shell:
   install:
     - |
-      apk add --no-cache jq
       jq -n --arg version "{{ env "MODULES_MODULE_TAG" "dev"}}" '{"version": $version}' > /prep-bundle/version.json
       cp -f CHANGELOG/{{ env "MODULES_MODULE_TAG" "dev" }}.yaml /prep-bundle/changelog.yaml || touch /prep-bundle/changelog.yaml
     - ls -la /prep-bundle
