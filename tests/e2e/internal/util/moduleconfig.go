@@ -109,6 +109,27 @@ func EnsureModuleConfig(f *framework.Framework) {
 		g.Expect(f.EnsureDynamicWithoutCleanup(context.Background(), modulePullOverrideGVR, "", mpo, true)).To(Succeed())
 	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
+	// When the caller knows which artifact it wants tested — in CI the digest the
+	// build job just pushed — verify the cluster resolved the tag to exactly that.
+	// A tag is mutable, so without this the suite can silently exercise an older
+	// build that happens to still sit behind it.
+	if c.ModuleDigest != "" {
+		By("Verifying the module pull override resolved to digest " + c.ModuleDigest)
+
+		Eventually(func(g Gomega) {
+			override, err := framework.GetClients().DynamicClient().
+				Resource(modulePullOverrideGVR).
+				Get(context.TODO(), moduleName, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+
+			digest, found, err := unstructured.NestedString(override.Object, "status", "imageDigest")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(found).To(BeTrue(), "module pull override has no status.imageDigest yet")
+			g.Expect(digest).To(Equal(c.ModuleDigest),
+				"cluster is running module digest %s, expected %s", digest, c.ModuleDigest)
+		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+	}
+
 	mc := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "deckhouse.io/v1alpha1",
