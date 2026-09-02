@@ -49,8 +49,9 @@ type ChartVersion struct {
 
 // KnownVersion is the verdict a previous pass reached for one tag.
 type KnownVersion struct {
-	MediaType         string
-	UnavailableReason string
+	MediaType          string
+	UnavailableReason  string
+	UnavailableMessage string
 }
 
 // KnownVersions maps a tag to its recorded verdict.

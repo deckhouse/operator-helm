@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
@@ -324,6 +325,10 @@ func TestFetchChartsOCIDropsVanishedTag(t *testing.T) {
 
 	chart := fetchOne(t, host, FetchOptions{})
 
+	if got := versionByTag(t, chart, "1.0.0").MediaType; got != currentChartMediaType {
+		t.Fatalf("a healthy tag must still be published, got media type %q", got)
+	}
+
 	for _, version := range chart.Versions {
 		if version.Version.Original() == "1.0.1" {
 			t.Fatal("a tag that 404s on its manifest must be omitted")
@@ -349,6 +354,35 @@ func TestFetchChartsOCIEscalatesUnauthorized(t *testing.T) {
 	}
 }
 
+// TestFetchChartsOCIResolveVersionsSurfacesCancelledContext exercises resolveChartVersions
+// directly rather than through FetchCharts: remote.List already fails a cancelled context
+// on its own (unaffected by this fix), so reproducing the bug end-to-end would require
+// cancelling the context after the listing but during the per-tag resolve, which is timing
+// dependent. Calling the resolve stage directly reproduces it deterministically: without
+// the ctx.Err() check, every goroutine's remote.Get fails with a wrapped context.Canceled
+// that is not a *transport.Error, so it falls through to a fabricated ResolvePending verdict
+// and resolveChartVersions returns a clean result with a nil error.
+func TestFetchChartsOCIResolveVersionsSurfacesCancelledContext(t *testing.T) {
+	_, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+
+	repo, err := name.NewRepository(host + "/podinfo")
+	if err != nil {
+		t.Fatalf("parsing repository: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = resolveChartVersions(ctx, repo, "podinfo", []string{"1.0.0"}, []remote.Option{remote.WithContext(ctx)}, FetchOptions{})
+	if err == nil {
+		t.Fatal("a cancelled context must not produce a completed pass")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected an error wrapping context.Canceled, got %v", err)
+	}
+}
+
 func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
@@ -357,9 +391,17 @@ func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 	pushChart(t, host, "1.0.3", helmConfigMediaType, currentChartMediaType)
 	reg.reset()
 
+	// The message a previous pass recorded for the unsupported verdict. A skipped tag
+	// is carried through verbatim, so this is test data rather than a message that
+	// examineManifest would actually produce for this fixture.
+	const unsupportedMessage = "config media type recorded by a previous pass is not a helm chart config"
+
 	known := KnownCharts{"podinfo": KnownVersions{
 		"1.0.0": {MediaType: currentChartMediaType},
-		"1.0.1": {UnavailableReason: helmv1alpha1.UnavailableReasonUnsupportedMediaType},
+		"1.0.1": {
+			UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+			UnavailableMessage: unsupportedMessage,
+		},
 		"1.0.2": {UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending},
 		// An entry written before media types were recorded: the upgrade migration.
 		"1.0.3": {},
@@ -383,6 +425,9 @@ func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 	if got := versionByTag(t, chart, "1.0.0").MediaType; got != currentChartMediaType {
 		t.Fatalf("a skipped tag must keep its media type, got %q", got)
 	}
+	if got := versionByTag(t, chart, "1.0.1").UnavailableMessage; got != unsupportedMessage {
+		t.Fatalf("a skipped unsupported tag must keep its recorded message, got %q, want %q", got, unsupportedMessage)
+	}
 	if got := versionByTag(t, chart, "1.0.2").MediaType; got != currentChartMediaType {
 		t.Fatalf("a re-examined tag must be resolved, got %q", got)
 	}
@@ -405,16 +450,58 @@ func TestFetchChartsOCIFullIgnoresKnown(t *testing.T) {
 }
 
 func TestFetchChartsOCIClearsRemovedFromRepository(t *testing.T) {
-	_, host := newFakeRegistry(t)
+	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	reg.reset()
 
 	known := KnownCharts{"podinfo": KnownVersions{"1.0.0": {
-		MediaType:         currentChartMediaType,
-		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
+		MediaType:          currentChartMediaType,
+		UnavailableReason:  helmv1alpha1.UnavailableReasonRemovedFromRepository,
+		UnavailableMessage: "no longer offered by the repository",
 	}}}
 
 	version := versionByTag(t, fetchOne(t, host, FetchOptions{Known: known}), "1.0.0")
+
+	// This must be the carry path, not a re-examination that happens to come back
+	// clean: a NeedsExamination bug that sent RemovedFromRepository down the examine
+	// path would also clear the reason, so the assertion above alone is not evidence
+	// of which path ran.
+	if got := reg.manifestGets("1.0.0"); got != 0 {
+		t.Fatalf("a tag carried from a known verdict must not be requested, got %d requests", got)
+	}
 	if version.UnavailableReason != "" {
 		t.Fatalf("a listed tag must not stay removed, got reason %q", version.UnavailableReason)
+	}
+	if version.UnavailableMessage != "" {
+		t.Fatalf("clearing the removed marker must also clear its message, got %q", version.UnavailableMessage)
+	}
+	if version.MediaType != currentChartMediaType {
+		t.Fatalf("the recorded media type must survive the carry, got %q", version.MediaType)
+	}
+}
+
+func TestTruncateCutsOnARuneBoundary(t *testing.T) {
+	// Every rune here is a 3-byte UTF-8 sequence (☃, U+2603), chosen so that the byte
+	// limit lands in the middle of one of them: a naive byte slice would corrupt it.
+	message := strings.Repeat("☃", unavailableMessageLimit/3+2)
+
+	got := truncate(message)
+
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncate produced invalid UTF-8: %q", got)
+	}
+	if len(got) > unavailableMessageLimit+len("…") {
+		t.Fatalf("truncated message is %d bytes, want at most %d", len(got), unavailableMessageLimit+len("…"))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("a truncated message must end with the ellipsis marker, got %q", got)
+	}
+}
+
+func TestTruncateLeavesAShortMessageUnchanged(t *testing.T) {
+	message := "config media type is not a helm chart config"
+
+	if got := truncate(message); got != message {
+		t.Fatalf("truncate(%q) = %q, want it unchanged", message, got)
 	}
 }

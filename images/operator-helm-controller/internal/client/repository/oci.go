@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -174,6 +175,16 @@ func resolveChartVersions(
 		remote.WithRetryBackoff(remote.Backoff{Duration: time.Millisecond, Factor: 1.0, Steps: 1}),
 	)
 
+	// One puller for the whole repository: it caches its fetcher (and therefore the
+	// auth handshake) per repository behind a sync.Map/sync.Once and is safe for
+	// concurrent use. remote.Get would build a fresh Puller per call, paying a fresh
+	// /v2/ ping - and, against a bearer registry, a fresh token request - for every
+	// examined tag.
+	puller, err := remote.NewPuller(tagOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("building the registry puller: %w", err)
+	}
+
 	for i := range candidates {
 		index, c := i, candidates[i]
 
@@ -184,7 +195,7 @@ func resolveChartVersions(
 				return nil
 			}
 
-			version, err := resolveChartVersion(repo.Tag(c.tag), c.version, tagOptions)
+			version, err := resolveChartVersion(groupCtx, puller, repo.Tag(c.tag), c.version)
 			if err != nil {
 				return err
 			}
@@ -195,6 +206,14 @@ func resolveChartVersions(
 	}
 
 	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+
+	// A cancelled parent context makes every remote.Get fail without surfacing as a
+	// transport error, so every goroutine above would otherwise return a fabricated
+	// ResolvePending verdict instead of an error. That is indistinguishable from a real
+	// registry failure and must not be reported as a completed pass.
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
@@ -210,27 +229,31 @@ func resolveChartVersions(
 }
 
 // carryKnown reuses a recorded verdict. A tag that is listed again is by definition no
-// longer removed from the repository, so that marker is dropped here: presence in the
-// listing is registry truth, which is this client's domain.
+// longer removed from the repository, so that marker - and the message describing the
+// absence it no longer holds - is dropped here: presence in the listing is registry
+// truth, which is this client's domain.
 func carryKnown(version *semver.Version, known KnownVersion) *ChartVersion {
-	reason := known.UnavailableReason
+	reason, message := known.UnavailableReason, known.UnavailableMessage
 	if reason == helmv1alpha1.UnavailableReasonRemovedFromRepository {
-		reason = ""
+		reason, message = "", ""
 	}
 
 	return &ChartVersion{
-		Version:           version,
-		MediaType:         known.MediaType,
-		UnavailableReason: reason,
+		Version:            version,
+		MediaType:          known.MediaType,
+		UnavailableReason:  reason,
+		UnavailableMessage: message,
 	}
 }
 
 // resolveChartVersion examines one tag. A nil version with a nil error means the tag
 // vanished between the listing and this request and must be treated as unlisted. A
 // non-nil error is always terminal: credentials rejected for one tag are rejected for
-// all of them, so there is no point in requesting the rest.
-func resolveChartVersion(ref name.Reference, version *semver.Version, options []remote.Option) (*ChartVersion, error) {
-	desc, err := remote.Get(ref, options...)
+// all of them, so there is no point in requesting the rest. puller is shared across all
+// tags of the pass so the auth handshake happens once for the repository rather than
+// once per tag.
+func resolveChartVersion(ctx context.Context, puller *remote.Puller, ref name.Reference, version *semver.Version) (*ChartVersion, error) {
+	desc, err := puller.Get(ctx, ref)
 	if err != nil {
 		var transportErr *transport.Error
 		if errors.As(err, &transportErr) {
@@ -284,7 +307,12 @@ func truncate(message string) string {
 		return message
 	}
 
-	return message[:unavailableMessageLimit] + "…"
+	cut := unavailableMessageLimit
+	for cut > 0 && !utf8.RuneStart(message[cut]) {
+		cut--
+	}
+
+	return message[:cut] + "…"
 }
 
 func trimSchemaPrefixes(url string) string {
