@@ -28,12 +28,15 @@ type InternalRepositoryState struct {
 }
 
 // FetchOutcome is the result of reading the chart catalog from the remote
-// repository. Terminal marks a failure that will not resolve by retrying.
+// repository. Terminal marks a failure that will not resolve by retrying. Pending
+// counts the chart versions that were listed but could not be examined in this pass:
+// they are retried by the next synchronization and are not failures.
 type FetchOutcome struct {
 	Err      error
 	Terminal bool
 	Reason   string
 	Message  string
+	Pending  int
 }
 
 // CatalogOutcome is the result of writing the chart catalog into the cluster.

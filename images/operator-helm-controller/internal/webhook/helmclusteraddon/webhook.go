@@ -26,24 +26,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-const addonChartIndex = ".spec.chart.repoAndChart"
-
 var uniquenessBypassUsernames = []string{
 	"system:serviceaccount:d8-operator-helm:operator-helm-controller",
-}
-
-func SetupIndexes(mgr ctrl.Manager) error {
-	return mgr.GetFieldIndexer().IndexField(
-		context.Background(), &helmv1alpha1.HelmClusterAddon{}, addonChartIndex,
-		func(obj client.Object) []string {
-			addon := obj.(*helmv1alpha1.HelmClusterAddon)
-			return []string{addon.Spec.Chart.HelmClusterAddonRepository + "/" + addon.Spec.Chart.HelmClusterAddonChartName}
-		},
-	)
 }
 
 func SetupWebhookWithManager(mgr ctrl.Manager) error {
@@ -134,9 +123,9 @@ func (v *HelmClusterAddonWebhookValidator) checkUniqueness(ctx context.Context, 
 	}
 
 	list := &helmv1alpha1.HelmClusterAddonList{}
-	indexValue := addon.Spec.Chart.HelmClusterAddonRepository + "/" + addon.Spec.Chart.HelmClusterAddonChartName
+	indexValue := index.AddonChartValue(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName)
 
-	if err := v.Client.List(ctx, list, client.MatchingFields{addonChartIndex: indexValue}); err != nil {
+	if err := v.Client.List(ctx, list, client.MatchingFields{index.AddonChart: indexValue}); err != nil {
 		return err
 	}
 

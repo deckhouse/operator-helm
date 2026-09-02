@@ -114,7 +114,13 @@ func DefineLifecycleTests(repoType, repoURL string) {
 
 			By("HelmClusterAddonChart should have versions")
 			for _, chart := range charts.Items {
-				Expect(chart.Status.Versions).NotTo(BeEmpty())
+				usable := 0
+				for _, version := range chart.Status.Versions {
+					if version.UnavailableReason == "" {
+						usable++
+					}
+				}
+				Expect(usable).To(BeNumerically(">", 0), "chart must expose at least one usable version")
 			}
 		})
 	})

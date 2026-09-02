@@ -19,8 +19,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 
-	"github.com/samber/lo"
+	"github.com/Masterminds/semver/v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,6 +33,7 @@ import (
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -76,7 +78,15 @@ func (s *RepoSyncService) Sync(
 	repo *helmv1alpha1.HelmClusterAddonRepository,
 	repoType utils.InternalRepositoryType,
 ) SyncOutcome {
-	charts, fetch := s.fetchCharts(ctx, repo, repoType)
+	known, err := s.knownCharts(ctx, repo)
+	if err != nil {
+		return SyncOutcome{Catalog: CatalogOutcome{Err: err}}
+	}
+
+	charts, fetch := s.fetchCharts(ctx, repo, repoType, repoclient.FetchOptions{
+		Known: known,
+		Full:  repo.ForceReconcileRequired(),
+	})
 	if fetch.Err != nil {
 		return SyncOutcome{Fetch: fetch}
 	}
@@ -84,10 +94,46 @@ func (s *RepoSyncService) Sync(
 	return SyncOutcome{Fetch: fetch, Catalog: s.reconcileCatalog(ctx, repo, charts)}
 }
 
+// knownCharts collects the verdicts recorded by previous passes, so the client can
+// skip the tags it has already examined. The chart objects are the only store of that
+// state: keeping a separate fingerprint would be one more thing to drift.
+func (s *RepoSyncService) knownCharts(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+) (repoclient.KnownCharts, error) {
+	var charts helmv1alpha1.HelmClusterAddonChartList
+	if err := s.Client.List(ctx, &charts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
+		return nil, fmt.Errorf("listing charts of repository %q: %w", repo.Name, err)
+	}
+
+	known := make(repoclient.KnownCharts, len(charts.Items))
+
+	for _, chart := range charts.Items {
+		chartName := chart.Labels[LabelChartName]
+		if chartName == "" {
+			continue
+		}
+
+		versions := make(repoclient.KnownVersions, len(chart.Status.Versions))
+		for _, version := range chart.Status.Versions {
+			versions[version.Version] = repoclient.KnownVersion{
+				MediaType:          version.MediaType,
+				UnavailableReason:  version.UnavailableReason,
+				UnavailableMessage: version.UnavailableMessage,
+			}
+		}
+
+		known[chartName] = versions
+	}
+
+	return known, nil
+}
+
 func (s *RepoSyncService) fetchCharts(
 	ctx context.Context,
 	repo *helmv1alpha1.HelmClusterAddonRepository,
 	repoType utils.InternalRepositoryType,
+	opts repoclient.FetchOptions,
 ) ([]repoclient.Chart, FetchOutcome) {
 	repoClient, err := s.clientFactory(repoType)
 	if err != nil {
@@ -99,9 +145,9 @@ func (s *RepoSyncService) fetchCharts(
 		}
 	}
 
-	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, buildRepoConfig(repo), repoclient.FetchOptions{})
+	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, buildRepoConfig(repo), opts)
 	if err == nil {
-		return charts, FetchOutcome{}
+		return charts, FetchOutcome{Pending: countPending(charts)}
 	}
 
 	if terminal, ok := repoclient.AsTerminal(err); ok {
@@ -118,6 +164,20 @@ func (s *RepoSyncService) fetchCharts(
 		Reason:  helmv1alpha1.ReasonSyncFailed,
 		Message: "Failed to read the repository catalog: " + err.Error(),
 	}
+}
+
+// countPending counts the versions that were listed but not examined in this pass.
+func countPending(charts []repoclient.Chart) int {
+	pending := 0
+	for _, chart := range charts {
+		for _, version := range chart.Versions {
+			if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending {
+				pending++
+			}
+		}
+	}
+
+	return pending
 }
 
 func buildRepoConfig(repo *helmv1alpha1.HelmClusterAddonRepository) *repoclient.RepoConfig {
@@ -148,11 +208,10 @@ func (s *RepoSyncService) reconcileCatalog(
 	desiredCharts := make(map[string]struct{}, len(charts))
 
 	for _, chart := range charts {
-		if len(chart.Versions) == 0 {
-			continue
-		}
-
 		addonChartName := naming.HelmClusterAddonChartName(repo.Name, chart.Name)
+		// A chart with no usable version is still created: it carries the reason each of
+		// its versions is unusable, and skipping it here would let the pruning loop below
+		// delete a chart whose tags merely failed to resolve.
 		existing := &helmv1alpha1.HelmClusterAddonChart{
 			ObjectMeta: metav1.ObjectMeta{Name: addonChartName},
 		}
@@ -186,12 +245,17 @@ func (s *RepoSyncService) reconcileCatalog(
 			logger.Info("Reconciled HelmClusterAddonChart", "operation", op, "addonChartName", addonChartName)
 		}
 
+		inUse, err := s.inUseVersions(ctx, repo.Name, chart.Name)
+		if err != nil {
+			return CatalogOutcome{Err: err}
+		}
+
 		base := existing.DeepCopy()
 
-		existing.Status.IconURL = chart.Versions[0].IconURL
-		existing.Status.Versions = lo.Map(chart.Versions, func(v repoclient.ChartVersion, _ int) helmv1alpha1.HelmClusterAddonChartVersion {
-			return helmv1alpha1.HelmClusterAddonChartVersion{Version: v.Version.Original()}
-		})
+		if len(chart.Versions) > 0 {
+			existing.Status.IconURL = chart.Versions[0].IconURL
+		}
+		existing.Status.Versions = mergeChartVersions(chart.Versions, existing.Status.Versions, inUse)
 
 		if err := s.Client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
 			return CatalogOutcome{Err: fmt.Errorf("updating versions of chart %q: %w", addonChartName, err)}
@@ -208,10 +272,111 @@ func (s *RepoSyncService) reconcileCatalog(
 			continue
 		}
 
+		inUse, err := s.inUseVersions(ctx, repo.Name, chart.Labels[LabelChartName])
+		if err != nil {
+			return CatalogOutcome{Err: err}
+		}
+		if len(inUse) > 0 {
+			// An addon still references this chart: deleting the object would make the
+			// addon's own reconciliation fail on a missing chart and block every change
+			// to it, including its removal.
+			logger.Info("Keeping a chart referenced by an addon", "addonChartName", chart.Name)
+
+			continue
+		}
+
 		if err := s.ensureResourceDeleted(ctx, types.NamespacedName{Name: chart.Name}, &chart); err != nil {
 			return CatalogOutcome{Err: fmt.Errorf("deleting stale charts: %w", err)}
 		}
 	}
 
 	return CatalogOutcome{}
+}
+
+// inUseVersions returns the chart versions referenced by the addon that uses this
+// repository/chart pair. The webhook and the claim Lease enforce one addon per pair,
+// so at most one is found; both its desired and its last applied version count, since
+// they differ during an upgrade.
+func (s *RepoSyncService) inUseVersions(ctx context.Context, repoName, chartName string) (map[string]struct{}, error) {
+	if chartName == "" {
+		return nil, nil
+	}
+
+	var addons helmv1alpha1.HelmClusterAddonList
+	if err := s.Client.List(ctx, &addons, client.MatchingFields{
+		index.AddonChart: index.AddonChartValue(repoName, chartName),
+	}); err != nil {
+		return nil, fmt.Errorf("listing addons of chart %q: %w", chartName, err)
+	}
+
+	inUse := make(map[string]struct{}, 2)
+
+	for _, addon := range addons.Items {
+		inUse[addon.Spec.Chart.Version] = struct{}{}
+		if last := addon.Status.LastAppliedChart; last != nil {
+			inUse[last.Version] = struct{}{}
+		}
+	}
+
+	return inUse, nil
+}
+
+// mergeChartVersions builds the desired version list from the fetched entries and the
+// ones already recorded. A recorded version the registry no longer lists is dropped,
+// unless an addon still references it: then it is retained with RemovedFromRepository
+// and keeps its media type, without which the addon's internal OCIRepository could not
+// be built at all.
+func mergeChartVersions(
+	fetched []repoclient.ChartVersion,
+	current []helmv1alpha1.HelmClusterAddonChartVersion,
+	inUse map[string]struct{},
+) []helmv1alpha1.HelmClusterAddonChartVersion {
+	merged := make([]helmv1alpha1.HelmClusterAddonChartVersion, 0, len(fetched)+len(current))
+	listed := make(map[string]struct{}, len(fetched))
+
+	for _, version := range fetched {
+		name := version.Version.Original()
+		listed[name] = struct{}{}
+
+		merged = append(merged, helmv1alpha1.HelmClusterAddonChartVersion{
+			Version:            name,
+			MediaType:          version.MediaType,
+			UnavailableReason:  version.UnavailableReason,
+			UnavailableMessage: version.UnavailableMessage,
+		})
+	}
+
+	for _, version := range current {
+		if _, stillListed := listed[version.Version]; stillListed {
+			continue
+		}
+		if _, referenced := inUse[version.Version]; !referenced {
+			continue
+		}
+
+		version.UnavailableReason = helmv1alpha1.UnavailableReasonRemovedFromRepository
+		version.UnavailableMessage = "the repository no longer offers this version"
+		merged = append(merged, version)
+	}
+
+	sortChartVersions(merged)
+
+	return merged
+}
+
+// sortChartVersions orders versions by descending semver, breaking ties — and ordering
+// versions that do not parse — by a reverse string comparison. The order has to be
+// deterministic: the merge goes through maps, and an unstable order would produce a
+// status patch on every synchronization for a catalog that did not change.
+func sortChartVersions(versions []helmv1alpha1.HelmClusterAddonChartVersion) {
+	sort.SliceStable(versions, func(i, j int) bool {
+		left, leftErr := semver.NewVersion(versions[i].Version)
+		right, rightErr := semver.NewVersion(versions[j].Version)
+
+		if leftErr == nil && rightErr == nil && !left.Equal(right) {
+			return left.GreaterThan(right)
+		}
+
+		return versions[i].Version > versions[j].Version
+	})
 }
