@@ -167,17 +167,19 @@ func UntilModuleEnabled(deployAt metav1.Time, timeout time.Duration) {
 	UntilConditionStatusWithLastTransitionTime("EnabledByModuleManager", string(metav1.ConditionTrue), deployAt, framework.LongTimeout, module)
 	UntilConditionStatusWithLastTransitionTime("IsReady", string(metav1.ConditionTrue), deployAt, framework.MaxTimeout, module)
 
+	// The webhook configuration and the TLS secret are checked for existence and
+	// mutual consistency, not for freshness: whether enabling the module recreated
+	// them depends on whether the module was already deployed in the cluster, which
+	// is a property of the environment rather than of the code under test.
 	Eventually(func(g Gomega) {
 		webhook, err := framework.GetClients().KubeClient().AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(context.TODO(), "operator-helm-controller-admission-webhook", metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(webhook.CreationTimestamp.After(deployAt.UTC().Add(-1 * time.Second))).To(BeTrue())
 		g.Expect(webhook.Webhooks).NotTo(BeEmpty())
 
 		caBundle := webhook.Webhooks[0].ClientConfig.CABundle
 
 		secret, err := framework.GetClients().KubeClient().CoreV1().Secrets(moduleNamespace).Get(context.TODO(), "operator-helm-controller-tls", metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(secret.CreationTimestamp.After(deployAt.UTC().Add(-1 * time.Second))).To(BeTrue())
 
 		caCert, found := secret.Data["ca.crt"]
 		g.Expect(found).To(BeTrue())
