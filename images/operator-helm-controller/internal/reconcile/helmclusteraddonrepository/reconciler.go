@@ -115,7 +115,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// Both services embed the same BaseRepoService with the same target namespace,
 	// so one of them reconciles the auxiliary secrets for either repository type.
-	in.SecretsErr = r.helmRepositoryService.EnsureSecrets(ctx, &repo)
+	in.SecretsErr = r.helmRepositoryService.EnsureSecrets(ctx, &repo, repoType)
 
 	if in.SecretsErr == nil {
 		switch repoType {
