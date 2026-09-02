@@ -37,7 +37,7 @@ type stubRepoClient struct {
 	err    error
 }
 
-func (s stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig) ([]repoclient.Chart, error) {
+func (s stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, _ repoclient.FetchOptions) ([]repoclient.Chart, error) {
 	return s.charts, s.err
 }
 

@@ -17,17 +17,21 @@ limitations under the License.
 package repository
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+	"golang.org/x/sync/errgroup"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
@@ -36,7 +40,15 @@ var OCIRepositoryDefaultClient ClientInterface = &ociRepositoryClient{}
 
 type ociRepositoryClient struct{}
 
-func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig) ([]Chart, error) {
+// chartResolveConcurrency bounds the manifest requests of one pass. The requests are
+// small, but a repository with hundreds of new tags would otherwise open hundreds of
+// connections at once.
+const chartResolveConcurrency = 8
+
+// unavailableMessageLimit keeps a registry error from bloating the chart status.
+const unavailableMessageLimit = 256
+
+func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig, opts FetchOptions) ([]Chart, error) {
 	url = trimSchemaPrefixes(url)
 	url = strings.TrimSuffix(url, "/")
 
@@ -93,7 +105,38 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 		return nil, classifyRemoteError(err, url)
 	}
 
-	var chartVersions []ChartVersion
+	versions, err := resolveChartVersions(ctx, repo, chartName, tags, options, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return []Chart{
+		{
+			Name:     chartName,
+			Versions: versions,
+		},
+	}, nil
+}
+
+// resolveChartVersions turns the listed tags into one version entry per tag. A tag
+// whose verdict is already recorded is carried through without a request; the rest are
+// examined concurrently. The only error returned is a terminal one: a per-tag failure
+// becomes a ResolvePending entry so the rest of the pass is still published.
+func resolveChartVersions(
+	ctx context.Context,
+	repo name.Repository,
+	chartName string,
+	tags []string,
+	options []remote.Option,
+	opts FetchOptions,
+) ([]ChartVersion, error) {
+	type candidate struct {
+		tag     string
+		version *semver.Version
+		known   *KnownVersion
+	}
+
+	candidates := make([]candidate, 0, len(tags))
 
 	for _, tag := range tags {
 		if isCosignTag(tag) {
@@ -105,15 +148,143 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 			continue
 		}
 
-		chartVersions = append(chartVersions, ChartVersion{Version: semVersion})
+		c := candidate{tag: tag, version: semVersion}
+		if !opts.NeedsExamination(chartName, tag) {
+			known := opts.Known[chartName][tag]
+			c.known = &known
+		}
+
+		candidates = append(candidates, c)
 	}
 
-	return []Chart{
-		{
-			Name:     chartName,
-			Versions: chartVersions,
-		},
-	}, nil
+	resolved := make([]*ChartVersion, len(candidates))
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(chartResolveConcurrency)
+
+	// A fresh slice per pass: appending to the shared options slice from several
+	// goroutines would race on its backing array.
+	tagOptions := make([]remote.Option, 0, len(options)+2)
+	tagOptions = append(tagOptions, options...)
+	tagOptions = append(tagOptions,
+		remote.WithContext(groupCtx),
+		// One attempt per tag: a failure is recorded as pending and retried by the next
+		// synchronization anyway, and retrying here would multiply the duration of a
+		// pass over a degraded registry.
+		remote.WithRetryBackoff(remote.Backoff{Duration: time.Millisecond, Factor: 1.0, Steps: 1}),
+	)
+
+	for i := range candidates {
+		index, c := i, candidates[i]
+
+		group.Go(func() error {
+			if c.known != nil {
+				resolved[index] = carryKnown(c.version, *c.known)
+
+				return nil
+			}
+
+			version, err := resolveChartVersion(repo.Tag(c.tag), c.version, tagOptions)
+			if err != nil {
+				return err
+			}
+			resolved[index] = version
+
+			return nil
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+
+	versions := make([]ChartVersion, 0, len(resolved))
+	for _, version := range resolved {
+		if version == nil {
+			continue
+		}
+		versions = append(versions, *version)
+	}
+
+	return versions, nil
+}
+
+// carryKnown reuses a recorded verdict. A tag that is listed again is by definition no
+// longer removed from the repository, so that marker is dropped here: presence in the
+// listing is registry truth, which is this client's domain.
+func carryKnown(version *semver.Version, known KnownVersion) *ChartVersion {
+	reason := known.UnavailableReason
+	if reason == helmv1alpha1.UnavailableReasonRemovedFromRepository {
+		reason = ""
+	}
+
+	return &ChartVersion{
+		Version:           version,
+		MediaType:         known.MediaType,
+		UnavailableReason: reason,
+	}
+}
+
+// resolveChartVersion examines one tag. A nil version with a nil error means the tag
+// vanished between the listing and this request and must be treated as unlisted. A
+// non-nil error is always terminal: credentials rejected for one tag are rejected for
+// all of them, so there is no point in requesting the rest.
+func resolveChartVersion(ref name.Reference, version *semver.Version, options []remote.Option) (*ChartVersion, error) {
+	desc, err := remote.Get(ref, options...)
+	if err != nil {
+		var transportErr *transport.Error
+		if errors.As(err, &transportErr) {
+			switch transportErr.StatusCode {
+			case http.StatusNotFound:
+				return nil, nil
+			case http.StatusUnauthorized, http.StatusForbidden:
+				terminal := TerminalFromStatusCode(transportErr.StatusCode, ref.String())
+				terminal.Err = err
+
+				return nil, terminal
+			}
+		}
+
+		return pendingVersion(version, err.Error()), nil
+	}
+
+	manifest, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
+	if err != nil {
+		// An unreadable manifest is a verdict about the artifact, not a transport
+		// problem, so it is recorded the same way as an unsupported media type.
+		return unsupportedVersion(version, "cannot parse the manifest: "+err.Error()), nil
+	}
+
+	verdict := examineManifest(desc.MediaType, manifest)
+	if !verdict.OK() {
+		return unsupportedVersion(version, verdict.Message), nil
+	}
+
+	return &ChartVersion{Version: version, MediaType: verdict.MediaType}, nil
+}
+
+func pendingVersion(version *semver.Version, message string) *ChartVersion {
+	return &ChartVersion{
+		Version:            version,
+		UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
+		UnavailableMessage: truncate(message),
+	}
+}
+
+func unsupportedVersion(version *semver.Version, message string) *ChartVersion {
+	return &ChartVersion{
+		Version:            version,
+		UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+		UnavailableMessage: truncate(message),
+	}
+}
+
+func truncate(message string) string {
+	if len(message) <= unavailableMessageLimit {
+		return message
+	}
+
+	return message[:unavailableMessageLimit] + "…"
 }
 
 func trimSchemaPrefixes(url string) string {
@@ -122,11 +293,6 @@ func trimSchemaPrefixes(url string) string {
 	}
 
 	return url
-}
-
-func isSemverCompliantTag(tag string) bool {
-	_, err := semver.NewVersion(tag)
-	return err == nil
 }
 
 func isCosignTag(tag string) bool {

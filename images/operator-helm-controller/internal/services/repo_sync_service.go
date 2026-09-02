@@ -99,7 +99,7 @@ func (s *RepoSyncService) fetchCharts(
 		}
 	}
 
-	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, buildRepoConfig(repo))
+	charts, err := repoClient.FetchCharts(ctx, repo.Spec.URL, buildRepoConfig(repo), repoclient.FetchOptions{})
 	if err == nil {
 		return charts, FetchOutcome{}
 	}

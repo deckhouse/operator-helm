@@ -48,7 +48,7 @@ type stubRepoClient struct {
 
 // The receiver is a pointer so a test can change what the repository returns
 // between reconcile passes.
-func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig) ([]repoclient.Chart, error) {
+func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, _ repoclient.FetchOptions) ([]repoclient.Chart, error) {
 	return s.charts, s.err
 }
 
