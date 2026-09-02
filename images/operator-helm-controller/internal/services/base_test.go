@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -73,7 +74,7 @@ func TestEnsureSecretsCreatesAuthAndTLS(t *testing.T) {
 
 	service, c := newBaseRepoService(t, repo)
 
-	if err := service.EnsureSecrets(context.Background(), repo); err != nil {
+	if err := service.EnsureSecrets(context.Background(), repo, utils.InternalHelmRepository); err != nil {
 		t.Fatalf("EnsureSecrets returned %v", err)
 	}
 
@@ -109,12 +110,48 @@ func TestEnsureSecretsRemovesObsoleteSecrets(t *testing.T) {
 
 	service, c := newBaseRepoService(t, repo, obsolete)
 
-	if err := service.EnsureSecrets(context.Background(), repo); err != nil {
+	if err := service.EnsureSecrets(context.Background(), repo, utils.InternalHelmRepository); err != nil {
 		t.Fatalf("EnsureSecrets returned %v", err)
 	}
 
 	err := c.Get(context.Background(), client.ObjectKeyFromObject(obsolete), &corev1.Secret{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("obsolete auth secret must be deleted, got %v", err)
+	}
+}
+
+func TestEnsureSecretsUsesDockerConfigForOCIRepositories(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{
+			URL:  "oci://ghcr.io/example/podinfo",
+			Auth: &helmv1alpha1.HelmClusterAddonRepositoryAuth{Username: "user", Password: "secret"},
+		},
+	}
+
+	service, c := newBaseRepoService(t, repo)
+
+	if err := service.EnsureSecrets(context.Background(), repo, utils.InternalOCIRepository); err != nil {
+		t.Fatalf("EnsureSecrets returned %v", err)
+	}
+
+	auth := &corev1.Secret{}
+	key := types.NamespacedName{Name: utils.GetInternalRepositoryAuthSecretName(repo.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, auth); err != nil {
+		t.Fatalf("auth secret was not created: %v", err)
+	}
+
+	// OCIRepository resolves credentials only from a dockerconfigjson secret;
+	// an Opaque username/password pair is silently ignored by the source controller.
+	if auth.Type != corev1.SecretTypeDockerConfigJson {
+		t.Fatalf("auth secret type is %q, want %q", auth.Type, corev1.SecretTypeDockerConfigJson)
+	}
+
+	config, found := auth.StringData[corev1.DockerConfigJsonKey]
+	if !found {
+		t.Fatalf("auth secret has no %q key, got keys %v", corev1.DockerConfigJsonKey, auth.StringData)
+	}
+	if !strings.Contains(config, "ghcr.io") {
+		t.Fatalf("docker config does not mention the registry host: %s", config)
 	}
 }
