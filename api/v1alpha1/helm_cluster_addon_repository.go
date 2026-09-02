@@ -28,6 +28,13 @@ const (
 	HelmClusterAddonRepositoryLabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 )
 
+// The "Next Sync" print column below is a string, not a date, on purpose: a date
+// column prints how long ago its value was, and kubectl renders any instant more
+// than a second in the future as <invalid>. nextSyncTime is always in the future.
+//
+// This note is deliberately outside the doc comment below — controller-gen folds
+// every non-marker line of that block into the resource's API description.
+
 // HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
 //
 // +kubebuilder:object:root=true
@@ -38,8 +45,6 @@ const (
 // +kubebuilder:printcolumn:name="Synced",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status",description="Repository synchronization status"
 // +kubebuilder:printcolumn:name="Last Sync",type="date",JSONPath=".status.lastSuccessfulSyncTime",description="Time of the last successful catalog synchronization"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-// Rendered as an absolute timestamp on purpose: a "date" column prints how long
-// ago the value was, and kubectl renders any future instant as <invalid>.
 // +kubebuilder:printcolumn:name="Next Sync",type="string",JSONPath=".status.nextSyncTime",priority=1,description="Scheduled time of the next synchronization attempt"
 // +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].message",priority=1
 // +genclient

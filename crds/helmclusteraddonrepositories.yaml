@@ -45,11 +45,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
-
-          Rendered as an absolute timestamp on purpose: a "date" column prints how long
-          ago the value was, and kubectl renders any future instant as <invalid>.
+        description: HelmClusterAddonRepository represents a Helm or OCI-compliant
+          repository containing Helm charts that can be referenced by HelmClusterAddon
+          resources.
         properties:
           apiVersion:
             description: |-
