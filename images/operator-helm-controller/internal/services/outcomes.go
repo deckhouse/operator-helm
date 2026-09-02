@@ -52,8 +52,14 @@ type ConfigOutcome struct {
 	Err     error
 }
 
-// SyncOutcome carries both phases of a synchronization attempt.
+// SyncOutcome carries both phases of a synchronization attempt. FetchAttempted is
+// true exactly when the registry was actually contacted (fetchCharts ran), on both
+// its success and its failure path. It is false when a cluster-side read (such as
+// knownCharts) failed before the fetch was ever issued: without this field the
+// caller cannot tell that case apart from a zero-value, already-succeeded fetch,
+// and would report a repository read failure as a read success.
 type SyncOutcome struct {
-	Fetch   FetchOutcome
-	Catalog CatalogOutcome
+	FetchAttempted bool
+	Fetch          FetchOutcome
+	Catalog        CatalogOutcome
 }

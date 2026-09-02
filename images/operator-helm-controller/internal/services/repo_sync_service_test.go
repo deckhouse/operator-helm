@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -211,8 +212,9 @@ func TestSyncPassesKnownVersionsToTheClient(t *testing.T) {
 	chart := existingChart(repo.Name, "podinfo",
 		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
 		helmv1alpha1.HelmClusterAddonChartVersion{
-			Version:           "6.7.2",
-			UnavailableReason: helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+			Version:            "6.7.2",
+			UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+			UnavailableMessage: "layer media type application/vnd.example is not a chart",
 		},
 	)
 
@@ -236,6 +238,9 @@ func TestSyncPassesKnownVersionsToTheClient(t *testing.T) {
 	}
 	if known["6.7.2"].UnavailableReason != helmv1alpha1.UnavailableReasonUnsupportedMediaType {
 		t.Fatalf("known reason is %q", known["6.7.2"].UnavailableReason)
+	}
+	if known["6.7.2"].UnavailableMessage != "layer media type application/vnd.example is not a chart" {
+		t.Fatalf("known message is %q", known["6.7.2"].UnavailableMessage)
 	}
 	if stub.opts.Full {
 		t.Fatal("a normal pass must not request a full re-index")
@@ -323,6 +328,9 @@ func TestSyncOrdersVersionsBySemverDescending(t *testing.T) {
 
 	got := chartStatus(t, c, repo.Name, "podinfo").Versions
 	want := []string{"6.10.0", "6.8.0", "6.7.1"}
+	if len(got) != len(want) {
+		t.Fatalf("versions are %v, want %v", got, want)
+	}
 	for i, version := range want {
 		if got[i].Version != version {
 			t.Fatalf("versions are %v, want %v", got, want)
@@ -372,5 +380,51 @@ func TestSyncKeepsChartReferencedByAddon(t *testing.T) {
 	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
 	if err := c.Get(context.Background(), key, &helmv1alpha1.HelmClusterAddonChart{}); err != nil {
 		t.Fatalf("a chart referenced by an addon must not be deleted: %v", err)
+	}
+}
+
+// TestSyncReportsNoFetchAttemptOnClusterReadFailure covers the knownCharts failure
+// path: the registry is never contacted, so the outcome must say so. Reporting
+// FetchAttempted: true here (or a zero-value Fetch with Err == nil) would make a
+// cluster-side read failure look like a successful repository fetch to a caller
+// that only checks Fetch.Err.
+func TestSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T) {
+	repo := testRepository()
+	scheme := testScheme(t)
+
+	sentinel := errors.New("synthetic chart list failure")
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&helmv1alpha1.HelmClusterAddonChart{}, &helmv1alpha1.HelmClusterAddonRepository{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, wc client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*helmv1alpha1.HelmClusterAddonChartList); ok {
+					return sentinel
+				}
+
+				return wc.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+
+	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+		return stubRepoClient{}, nil
+	}
+	service := NewRepoSyncService(c, scheme, factory)
+
+	outcome := service.Sync(context.Background(), repo, utils.InternalOCIRepository)
+
+	if outcome.FetchAttempted {
+		t.Fatal("a cluster-side read failure before the fetch must not report FetchAttempted")
+	}
+	if outcome.Fetch.Err != nil {
+		t.Fatalf("Fetch must stay zero-valued on this path, got Err: %v", outcome.Fetch.Err)
+	}
+	if outcome.Catalog.Err == nil {
+		t.Fatal("expected a catalog error from the failed chart listing")
+	}
+	if !errors.Is(outcome.Catalog.Err, sentinel) {
+		t.Fatalf("catalog error must wrap the underlying failure, got %v", outcome.Catalog.Err)
 	}
 }

@@ -80,6 +80,9 @@ func (s *RepoSyncService) Sync(
 ) SyncOutcome {
 	known, err := s.knownCharts(ctx, repo)
 	if err != nil {
+		// The registry was never contacted: FetchAttempted stays false so the
+		// caller does not mistake this cluster-side read failure for a fetch that
+		// ran (let alone succeeded).
 		return SyncOutcome{Catalog: CatalogOutcome{Err: err}}
 	}
 
@@ -88,10 +91,10 @@ func (s *RepoSyncService) Sync(
 		Full:  repo.ForceReconcileRequired(),
 	})
 	if fetch.Err != nil {
-		return SyncOutcome{Fetch: fetch}
+		return SyncOutcome{FetchAttempted: true, Fetch: fetch}
 	}
 
-	return SyncOutcome{Fetch: fetch, Catalog: s.reconcileCatalog(ctx, repo, charts)}
+	return SyncOutcome{FetchAttempted: true, Fetch: fetch, Catalog: s.reconcileCatalog(ctx, repo, charts)}
 }
 
 // knownCharts collects the verdicts recorded by previous passes, so the client can
@@ -106,11 +109,19 @@ func (s *RepoSyncService) knownCharts(
 		return nil, fmt.Errorf("listing charts of repository %q: %w", repo.Name, err)
 	}
 
+	logger := log.FromContext(ctx)
 	known := make(repoclient.KnownCharts, len(charts.Items))
 
 	for _, chart := range charts.Items {
 		chartName := chart.Labels[LabelChartName]
 		if chartName == "" {
+			// The chart label is the only way back from the object name (a
+			// truncated hash) to the chart name it belongs to. Without it the
+			// recorded verdicts for this chart cannot be looked up here, so every
+			// tag is re-examined on the next fetch; that is safe but not free, so
+			// it is worth surfacing.
+			logger.Info("Chart object has no chart label, dropping its recorded verdicts", "addonChartName", chart.Name)
+
 			continue
 		}
 
@@ -272,7 +283,17 @@ func (s *RepoSyncService) reconcileCatalog(
 			continue
 		}
 
-		inUse, err := s.inUseVersions(ctx, repo.Name, chart.Labels[LabelChartName])
+		chartName := chart.Labels[LabelChartName]
+		if chartName == "" {
+			// The chart label is the only way back from the object name (a
+			// truncated hash) to the chart name an addon references, so
+			// inUseVersions cannot find anything to protect and this chart is
+			// pruned even if an addon still uses it. That fail-open is unavoidable
+			// as written, so at least make it diagnosable.
+			logger.Info("Pruning a chart with no chart label; in-use protection could not be checked", "addonChartName", chart.Name)
+		}
+
+		inUse, err := s.inUseVersions(ctx, repo.Name, chartName)
 		if err != nil {
 			return CatalogOutcome{Err: err}
 		}
@@ -313,7 +334,14 @@ func (s *RepoSyncService) inUseVersions(ctx context.Context, repoName, chartName
 
 	for _, addon := range addons.Items {
 		inUse[addon.Spec.Chart.Version] = struct{}{}
-		if last := addon.Status.LastAppliedChart; last != nil {
+
+		// LastAppliedChart carries its own repository/chart identity and can lag
+		// behind Spec.Chart when an addon is switched to a different chart: only
+		// credit it here when it still names this repository/chart pair, or a
+		// stale entry would protect a phantom version on the new chart while no
+		// longer protecting the version actually applied on the old one.
+		if last := addon.Status.LastAppliedChart; last != nil &&
+			last.HelmClusterAddonChartName == chartName && last.HelmClusterAddonRepository == repoName {
 			inUse[last.Version] = struct{}{}
 		}
 	}
@@ -364,16 +392,29 @@ func mergeChartVersions(
 	return merged
 }
 
-// sortChartVersions orders versions by descending semver, breaking ties — and ordering
-// versions that do not parse — by a reverse string comparison. The order has to be
-// deterministic: the merge goes through maps, and an unstable order would produce a
-// status patch on every synchronization for a catalog that did not change.
+// sortChartVersions orders versions by descending semver, breaking ties by a reverse
+// string comparison. A version that does not parse as semver sorts after every
+// version that does, ordered among themselves by the same reverse string comparison.
+// Parsability has to be the primary key: comparing a parsable and an unparsable
+// version by semver on one pair and by string on another can produce a cycle (e.g.
+// "6.10.0" > "6.9.0" by semver, "6.9.0" > "6.5.x" and "6.5.x" > "6.10.0" by string),
+// which is not a valid ordering for sort.SliceStable. Today's clients never write an
+// unparsable version, but legacy status data can still carry one, and the order has to
+// be deterministic regardless: the merge goes through maps, and an unstable order
+// would produce a status patch on every synchronization for a catalog that did not
+// change.
 func sortChartVersions(versions []helmv1alpha1.HelmClusterAddonChartVersion) {
 	sort.SliceStable(versions, func(i, j int) bool {
 		left, leftErr := semver.NewVersion(versions[i].Version)
 		right, rightErr := semver.NewVersion(versions[j].Version)
 
-		if leftErr == nil && rightErr == nil && !left.Equal(right) {
+		leftParses, rightParses := leftErr == nil, rightErr == nil
+
+		if leftParses != rightParses {
+			return leftParses
+		}
+
+		if leftParses && !left.Equal(right) {
 			return left.GreaterThan(right)
 		}
 

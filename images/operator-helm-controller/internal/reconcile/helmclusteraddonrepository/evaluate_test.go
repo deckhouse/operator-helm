@@ -476,6 +476,56 @@ func TestEvaluateDecisionErr(t *testing.T) {
 	}
 }
 
+// TestEvaluatePreservesFailuresWhenNoFetchWasAttempted covers the case where a
+// synchronization pass ran (Attempted: true, e.g. its knownCharts read failed
+// before the registry was ever contacted) but Fetch is nil: nextFailureCount must
+// carry ConsecutiveFetchFailures forward rather than resetting it as if the
+// registry had just answered successfully, Ready must not be written
+// True/Success off that phantom fetch, and Synced must report the catalog
+// failure.
+func TestEvaluatePreservesFailuresWhenNoFetchWasAttempted(t *testing.T) {
+	catalogErr := errors.New("listing charts of repository \"example\": etcdserver: request timed out")
+
+	in := Inputs{
+		Generation: 1,
+		Now:        testNow,
+		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+			ObservedGeneration:       1,
+			ConsecutiveFetchFailures: 3,
+		},
+		InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+		Attempted:          true,
+		Fetch:              nil,
+		Catalog:            &services.CatalogOutcome{Err: catalogErr},
+	}
+
+	got := Evaluate(in)
+
+	if got.Status.ConsecutiveFetchFailures != 3 {
+		t.Fatalf("ConsecutiveFetchFailures is %d, want 3 (preserved, not reset by a pass that never reached the registry)",
+			got.Status.ConsecutiveFetchFailures)
+	}
+
+	ready := conditionOf(t, got.Status, helmv1alpha1.ConditionTypeReady)
+	if ready == nil {
+		t.Fatal("Ready condition must always be present")
+	}
+	if ready.Status == metav1.ConditionTrue && ready.Reason == helmv1alpha1.ReasonSuccess {
+		t.Fatal("Ready must not be written True/Success off a fetch that was never attempted")
+	}
+
+	synced := conditionOf(t, got.Status, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil {
+		t.Fatal("Synced condition is missing")
+	}
+	if synced.Status != metav1.ConditionFalse {
+		t.Fatalf("Synced status is %q, want False", synced.Status)
+	}
+	if synced.Reason != helmv1alpha1.ReasonCatalogUpdateFailed {
+		t.Fatalf("Synced reason is %q, want %q", synced.Reason, helmv1alpha1.ReasonCatalogUpdateFailed)
+	}
+}
+
 func assertAbnormal(t *testing.T, status helmv1alpha1.HelmClusterAddonRepositoryStatus, conditionType, wantReason string) {
 	t.Helper()
 

@@ -424,6 +424,13 @@ func nextFailureCount(failures int32, attempted, fetchFailed bool, fetch *servic
 		return failures
 	}
 
+	if fetch == nil {
+		// The pass ran but never reached the registry (a cluster-side failure, such
+		// as knownCharts, happened first). That is not evidence the registry
+		// recovered, so the counter is carried forward rather than reset.
+		return failures
+	}
+
 	if !fetchFailed {
 		return 0
 	}

@@ -94,7 +94,7 @@ func main() {
 	}
 
 	if err = index.SetupAddonChart(mgr); err != nil {
-		logger.Error(err, "unable to setup indexes", "webhook", "HelmClusterAddon")
+		logger.Error(err, "unable to setup indexes", "index", index.AddonChart)
 		os.Exit(1)
 	}
 
