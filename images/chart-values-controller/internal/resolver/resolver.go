@@ -149,7 +149,21 @@ func (r *Resolver) chartVersionMediaType(ctx context.Context, req Request) (stri
 		}
 
 		if version.MediaType == "" {
+			if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending {
+				// Pending means the catalog has not reached a verdict yet: the manifest
+				// request failed and will be retried on the next normal synchronization,
+				// so the caller should retry too rather than being told the version is
+				// permanently unreadable.
+				return "", &Result{Outcome: OutcomePending}, nil
+			}
+
+			// Every other reason is a verdict that will not change without a change in
+			// the repository (e.g. an unsupported media type, or a removed tag with no
+			// media type on record), so it is reported as values-not-found, naming why.
 			detail := version.UnavailableReason
+			if detail == "" {
+				detail = "no verdict recorded"
+			}
 			if version.UnavailableMessage != "" {
 				detail += ": " + version.UnavailableMessage
 			}

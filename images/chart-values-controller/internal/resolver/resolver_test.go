@@ -120,4 +120,42 @@ func TestChartVersionMediaType(t *testing.T) {
 			t.Fatalf("message %q must name the reason", done.Message)
 		}
 	})
+
+	t.Run("a resolve-pending version is pending, not values_not_found", func(t *testing.T) {
+		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
+			helmv1alpha1.HelmClusterAddonChartVersion{
+				Version:           "6.7.1",
+				UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending,
+			},
+		))
+
+		_, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if done == nil || done.Outcome != OutcomePending {
+			t.Fatalf("outcome is %+v, want pending: a resolve-pending verdict is self-healing and must be retried, not reported as a permanent failure", done)
+		}
+	})
+
+	t.Run("a removed version keeps its media type usable", func(t *testing.T) {
+		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
+			helmv1alpha1.HelmClusterAddonChartVersion{
+				Version:           "6.7.1",
+				MediaType:         "application/tar+gzip",
+				UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
+			},
+		))
+
+		mediaType, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if done != nil {
+			t.Fatalf("expected to continue, got outcome %q", done.Outcome)
+		}
+		if mediaType != "application/tar+gzip" {
+			t.Fatalf("media type is %q", mediaType)
+		}
+	})
 }
