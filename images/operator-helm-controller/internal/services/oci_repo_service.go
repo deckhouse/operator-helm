@@ -83,7 +83,12 @@ func (r OCIRepoResult) GetConditionType() string {
 	return helmv1alpha1.ConditionTypeReady
 }
 
-func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository) OCIRepoResult {
+func (s *OCIRepoService) EnsureInternalOCIRepository(
+	ctx context.Context,
+	addon *helmv1alpha1.HelmClusterAddon,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	version *helmv1alpha1.HelmClusterAddonChartVersion,
+) OCIRepoResult {
 	logger := log.FromContext(ctx)
 
 	existing := &sourcev1.OCIRepository{
@@ -94,7 +99,7 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon 
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		applyOCIRepositorySpec(addon, repo, existing)
+		applyOCIRepositorySpec(addon, repo, version.MediaType, existing)
 
 		return nil
 	})
@@ -116,6 +121,18 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(ctx context.Context, addon 
 	processedStatus := status.ProcessChildConditions(
 		existing.Status.Conditions, existing.Generation, addon, ociRepositoryErrorRules,
 	)
+
+	if version.UnavailableReason == helmv1alpha1.UnavailableReasonRemovedFromRepository &&
+		processedStatus.Status != metav1.ConditionTrue {
+		// The version is still recorded — that is what keeps this addon reconcilable —
+		// but the repository no longer offers the tag, so the pull cannot succeed. Name
+		// that cause instead of leaving only the source controller's "not found".
+		processedStatus.Reason = helmv1alpha1.ReasonChartVersionRemoved
+		processedStatus.Message = fmt.Sprintf(
+			"Version %s is no longer offered by repository %s: %s",
+			version.Version, repo.Name, processedStatus.Message,
+		)
+	}
 
 	return OCIRepoResult{
 		Artifact: existing.Status.Artifact,
@@ -167,7 +184,12 @@ func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, addon *helmv1a
 	return ociRepo, nil
 }
 
-func applyOCIRepositorySpec(addon *helmv1alpha1.HelmClusterAddon, repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.OCIRepository) {
+func applyOCIRepositorySpec(
+	addon *helmv1alpha1.HelmClusterAddon,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	mediaType string,
+	existing *sourcev1.OCIRepository,
+) {
 	if repo.ForceReconcileRequired() {
 		if existing.Annotations == nil {
 			existing.Annotations = map[string]string{}
@@ -198,8 +220,11 @@ func applyOCIRepositorySpec(addon *helmv1alpha1.HelmClusterAddon, repo *helmv1al
 		}
 	}
 
+	// The media type is the one recorded for this chart version by the repository
+	// synchronization: it differs between charts pushed by current and by older tooling.
+	// The caller guarantees it is non-empty.
 	existing.Spec.LayerSelector = &sourcev1.OCILayerSelector{
-		MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+		MediaType: mediaType,
 		Operation: "copy",
 	}
 
