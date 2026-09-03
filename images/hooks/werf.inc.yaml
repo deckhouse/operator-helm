@@ -1,7 +1,7 @@
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
-fromImage: builder/src
+fromImage: builder/distroless
 git:
   - add: {{ .ModuleDir }}/images/{{ .ImageName }}
     to: /src/images/hooks

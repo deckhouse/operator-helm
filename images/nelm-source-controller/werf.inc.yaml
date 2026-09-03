@@ -2,7 +2,7 @@
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
-fromImage: builder/src
+fromImage: builder/distroless
 git:
   - url: {{ .SOURCE_REPO }}/werf/nelm-source-controller.git
     tag: {{ $nelmSourceControllerTag }}
