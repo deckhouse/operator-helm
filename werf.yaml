@@ -1,6 +1,7 @@
 project: operator-helm
 configVersion: 1
 build:
+  cacheVersion: "1"
   sbom:
     enable: true
     standard: cyclonedx@1.6
