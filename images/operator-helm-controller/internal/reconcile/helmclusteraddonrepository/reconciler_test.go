@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -81,6 +82,11 @@ func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object)
 				addon.Spec.Chart.HelmClusterAddonRepository,
 				addon.Spec.Chart.HelmClusterAddonChartName,
 			)}
+		}).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonRepository, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{addon.Spec.Chart.HelmClusterAddonRepository}
 		}).
 		Build()
 
@@ -332,5 +338,100 @@ func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
 		if err := c.Get(context.Background(), key, obj.DeepCopyObject().(client.Object)); !apierrors.IsNotFound(err) {
 			t.Fatalf("%s must be deleted, got %v", key, err)
 		}
+	}
+}
+
+// TestReconcileForcedOCIRepositoryForcesAddonSources covers a force request on an
+// oci:// repository. Unlike the helm:// path, where the internal HelmRepository
+// carries the request and the HelmCharts follow it, an OCI repository has no
+// internal source object of its own: the artifacts are pulled by the per-addon
+// OCIRepositories, so the request must be pushed onto those.
+func TestReconcileForcedOCIRepositoryForcesAddonSources(t *testing.T) {
+	repo := ociRepository()
+	addon := &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "consumer", Generation: 1},
+		Spec: helmv1alpha1.HelmClusterAddonSpec{
+			Namespace: "app",
+			Chart: helmv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonRepository: repo.Name,
+				HelmClusterAddonChartName:  "podinfo",
+				Version:                    "6.7.1",
+			},
+		},
+	}
+	source := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+			Namespace: helmv1alpha1.TargetNamespace,
+		},
+	}
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo, addon, source)
+	reconcileUntilStable(t, r, repo.Name)
+
+	stored := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), stored); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	stored.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatalf("annotating repository: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	forced := &sourcev1.OCIRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(source), forced); err != nil {
+		t.Fatalf("getting internal oci repository: %v", err)
+	}
+	if forced.Annotations[meta.ReconcileRequestAnnotation] == "" {
+		t.Errorf("%s must be pushed onto the addon source by a forced repository", meta.ReconcileRequestAnnotation)
+	}
+}
+
+// TestReconcileUnforcedOCIRepositoryLeavesAddonSources is the complement: a
+// scheduled synchronization must not stamp the addon sources, or every pass would
+// make the source controller re-pull every artifact of the repository.
+func TestReconcileUnforcedOCIRepositoryLeavesAddonSources(t *testing.T) {
+	repo := ociRepository()
+	addon := &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "consumer", Generation: 1},
+		Spec: helmv1alpha1.HelmClusterAddonSpec{
+			Namespace: "app",
+			Chart: helmv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonRepository: repo.Name,
+				HelmClusterAddonChartName:  "podinfo",
+				Version:                    "6.7.1",
+			},
+		},
+	}
+	source := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+			Namespace: helmv1alpha1.TargetNamespace,
+		},
+	}
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo, addon, source)
+	reconcileUntilStable(t, r, repo.Name)
+
+	untouched := &sourcev1.OCIRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(source), untouched); err != nil {
+		t.Fatalf("getting internal oci repository: %v", err)
+	}
+	if _, found := untouched.Annotations[meta.ReconcileRequestAnnotation]; found {
+		t.Errorf("%s must not be pushed onto the addon source by a scheduled synchronization", meta.ReconcileRequestAnnotation)
 	}
 }

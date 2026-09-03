@@ -19,7 +19,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -266,4 +268,22 @@ func (s *BaseRepoService) reconcileTLSSecret(ctx context.Context, repo *helmv1al
 	}
 
 	return nil
+}
+
+// setReconcileRequestAnnotations stamps the flux reconcile/force request
+// annotations so the controller owning obj reconciles it immediately instead of
+// waiting for its next interval. Both are stamped with the same timestamp:
+// ForceRequestAnnotation is only honoured when it matches
+// ReconcileRequestAnnotation.
+func setReconcileRequestAnnotations(obj metav1.Object) {
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	annotations[meta.ForceRequestAnnotation] = ts
+	annotations[meta.ReconcileRequestAnnotation] = ts
+
+	obj.SetAnnotations(annotations)
 }

@@ -19,11 +19,11 @@ package services
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -140,6 +141,50 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 	}
 }
 
+// ForceReconcileInternalRepositories stamps the reconcile request annotations on
+// the internal OCIRepository of every addon that references repoName.
+//
+// An oci:// repository has no internal source object of its own: the artifact is
+// pulled per addon, so a force request on the repository reaches the artifacts
+// only through its addons' OCIRepositories. The helm:// path needs no equivalent -
+// there the internal HelmRepository carries the request and its HelmCharts follow
+// the re-indexed source on their own.
+//
+// An addon whose internal OCIRepository does not exist yet is skipped: the force
+// request must not be blocked by an addon that has not reached the point of
+// building one.
+func (s *OCIRepoService) ForceReconcileInternalRepositories(ctx context.Context, repoName string) error {
+	addons := &helmv1alpha1.HelmClusterAddonList{}
+	if err := s.Client.List(ctx, addons, client.MatchingFields{index.AddonRepository: repoName}); err != nil {
+		return fmt.Errorf("listing addons of repository %s: %w", repoName, err)
+	}
+
+	for i := range addons.Items {
+		name := utils.GetInternalOCIRepositoryName(addons.Items[i].Name)
+		nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
+
+		ociRepo := &sourcev1.OCIRepository{}
+		if err := s.Client.Get(ctx, nn, ociRepo); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+
+			return fmt.Errorf("getting internal oci repository %s: %w", name, err)
+		}
+
+		base := ociRepo.DeepCopy()
+		setReconcileRequestAnnotations(ociRepo)
+
+		// The internal repository may be removed between the get and the patch,
+		// which is the same case as the one skipped above.
+		if err := s.Client.Patch(ctx, ociRepo, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("requesting reconciliation of internal oci repository %s: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
 func (s *OCIRepoService) CleanupOCIRepository(ctx context.Context, repoName string) error {
 	resources := []struct {
 		name string
@@ -190,13 +235,8 @@ func applyOCIRepositorySpec(
 	mediaType string,
 	existing *sourcev1.OCIRepository,
 ) {
-	if repo.ForceReconcileRequired() {
-		if existing.Annotations == nil {
-			existing.Annotations = map[string]string{}
-		}
-		ts := time.Now().UTC().Format(time.RFC3339)
-		existing.Annotations[meta.ForceRequestAnnotation] = ts
-		existing.Annotations[meta.ReconcileRequestAnnotation] = ts
+	if addon.ForceReconcileRequired() {
+		setReconcileRequestAnnotations(existing)
 	}
 
 	existing.Spec.URL = repo.Spec.URL

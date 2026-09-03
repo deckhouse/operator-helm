@@ -140,6 +140,10 @@ func (s *ChartService) CleanupHelmChart(ctx context.Context, addon *helmv1alpha1
 }
 
 func applyHelmChartSpec(addon *helmv1alpha1.HelmClusterAddon, existing *sourcev1.HelmChart) {
+	if addon.ForceReconcileRequired() {
+		setReconcileRequestAnnotations(existing)
+	}
+
 	if existing.Labels == nil {
 		existing.Labels = map[string]string{}
 	}
