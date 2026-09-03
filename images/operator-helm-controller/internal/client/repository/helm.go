@@ -47,7 +47,10 @@ type HelmRepositoryChartVersion struct {
 	Removed bool   `json:"removed,omitempty"`
 }
 
-func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig) ([]Chart, error) {
+// FetchCharts reads the repository index. FetchOptions is ignored: a helm index is a
+// single document that already carries every version, so there is nothing to resolve
+// incrementally.
+func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig, _ FetchOptions) ([]Chart, error) {
 	if !strings.HasSuffix(url, "/index.yaml") {
 		url += "/index.yaml"
 	}

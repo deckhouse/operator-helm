@@ -15,6 +15,7 @@ require (
 	github.com/werf/3p-helm-controller/api v0.1.5
 	github.com/werf/nelm-source-controller/api v0.1.5
 	go.yaml.in/yaml/v3 v3.0.4
+	golang.org/x/sync v0.19.0
 	helm.sh/helm/v3 v3.20.2
 	k8s.io/api v0.35.1
 	k8s.io/apimachinery v0.35.1
@@ -75,7 +76,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/term v0.39.0 // indirect
 	golang.org/x/text v0.33.0 // indirect

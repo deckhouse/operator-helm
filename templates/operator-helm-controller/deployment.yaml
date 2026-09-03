@@ -71,6 +71,7 @@ spec:
         app: operator-helm-controller
       annotations:
         kubectl.kubernetes.io/default-container: operator-helm-controller
+        checksum/cert: {{ printf "%s%s" .Values.operatorHelm.internal.controller.cert.ca .Values.operatorHelm.internal.controller.cert.crt | sha256sum }}
     spec:
       containers:
         {{- include "kube_api_rewriter.sidecar_container" . | nindent 8 }}

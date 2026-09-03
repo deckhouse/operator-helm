@@ -54,7 +54,7 @@ func TestFetchChartsTerminalStatusCodes(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			_, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil)
+			_, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
 			if err == nil {
 				t.Fatalf("expected error for status %d", tc.statusCode)
 			}
@@ -76,7 +76,7 @@ func TestFetchChartsServerErrorIsNotTerminal(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil)
+	_, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
 	if err == nil {
 		t.Fatal("expected error for repeated 500 responses")
 	}
@@ -96,7 +96,7 @@ func TestFetchChartsSkipsInvalidVersion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil)
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
 	if err != nil {
 		t.Fatalf("expected invalid version to be skipped, got error: %v", err)
 	}

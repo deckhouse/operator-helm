@@ -111,9 +111,31 @@ spec:
                 format: int64
                 type: integer
               versions:
-                description: Available helm chart versions
+                description: |-
+                  Versions lists every chart version the controller has examined. A version is
+                  usable when it has no unavailableReason; for an OCI repository a usable version
+                  also carries the media type of the layer that holds it.
                 items:
                   properties:
+                    mediaType:
+                      description: |-
+                        MediaType is the OCI media type of the layer that holds this chart version. It is
+                        set only for versions from an OCI repository, and only when the layer is supported:
+                        an empty value means the version cannot be deployed.
+                      type: string
+                    unavailableMessage:
+                      description: UnavailableMessage carries human readable detail
+                        for UnavailableReason.
+                      type: string
+                    unavailableReason:
+                      description: |-
+                        UnavailableReason explains why this version cannot be deployed. Its absence means
+                        the version is usable.
+                      enum:
+                      - RemovedFromRepository
+                      - UnsupportedMediaType
+                      - ResolvePending
+                      type: string
                     version:
                       description: Helm chart version
                       minLength: 1

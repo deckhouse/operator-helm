@@ -476,6 +476,153 @@ func TestEvaluateDecisionErr(t *testing.T) {
 	}
 }
 
+// TestEvaluatePreservesFailuresWhenNoFetchWasAttempted covers the case where a
+// synchronization pass ran (Attempted: true, e.g. its knownCharts read failed
+// before the registry was ever contacted) but Fetch is nil: nextFailureCount must
+// carry ConsecutiveFetchFailures forward rather than resetting it as if the
+// registry had just answered successfully, Ready must not be written
+// True/Success off that phantom fetch, and Synced must report the catalog
+// failure.
+func TestEvaluatePreservesFailuresWhenNoFetchWasAttempted(t *testing.T) {
+	catalogErr := errors.New("listing charts of repository \"example\": etcdserver: request timed out")
+
+	in := Inputs{
+		Generation: 1,
+		Now:        testNow,
+		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+			ObservedGeneration:       1,
+			ConsecutiveFetchFailures: 3,
+		},
+		InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+		Attempted:          true,
+		Fetch:              nil,
+		Catalog:            &services.CatalogOutcome{Err: catalogErr},
+	}
+
+	got := Evaluate(in)
+
+	if got.Status.ConsecutiveFetchFailures != 3 {
+		t.Fatalf("ConsecutiveFetchFailures is %d, want 3 (preserved, not reset by a pass that never reached the registry)",
+			got.Status.ConsecutiveFetchFailures)
+	}
+
+	ready := conditionOf(t, got.Status, helmv1alpha1.ConditionTypeReady)
+	if ready == nil {
+		t.Fatal("Ready condition must always be present")
+	}
+	if ready.Status == metav1.ConditionTrue && ready.Reason == helmv1alpha1.ReasonSuccess {
+		t.Fatal("Ready must not be written True/Success off a fetch that was never attempted")
+	}
+
+	synced := conditionOf(t, got.Status, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil {
+		t.Fatal("Synced condition is missing")
+	}
+	if synced.Status != metav1.ConditionFalse {
+		t.Fatalf("Synced status is %q, want False", synced.Status)
+	}
+	if synced.Reason != helmv1alpha1.ReasonCatalogUpdateFailed {
+		t.Fatalf("Synced reason is %q, want %q", synced.Reason, helmv1alpha1.ReasonCatalogUpdateFailed)
+	}
+}
+
+func TestEvaluatePartialFirstSyncIsNotSynced(t *testing.T) {
+	in := Inputs{
+		Generation: 1,
+		Now:        time.Now().UTC(),
+		Attempted:  true,
+		Fetch:      &services.FetchOutcome{Pending: 2},
+		Catalog:    &services.CatalogOutcome{},
+	}
+
+	decision := Evaluate(in)
+
+	synced := apimeta.FindStatusCondition(decision.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Status != metav1.ConditionFalse {
+		t.Fatalf("Synced is %+v, want False", synced)
+	}
+	if synced.Reason != helmv1alpha1.ReasonPartialSync {
+		t.Fatalf("Synced reason is %q, want %q", synced.Reason, helmv1alpha1.ReasonPartialSync)
+	}
+
+	ready := apimeta.FindStatusCondition(decision.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Fatalf("Ready is %+v, want True: reading the repository did succeed", ready)
+	}
+	if cond := apimeta.FindStatusCondition(decision.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling must be absent, got %+v", cond)
+	}
+	if decision.Status.LastSuccessfulSyncTime != nil {
+		t.Fatal("a partial pass must not advance lastSuccessfulSyncTime")
+	}
+	if decision.Status.ConsecutiveFetchFailures != 0 {
+		t.Fatalf("failures are %d, want 0", decision.Status.ConsecutiveFetchFailures)
+	}
+}
+
+func TestEvaluatePartialSyncAfterFullOneStaysSynced(t *testing.T) {
+	earlier := metav1.NewTime(time.Now().UTC().Add(-time.Hour))
+	in := Inputs{
+		Generation: 1,
+		Now:        time.Now().UTC(),
+		Attempted:  true,
+		Fetch:      &services.FetchOutcome{Pending: 1},
+		Catalog:    &services.CatalogOutcome{},
+		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+			ObservedGeneration:     1,
+			LastSuccessfulSyncTime: &earlier,
+		},
+	}
+
+	decision := Evaluate(in)
+
+	synced := apimeta.FindStatusCondition(decision.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Status != metav1.ConditionTrue {
+		t.Fatalf("Synced is %+v, want True", synced)
+	}
+	if !decision.Status.LastSuccessfulSyncTime.Equal(&earlier) {
+		t.Fatalf("lastSuccessfulSyncTime is %v, want it unchanged at %v", decision.Status.LastSuccessfulSyncTime, earlier)
+	}
+}
+
+func TestEvaluatePartialSyncNeverStalls(t *testing.T) {
+	current := helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1}
+
+	for range MaxFetchFailures + 2 {
+		decision := Evaluate(Inputs{
+			Generation: 1,
+			Now:        time.Now().UTC(),
+			Attempted:  true,
+			Fetch:      &services.FetchOutcome{Pending: 1},
+			Catalog:    &services.CatalogOutcome{},
+			Current:    current,
+		})
+		current = decision.Status
+	}
+
+	if cond := apimeta.FindStatusCondition(current.Conditions, helmv1alpha1.ConditionTypeStalled); cond != nil {
+		t.Fatalf("repeated partial passes must not stall the repository, got %+v", cond)
+	}
+	if current.ConsecutiveFetchFailures != 0 {
+		t.Fatalf("failures are %d, want 0", current.ConsecutiveFetchFailures)
+	}
+}
+
+func TestEvaluateFullSyncAdvancesLastSuccessfulSyncTime(t *testing.T) {
+	now := time.Now().UTC()
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        now,
+		Attempted:  true,
+		Fetch:      &services.FetchOutcome{},
+		Catalog:    &services.CatalogOutcome{},
+	})
+
+	if decision.Status.LastSuccessfulSyncTime == nil || !decision.Status.LastSuccessfulSyncTime.Time.Equal(now) {
+		t.Fatalf("lastSuccessfulSyncTime is %v, want %v", decision.Status.LastSuccessfulSyncTime, now)
+	}
+}
+
 func assertAbnormal(t *testing.T, status helmv1alpha1.HelmClusterAddonRepositoryStatus, conditionType, wantReason string) {
 	t.Helper()
 

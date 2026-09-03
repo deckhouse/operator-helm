@@ -25,9 +25,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -36,8 +39,19 @@ type stubRepoClient struct {
 	err    error
 }
 
-func (s stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig) ([]repoclient.Chart, error) {
+func (s stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, _ repoclient.FetchOptions) ([]repoclient.Chart, error) {
 	return s.charts, s.err
+}
+
+type recordingRepoClient struct {
+	charts []repoclient.Chart
+	opts   repoclient.FetchOptions
+}
+
+func (s *recordingRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, opts repoclient.FetchOptions) ([]repoclient.Chart, error) {
+	s.opts = opts
+
+	return s.charts, nil
 }
 
 func newRepoSyncService(t *testing.T, stub stubRepoClient, objects ...client.Object) (*RepoSyncService, client.Client) {
@@ -48,6 +62,14 @@ func newRepoSyncService(t *testing.T, stub stubRepoClient, objects ...client.Obj
 		WithScheme(scheme).
 		WithObjects(objects...).
 		WithStatusSubresource(&helmv1alpha1.HelmClusterAddonChart{}, &helmv1alpha1.HelmClusterAddonRepository{}).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonChart, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{index.AddonChartValue(
+				addon.Spec.Chart.HelmClusterAddonRepository,
+				addon.Spec.Chart.HelmClusterAddonChartName,
+			)}
+		}).
 		Build()
 
 	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
@@ -55,6 +77,46 @@ func newRepoSyncService(t *testing.T, stub stubRepoClient, objects ...client.Obj
 	}
 
 	return NewRepoSyncService(c, scheme, factory), c
+}
+
+func ociVersion(version, mediaType string) repoclient.ChartVersion {
+	return repoclient.ChartVersion{Version: semver.MustParse(version), MediaType: mediaType}
+}
+
+func existingChart(repoName, chartName string, versions ...helmv1alpha1.HelmClusterAddonChartVersion) *helmv1alpha1.HelmClusterAddonChart {
+	return &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   naming.HelmClusterAddonChartName(repoName, chartName),
+			Labels: map[string]string{LabelRepositoryName: repoName, LabelChartName: chartName},
+		},
+		Status: helmv1alpha1.HelmClusterAddonChartStatus{Versions: versions},
+	}
+}
+
+func addonUsing(repoName, chartName, version string) *helmv1alpha1.HelmClusterAddon {
+	return &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "consumer"},
+		Spec: helmv1alpha1.HelmClusterAddonSpec{
+			Namespace: "app",
+			Chart: helmv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonRepository: repoName,
+				HelmClusterAddonChartName:  chartName,
+				Version:                    version,
+			},
+		},
+	}
+}
+
+func chartStatus(t *testing.T, c client.Client, repoName, chartName string) helmv1alpha1.HelmClusterAddonChartStatus {
+	t.Helper()
+
+	chart := &helmv1alpha1.HelmClusterAddonChart{}
+	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repoName, chartName)}
+	if err := c.Get(context.Background(), key, chart); err != nil {
+		t.Fatalf("getting chart: %v", err)
+	}
+
+	return chart.Status
 }
 
 func chartFixture(name, version string) repoclient.Chart {
@@ -77,7 +139,7 @@ func TestSyncCreatesChartsAndRecordsVersions(t *testing.T) {
 	}
 
 	chart := &helmv1alpha1.HelmClusterAddonChart{}
-	key := client.ObjectKey{Name: utils.GetHelmClusterAddonChartName(repo.Name, "podinfo")}
+	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
 	if err := c.Get(context.Background(), key, chart); err != nil {
 		t.Fatalf("chart was not created: %v", err)
 	}
@@ -90,7 +152,7 @@ func TestSyncPrunesStaleCharts(t *testing.T) {
 	repo := testRepository()
 	stale := &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   utils.GetHelmClusterAddonChartName(repo.Name, "removed"),
+			Name:   naming.HelmClusterAddonChartName(repo.Name, "removed"),
 			Labels: map[string]string{LabelRepositoryName: repo.Name, LabelChartName: "removed"},
 		},
 	}
@@ -142,5 +204,294 @@ func TestSyncReportsTransientFetchFailure(t *testing.T) {
 	}
 	if outcome.Fetch.Reason != helmv1alpha1.ReasonSyncFailed {
 		t.Fatalf("fetch reason is %q, want %q", outcome.Fetch.Reason, helmv1alpha1.ReasonSyncFailed)
+	}
+}
+
+func TestSyncPassesKnownVersionsToTheClient(t *testing.T) {
+	repo := testRepository()
+	chart := existingChart(repo.Name, "podinfo",
+		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+		helmv1alpha1.HelmClusterAddonChartVersion{
+			Version:            "6.7.2",
+			UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+			UnavailableMessage: "layer media type application/vnd.example is not a chart",
+		},
+	)
+
+	stub := &recordingRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{ociVersion("6.7.1", "application/tar+gzip")},
+	}}}
+
+	service, _ := newRepoSyncService(t, stubRepoClient{}, repo, chart)
+	service.clientFactory = func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+		return stub, nil
+	}
+
+	if outcome := service.Sync(context.Background(), repo, utils.InternalOCIRepository); outcome.Fetch.Err != nil {
+		t.Fatalf("fetch failed: %v", outcome.Fetch.Err)
+	}
+
+	known := stub.opts.Known["podinfo"]
+	if known["6.7.1"].MediaType != "application/tar+gzip" {
+		t.Fatalf("known media type is %q", known["6.7.1"].MediaType)
+	}
+	if known["6.7.2"].UnavailableReason != helmv1alpha1.UnavailableReasonUnsupportedMediaType {
+		t.Fatalf("known reason is %q", known["6.7.2"].UnavailableReason)
+	}
+	if known["6.7.2"].UnavailableMessage != "layer media type application/vnd.example is not a chart" {
+		t.Fatalf("known message is %q", known["6.7.2"].UnavailableMessage)
+	}
+	if stub.opts.Full {
+		t.Fatal("a normal pass must not request a full re-index")
+	}
+}
+
+func TestSyncRequestsFullPassOnForceReconcile(t *testing.T) {
+	repo := testRepository()
+	repo.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+
+	stub := &recordingRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{ociVersion("6.7.1", "application/tar+gzip")},
+	}}}
+
+	service, _ := newRepoSyncService(t, stubRepoClient{}, repo)
+	service.clientFactory = func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+		return stub, nil
+	}
+
+	service.Sync(context.Background(), repo, utils.InternalOCIRepository)
+
+	if !stub.opts.Full {
+		t.Fatal("force reconcile must request a full re-index")
+	}
+}
+
+func TestSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
+	repo := testRepository()
+	chart := existingChart(repo.Name, "podinfo",
+		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
+	)
+	addon := addonUsing(repo.Name, "podinfo", "6.7.1")
+
+	stub := stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{ociVersion("6.8.0", "application/tar+gzip")},
+	}}}
+
+	service, c := newRepoSyncService(t, stub, repo, chart, addon)
+	if outcome := service.Sync(context.Background(), repo, utils.InternalOCIRepository); outcome.Catalog.Err != nil {
+		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
+	}
+
+	status := chartStatus(t, c, repo.Name, "podinfo")
+
+	var retained, pruned bool
+	for _, version := range status.Versions {
+		switch version.Version {
+		case "6.7.1":
+			retained = true
+			if version.UnavailableReason != helmv1alpha1.UnavailableReasonRemovedFromRepository {
+				t.Fatalf("retained version reason is %q", version.UnavailableReason)
+			}
+			if version.MediaType != "application/tar+gzip" {
+				t.Fatalf("retained version lost its media type: %q", version.MediaType)
+			}
+		case "6.7.0":
+			pruned = true
+		}
+	}
+
+	if !retained {
+		t.Fatal("a referenced version must be retained")
+	}
+	if pruned {
+		t.Fatal("an unreferenced version must be pruned")
+	}
+}
+
+// TestSyncRetainsMediaTypeForReferencedUnsupportedVersion covers D4's fourth row: a
+// version whose tag was re-pushed as a non-chart artifact must keep its previously
+// recorded media type as long as an addon still references it, so the addon's internal
+// OCIRepository can still be built and the pull failure surfaces from the source
+// controller instead of the deploy gate. The same version, unreferenced, must not carry
+// the old media type forward: retention is scoped to in-use versions only.
+func TestSyncRetainsMediaTypeForReferencedUnsupportedVersion(t *testing.T) {
+	repo := testRepository()
+	chart := existingChart(repo.Name, "podinfo",
+		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
+	)
+	addon := addonUsing(repo.Name, "podinfo", "6.7.1")
+
+	stub := stubRepoClient{charts: []repoclient.Chart{{
+		Name: "podinfo",
+		Versions: []repoclient.ChartVersion{
+			{
+				Version:            semver.MustParse("6.7.1"),
+				UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+				UnavailableMessage: "layer media type \"application/vnd.oci.image.layer.v1.tar\" is not a helm chart layer",
+			},
+			{
+				Version:            semver.MustParse("6.7.0"),
+				UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+				UnavailableMessage: "layer media type \"application/vnd.oci.image.layer.v1.tar\" is not a helm chart layer",
+			},
+		},
+	}}}
+
+	service, c := newRepoSyncService(t, stub, repo, chart, addon)
+	if outcome := service.Sync(context.Background(), repo, utils.InternalOCIRepository); outcome.Catalog.Err != nil {
+		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
+	}
+
+	status := chartStatus(t, c, repo.Name, "podinfo")
+
+	var sawReferenced, sawUnreferenced bool
+	for _, version := range status.Versions {
+		switch version.Version {
+		case "6.7.1":
+			sawReferenced = true
+			if version.UnavailableReason != helmv1alpha1.UnavailableReasonUnsupportedMediaType {
+				t.Fatalf("referenced version reason is %q, want UnsupportedMediaType", version.UnavailableReason)
+			}
+			if version.MediaType != "application/tar+gzip" {
+				t.Fatalf("referenced version lost its media type: %q", version.MediaType)
+			}
+		case "6.7.0":
+			sawUnreferenced = true
+			if version.MediaType != "" {
+				t.Fatalf("unreferenced version must not carry its old media type forward: %q", version.MediaType)
+			}
+			if version.UnavailableReason != helmv1alpha1.UnavailableReasonUnsupportedMediaType {
+				t.Fatalf("unreferenced version reason is %q, want UnsupportedMediaType", version.UnavailableReason)
+			}
+		}
+	}
+
+	if !sawReferenced {
+		t.Fatal("referenced version 6.7.1 must be present")
+	}
+	if !sawUnreferenced {
+		t.Fatal("unreferenced version 6.7.0 must be present")
+	}
+}
+
+func TestSyncOrdersVersionsBySemverDescending(t *testing.T) {
+	repo := testRepository()
+	stub := stubRepoClient{charts: []repoclient.Chart{{
+		Name: "podinfo",
+		Versions: []repoclient.ChartVersion{
+			ociVersion("6.7.1", "application/tar+gzip"),
+			ociVersion("6.10.0", "application/tar+gzip"),
+			ociVersion("6.8.0", "application/tar+gzip"),
+		},
+	}}}
+
+	service, c := newRepoSyncService(t, stub, repo)
+	service.Sync(context.Background(), repo, utils.InternalOCIRepository)
+
+	got := chartStatus(t, c, repo.Name, "podinfo").Versions
+	want := []string{"6.10.0", "6.8.0", "6.7.1"}
+	if len(got) != len(want) {
+		t.Fatalf("versions are %v, want %v", got, want)
+	}
+	for i, version := range want {
+		if got[i].Version != version {
+			t.Fatalf("versions are %v, want %v", got, want)
+		}
+	}
+}
+
+func TestSyncCreatesChartWithNoUsableVersions(t *testing.T) {
+	repo := testRepository()
+	stub := stubRepoClient{charts: []repoclient.Chart{{
+		Name: "podinfo",
+		Versions: []repoclient.ChartVersion{{
+			Version:            semver.MustParse("6.7.1"),
+			UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
+			UnavailableMessage: "registry returned 500",
+		}},
+	}}}
+
+	service, c := newRepoSyncService(t, stub, repo)
+	outcome := service.Sync(context.Background(), repo, utils.InternalOCIRepository)
+
+	if outcome.Catalog.Err != nil {
+		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
+	}
+	if outcome.Fetch.Pending != 1 {
+		t.Fatalf("pending count is %d, want 1", outcome.Fetch.Pending)
+	}
+
+	status := chartStatus(t, c, repo.Name, "podinfo")
+	if len(status.Versions) != 1 || status.Versions[0].UnavailableReason != helmv1alpha1.UnavailableReasonResolvePending {
+		t.Fatalf("chart status is %+v", status.Versions)
+	}
+}
+
+func TestSyncKeepsChartReferencedByAddon(t *testing.T) {
+	repo := testRepository()
+	chart := existingChart(repo.Name, "podinfo",
+		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+	)
+	addon := addonUsing(repo.Name, "podinfo", "6.7.1")
+
+	service, c := newRepoSyncService(t, stubRepoClient{charts: nil}, repo, chart, addon)
+	if outcome := service.Sync(context.Background(), repo, utils.InternalOCIRepository); outcome.Catalog.Err != nil {
+		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
+	}
+
+	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
+	if err := c.Get(context.Background(), key, &helmv1alpha1.HelmClusterAddonChart{}); err != nil {
+		t.Fatalf("a chart referenced by an addon must not be deleted: %v", err)
+	}
+}
+
+// TestSyncReportsNoFetchAttemptOnClusterReadFailure covers the knownCharts failure
+// path: the registry is never contacted, so the outcome must say so. Reporting
+// FetchAttempted: true here (or a zero-value Fetch with Err == nil) would make a
+// cluster-side read failure look like a successful repository fetch to a caller
+// that only checks Fetch.Err.
+func TestSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T) {
+	repo := testRepository()
+	scheme := testScheme(t)
+
+	sentinel := errors.New("synthetic chart list failure")
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&helmv1alpha1.HelmClusterAddonChart{}, &helmv1alpha1.HelmClusterAddonRepository{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, wc client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*helmv1alpha1.HelmClusterAddonChartList); ok {
+					return sentinel
+				}
+
+				return wc.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+
+	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+		return stubRepoClient{}, nil
+	}
+	service := NewRepoSyncService(c, scheme, factory)
+
+	outcome := service.Sync(context.Background(), repo, utils.InternalOCIRepository)
+
+	if outcome.FetchAttempted {
+		t.Fatal("a cluster-side read failure before the fetch must not report FetchAttempted")
+	}
+	if outcome.Fetch.Err != nil {
+		t.Fatalf("Fetch must stay zero-valued on this path, got Err: %v", outcome.Fetch.Err)
+	}
+	if outcome.Catalog.Err == nil {
+		t.Fatal("expected a catalog error from the failed chart listing")
+	}
+	if !errors.Is(outcome.Catalog.Err, sentinel) {
+		t.Fatalf("catalog error must wrap the underlying failure, got %v", outcome.Catalog.Err)
 	}
 }

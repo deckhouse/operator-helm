@@ -17,6 +17,7 @@ limitations under the License.
 package helmclusteraddonrepository
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"time"
 
@@ -109,7 +110,7 @@ func Evaluate(in Inputs) Decision {
 	status.ConsecutiveFetchFailures = failures
 
 	if in.Attempted {
-		if fetchSucceeded && !catalogFailed {
+		if fetchSucceeded && !catalogFailed && in.Fetch.Pending == 0 {
 			status.LastSuccessfulSyncTime = &metav1.Time{Time: in.Now}
 		}
 
@@ -177,6 +178,18 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 	case catalogFailed:
 		return metav1.ConditionFalse, helmv1alpha1.ReasonCatalogUpdateFailed,
 			"Failed to update the chart catalog: " + in.Catalog.Err.Error()
+	case in.Fetch != nil && in.Fetch.Pending > 0 && in.Current.LastSuccessfulSyncTime == nil:
+		// On the very first pass there is no other signal that the read was incomplete:
+		// lastSuccessfulSyncTime is empty either way, so a user who just created the
+		// repository would see Synced=True over a partial catalog. Once a full pass has
+		// happened, the frozen Last Sync column carries that signal instead and Synced
+		// stops flapping because of a single unreadable tag. The state does not escalate:
+		// the failure counter is untouched and Stalled is never reached. The nil guard on
+		// in.Fetch protects against a pre-fetch cluster failure, which leaves Fetch nil
+		// while still setting Attempted; that case is matched by fetchFailed/catalogFailed
+		// above today, but the invariant lives elsewhere and must not be relied on here.
+		return metav1.ConditionFalse, helmv1alpha1.ReasonPartialSync,
+			fmt.Sprintf("The first repository read left %d chart versions unresolved", in.Fetch.Pending)
 	default:
 		return metav1.ConditionTrue, helmv1alpha1.ReasonSuccess, ""
 	}
@@ -421,6 +434,13 @@ func withJitter(delay time.Duration, jitter float64) time.Duration {
 
 func nextFailureCount(failures int32, attempted, fetchFailed bool, fetch *services.FetchOutcome) int32 {
 	if !attempted {
+		return failures
+	}
+
+	if fetch == nil {
+		// The pass ran but never reached the registry (a cluster-side failure, such
+		// as knownCharts, happened first). That is not evidence the registry
+		// recovered, so the counter is carried forward rather than reset.
 		return failures
 	}
 

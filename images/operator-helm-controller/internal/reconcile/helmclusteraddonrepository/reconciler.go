@@ -135,7 +135,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		outcome := r.chartSyncService.Sync(ctx, &repo, repoType)
 
 		in.Attempted = true
-		in.Fetch = &outcome.Fetch
+		if outcome.FetchAttempted {
+			// A cluster-side failure before the fetch (see RepoSyncService.Sync)
+			// leaves outcome.FetchAttempted false; in.Fetch must stay nil then, or
+			// its zero-value Err == nil would be read as a successful fetch and
+			// reset ConsecutiveFetchFailures / mark Ready=True off nothing.
+			in.Fetch = &outcome.Fetch
+		}
 		in.Catalog = &outcome.Catalog
 	}
 

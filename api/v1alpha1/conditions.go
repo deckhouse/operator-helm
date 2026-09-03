@@ -51,6 +51,12 @@ const (
 	ReasonSourceRejectedRequest     = "SourceRejectedRequest"
 	ReasonInvalidRepositoryURL      = "InvalidRepositoryURL"
 	ReasonUnsupportedRepositoryType = "UnsupportedRepositoryType"
+	// ReasonChartVersionRemoved marks an addon whose chart version is still recorded in
+	// the catalog but is no longer offered by the repository.
+	ReasonChartVersionRemoved = "ChartVersionRemoved"
+	// ReasonPartialSync marks a repository whose first catalog read left some chart
+	// versions unresolved.
+	ReasonPartialSync = "PartialSync"
 
 	// HelmRelease error reasons
 	ReasonReleaseFailed = "ReleaseFailed"

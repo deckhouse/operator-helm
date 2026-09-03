@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
@@ -188,7 +189,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	var repoRes services.OCIRepoResult
 	var releaseRes services.ReleaseResult
 
-	_, addonChartErr := r.getHelmClusterAddonChart(ctx, addon)
+	_, chartVersion, addonChartErr := r.getHelmClusterAddonChart(ctx, addon, repoType)
 
 	switch repoType {
 	case utils.InternalHelmRepository:
@@ -212,8 +213,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		chartRes = r.chartService.EnsureHelmChart(ctx, addon)
 	case utils.InternalOCIRepository:
 		if addonChartErr != nil {
+			// addonChartErr, not err: err is the (nil) result of GetRepositoryType above,
+			// so passing it dropped the real cause.
 			repoRes = services.OCIRepoResult{
-				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "failed to get desired chart version", err),
+				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "failed to get desired chart version", addonChartErr),
 			}
 
 			break
@@ -226,7 +229,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			break
 		}
 
-		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo)
+		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo, chartVersion)
 	default:
 		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
 			addon,
@@ -414,22 +417,55 @@ func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile
 	return nil
 }
 
-func (r *Reconciler) getHelmClusterAddonChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*helmv1alpha1.HelmClusterAddonChart, error) {
-	addonChartName := utils.GetHelmClusterAddonChartName(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName)
+// getHelmClusterAddonChart resolves the catalog entry for the version the addon asks
+// for. For an OCI repository an entry is usable only when it carries a media type:
+// that is exactly "we know enough to build the internal OCIRepository". A version
+// retained after its tag disappeared keeps its media type, so this gate stays open for
+// it and the addon keeps reconciling everything else — its values, its maintenance
+// mode, its removal.
+func (r *Reconciler) getHelmClusterAddonChart(
+	ctx context.Context,
+	addon *helmv1alpha1.HelmClusterAddon,
+	repoType utils.InternalRepositoryType,
+) (*helmv1alpha1.HelmClusterAddonChart, *helmv1alpha1.HelmClusterAddonChartVersion, error) {
+	addonChartName := naming.HelmClusterAddonChartName(
+		addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName,
+	)
 	addonChart := &helmv1alpha1.HelmClusterAddonChart{}
 
-	err := r.Get(ctx, types.NamespacedName{Name: addonChartName}, addonChart)
-	if err != nil {
-		return nil, fmt.Errorf("getting helm cluster addon chart: %w", err)
+	if err := r.Get(ctx, types.NamespacedName{Name: addonChartName}, addonChart); err != nil {
+		return nil, nil, fmt.Errorf("getting helm cluster addon chart: %w", err)
 	}
 
-	for _, version := range addonChart.Status.Versions {
-		if version.Version == addon.Spec.Chart.Version {
-			return addonChart, nil
+	for i := range addonChart.Status.Versions {
+		version := &addonChart.Status.Versions[i]
+		if version.Version != addon.Spec.Chart.Version {
+			continue
 		}
+
+		if repoType == utils.InternalOCIRepository && version.MediaType == "" {
+			return nil, nil, fmt.Errorf(
+				"chart version %q cannot be deployed: %s",
+				version.Version, versionUnavailableDetail(*version),
+			)
+		}
+
+		return addonChart, version, nil
 	}
 
-	return nil, fmt.Errorf("helm cluster addon chart does not have version %q", addon.Spec.Chart.Version)
+	return nil, nil, fmt.Errorf("helm cluster addon chart does not have version %q", addon.Spec.Chart.Version)
+}
+
+// versionUnavailableDetail explains why a catalog entry is not deployable.
+func versionUnavailableDetail(version helmv1alpha1.HelmClusterAddonChartVersion) string {
+	switch {
+	case version.UnavailableReason == "":
+		return "the repository catalog has not resolved it yet"
+	case version.UnavailableMessage == "":
+		return version.UnavailableReason
+	default:
+		return version.UnavailableReason + ": " + version.UnavailableMessage
+	}
 }
 
 func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.OCIRepoResult, releaseRes services.ReleaseResult) status.MutatorFunc {

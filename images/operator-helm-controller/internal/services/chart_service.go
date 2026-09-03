@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -145,7 +146,7 @@ func applyHelmChartSpec(addon *helmv1alpha1.HelmClusterAddon, existing *sourcev1
 
 	existing.Labels[helmv1alpha1.LabelManagedBy] = helmv1alpha1.LabelManagedByValue
 	existing.Labels[helmv1alpha1.HelmClusterAddonLabelSourceName] = addon.Name
-	existing.Labels[helmv1alpha1.HelmClusterAddonChartLabelSourceName] = utils.GetHelmClusterAddonChartName(
+	existing.Labels[helmv1alpha1.HelmClusterAddonChartLabelSourceName] = naming.HelmClusterAddonChartName(
 		addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName,
 	)
 

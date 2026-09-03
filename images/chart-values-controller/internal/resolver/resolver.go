@@ -39,12 +39,9 @@ import (
 	"github.com/deckhouse/chart-values-controller/internal/cache"
 	"github.com/deckhouse/chart-values-controller/internal/labels"
 	"github.com/deckhouse/chart-values-controller/internal/naming"
+	apinaming "github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
-
-// helmChartLayerMediaType is the OCI media type of the layer that holds a
-// packaged Helm chart.
-const helmChartLayerMediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
 // RepositoryKind identifies the kind of repository a chart lives in. New
 // repository kinds are added as new constants plus a case in Resolve.
@@ -126,6 +123,64 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 	}
 }
 
+// chartVersionMediaType reads the OCI layer media type recorded for the requested
+// version by operator-helm-controller. That status is the single source of truth:
+// resolving the media type here would duplicate the logic and spend registry requests
+// on an answer that is already in the cluster.
+//
+// A non-nil Result means the caller must stop and return it.
+func (r *Resolver) chartVersionMediaType(ctx context.Context, req Request) (string, *Result, error) {
+	chart := &helmv1alpha1.HelmClusterAddonChart{}
+	key := types.NamespacedName{Name: apinaming.HelmClusterAddonChartName(req.RepositoryName, req.Chart)}
+
+	if err := r.client.Get(ctx, key, chart); err != nil {
+		if apierrors.IsNotFound(err) {
+			// The chart object is created by operator-helm-controller when it synchronizes
+			// the repository: until then the catalog simply has not caught up.
+			return "", &Result{Outcome: OutcomePending}, nil
+		}
+
+		return "", nil, fmt.Errorf("getting chart: %w", err)
+	}
+
+	for _, version := range chart.Status.Versions {
+		if version.Version != req.Version {
+			continue
+		}
+
+		if version.MediaType == "" {
+			if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending || version.UnavailableReason == "" {
+				// Both an explicit ResolvePending and an empty reason mean the catalog has
+				// not reached a verdict yet, so the caller should retry rather than being
+				// told the version is permanently unreadable. An empty reason alongside an
+				// empty media type is the pre-upgrade shape of a version entry (written
+				// before this controller recorded verdicts at all): the client's
+				// KnownVersions treats it as never examined and re-resolves it on the very
+				// next normal synchronization, exactly like ResolvePending.
+				return "", &Result{Outcome: OutcomePending}, nil
+			}
+
+			// Every other reason is a durable verdict that will not change without a
+			// change in the repository (e.g. an unsupported media type, or a removed tag
+			// with no media type on record), so it is reported as values-not-found,
+			// naming why.
+			detail := version.UnavailableReason
+			if version.UnavailableMessage != "" {
+				detail += ": " + version.UnavailableMessage
+			}
+
+			return "", &Result{
+				Outcome: OutcomeValuesNotFound,
+				Message: fmt.Sprintf("chart version %s is not readable (%s)", req.Version, detail),
+			}, nil
+		}
+
+		return version.MediaType, nil, nil
+	}
+
+	return "", &Result{Outcome: OutcomePending}, nil
+}
+
 // resolveHelmClusterAddon ensures the auxiliary source resource for a chart from
 // a HelmClusterAddonRepository exists, inspects its status and returns the
 // chart's values.yaml once the artifact is ready.
@@ -154,7 +209,15 @@ func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Re
 
 	switch {
 	case isOCI(repo.Spec.URL):
-		ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt)
+		mediaType, done, err := r.chartVersionMediaType(ctx, req)
+		if err != nil {
+			return Result{}, err
+		}
+		if done != nil {
+			return *done, nil
+		}
+
+		ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt, mediaType)
 		if err != nil {
 			return Result{}, err
 		}
@@ -234,7 +297,7 @@ func (r *Resolver) ensureHelmChart(ctx context.Context, repo *helmv1alpha1.HelmC
 	return chart, false, nil
 }
 
-func (r *Resolver) ensureOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, req Request, name, expiresAt string) (*sourcev1.OCIRepository, error) {
+func (r *Resolver) ensureOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, req Request, name, expiresAt, mediaType string) (*sourcev1.OCIRepository, error) {
 	authSecret, tlsSecret, err := r.findRepositorySecretNames(ctx, repo.Name)
 	if err != nil {
 		return nil, err
@@ -254,7 +317,7 @@ func (r *Resolver) ensureOCIRepository(ctx context.Context, repo *helmv1alpha1.H
 		ociRepo.Spec.Interval = r.sourceInterval
 		ociRepo.Spec.Insecure = repo.Spec.InsecureSkipVerify
 		ociRepo.Spec.LayerSelector = &sourcev1.OCILayerSelector{
-			MediaType: helmChartLayerMediaType,
+			MediaType: mediaType,
 			Operation: "copy",
 		}
 

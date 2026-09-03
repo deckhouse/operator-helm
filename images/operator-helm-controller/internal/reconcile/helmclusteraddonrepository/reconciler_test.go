@@ -36,6 +36,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -48,7 +49,7 @@ type stubRepoClient struct {
 
 // The receiver is a pointer so a test can change what the repository returns
 // between reconcile passes.
-func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig) ([]repoclient.Chart, error) {
+func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, _ repoclient.FetchOptions) ([]repoclient.Chart, error) {
 	return s.charts, s.err
 }
 
@@ -73,6 +74,14 @@ func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object)
 			&helmv1alpha1.HelmClusterAddonRepository{},
 			&helmv1alpha1.HelmClusterAddonChart{},
 		).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonChart, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{index.AddonChartValue(
+				addon.Spec.Chart.HelmClusterAddonRepository,
+				addon.Spec.Chart.HelmClusterAddonChartName,
+			)}
+		}).
 		Build()
 
 	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {

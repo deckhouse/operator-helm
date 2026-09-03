@@ -20,13 +20,13 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/index"
 )
 
 func MapInternalResources(controllerName, targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName string) handler.MapFunc {
@@ -61,24 +61,10 @@ func MapInternalResources(controllerName, targetNamespace, labelManagedBy, label
 	}
 }
 
-const AddonRepositoryIndex = ".spec.chart.helmClusterAddonRepository"
-
-func SetupAddonRepositoryIndex(mgr ctrl.Manager) error {
-	return mgr.GetFieldIndexer().IndexField(context.Background(), &helmv1alpha1.HelmClusterAddon{}, AddonRepositoryIndex,
-		func(obj client.Object) []string {
-			addon := obj.(*helmv1alpha1.HelmClusterAddon)
-			if addon.Spec.Chart.HelmClusterAddonRepository == "" {
-				return nil
-			}
-			return []string{addon.Spec.Chart.HelmClusterAddonRepository}
-		},
-	)
-}
-
 func MapRepositoryToAddons(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		addonList := &helmv1alpha1.HelmClusterAddonList{}
-		if err := c.List(ctx, addonList, client.MatchingFields{AddonRepositoryIndex: obj.GetName()}); err != nil {
+		if err := c.List(ctx, addonList, client.MatchingFields{index.AddonRepository: obj.GetName()}); err != nil {
 			log.FromContext(ctx).Error(err, "Failed to list HelmClusterAddons for repository mapping")
 			return nil
 		}
