@@ -24,11 +24,13 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
+	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 )
 
@@ -257,6 +259,64 @@ func UntilModuleEnabled(deployAt metav1.Time, timeout time.Duration) {
 			}
 		}
 	}, "60s", "1s")
+
+	// The caBundle check above only proves that two API objects agree with each
+	// other: the ValidatingWebhookConfiguration's caBundle equals ca.crt in the
+	// controller's TLS Secret. It does not prove the API server can actually
+	// complete a TLS handshake with the certificate the running webhook pod
+	// serves. Only HelmClusterAddon goes through that webhook, so a dry-run
+	// create of one is the faithful, side-effect-free way to exercise the real
+	// admission path before any spec relies on it.
+	By("Verifying the HelmClusterAddon validating webhook is reachable")
+
+	probe := &apiv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "e2e-webhook-probe-preflight",
+		},
+		Spec: apiv1alpha1.HelmClusterAddonSpec{
+			Chart: apiv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonChartName:  "e2e-webhook-probe",
+				HelmClusterAddonRepository: "e2e-webhook-probe",
+				Version:                    "0.0.0",
+			},
+			Namespace: "default",
+		},
+	}
+
+	Eventually(func(g Gomega) {
+		_, err := framework.GetClients().OperatorClient().HelmV1alpha1().
+			HelmClusterAddons().
+			Create(context.TODO(), probe, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+
+		// Schema validation runs before admission webhooks in the API server's
+		// pipeline, so an Invalid response means the request never reached the
+		// webhook at all. That is not "not ready yet" — it means the probe object
+		// above has drifted from the CRD's own constraints (a new required field,
+		// a tightened MinLength, ...) and this check has stopped proving anything
+		// about the webhook. Fail the setup immediately rather than retrying a
+		// broken probe until the timeout.
+		if apierrors.IsInvalid(err) {
+			Expect(err).NotTo(HaveOccurred(),
+				"the webhook-reachability probe object is no longer valid against the "+
+					"HelmClusterAddon CRD (%v); fix the probe built in UntilModuleEnabled "+
+					"to satisfy the current CRD constraints — as written it can no longer "+
+					"prove the validating webhook is reachable", err)
+		}
+
+		if err == nil || !apierrors.IsInternalError(err) {
+			// Either the dry-run create was admitted, or it was rejected with a
+			// verdict that only the webhook itself could have produced (e.g. a
+			// namespace or uniqueness violation). Both prove the webhook was
+			// actually called, which is all this probe needs to establish.
+			return
+		}
+
+		g.Expect(err).NotTo(HaveOccurred(),
+			"the HelmClusterAddon validating webhook is still not reachable: %v. "+
+				"This is usually caused by the webhook serving a certificate the "+
+				"API server does not yet trust, even though the caBundle/ca.crt "+
+				"check above already passed.", err)
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
 func UntilModuleDisabled(timeout time.Duration) {
