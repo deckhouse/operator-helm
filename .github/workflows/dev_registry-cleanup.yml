@@ -1,0 +1,28 @@
+name: Cleanup dev registry
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "12 0 * * 6" # раз в неделю, суббота 00:12 UTC
+
+env:
+  MODULES_MODULE_SOURCE: ${{ vars.DEV_MODULE_SOURCE }}
+  MODULES_MODULE_NAME: ${{ vars.MODULES_MODULE_NAME }}
+
+jobs:
+  cleanup:
+    runs-on: [self-hosted, regular]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: deckhouse/modules-actions/setup@v16
+        with:
+          registry: ${{ vars.DEV_REGISTRY }}
+          registry_login: ${{ vars.DEV_MODULES_REGISTRY_LOGIN }}
+          registry_password: ${{ secrets.DEV_MODULES_REGISTRY_PASSWORD }}
+      - name: Cleanup
+        env:
+          WERF_DRY_RUN: "false"
+        run: |
+          werf cleanup \
+            --repo "${MODULES_MODULE_SOURCE}/${MODULES_MODULE_NAME}" \
+            --without-kube=true --config werf_cleanup.yaml
