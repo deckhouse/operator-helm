@@ -220,10 +220,11 @@ func UntilModuleEnabled(deployAt metav1.Time, timeout time.Duration) {
 			Pods(moduleNamespace).
 			List(context.Background(), metav1.ListOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(pods.Items).NotTo(BeEmpty(),
+		activePods := notTerminating(pods.Items)
+		g.Expect(activePods).NotTo(BeEmpty(),
 			"no pods found in namespace %s", moduleNamespace)
 
-		for _, pod := range pods.Items {
+		for _, pod := range activePods {
 			g.Expect(pod.CreationTimestamp.After(deployAt.UTC().Add(-1*time.Second))).To(BeTrue(),
 				"pod was created at %v, which is not after %v", pod.CreationTimestamp, deployAt)
 			g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning),
@@ -242,15 +243,20 @@ func UntilModuleEnabled(deployAt metav1.Time, timeout time.Duration) {
 
 	UntilAllPodsReady("d8-system", "app=webhook-handler", 1, timeout)
 
+	// The delete above may still be tearing down the old pod when this Consistently
+	// starts: the terminating pod lingers in List results alongside the already-Running
+	// replacement UntilAllPodsReady just confirmed, so it must be filtered out here too
+	// or a single healthy pod counts as two.
 	Consistently(func(g Gomega) {
 		pods, err := framework.GetClients().KubeClient().CoreV1().
 			Pods("d8-system").
 			List(context.Background(), metav1.ListOptions{LabelSelector: "app=webhook-handler"})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(len(pods.Items)).To(Equal(1),
-			"expected %d pods, got %d", 1, len(pods.Items))
+		activePods := notTerminating(pods.Items)
+		g.Expect(len(activePods)).To(Equal(1),
+			"expected %d pods, got %d", 1, len(activePods))
 
-		for _, pod := range pods.Items {
+		for _, pod := range activePods {
 			g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning),
 				"pod %s phase: %s", pod.Name, pod.Status.Phase)
 			for _, cs := range pod.Status.ContainerStatuses {
