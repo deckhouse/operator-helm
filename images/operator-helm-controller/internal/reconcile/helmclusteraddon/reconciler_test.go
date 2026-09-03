@@ -148,6 +148,30 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			repoType: utils.InternalHelmRepository,
 		},
 		{
+			// The repository's URL just switched from oci:// to https://: the
+			// catalog entry is still OCI-era (it carries a media type from the last
+			// OCI sync), but the Helm gate never reads the media type, so it passes.
+			name: "oci-era entry with a media type still passes right after switching to a helm repository",
+			version: helmv1alpha1.HelmClusterAddonChartVersion{
+				Version:   "6.7.1",
+				MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+			},
+			repoType: utils.InternalHelmRepository,
+		},
+		{
+			// The repository's URL just switched from https:// to oci://, but the
+			// first OCI sync has not resolved the tag's media type yet: the entry is
+			// still Helm-era (no media type, no reason), so the OCI gate must reject
+			// it rather than let an unresolved layer through.
+			name: "helm-era entry with no media type is rejected right after switching to an oci repository",
+			version: helmv1alpha1.HelmClusterAddonChartVersion{
+				Version: "6.7.1",
+			},
+			repoType:       utils.InternalOCIRepository,
+			wantErr:        true,
+			wantErrContain: "has not resolved it yet",
+		},
+		{
 			name:           "a version the addon does not reference is rejected",
 			version:        helmv1alpha1.HelmClusterAddonChartVersion{Version: "9.9.9"},
 			repoType:       utils.InternalOCIRepository,
