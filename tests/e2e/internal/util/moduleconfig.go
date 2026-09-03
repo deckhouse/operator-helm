@@ -237,15 +237,15 @@ func UntilModuleEnabled(deployAt metav1.Time, timeout time.Duration) {
 
 	Eventually(func(g Gomega) {
 		err := framework.GetClients().KubeClient().CoreV1().Pods("d8-system").DeleteCollection(context.TODO(), metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: "app=webhook-handler"})
-		Expect(err).NotTo(HaveOccurred(), "should remove deckhouse webhook-hander pods in d8-system namespace")
-	}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval)
+		g.Expect(err).NotTo(HaveOccurred(), "should remove deckhouse webhook-handler pods in d8-system namespace")
+	}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
 	UntilAllPodsReady("d8-system", "app=webhook-handler", 1, timeout)
 
 	Consistently(func(g Gomega) {
 		pods, err := framework.GetClients().KubeClient().CoreV1().
 			Pods("d8-system").
-			List(context.Background(), metav1.ListOptions{LabelSelector: "app=webhook-hander"})
+			List(context.Background(), metav1.ListOptions{LabelSelector: "app=webhook-handler"})
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(len(pods.Items)).To(Equal(1),
 			"expected %d pods, got %d", 1, len(pods.Items))
@@ -258,7 +258,7 @@ func UntilModuleEnabled(deployAt metav1.Time, timeout time.Duration) {
 					"pod %s container %s not ready", pod.Name, cs.Name)
 			}
 		}
-	}, "60s", "1s")
+	}, "60s", "1s").Should(Succeed())
 
 	// The caBundle check above only proves that two API objects agree with each
 	// other: the ValidatingWebhookConfiguration's caBundle equals ca.crt in the
