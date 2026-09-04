@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -170,18 +169,6 @@ func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, addon *helmv1alpha
 	}
 
 	return nil
-}
-
-// setReconcileRequestAnnotations stamps the flux reconcile/force request
-// annotations so helm-controller reconciles the release immediately.
-func setReconcileRequestAnnotations(release *helmv2.HelmRelease) {
-	if release.Annotations == nil {
-		release.Annotations = map[string]string{}
-	}
-
-	ts := time.Now().UTC().Format(time.RFC3339)
-	release.Annotations[meta.ForceRequestAnnotation] = ts
-	release.Annotations[meta.ReconcileRequestAnnotation] = ts
 }
 
 func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2.HelmRelease, repoType utils.InternalRepositoryType, targetNamespace string) error {
