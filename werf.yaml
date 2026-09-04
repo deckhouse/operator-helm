@@ -1,6 +1,10 @@
 project: operator-helm
 configVersion: 1
 build:
+  cacheVersion: "1"
+  sbom:
+    enable: true
+    standard: cyclonedx@1.6
   imageSpec:
     author: "Deckhouse Kubernetes Platform <contact@deckhouse.io>"
     clearHistory: true
@@ -33,7 +37,7 @@ build:
 {{- end }}
 ---
 image: images-digests
-fromImage: builder/alpine
+fromImage: builder/distroless
 dependencies:
   {{- range $ImageID := $.ImagesIDList }}
   {{- $ImageNameCamel  := $ImageID | splitList "/" | last  | camelcase | untitle }}
@@ -43,9 +47,11 @@ dependencies:
     - type: ImageDigest
       targetEnv: MODULE_IMAGE_DIGEST_{{ $ImageNameCamel }}
   {{- end }}
+packages:
+  - type: os-pm
+    spec:
+      - jq==1.8.1
 shell:
-  beforeInstall:
-    - apk add --no-cache jq
   setup:
     - |
       env | grep MODULE_IMAGE_DIGEST | jq -Rn '
@@ -69,7 +75,7 @@ import:
   after: setup
 ---
 image: prepare-bundle
-fromImage: builder/alpine
+fromImage: builder/distroless
 import:
 - image: images-digests
   add: /
@@ -84,9 +90,6 @@ import:
 git:
   - add: /
     to: /prep-bundle
-    stageDependencies:
-      install:
-      - '**/*'
     includePaths:
       - CHANGELOG
       - charts
@@ -104,10 +107,13 @@ git:
       - docs/images/*.drawio
       - docs/images/*.sh
       - docs/internal
+packages:
+  - type: os-pm
+    spec:
+      - jq==1.8.1
 shell:
   install:
     - |
-      apk add --no-cache jq
       jq -n --arg version "{{ env "MODULES_MODULE_TAG" "dev"}}" '{"version": $version}' > /prep-bundle/version.json
       cp -f CHANGELOG/{{ env "MODULES_MODULE_TAG" "dev" }}.yaml /prep-bundle/changelog.yaml || touch /prep-bundle/changelog.yaml
     - ls -la /prep-bundle
