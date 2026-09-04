@@ -75,7 +75,7 @@ import:
   after: setup
 ---
 image: prepare-bundle
-fromImage: builder/alpine
+fromImage: builder/distroless
 import:
 - image: images-digests
   add: /
