@@ -1,0 +1,11 @@
+
+breaking: []
+features:
+  - "rework HelmClusterAddonRepository status semantics"
+  - "support legacy OCI chart media type with incremental indexing"
+fixes:
+  - "propagate force reconcile to internal sources"
+security: []
+chore:
+  - "add dev registry cleanup job"
+
