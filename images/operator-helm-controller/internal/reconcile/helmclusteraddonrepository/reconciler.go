@@ -134,10 +134,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	if in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
 		ShouldAttempt(in.Current, in.Generation, in.Now, in.Forced) {
-		if in.Forced {
-			if err := r.markForceReconcileInProgress(ctx, &repo); err != nil {
-				return reconcile.Result{}, err
-			}
+		if err := r.markSyncInProgress(ctx, &repo, in.Forced); err != nil {
+			return reconcile.Result{}, err
 		}
 
 		outcome := r.chartSyncService.Sync(ctx, &repo, repoType)
@@ -272,24 +270,37 @@ func (r *Reconciler) awaitInternalResourceDeletion(ctx context.Context, repo *he
 	return reconcile.Result{RequeueAfter: internalResourceDeletionRequeueInterval}, nil
 }
 
-// markForceReconcileInProgress publishes Reconciling before the forced
-// synchronization starts. A forced pass is the one case where someone is watching:
-// they annotated the repository a moment ago and want to see it was picked up, and
-// the read that follows can take a while. The condition is deliberately written
-// outside the Inputs snapshot Evaluate works from, so the status computed at the
-// end of the pass removes it again without a rule of its own.
-func (r *Reconciler) markForceReconcileInProgress(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+// markSyncInProgress publishes Reconciling before the synchronization starts, so
+// a pass that is about to read the repository says so while the read is running
+// instead of only once it is over — a read can take a while, and until it
+// returns nothing else on the status moves. The reason distinguishes the two ways
+// a pass is triggered: ForceReconcile is the case someone is actively watching,
+// having annotated the repository a moment ago to see it picked up, while
+// Synchronization is the ordinary scheduled cadence. The condition is
+// deliberately written outside the Inputs snapshot Evaluate works from, so the
+// status computed at the end of the pass removes it again without a rule of its
+// own.
+func (r *Reconciler) markSyncInProgress(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	forced bool,
+) error {
+	reason, message := helmv1alpha1.ReasonSynchronization, "Repository synchronization in progress"
+	if forced {
+		reason, message = helmv1alpha1.ReasonForceReconcile, "Forced reconciliation in progress"
+	}
+
 	err := r.statusManager.PatchStatus(ctx, repo, func() {
 		apimeta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
 			Type:               helmv1alpha1.ConditionTypeReconciling,
 			Status:             metav1.ConditionTrue,
-			Reason:             helmv1alpha1.ReasonForceReconcile,
-			Message:            "Forced reconciliation in progress",
+			Reason:             reason,
+			Message:            message,
 			ObservedGeneration: repo.Generation,
 		})
 	})
 	if client.IgnoreNotFound(err) != nil {
-		return fmt.Errorf("publishing forced reconciliation progress: %w", err)
+		return fmt.Errorf("publishing synchronization progress: %w", err)
 	}
 
 	return nil

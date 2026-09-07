@@ -584,3 +584,82 @@ func TestReconcileUnforcedRepositoryRecordsNoForceReconcile(t *testing.T) {
 			settled.Status.LastForceReconcileTime)
 	}
 }
+
+// TestReconcileScheduledSynchronizationReportsProgressBeforeReading pins that an
+// ordinary, unrequested synchronization also publishes Reconciling before the
+// repository is read — with its own reason, so the condition says whether the
+// pass is running on the schedule or on a force request. Without it a scheduled
+// pass writes nothing until the read is over, and a slow repository looks idle
+// for the whole read.
+func TestReconcileScheduledSynchronizationReportsProgressBeforeReading(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+
+	var inFlight *metav1.Condition
+	stub.onFetch = func() {
+		observed := &helmv1alpha1.HelmClusterAddonRepository{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), observed); err != nil {
+			t.Errorf("getting repository during the fetch: %v", err)
+
+			return
+		}
+
+		inFlight = apimeta.FindStatusCondition(observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if inFlight == nil {
+		t.Fatal("Reconciling must be published before the repository is read")
+	}
+	if inFlight.Status != metav1.ConditionTrue || inFlight.Reason != helmv1alpha1.ReasonSynchronization {
+		t.Fatalf("Reconciling is %s/%s, want True/%s",
+			inFlight.Status, inFlight.Reason, helmv1alpha1.ReasonSynchronization)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), settled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling must be gone once the scheduled pass finished, got %+v", cond)
+	}
+}
+
+// TestReconcileSkippedSynchronizationReportsNoProgress is the complement: a pass
+// that is not due must not claim a synchronization is running. The progress
+// condition is tied to an actual attempt, not to every trip through Reconcile.
+func TestReconcileSkippedSynchronizationReportsNoProgress(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+	reconcileUntilStable(t, r, repo.Name)
+
+	// The schedule is now set in the future, so this pass performs no attempt.
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), settled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("a pass without an attempt must not report Reconciling, got %+v", cond)
+	}
+}
