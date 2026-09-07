@@ -20,15 +20,24 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	helmv2 "github.com/werf/3p-helm-controller/api/v2"
+	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/manager/status"
+	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -232,5 +241,345 @@ func TestGetHelmClusterAddonChartMissingChart(t *testing.T) {
 	}
 	if gotChart != nil || gotVersion != nil {
 		t.Fatalf("expected nil chart and version on error, got chart=%v version=%v", gotChart, gotVersion)
+	}
+}
+
+// newForceTestReconciler builds a reconciler with the full service set, so a test
+// can drive a complete pass rather than a single helper.
+func newForceTestReconciler(
+	t *testing.T,
+	interceptors interceptor.Funcs,
+	objects ...client.Object,
+) (*Reconciler, client.Client) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		clientgoscheme.AddToScheme,
+		helmv1alpha1.AddToScheme,
+		sourcev1.AddToScheme,
+		helmv2.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatalf("registering scheme: %v", err)
+		}
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithStatusSubresource(&helmv1alpha1.HelmClusterAddon{}).
+		WithInterceptorFuncs(interceptors).
+		Build()
+
+	return New(
+		c,
+		services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
+		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
+		services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
+		services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
+		status.NewManager(c),
+	), c
+}
+
+func ociRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
+	return &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
+		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "oci://ghcr.io/example/podinfo"},
+	}
+}
+
+func forceTestFixtures() []client.Object {
+	return []client.Object{
+		ociRepositoryFixture(),
+		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+			Version:   "6.7.1",
+			MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+		}),
+	}
+}
+
+func reconcileAddon(t *testing.T, r *Reconciler, name string) {
+	t.Helper()
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+}
+
+// TestReconcileForcedAddonReportsProgressBeforeWorking pins that Reconciling is
+// published before the internal source is touched. The user annotated the addon a
+// moment ago and is watching it; a condition written only after the release has
+// been reconciled would report progress that is already over.
+func TestReconcileForcedAddonReportsProgressBeforeWorking(t *testing.T) {
+	addon := testAddon()
+	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+
+	var inFlight *metav1.Condition
+	var c client.Client
+
+	// The internal source is reconciled with CreateOrPatch, so the first write to
+	// it is a Create on a fresh addon and a Patch on an existing one; hook both so
+	// the test does not depend on which one this fixture takes.
+	captureAddonStatus := func(ctx context.Context) {
+		if inFlight != nil {
+			return
+		}
+
+		observed := &helmv1alpha1.HelmClusterAddon{}
+		if err := c.Get(ctx, types.NamespacedName{Name: addon.Name}, observed); err == nil {
+			inFlight = apimeta.FindStatusCondition(
+				observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+		}
+	}
+
+	observe := interceptor.Funcs{
+		Create: func(
+			ctx context.Context,
+			inner client.WithWatch,
+			obj client.Object,
+			opts ...client.CreateOption,
+		) error {
+			if _, isSource := obj.(*sourcev1.OCIRepository); isSource {
+				captureAddonStatus(ctx)
+			}
+
+			return inner.Create(ctx, obj, opts...)
+		},
+		Patch: func(
+			ctx context.Context,
+			inner client.WithWatch,
+			obj client.Object,
+			patch client.Patch,
+			opts ...client.PatchOption,
+		) error {
+			if _, isSource := obj.(*sourcev1.OCIRepository); isSource {
+				captureAddonStatus(ctx)
+			}
+
+			return inner.Patch(ctx, obj, patch, opts...)
+		},
+	}
+
+	r, built := newForceTestReconciler(t, observe, append(forceTestFixtures(), addon)...)
+	c = built
+
+	reconcileAddon(t, r, addon.Name)
+
+	if inFlight == nil {
+		t.Fatal("Reconciling must be published before the internal source is reconciled")
+	}
+	if inFlight.Status != metav1.ConditionTrue || inFlight.Reason != helmv1alpha1.ReasonForceReconcile {
+		t.Fatalf("Reconciling is %s/%s, want True/%s",
+			inFlight.Status, inFlight.Reason, helmv1alpha1.ReasonForceReconcile)
+	}
+}
+
+// TestReconcileForcedAddonRecordsCompletion covers the other end of the same pass.
+func TestReconcileForcedAddonRecordsCompletion(t *testing.T) {
+	addon := testAddon()
+	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+
+	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
+
+	// metav1.Time serialises at second precision, so the stored stamp can land
+	// just before an untruncated wall-clock reading of the same second.
+	before := time.Now().UTC().Truncate(time.Second)
+
+	reconcileAddon(t, r, addon.Name)
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling must be gone once the forced pass finished, got %+v", cond)
+	}
+	if settled.Status.LastForceReconcileTime == nil {
+		t.Fatal("lastForceReconcileTime must be recorded by the forced pass")
+	}
+	if settled.Status.LastForceReconcileTime.Time.Before(before) {
+		t.Fatalf("lastForceReconcileTime is %v, want at or after %v",
+			settled.Status.LastForceReconcileTime.Time, before)
+	}
+	if _, found := settled.Annotations[helmv1alpha1.AnnotationForceReconcile]; found {
+		t.Fatal("the force annotation must be consumed by the pass it triggered")
+	}
+}
+
+// TestReconcileUnforcedAddonRecordsNoForceReconcile is the complement: an ordinary
+// pass must not report a force request that was never made.
+func TestReconcileUnforcedAddonRecordsNoForceReconcile(t *testing.T) {
+	addon := testAddon()
+
+	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
+
+	reconcileAddon(t, r, addon.Name)
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	if settled.Status.LastForceReconcileTime != nil {
+		t.Fatalf("lastForceReconcileTime is %v, want it unset without a force request",
+			settled.Status.LastForceReconcileTime)
+	}
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil &&
+		cond.Reason == helmv1alpha1.ReasonForceReconcile {
+		t.Fatalf("an unforced pass must not report %s", helmv1alpha1.ReasonForceReconcile)
+	}
+}
+
+// TestReconcileForceAnnotationSkipsUnannotatedAddon pins that an addon carrying
+// unrelated annotations is not written on every pass. Guarding on the map instead
+// of on the annotation itself sends an empty PATCH each time, which costs a write
+// and an update event for every addon in the cluster.
+func TestReconcileForceAnnotationSkipsUnannotatedAddon(t *testing.T) {
+	addon := testAddon()
+	addon.Annotations = map[string]string{"example.io/unrelated": "value"}
+
+	r, c := newForceTestReconciler(t, interceptor.Funcs{}, addon)
+
+	stored := &helmv1alpha1.HelmClusterAddon{}
+	key := types.NamespacedName{Name: addon.Name}
+	if err := c.Get(context.Background(), key, stored); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+	before := stored.ResourceVersion
+
+	if err := r.reconcileForceAnnotation(context.Background(), key); err != nil {
+		t.Fatalf("reconcileForceAnnotation returned %v", err)
+	}
+
+	if err := c.Get(context.Background(), key, stored); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+	if stored.ResourceVersion != before {
+		t.Fatalf("resourceVersion moved from %s to %s: an addon without the force annotation was written",
+			before, stored.ResourceVersion)
+	}
+	if stored.Annotations["example.io/unrelated"] != "value" {
+		t.Fatal("unrelated annotations must be left in place")
+	}
+}
+
+// maintainedAddon builds an addon asking for maintenance mode, carrying a force
+// request and the progress condition a forced pass publishes before it works. That
+// is the state a pass interrupted between the two writes leaves behind.
+func maintainedAddon() *helmv1alpha1.HelmClusterAddon {
+	addon := testAddon()
+	addon.Spec.Maintenance = string(helmv1alpha1.NoResourceReconciliation)
+	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	addon.Status.Conditions = []metav1.Condition{{
+		Type:               helmv1alpha1.ConditionTypeReconciling,
+		Status:             metav1.ConditionTrue,
+		Reason:             helmv1alpha1.ReasonForceReconcile,
+		Message:            "Forced reconciliation in progress",
+		LastTransitionTime: metav1.Now(),
+	}}
+
+	return addon
+}
+
+// TestReconcileEnteringMaintenanceDiscardsForceReconcile covers the pass that puts
+// the addon into maintenance. The controller has just decided to stop reconciling
+// it, so a force request it will never act on must not be left claiming progress —
+// kstatus reads a standing Reconciling as work in flight.
+func TestReconcileEnteringMaintenanceDiscardsForceReconcile(t *testing.T) {
+	addon := maintainedAddon()
+
+	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
+
+	reconcileAddon(t, r, addon.Name)
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	if !settled.MaintenanceModeEnabled() {
+		t.Fatalf("the fixture must reach maintenance mode first, conditions: %v", settled.Status.Conditions)
+	}
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling must be dropped when the addon enters maintenance, got %+v", cond)
+	}
+	if _, found := settled.Annotations[helmv1alpha1.AnnotationForceReconcile]; found {
+		t.Fatal("the force annotation must be discarded: maintenance will never act on it")
+	}
+	if settled.Status.LastForceReconcileTime != nil {
+		t.Fatalf("lastForceReconcileTime is %v, want it unset: the request was discarded, not processed",
+			settled.Status.LastForceReconcileTime)
+	}
+}
+
+// TestReconcileSittingInMaintenanceDiscardsForceReconcile is the same guarantee for
+// an addon already in maintenance, which takes the early return instead of the
+// maintenance-change branch. Without it a request annotated onto a maintained addon
+// would sit on the object forever.
+func TestReconcileSittingInMaintenanceDiscardsForceReconcile(t *testing.T) {
+	addon := maintainedAddon()
+	addon.Status.Conditions = append(addon.Status.Conditions, metav1.Condition{
+		Type:               helmv1alpha1.ConditionTypeManaged,
+		Status:             metav1.ConditionFalse,
+		Reason:             helmv1alpha1.ReasonMaintenanceModeActive,
+		Message:            "Maintenance mode enabled",
+		LastTransitionTime: metav1.Now(),
+	})
+
+	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
+
+	if !addon.MaintenanceModeEnabled() || r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
+		t.Fatal("the fixture must already be in maintenance, otherwise the test takes the wrong branch")
+	}
+
+	reconcileAddon(t, r, addon.Name)
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling must be dropped on a maintained addon, got %+v", cond)
+	}
+	if _, found := settled.Annotations[helmv1alpha1.AnnotationForceReconcile]; found {
+		t.Fatal("the force annotation must be discarded: maintenance will never act on it")
+	}
+}
+
+// TestReconcileLeavingMaintenanceKeepsForceReconcile is the complement. Lifting
+// maintenance also returns early, but reconciliation is resuming, so the request is
+// about to become actionable and must survive to the pass that can honour it.
+func TestReconcileLeavingMaintenanceKeepsForceReconcile(t *testing.T) {
+	addon := testAddon()
+	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	addon.Status.Conditions = []metav1.Condition{{
+		Type:               helmv1alpha1.ConditionTypeManaged,
+		Status:             metav1.ConditionFalse,
+		Reason:             helmv1alpha1.ReasonMaintenanceModeActive,
+		Message:            "Maintenance mode enabled",
+		LastTransitionTime: metav1.Now(),
+	}}
+
+	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
+
+	if addon.MaintenanceModeActivated() || !r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
+		t.Fatal("the fixture must be leaving maintenance, otherwise the test proves nothing")
+	}
+
+	reconcileAddon(t, r, addon.Name)
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	if _, found := settled.Annotations[helmv1alpha1.AnnotationForceReconcile]; !found {
+		t.Fatal("the force annotation must survive the pass that lifts maintenance")
 	}
 }

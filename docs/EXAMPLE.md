@@ -97,3 +97,23 @@ d8 k annotate helmclusteraddonrepository podinfo reconcile.helm.deckhouse.io/for
 {{< alert level="info" >}}
 The annotation value is not significant — only its presence on the resource matters. The controller removes the annotation after the reconciliation is complete.
 {{< /alert >}}
+
+### Observing a forced reconciliation
+
+While a forced pass is running, the resource carries the `Reconciling` condition with the reason `ForceReconcile`:
+
+```shell
+d8 k get helmclusteraddonrepository podinfo -o jsonpath='{.status.conditions[?(@.type=="Reconciling")]}'
+```
+
+Once the pass finishes, that condition is removed and `.status.lastForceReconcileTime` records when the request was processed:
+
+```shell
+d8 k get helmclusteraddonrepository podinfo -o jsonpath='{.status.lastForceReconcileTime}'
+```
+
+The timestamp records that the request was acted on, not that it succeeded — the outcome is reported by the `Ready` and `Synced` conditions.
+
+{{< alert level="warning" >}}
+A HelmClusterAddon in maintenance mode (`.spec.maintenance: NoResourceReconciliation`) is not reconciled at all, so a force request on it cannot be honoured. The controller discards the annotation instead of holding it until maintenance is lifted, and `.status.lastForceReconcileTime` is left untouched. Lift maintenance first, then request the reconciliation.
+{{< /alert >}}

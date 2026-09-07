@@ -115,7 +115,9 @@ spec:
 
                   Reconciling and Stalled follow the kstatus convention: they are present only while
                   applicable. Reconciling means work is in progress or a retry is scheduled; Stalled
-                  means the repository will not recover without a change.
+                  means the repository will not recover without a change. Reconciling carries the
+                  reason ForceReconcile while a synchronization requested through the force
+                  reconcile annotation is running.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -177,6 +179,13 @@ spec:
                   It drives the retry backoff and resets on the first success.
                 format: int32
                 type: integer
+              lastForceReconcileTime:
+                description: |-
+                  LastForceReconcileTime is the time the most recent force reconcile request was
+                  processed. It records that the request was acted on, not that it succeeded:
+                  the outcome is reported by Ready and Synced.
+                format: date-time
+                type: string
               lastSuccessfulSyncTime:
                 description: |-
                   LastSuccessfulSyncTime is the last time the chart catalog was fully brought up to date,

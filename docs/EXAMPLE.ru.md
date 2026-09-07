@@ -97,3 +97,23 @@ d8 k annotate helmclusteraddonrepository podinfo reconcile.helm.deckhouse.io/for
 {{< alert level="info" >}}
 Значение аннотации не имеет значения — контроллер проверяет только её наличие на ресурсе. После завершения реконсиляции аннотация удаляется автоматически.
 {{< /alert >}}
+
+### Наблюдение за принудительной реконсиляцией
+
+Пока принудительный проход выполняется, на ресурсе присутствует условие `Reconciling` с причиной `ForceReconcile`:
+
+```shell
+d8 k get helmclusteraddonrepository podinfo -o jsonpath='{.status.conditions[?(@.type=="Reconciling")]}'
+```
+
+После завершения прохода это условие снимается, а в `.status.lastForceReconcileTime` записывается время обработки запроса:
+
+```shell
+d8 k get helmclusteraddonrepository podinfo -o jsonpath='{.status.lastForceReconcileTime}'
+```
+
+Отметка времени фиксирует, что запрос был обработан, а не что он завершился успешно — результат отражают условия `Ready` и `Synced`.
+
+{{< alert level="warning" >}}
+HelmClusterAddon в режиме обслуживания (`.spec.maintenance: NoResourceReconciliation`) не согласовывается вовсе, поэтому запрос принудительной реконсиляции для него невыполним. Контроллер удаляет аннотацию, а не удерживает её до выхода из режима обслуживания; `.status.lastForceReconcileTime` при этом не меняется. Сначала выйдите из режима обслуживания, затем запрашивайте реконсиляцию.
+{{< /alert >}}

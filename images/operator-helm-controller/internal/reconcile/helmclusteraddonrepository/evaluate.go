@@ -42,6 +42,10 @@ type Inputs struct {
 	InternalRepository    services.InternalRepositoryState
 	ConfigErr             *services.ConfigOutcome
 
+	// Forced reports whether this pass was requested through the force reconcile
+	// annotation.
+	Forced bool
+
 	// Attempted reports whether a synchronization attempt ran in this pass.
 	// Fetch and Catalog are nil when it did not.
 	Attempted bool
@@ -110,6 +114,13 @@ func Evaluate(in Inputs) Decision {
 	status.ConsecutiveFetchFailures = failures
 
 	if in.Attempted {
+		if in.Forced {
+			// Stamped on the attempt, because the attempt is what consumes the force
+			// annotation. The stamp records that the request was acted on, not that it
+			// succeeded — the outcome is carried by Ready and Synced.
+			status.LastForceReconcileTime = &metav1.Time{Time: in.Now}
+		}
+
 		if fetchSucceeded && !catalogFailed && in.Fetch.Pending == 0 {
 			status.LastSuccessfulSyncTime = &metav1.Time{Time: in.Now}
 		}
