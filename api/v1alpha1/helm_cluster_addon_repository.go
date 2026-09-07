@@ -128,9 +128,9 @@ type HelmClusterAddonRepositoryStatus struct {
 	//
 	// Reconciling and Stalled follow the kstatus convention: they are present only while
 	// applicable. Reconciling means work is in progress or a retry is scheduled; Stalled
-	// means the repository will not recover without a change. Reconciling carries the
-	// reason ForceReconcile while a synchronization requested through the force
-	// reconcile annotation is running.
+	// means the repository will not recover without a change. While a synchronization is
+	// running Reconciling carries the reason Synchronization, or ForceReconcile when the
+	// pass was requested through the force reconcile annotation.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.

@@ -106,6 +106,8 @@ d8 k annotate helmclusteraddonrepository podinfo reconcile.helm.deckhouse.io/for
 d8 k get helmclusteraddonrepository podinfo -o jsonpath='{.status.conditions[?(@.type=="Reconciling")]}'
 ```
 
+Синхронизация по обычному расписанию выставляет то же условие с причиной `Synchronization`, поэтому причина позволяет различить эти два случая.
+
 После завершения прохода это условие снимается, а в `.status.lastForceReconcileTime` записывается время обработки запроса:
 
 ```shell

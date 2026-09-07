@@ -42,6 +42,9 @@ const (
 	// ReasonForceReconcile marks the Reconciling condition raised for a pass that
 	// was requested through the force reconcile annotation.
 	ReasonForceReconcile = "ForceReconcile"
+	// ReasonSynchronization marks the Reconciling condition raised for a pass that
+	// runs on the ordinary synchronization schedule rather than on request.
+	ReasonSynchronization = "Synchronization"
 
 	// HelmClusterAddonRepository condition reasons.
 	ReasonAuxiliaryResourcesFailed  = "AuxiliaryResourcesFailed"

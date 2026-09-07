@@ -106,6 +106,8 @@ While a forced pass is running, the resource carries the `Reconciling` condition
 d8 k get helmclusteraddonrepository podinfo -o jsonpath='{.status.conditions[?(@.type=="Reconciling")]}'
 ```
 
+A synchronization that runs on the ordinary schedule raises the same condition with the reason `Synchronization`, so the reason tells the two apart.
+
 Once the pass finishes, that condition is removed and `.status.lastForceReconcileTime` records when the request was processed:
 
 ```shell
