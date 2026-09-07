@@ -3,6 +3,23 @@ title: "Release Notes"
 description: "Release notes for Deckhouse operator-helm."
 ---
 
+## v0.2.0
+
+### New Features
+
+* reworked HelmClusterAddonRepository status semantics
+* support legacy OCI chart media type with incremental indexing
+* surface force reconcile progress and completion in status
+* report scheduled repository synchronization in status
+
+### Bug Fixes
+
+* propagate force reconcile to internal sources
+
+### Chore
+
+* added dev registry cleanup job
+
 ## v0.1.1
 
 ### Bug Fixes
