@@ -16,10 +16,6 @@ description: "Release notes for Deckhouse operator-helm."
 
 * Propagate force reconcile to internal sources
 
-### Chore
-
-* Added dev registry cleanup job
-
 ## v0.1.1
 
 ### Bug Fixes
@@ -99,4 +95,3 @@ description: "Release notes for Deckhouse operator-helm."
 ### New Features
 
 * Initial release with basic capabilities
-
