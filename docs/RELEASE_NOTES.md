@@ -3,6 +3,19 @@ title: "Release Notes"
 description: "Release notes for Deckhouse operator-helm."
 ---
 
+## v0.2.0
+
+### New Features
+
+* Reworked HelmClusterAddonRepository status semantics
+* Support legacy OCI chart media type with incremental indexing
+* Surface force reconcile progress and completion in status
+* Report scheduled repository synchronization in status
+
+### Bug Fixes
+
+* Propagate force reconcile to internal sources
+
 ## v0.1.1
 
 ### Bug Fixes
@@ -17,69 +30,68 @@ description: "Release notes for Deckhouse operator-helm."
 
 ### New Features
 
-* enforced restricted pss
+* Enforced restricted PSS
 
 ### Bug Fixes
 
-* forbidden to use system namespaces
+* Forbidden to use system namespaces
 
 ### Chore
 
-* added changelog and release notes generation
+* Added changelog and release notes generation
 
 ## v0.0.8
 
 ### Bug Fixes
 
-* resolved race on module disable which could lead to application disruption
+* Resolved race on module disable which could lead to application disruption
 
 ### Chore
 
-* watch shadow custom resources in module namespace only
+* Watch shadow custom resources in module namespace only
 
 ## v0.0.7
 
 ### New Features
 
-* added ability to review chart default values in console during addon creation
+* Added ability to review chart default values in console during addon creation
 
 ## v0.0.6
 
 ### New Features
 
-* do not mark possible status conditions as intitialized on reconcile
+* Do not mark possible status conditions as initialized on reconcile
 
 ### Chore
 
-* added weight annotations to validation webhook
+* Added weight annotations to validation webhook
 
 ## v0.0.5
 
 ### Chore
 
-* minor documentation updates
+* Minor documentation updates
 
 ## v0.0.4
 
 ### Chore
 
-* updated main documentation page alerts formatting
+* Updated main documentation page alerts formatting
 
 ## v0.0.3
 
 ### New Features
 
-* the first public alpha release with HelmClusterAddon, HelmClusterAddonChart, and HelmClusterAddonRepository CRDs supoort
+* The first public alpha release with HelmClusterAddon, HelmClusterAddonChart, and HelmClusterAddonRepository CRDs support
 
 ## v0.0.2
 
 ### New Features
 
-* applied deckhouse runtime time review recommendations
+* Applied deckhouse runtime review recommendations
 
 ## v0.0.1
 
 ### New Features
 
-* initial release with basic capabilities
-
+* Initial release with basic capabilities
