@@ -26,6 +26,7 @@ import (
 	helmchartutil "helm.sh/helm/v3/pkg/chartutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -149,11 +150,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	if r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
 		maintenanceRes := r.maintenanceService.EnsureMaintenanceMode(ctx, addon)
-		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, maintenanceRes, status.AsCondition(maintenanceRes, "Ready"))
+		if err := r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, maintenanceRes, status.AsCondition(maintenanceRes, "Ready")); err != nil {
+			return reconcile.Result{}, err
+		}
+
+		if !addon.MaintenanceModeActivated() {
+			// Maintenance is being lifted: a pending force request is about to become
+			// actionable, so it is left in place for the pass that can honour it.
+			return reconcile.Result{}, nil
+		}
+
+		return reconcile.Result{}, r.discardForceReconcile(ctx, addon)
 	}
 
 	if addon.MaintenanceModeActivated() {
-		return reconcile.Result{}, nil
+		return reconcile.Result{}, r.discardForceReconcile(ctx, addon)
 	}
 
 	repo := &helmv1alpha1.HelmClusterAddonRepository{}
@@ -183,6 +194,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
 			err,
 		)})
+	}
+
+	// From here on every path reaches the status update at the end of the pass,
+	// which is what consumes the force request. Marking earlier would leave the
+	// progress condition behind on a validation failure that never consumes it.
+	forced := addon.ForceReconcileRequired()
+	if forced {
+		if err := r.markForceReconcileInProgress(ctx, addon); err != nil {
+			return reconcile.Result{}, err
+		}
 	}
 
 	var chartRes services.ChartResult
@@ -255,20 +276,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, repoType, artifactRevision)
 	}
 
-	if err := r.reconcileForceAnnotation(ctx, req); err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
-	}
-
 	if err := r.statusManager.Update(
 		ctx,
 		addon,
-		setStatusAttrs(repoType, chartRes, repoRes, releaseRes),
+		setStatusAttrs(repoType, chartRes, repoRes, releaseRes, forceReconcileOutcome{
+			forced: forced,
+			now:    time.Now().UTC(),
+		}),
 		status.NoopStatusMapper,
 		chartRes,
 		repoRes,
 		releaseRes,
 	); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
+	}
+
+	// The annotation is consumed after the status patch, so a conflict on the patch
+	// leaves the request in place to be retried rather than losing it.
+	if err := r.reconcileForceAnnotation(ctx, req.NamespacedName); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 	}
 
 	return reconcile.Result{}, nil
@@ -392,17 +418,65 @@ func (r *Reconciler) reconcileAddonNamespace(ctx context.Context, addon *helmv1a
 	return nil
 }
 
-func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, req reconcile.Request) error {
+// markForceReconcileInProgress publishes Reconciling before the work a force
+// request asks for begins. A forced pass is the one case where someone is
+// watching: they annotated the addon a moment ago and want to see it was picked
+// up. The condition is removed again by the status update that ends the pass.
+func (r *Reconciler) markForceReconcileInProgress(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+	err := r.statusManager.PatchStatus(ctx, addon, func() {
+		apimeta.SetStatusCondition(&addon.Status.Conditions, metav1.Condition{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             helmv1alpha1.ReasonForceReconcile,
+			Message:            "Forced reconciliation in progress",
+			ObservedGeneration: addon.Generation,
+		})
+	})
+	if client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("publishing forced reconciliation progress: %w", err)
+	}
+
+	return nil
+}
+
+// discardForceReconcile drops the in-flight force state from an addon that is
+// entering, or already sitting in, maintenance mode. Every pass on such an addon
+// returns before the work a force request asks for, so the request can never be
+// acted on: leaving Reconciling behind would report work in flight to kstatus
+// forever, and leaving the annotation would replay a request made days earlier the
+// moment maintenance is lifted. Reconciling is removed unconditionally because the
+// force path is its only producer on an addon.
+//
+// lastForceReconcileTime is deliberately untouched — the request was discarded,
+// not processed, and the stamp means the latter.
+func (r *Reconciler) discardForceReconcile(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
+	err := r.statusManager.PatchStatus(ctx, addon, func() {
+		apimeta.RemoveStatusCondition(&addon.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	})
+	if client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("dropping forced reconciliation progress: %w", err)
+	}
+
+	if err := r.reconcileForceAnnotation(ctx, client.ObjectKeyFromObject(addon)); err != nil {
+		return fmt.Errorf("failed to reconcile force annotation: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, key client.ObjectKey) error {
 	var addon helmv1alpha1.HelmClusterAddon
 
-	if err := r.Get(ctx, req.NamespacedName, &addon); err != nil {
+	if err := r.Get(ctx, key, &addon); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("getting helm cluster addon: %w", err)
 	}
 
-	if addon.Annotations == nil {
+	if _, found := addon.Annotations[helmv1alpha1.AnnotationForceReconcile]; !found {
+		// Guard on the annotation itself, not on the map: an addon carrying any
+		// unrelated annotation would otherwise take an empty PATCH on every pass.
 		return nil
 	}
 
@@ -468,10 +542,33 @@ func versionUnavailableDetail(version helmv1alpha1.HelmClusterAddonChartVersion)
 	}
 }
 
-func setStatusAttrs(repoType utils.InternalRepositoryType, chartRes services.ChartResult, repoRes services.OCIRepoResult, releaseRes services.ReleaseResult) status.MutatorFunc {
+// forceReconcileOutcome carries what the status mutator needs to close out a
+// forced pass. It is a struct so the clock stays with the caller: the mutator
+// runs inside the status manager, after it has snapshotted the object it diffs
+// against, which is the only place a change to the status is actually patched.
+type forceReconcileOutcome struct {
+	forced bool
+	now    time.Time
+}
+
+func setStatusAttrs(
+	repoType utils.InternalRepositoryType,
+	chartRes services.ChartResult,
+	repoRes services.OCIRepoResult,
+	releaseRes services.ReleaseResult,
+	force forceReconcileOutcome,
+) status.MutatorFunc {
 	return func(obj status.ObjectWithConditions, results []status.Provider) (status.ObjectWithConditions, []status.Provider) {
 		results = status.DetermineConditions(obj, results...)
 		addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+		if force.forced {
+			// The stamp records that the request was acted on, not that it succeeded:
+			// the outcome is reported by Ready. Reconciling is removed explicitly —
+			// the status manager only ever sets conditions.
+			addon.Status.LastForceReconcileTime = &metav1.Time{Time: force.now}
+			apimeta.RemoveStatusCondition(&addon.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+		}
 
 		latestRelease := releaseRes.History.Latest()
 

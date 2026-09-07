@@ -39,6 +39,9 @@ const (
 	ReasonFailed                  = "Failed"
 	ReasonUninstallFailed         = "UninstallFailed"
 	ReasonChartClaimConflict      = "ChartClaimConflict"
+	// ReasonForceReconcile marks the Reconciling condition raised for a pass that
+	// was requested through the force reconcile annotation.
+	ReasonForceReconcile = "ForceReconcile"
 
 	// HelmClusterAddonRepository condition reasons.
 	ReasonAuxiliaryResourcesFailed  = "AuxiliaryResourcesFailed"

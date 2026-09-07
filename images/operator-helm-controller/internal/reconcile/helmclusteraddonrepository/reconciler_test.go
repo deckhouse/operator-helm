@@ -46,11 +46,19 @@ import (
 type stubRepoClient struct {
 	charts []repoclient.Chart
 	err    error
+	// onFetch runs at the moment the repository is read, which is the only point
+	// from which a test can observe the status the controller publishes *while* it
+	// is working rather than the one it leaves behind.
+	onFetch func()
 }
 
 // The receiver is a pointer so a test can change what the repository returns
 // between reconcile passes.
 func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, _ repoclient.FetchOptions) ([]repoclient.Chart, error) {
+	if s.onFetch != nil {
+		s.onFetch()
+	}
+
 	return s.charts, s.err
 }
 
@@ -433,5 +441,146 @@ func TestReconcileUnforcedOCIRepositoryLeavesAddonSources(t *testing.T) {
 	}
 	if _, found := untouched.Annotations[meta.ReconcileRequestAnnotation]; found {
 		t.Errorf("%s must not be pushed onto the addon source by a scheduled synchronization", meta.ReconcileRequestAnnotation)
+	}
+}
+
+// forcedRepository drives a repository to a stable state and then puts a force
+// request on the stored object, so a test can run the single pass that consumes it.
+func forcedRepository(t *testing.T, r *Reconciler, c client.Client, repo *helmv1alpha1.HelmClusterAddonRepository) {
+	t.Helper()
+
+	reconcileUntilStable(t, r, repo.Name)
+
+	stored := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), stored); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	stored.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatalf("annotating repository: %v", err)
+	}
+}
+
+// TestReconcileForcedRepositoryReportsProgressBeforeReading pins that the
+// Reconciling condition is published *before* the repository is read. A forced
+// synchronization is the one case where the user is watching: they annotated the
+// object a moment ago and want to see it was picked up, so a condition written
+// only after the read — when the work is already done — would report nothing
+// useful.
+func TestReconcileForcedRepositoryReportsProgressBeforeReading(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+	forcedRepository(t, r, c, repo)
+
+	var inFlight *metav1.Condition
+	stub.onFetch = func() {
+		observed := &helmv1alpha1.HelmClusterAddonRepository{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), observed); err != nil {
+			t.Errorf("getting repository during the fetch: %v", err)
+
+			return
+		}
+
+		inFlight = apimeta.FindStatusCondition(observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if inFlight == nil {
+		t.Fatal("Reconciling must be published before the repository is read")
+	}
+	if inFlight.Status != metav1.ConditionTrue || inFlight.Reason != helmv1alpha1.ReasonForceReconcile {
+		t.Fatalf("Reconciling is %s/%s, want True/%s",
+			inFlight.Status, inFlight.Reason, helmv1alpha1.ReasonForceReconcile)
+	}
+}
+
+// TestReconcileForcedRepositoryRecordsCompletion covers the other end of the same
+// pass: the progress condition is gone and the stamp records when the request was
+// processed.
+func TestReconcileForcedRepositoryRecordsCompletion(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+	forcedRepository(t, r, c, repo)
+
+	// metav1.Time serialises at second precision, so the stored stamp can land
+	// just before an untruncated wall-clock reading of the same second.
+	before := time.Now().UTC().Truncate(time.Second)
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), settled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling must be gone once the forced pass finished, got %+v", cond)
+	}
+	if settled.Status.LastForceReconcileTime == nil {
+		t.Fatal("lastForceReconcileTime must be recorded by the forced pass")
+	}
+	if settled.Status.LastForceReconcileTime.Time.Before(before) {
+		t.Fatalf("lastForceReconcileTime is %v, want at or after %v",
+			settled.Status.LastForceReconcileTime.Time, before)
+	}
+	if _, found := settled.Annotations[helmv1alpha1.AnnotationForceReconcile]; found {
+		t.Fatal("the force annotation must be consumed by the pass it triggered")
+	}
+}
+
+// TestReconcileUnforcedRepositoryRecordsNoForceReconcile is the complement: a
+// scheduled synchronization neither claims progress on behalf of a force request
+// nor stamps one.
+func TestReconcileUnforcedRepositoryRecordsNoForceReconcile(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+
+	var inFlight *metav1.Condition
+	stub.onFetch = func() {
+		observed := &helmv1alpha1.HelmClusterAddonRepository{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), observed); err != nil {
+			return
+		}
+
+		inFlight = apimeta.FindStatusCondition(observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	}
+
+	reconcileUntilStable(t, r, repo.Name)
+
+	if inFlight != nil && inFlight.Reason == helmv1alpha1.ReasonForceReconcile {
+		t.Fatalf("a scheduled synchronization must not report %s", helmv1alpha1.ReasonForceReconcile)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), settled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if settled.Status.LastForceReconcileTime != nil {
+		t.Fatalf("lastForceReconcileTime is %v, want it unset without a force request",
+			settled.Status.LastForceReconcileTime)
 	}
 }

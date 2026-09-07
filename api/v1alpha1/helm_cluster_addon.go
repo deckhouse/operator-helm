@@ -183,10 +183,19 @@ type HelmClusterAddonStatus struct {
 	// +optional
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
 	// Conditions represent the latest available observations of the addon state.
+	//
+	// Reconciling is present only while applicable, following the kstatus convention.
+	// It carries the reason ForceReconcile while a reconciliation requested through
+	// the force reconcile annotation is running.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// LastForceReconcileTime is the time the most recent force reconcile request was
+	// processed. It records that the request was acted on, not that it succeeded:
+	// the outcome is reported by Ready.
+	// +optional
+	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
 }
 
 type HelmClusterAddonLastAppliedChartRef struct {

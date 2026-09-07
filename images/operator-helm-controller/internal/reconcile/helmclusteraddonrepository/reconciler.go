@@ -22,6 +22,8 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -128,10 +130,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
-	forced := repo.ForceReconcileRequired()
+	in.Forced = repo.ForceReconcileRequired()
 
 	if in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
-		ShouldAttempt(in.Current, in.Generation, in.Now, forced) {
+		ShouldAttempt(in.Current, in.Generation, in.Now, in.Forced) {
+		if in.Forced {
+			if err := r.markForceReconcileInProgress(ctx, &repo); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
+
 		outcome := r.chartSyncService.Sync(ctx, &repo, repoType)
 
 		in.Attempted = true
@@ -262,6 +270,29 @@ func (r *Reconciler) awaitInternalResourceDeletion(ctx context.Context, repo *he
 	}
 
 	return reconcile.Result{RequeueAfter: internalResourceDeletionRequeueInterval}, nil
+}
+
+// markForceReconcileInProgress publishes Reconciling before the forced
+// synchronization starts. A forced pass is the one case where someone is watching:
+// they annotated the repository a moment ago and want to see it was picked up, and
+// the read that follows can take a while. The condition is deliberately written
+// outside the Inputs snapshot Evaluate works from, so the status computed at the
+// end of the pass removes it again without a rule of its own.
+func (r *Reconciler) markForceReconcileInProgress(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+	err := r.statusManager.PatchStatus(ctx, repo, func() {
+		apimeta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             helmv1alpha1.ReasonForceReconcile,
+			Message:            "Forced reconciliation in progress",
+			ObservedGeneration: repo.Generation,
+		})
+	})
+	if client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("publishing forced reconciliation progress: %w", err)
+	}
+
+	return nil
 }
 
 func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, key client.ObjectKey) error {

@@ -340,6 +340,10 @@ func (in *HelmClusterAddonRepositoryStatus) DeepCopyInto(out *HelmClusterAddonRe
 		in, out := &in.NextSyncTime, &out.NextSyncTime
 		*out = (*in).DeepCopy()
 	}
+	if in.LastForceReconcileTime != nil {
+		in, out := &in.LastForceReconcileTime, &out.LastForceReconcileTime
+		*out = (*in).DeepCopy()
+	}
 	return
 }
 
@@ -394,6 +398,10 @@ func (in *HelmClusterAddonStatus) DeepCopyInto(out *HelmClusterAddonStatus) {
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
+	}
+	if in.LastForceReconcileTime != nil {
+		in, out := &in.LastForceReconcileTime, &out.LastForceReconcileTime
+		*out = (*in).DeepCopy()
 	}
 	return
 }

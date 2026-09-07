@@ -645,3 +645,92 @@ func assertAbnormal(t *testing.T, status helmv1alpha1.HelmClusterAddonRepository
 		t.Fatalf("%s reason is %q, want %q", conditionType, cond.Reason, wantReason)
 	}
 }
+
+// TestEvaluateForcedAttemptStampsLastForceReconcileTime pins the contract that
+// makes the field readable: the stamp is written exactly on the pass that
+// consumes the force annotation, which is the pass that attempted.
+func TestEvaluateForcedAttemptStampsLastForceReconcileTime(t *testing.T) {
+	now := time.Now().UTC()
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        now,
+		Forced:     true,
+		Attempted:  true,
+		Fetch:      &services.FetchOutcome{},
+		Catalog:    &services.CatalogOutcome{},
+	})
+
+	if decision.Status.LastForceReconcileTime == nil || !decision.Status.LastForceReconcileTime.Time.Equal(now) {
+		t.Fatalf("lastForceReconcileTime is %v, want %v", decision.Status.LastForceReconcileTime, now)
+	}
+}
+
+// TestEvaluateFailedForcedAttemptStampsLastForceReconcileTime: the stamp answers
+// "when was my force request processed", not "when did it succeed". A forced pass
+// whose read failed still consumes the annotation, so it must still be stamped —
+// otherwise an empty field could not be told apart from a request never made.
+func TestEvaluateFailedForcedAttemptStampsLastForceReconcileTime(t *testing.T) {
+	now := time.Now().UTC()
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        now,
+		Forced:     true,
+		Attempted:  true,
+		Fetch: &services.FetchOutcome{
+			Err:     errors.New("dial tcp: connection refused"),
+			Reason:  helmv1alpha1.ReasonSyncFailed,
+			Message: "failed to read the repository",
+		},
+	})
+
+	if decision.Status.LastForceReconcileTime == nil || !decision.Status.LastForceReconcileTime.Time.Equal(now) {
+		t.Fatalf("lastForceReconcileTime is %v, want %v", decision.Status.LastForceReconcileTime, now)
+	}
+}
+
+// TestEvaluateForcedPassWithoutAttemptKeepsLastForceReconcileTime covers the pass
+// that carries a force request it could not act on — a structural failure stops it
+// before the attempt, so the annotation survives and the stamp must not move.
+func TestEvaluateForcedPassWithoutAttemptKeepsLastForceReconcileTime(t *testing.T) {
+	previous := metav1.NewTime(testNow.Add(-time.Hour))
+	current := readyStatus(1)
+	current.LastForceReconcileTime = &previous
+
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        testNow,
+		Current:    current,
+		Forced:     true,
+		SecretsErr: errors.New("creating auth secret: forbidden"),
+	})
+
+	if decision.Status.LastForceReconcileTime == nil ||
+		!decision.Status.LastForceReconcileTime.Time.Equal(previous.Time) {
+		t.Fatalf("lastForceReconcileTime is %v, want it kept at %v",
+			decision.Status.LastForceReconcileTime, previous.Time)
+	}
+}
+
+// TestEvaluateScheduledSyncKeepsLastForceReconcileTime is the complement: an
+// ordinary scheduled synchronization must not touch the stamp, or it would
+// report a force request that was never made.
+func TestEvaluateScheduledSyncKeepsLastForceReconcileTime(t *testing.T) {
+	previous := metav1.NewTime(testNow.Add(-time.Hour))
+	current := readyStatus(1)
+	current.LastForceReconcileTime = &previous
+
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        testNow,
+		Current:    current,
+		Attempted:  true,
+		Fetch:      &services.FetchOutcome{},
+		Catalog:    &services.CatalogOutcome{},
+	})
+
+	if decision.Status.LastForceReconcileTime == nil ||
+		!decision.Status.LastForceReconcileTime.Time.Equal(previous.Time) {
+		t.Fatalf("lastForceReconcileTime is %v, want it kept at %v",
+			decision.Status.LastForceReconcileTime, previous.Time)
+	}
+}

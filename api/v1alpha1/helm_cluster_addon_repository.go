@@ -128,7 +128,9 @@ type HelmClusterAddonRepositoryStatus struct {
 	//
 	// Reconciling and Stalled follow the kstatus convention: they are present only while
 	// applicable. Reconciling means work is in progress or a retry is scheduled; Stalled
-	// means the repository will not recover without a change.
+	// means the repository will not recover without a change. Reconciling carries the
+	// reason ForceReconcile while a synchronization requested through the force
+	// reconcile annotation is running.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
@@ -140,6 +142,11 @@ type HelmClusterAddonRepositoryStatus struct {
 	// NextSyncTime is the scheduled time of the next synchronization attempt.
 	// +optional
 	NextSyncTime *metav1.Time `json:"nextSyncTime,omitempty"`
+	// LastForceReconcileTime is the time the most recent force reconcile request was
+	// processed. It records that the request was acted on, not that it succeeded:
+	// the outcome is reported by Ready and Synced.
+	// +optional
+	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
 	// ConsecutiveFetchFailures counts consecutive failures to read from the repository.
 	// It drives the retry backoff and resets on the first success.
 	// +optional
