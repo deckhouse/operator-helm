@@ -41,6 +41,11 @@ const (
 	// UnavailableReasonResolvePending means the manifest request failed and no verdict
 	// was reached. Such a tag is re-examined on every normal synchronization.
 	UnavailableReasonResolvePending = "ResolvePending"
+	// UnavailableReasonInvalidChartReference means the repository index points this
+	// version at a registry, but the reference it gives is not a valid tagged
+	// reference. It is a verdict about the index entry rather than about the
+	// artifact, so it is kept until the repository publishes a usable reference.
+	UnavailableReasonInvalidChartReference = "InvalidChartReference"
 )
 
 // HelmClusterAddonChart represents a specific Helm chart discovered within a HelmClusterAddonRepository. These resources are automatically managed during repository synchronization and are immutable to user modifications.
@@ -98,15 +103,26 @@ type HelmClusterAddonChartVersion struct {
 	// Helm chart version
 	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`
-	// MediaType is the OCI media type of the layer that holds this chart version. It is
-	// set only for versions from an OCI repository, and only when the layer is supported:
-	// an empty value means the version cannot be deployed.
+	// OCIRef is the OCI reference this version is published at, as recorded from
+	// the repository index. It is set only for a version of a helm repository whose
+	// index entry points at a registry instead of a chart archive; such a version is
+	// deployed through an internal OCIRepository even though its repository is a helm
+	// one. The registry host and path keep the spelling the index used, and the tag is
+	// always explicit: an index entry without one is recorded with its own version as
+	// the tag.
+	// +optional
+	OCIRef string `json:"ociRef,omitempty"`
+	// MediaType is the OCI media type of the layer that holds this chart version. It
+	// is set only for a version of an oci:// repository, and only when the layer is
+	// supported: an empty value there means the version cannot be deployed. It stays
+	// empty for a version carrying OCIRef — the layer of such an artifact is examined
+	// at deploy time and is not recorded here.
 	// +optional
 	MediaType string `json:"mediaType,omitempty"`
 	// UnavailableReason explains why this version cannot be deployed. Its absence means
 	// the version is usable.
 	// +optional
-	// +kubebuilder:validation:Enum=RemovedFromRepository;UnsupportedMediaType;ResolvePending
+	// +kubebuilder:validation:Enum=RemovedFromRepository;UnsupportedMediaType;ResolvePending;InvalidChartReference
 	UnavailableReason string `json:"unavailableReason,omitempty"`
 	// UnavailableMessage carries human readable detail for UnavailableReason.
 	// +optional
