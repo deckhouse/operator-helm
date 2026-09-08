@@ -352,8 +352,8 @@ func (s *RepoSyncService) inUseVersions(ctx context.Context, repoName, chartName
 // mergeChartVersions builds the desired version list from the fetched entries and the
 // ones already recorded. A recorded version the registry no longer lists is dropped,
 // unless an addon still references it: then it is retained with RemovedFromRepository
-// and keeps its media type, without which the addon's internal OCIRepository could not
-// be built at all.
+// and keeps both its media type and its recorded OCI reference, without either of
+// which the addon's internal OCIRepository could not be built at all.
 //
 // The same protection applies to a version that is still listed but whose tag was
 // re-pushed as a non-chart artifact: the fresh verdict carries no media type, but if an
@@ -391,6 +391,7 @@ func mergeChartVersions(
 
 		merged = append(merged, helmv1alpha1.HelmClusterAddonChartVersion{
 			Version:            name,
+			OCIRef:             version.OCIRef,
 			MediaType:          mediaType,
 			UnavailableReason:  version.UnavailableReason,
 			UnavailableMessage: version.UnavailableMessage,
