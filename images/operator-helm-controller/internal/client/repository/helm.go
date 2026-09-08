@@ -29,6 +29,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/Masterminds/semver/v3"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 var HelmRepositoryDefaultClient ClientInterface = &helmRepositoryClient{}
@@ -43,13 +46,15 @@ type HelmRepositoryIndex struct {
 type HelmRepositoryChartVersion struct {
 	Icon    string `json:"icon,omitempty"`
 	Version string `json:"version"`
-	Digest  string `json:"digest"`
+	Digest  string `json:"digest,omitempty"`
 	Removed bool   `json:"removed,omitempty"`
+	URLs    []string `json:"urls,omitempty"`
 }
 
-// FetchCharts reads the repository index. FetchOptions is ignored: a helm index is a
-// single document that already carries every version, so there is nothing to resolve
-// incrementally.
+// FetchCharts reads the repository index. FetchOptions is ignored: the index is a
+// single document that already carries every version, and the one thing it does not
+// carry — the media type of a version published in a registry — is resolved lazily at
+// deploy time rather than incrementally here.
 func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig, _ FetchOptions) ([]Chart, error) {
 	if !strings.HasSuffix(url, "/index.yaml") {
 		url += "/index.yaml"
@@ -146,7 +151,10 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 				continue
 			}
 
-			chart.Versions = append(chart.Versions, ChartVersion{Version: semVersion, IconURL: chartVersion.Icon})
+			version := ChartVersion{Version: semVersion, IconURL: chartVersion.Icon}
+			classifyChartLocation(&version, chartVersion.URLs)
+
+			chart.Versions = append(chart.Versions, version)
 		}
 
 		sort.Slice(chart.Versions, func(i, j int) bool {
@@ -157,4 +165,29 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 	}
 
 	return charts, nil
+}
+
+// classifyChartLocation records where an index entry publishes its version. Only the
+// first url is examined: the internal HelmChart resolves the version through the
+// internal HelmRepository and downloads urls[0], so an entry whose first url is a
+// registry reference cannot be served through the helm path at all, no matter what
+// the remaining urls offer.
+//
+// An unusable reference is a verdict about the index entry: recording it as such is
+// what keeps the addon from being sent down the helm path only to fail on the same
+// url with an opaque error from the source controller.
+func classifyChartLocation(version *ChartVersion, urls []string) {
+	if len(urls) == 0 || !strings.HasPrefix(urls[0], "oci://") {
+		return
+	}
+
+	url, tag, err := utils.SplitOCIRef(urls[0], version.Version.Original())
+	if err != nil {
+		version.UnavailableReason = helmv1alpha1.UnavailableReasonInvalidChartReference
+		version.UnavailableMessage = truncate(err.Error())
+
+		return
+	}
+
+	version.OCIRef = url + ":" + tag
 }

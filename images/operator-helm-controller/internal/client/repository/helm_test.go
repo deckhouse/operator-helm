@@ -35,6 +35,25 @@ entries:
     - version: 6.7.0
 `
 
+const testHybridIndex = `apiVersion: v1
+entries:
+  airflow:
+    - version: 25.0.2
+      urls:
+        - oci://registry-1.docker.io/bitnamicharts/airflow:25.0.2
+    - version: 24.0.0
+      urls:
+        - https://charts.example.invalid/airflow-24.0.0.tgz
+        - oci://registry-1.docker.io/bitnamicharts/airflow:24.0.0
+    - version: 23.0.0
+      urls:
+        - oci://registry-1.docker.io/bitnamicharts/airflow
+    - version: 22.0.0
+      urls:
+        - "oci://BAD_HOST//:::"
+    - version: 21.0.0
+`
+
 func TestFetchChartsTerminalStatusCodes(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -108,5 +127,59 @@ func TestFetchChartsSkipsInvalidVersion(t *testing.T) {
 	}
 	if got := charts[0].Versions[0].Version.Original(); got != "6.7.1" {
 		t.Fatalf("expected newest version first, got %q", got)
+	}
+}
+
+// TestFetchChartsHelmRecordsOCIReferences pins how an index entry is classified. Only
+// urls[0] is examined, because the internal HelmChart downloads exactly that url:
+// picking an archive from urls[1] would send the version down the helm path where the
+// source controller would still trip over urls[0].
+func TestFetchChartsHelmRecordsOCIReferences(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(testHybridIndex))
+	}))
+	t.Cleanup(server.Close)
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(
+		context.Background(), server.URL+"/index.yaml", nil, FetchOptions{},
+	)
+	if err != nil {
+		t.Fatalf("FetchCharts returned %v", err)
+	}
+	if len(charts) != 1 {
+		t.Fatalf("expected one chart, got %d", len(charts))
+	}
+
+	byVersion := map[string]ChartVersion{}
+	for _, version := range charts[0].Versions {
+		byVersion[version.Version.Original()] = version
+	}
+
+	if got := byVersion["25.0.2"].OCIRef; got != "oci://registry-1.docker.io/bitnamicharts/airflow:25.0.2" {
+		t.Fatalf("25.0.2 oci ref = %q, want the reference from the index", got)
+	}
+
+	if got := byVersion["24.0.0"].OCIRef; got != "" {
+		t.Fatalf("24.0.0 oci ref = %q, want empty: its first url is an archive", got)
+	}
+
+	// The tag is made explicit on write, so the recorded reference is self-contained.
+	if got := byVersion["23.0.0"].OCIRef; got != "oci://registry-1.docker.io/bitnamicharts/airflow:23.0.0" {
+		t.Fatalf("23.0.0 oci ref = %q, want the entry version as the tag", got)
+	}
+
+	invalid := byVersion["22.0.0"]
+	if invalid.OCIRef != "" {
+		t.Fatalf("22.0.0 oci ref = %q, want empty for an unusable reference", invalid.OCIRef)
+	}
+	if invalid.UnavailableReason != helmv1alpha1.UnavailableReasonInvalidChartReference {
+		t.Fatalf("22.0.0 reason = %q, want %q", invalid.UnavailableReason, helmv1alpha1.UnavailableReasonInvalidChartReference)
+	}
+	if invalid.UnavailableMessage == "" {
+		t.Fatal("an unusable reference must be explained in the message")
+	}
+
+	if got := byVersion["21.0.0"].OCIRef; got != "" {
+		t.Fatalf("21.0.0 oci ref = %q, want empty: the entry has no urls", got)
 	}
 }

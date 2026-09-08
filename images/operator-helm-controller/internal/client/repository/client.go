@@ -41,6 +41,10 @@ type ChartVersion struct {
 	// MediaType is the OCI media type of the layer holding this chart version. It is
 	// empty for helm repositories and for OCI versions that are not usable.
 	MediaType string
+	// OCIRef is the reference the repository index publishes this version at, set
+	// only when the index points it at a registry rather than at a chart archive.
+	// The tag is always explicit.
+	OCIRef string
 	// UnavailableReason and UnavailableMessage are set when the version cannot be
 	// deployed and are empty for a usable one.
 	UnavailableReason  string
