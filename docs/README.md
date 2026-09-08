@@ -31,7 +31,7 @@ The following custom resources are used to manage Helm charts in the module:
 
 - Admin privileges (the `cluster-admin` role) are required to manage HelmClusterAddon and HelmClusterAddonRepository resources.
 - A HelmClusterAddon resource referencing a specific HelmClusterAddonChart can only be created as a single instance in the cluster. This is because Helm charts can contain custom resource definitions (CRDs), and installing them multiple times at the cluster level is not allowed.
-- Credentials and TLS settings of a repository are not sent to a registry that only its index names: a chart version published in a registry on a different host is pulled anonymously, so such a registry has to be publicly readable.
+- Credentials and TLS settings of a repository are not sent to a registry that only its index names, and a classic repository's credentials are withheld even from a registry at its own host, because it stores them as a plain username/password secret that only its own HelmRepository accepts rather than the dockerconfigjson secret an OCIRepository requires; a chart version published in a registry is therefore always pulled anonymously, so that registry has to be publicly readable.
 
 See [usage examples](example.html) for practical scenarios.
 
