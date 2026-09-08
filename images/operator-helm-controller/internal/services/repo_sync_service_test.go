@@ -540,3 +540,35 @@ func TestMergeChartVersionsCarriesOCIRef(t *testing.T) {
 		t.Fatalf("retained reason = %q, want %q", retained.UnavailableReason, helmv1alpha1.UnavailableReasonRemovedFromRepository)
 	}
 }
+
+// TestMergeChartVersionsDoesNotCarryMediaTypeOntoOCIRef pins the invariant the API
+// documentation asserts: MediaType stays empty for a version carrying OCIRef. A
+// version that now resolves to an OCI artifact must probe its own layer media type
+// from scratch even though an addon still references it and a previous pass (back
+// when the version was an archive) recorded one: resolveMediaType checks
+// version.MediaType != "" before the force-reconcile cache bypass, so a stale
+// carried-forward value would use the wrong layer selector and no force reconcile
+// could ever correct it.
+func TestMergeChartVersionsDoesNotCarryMediaTypeOntoOCIRef(t *testing.T) {
+	fetched := []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.7.1"), OCIRef: "oci://other-registry.example.com/x/podinfo:6.7.1"},
+	}
+
+	current := []helmv1alpha1.HelmClusterAddonChartVersion{
+		{Version: "6.7.1", MediaType: "application/tar+gzip"},
+	}
+
+	inUse := map[string]struct{}{"6.7.1": {}}
+
+	merged := mergeChartVersions(fetched, current, inUse)
+
+	if len(merged) != 1 {
+		t.Fatalf("merged = %+v, want exactly one version", merged)
+	}
+	if merged[0].OCIRef != "oci://other-registry.example.com/x/podinfo:6.7.1" {
+		t.Fatalf("OCIRef = %q, want the fetched one", merged[0].OCIRef)
+	}
+	if merged[0].MediaType != "" {
+		t.Fatalf("MediaType = %q, want empty: a version carrying OCIRef must not carry a stale media type forward", merged[0].MediaType)
+	}
+}

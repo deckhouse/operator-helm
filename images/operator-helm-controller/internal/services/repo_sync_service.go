@@ -381,7 +381,12 @@ func mergeChartVersions(
 		listed[name] = struct{}{}
 
 		mediaType := version.MediaType
-		if mediaType == "" {
+		// The carry-forward only makes sense for a version that still resolves to an
+		// archive: a fresh entry that now carries an OCIRef must probe its own layer
+		// media type from scratch, or a stale value stamped here would be read by
+		// resolveMediaType before the force-reconcile cache bypass and the pull would
+		// fail forever with no way to correct it.
+		if mediaType == "" && version.OCIRef == "" {
 			if _, referenced := inUse[name]; referenced {
 				if old, recorded := currentByVersion[name]; recorded && old.MediaType != "" {
 					mediaType = old.MediaType
