@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -32,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/deckhouse/operator-helm/api/naming"
@@ -497,6 +499,72 @@ func TestReconcileVersionMovedIntoRegistrySupersedesTheHelmChart(t *testing.T) {
 	}
 	if ociRepo.Spec.URL != "oci://registry.example.com/charts/podinfo" {
 		t.Fatalf("url = %q, want the address from the index entry", ociRepo.Spec.URL)
+	}
+}
+
+// TestLogSourceKindFlipIgnoresStaleEntryFromADifferentChartOrRepository pins the
+// guard added to logSourceKindFlip: LastAppliedChart carries its own repository/chart
+// identity and can lag behind Spec.Chart, so a version string that happens to match
+// is not enough on its own — the repository and chart name have to match too, or an
+// addon that switched to an unrelated chart reusing the same version string would be
+// misreported as its current chart having changed where it is published.
+func TestLogSourceKindFlipIgnoresStaleEntryFromADifferentChartOrRepository(t *testing.T) {
+	tests := []struct {
+		name       string
+		last       *helmv1alpha1.HelmClusterAddonLastAppliedChartRef
+		wantLogged bool
+	}{
+		{
+			name: "same repository, chart and version is a flip",
+			last: &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+				HelmClusterAddonRepository: "example",
+				HelmClusterAddonChartName:  "podinfo",
+				Version:                    "6.7.1",
+			},
+			wantLogged: true,
+		},
+		{
+			// The version string coincides, but it belongs to a different chart's
+			// history: the addon was repointed, not flipped.
+			name: "same version but a different chart name is not a flip",
+			last: &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+				HelmClusterAddonRepository: "example",
+				HelmClusterAddonChartName:  "other-chart",
+				Version:                    "6.7.1",
+			},
+			wantLogged: false,
+		},
+		{
+			// Same reasoning, the other field: the version string coincides, but it
+			// belongs to a different repository's history.
+			name: "same version but a different repository is not a flip",
+			last: &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+				HelmClusterAddonRepository: "other-repo",
+				HelmClusterAddonChartName:  "podinfo",
+				Version:                    "6.7.1",
+			},
+			wantLogged: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			addon := testAddon()
+			addon.Status.LastAppliedChart = tt.last
+
+			var logged bool
+			logger := funcr.New(func(prefix, args string) {
+				logged = true
+			}, funcr.Options{})
+			ctx := log.IntoContext(context.Background(), logger)
+
+			r := &Reconciler{}
+			r.logSourceKindFlip(ctx, addon, utils.InternalOCIRepository, true)
+
+			if logged != tt.wantLogged {
+				t.Fatalf("logged = %v, want %v", logged, tt.wantLogged)
+			}
+		})
 	}
 }
 

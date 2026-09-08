@@ -586,9 +586,16 @@ func (r *Reconciler) logSourceKindFlip(
 	}
 
 	last := addon.Status.LastAppliedChart
-	if last == nil || last.Version != addon.Spec.Chart.Version {
+	if last == nil ||
+		last.HelmClusterAddonRepository != addon.Spec.Chart.HelmClusterAddonRepository ||
+		last.HelmClusterAddonChartName != addon.Spec.Chart.HelmClusterAddonChartName ||
+		last.Version != addon.Spec.Chart.Version {
 		// Not a flip: the addon is moving to another version (or another chart), and
-		// the superseded source belonged to the one it is leaving.
+		// the superseded source belonged to the one it is leaving. All three fields
+		// have to match: LastAppliedChart carries its own repository/chart identity
+		// and can lag behind Spec.Chart when the addon is repointed at a different
+		// chart, so the version alone could match by coincidence while naming an
+		// entirely different chart's history.
 		return
 	}
 
