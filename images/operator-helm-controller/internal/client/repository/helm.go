@@ -44,10 +44,10 @@ type HelmRepositoryIndex struct {
 }
 
 type HelmRepositoryChartVersion struct {
-	Icon    string `json:"icon,omitempty"`
-	Version string `json:"version"`
-	Digest  string `json:"digest,omitempty"`
-	Removed bool   `json:"removed,omitempty"`
+	Icon    string   `json:"icon,omitempty"`
+	Version string   `json:"version"`
+	Digest  string   `json:"digest"`
+	Removed bool     `json:"removed,omitempty"`
 	URLs    []string `json:"urls,omitempty"`
 }
 
