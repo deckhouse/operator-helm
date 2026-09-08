@@ -271,11 +271,10 @@ func artifactRepoConfig(repo *helmv1alpha1.HelmClusterAddonRepository, source ut
 // ForceReconcileInternalRepositories stamps the reconcile request annotations on
 // the internal OCIRepository of every addon that references repoName.
 //
-// An oci:// repository has no internal source object of its own: the artifact is
-// pulled per addon, so a force request on the repository reaches the artifacts
-// only through its addons' OCIRepositories. The helm:// path needs no equivalent -
-// there the internal HelmRepository carries the request and its HelmCharts follow
-// the re-indexed source on their own.
+// An artifact pulled per addon has no internal source object shared by the
+// repository, so a force request reaches it only through the addons' own
+// OCIRepositories. That is every addon of an oci:// repository, and every addon of a
+// helm repository whose version the index publishes in a registry.
 //
 // An addon whose internal OCIRepository does not exist yet is skipped: the force
 // request must not be blocked by an addon that has not reached the point of

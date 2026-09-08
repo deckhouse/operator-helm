@@ -179,12 +179,14 @@ func (r *Reconciler) finish(
 	}
 
 	if attempted {
-		// An oci:// repository has no internal source object of its own, so a force
-		// request reaches the artifacts only through the addons' OCIRepositories.
-		// This runs before the annotation is consumed: a failure leaves the request
-		// in place to be retried. The helm:// path needs no equivalent - there the
-		// internal HelmRepository carries the request.
-		if repoType == utils.InternalOCIRepository && repo.ForceReconcileRequired() {
+		// A force request reaches an addon's artifact only through the addon's own
+		// internal OCIRepository, and any repository can have those: an oci:// one for
+		// every addon, a helm one for every version its index publishes in a registry.
+		// This runs before the annotation is consumed: a failure leaves the request in
+		// place to be retried. The versions a helm repository serves as archives need no
+		// equivalent — there the internal HelmRepository carries the request and its
+		// HelmCharts follow the re-indexed source on their own.
+		if repo.ForceReconcileRequired() {
 			if err := r.ociRepositoryService.ForceReconcileInternalRepositories(ctx, repo.Name); err != nil {
 				return reconcile.Result{}, fmt.Errorf("failed to force reconcile internal oci repositories: %w", err)
 			}
