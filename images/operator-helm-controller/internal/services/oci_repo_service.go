@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
@@ -32,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -45,11 +47,30 @@ var ociRepositoryErrorRules = []status.ErrorConditionRule{
 	{Type: "SourceVerified", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonOCIVerificationFailed},
 }
 
+// chartArtifactProbeRequeueInterval bounds how often a version whose artifact could
+// not be examined is retried. There is no watch that fires when a registry starts
+// answering again, so this periodic requeue is what lets a rate-limited or briefly
+// unreachable registry recover on its own.
+const chartArtifactProbeRequeueInterval = 2 * time.Minute
+
 type OCIRepoService struct {
 	BaseRepoService
+
+	resolver repoclient.ChartResolverInterface
 }
 
-func NewOCIRepoService(client client.Client, scheme *runtime.Scheme, namespace string) *OCIRepoService {
+// NewOCIRepoService builds the service. A nil resolver selects the default one; tests
+// pass their own so they never reach a registry.
+func NewOCIRepoService(
+	client client.Client,
+	scheme *runtime.Scheme,
+	namespace string,
+	resolver repoclient.ChartResolverInterface,
+) *OCIRepoService {
+	if resolver == nil {
+		resolver = repoclient.OCIChartResolverDefault
+	}
+
 	return &OCIRepoService{
 		BaseRepoService: BaseRepoService{
 			BaseService: BaseService{
@@ -58,6 +79,7 @@ func NewOCIRepoService(client client.Client, scheme *runtime.Scheme, namespace s
 			},
 			TargetNamespace: namespace,
 		},
+		resolver: resolver,
 	}
 }
 
@@ -66,6 +88,10 @@ var _ status.Provider = (*OCIRepoResult)(nil)
 type OCIRepoResult struct {
 	Status   status.Status
 	Artifact *meta.Artifact
+	// RequeueAfter asks the caller to schedule another pass. It is set only when the
+	// artifact could not be examined for a reason that may pass on its own: there is
+	// no watch on a foreign registry.
+	RequeueAfter time.Duration
 }
 
 func (r OCIRepoResult) GetStatus() status.Status {
@@ -93,6 +119,11 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 ) OCIRepoResult {
 	logger := log.FromContext(ctx)
 
+	mediaType, failure := s.resolveMediaType(ctx, addon, repo, source, version)
+	if failure != nil {
+		return *failure
+	}
+
 	existing := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
@@ -101,7 +132,7 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		applyOCIRepositorySpec(addon, repo, source, version.MediaType, existing)
+		applyOCIRepositorySpec(addon, repo, source, mediaType, existing)
 
 		return nil
 	})
@@ -139,6 +170,101 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 	return OCIRepoResult{
 		Artifact: existing.Status.Artifact,
 		Status:   processedStatus,
+	}
+}
+
+// resolveMediaType decides the layer selector for this version. A version of an
+// oci:// repository carries the verdict the catalog reached for it. A version a helm
+// index publishes in a registry does not: the catalog records only the reference, and
+// the artifact is examined here, when the addon is about to be deployed.
+//
+// The internal OCIRepository is the cache of that verdict, and it needs no upkeep of
+// its own: it lives exactly as long as the addon/version pair it serves, and it
+// already records which artifact the verdict is about. The registry is asked only
+// when the object is missing, addresses a different artifact, or carries no selector
+// — or when a force request asks for a re-examination.
+func (s *OCIRepoService) resolveMediaType(
+	ctx context.Context,
+	addon *helmv1alpha1.HelmClusterAddon,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	source utils.ChartSource,
+	version *helmv1alpha1.HelmClusterAddonChartVersion,
+) (string, *OCIRepoResult) {
+	if version.MediaType != "" {
+		return version.MediaType, nil
+	}
+
+	if !addon.ForceReconcileRequired() {
+		if cached := s.cachedMediaType(ctx, addon, source); cached != "" {
+			return cached, nil
+		}
+	}
+
+	mediaType, err := s.resolver.ResolveChartArtifact(ctx, source.URL+":"+source.Tag, artifactRepoConfig(repo, source))
+	if err == nil {
+		return mediaType, nil
+	}
+
+	if terminal, ok := repoclient.AsTerminal(err); ok {
+		return "", &OCIRepoResult{
+			Status: status.Failed(addon, terminal.Reason, terminal.Message, err),
+		}
+	}
+
+	return "", &OCIRepoResult{
+		Status: status.Failed(
+			addon,
+			helmv1alpha1.ReasonOCIFetchFailed,
+			"Failed to examine the chart artifact: "+err.Error(),
+			err,
+		),
+		RequeueAfter: chartArtifactProbeRequeueInterval,
+	}
+}
+
+// cachedMediaType returns the verdict recorded on the internal object, but only if it
+// is a verdict about this exact artifact.
+func (s *OCIRepoService) cachedMediaType(
+	ctx context.Context,
+	addon *helmv1alpha1.HelmClusterAddon,
+	source utils.ChartSource,
+) string {
+	nn := types.NamespacedName{
+		Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+		Namespace: s.TargetNamespace,
+	}
+
+	existing := &sourcev1.OCIRepository{}
+	if err := s.Client.Get(ctx, nn, existing); err != nil {
+		return ""
+	}
+
+	if existing.Spec.URL != source.URL {
+		return ""
+	}
+	if existing.Spec.Reference == nil || existing.Spec.Reference.Tag != source.Tag {
+		return ""
+	}
+
+	return existing.GetLayerMediaType()
+}
+
+// artifactRepoConfig builds the transport settings for examining the artifact. Only
+// the host the repository names gets them, and credentials are never included: the
+// internal OCIRepository pulls a foreign registry anonymously, and a probe that
+// authenticated would report a chart the pull could not fetch.
+func artifactRepoConfig(repo *helmv1alpha1.HelmClusterAddonRepository, source utils.ChartSource) *repoclient.RepoConfig {
+	if !sameRegistryHost(repo.Spec.URL, source.URL) {
+		return nil
+	}
+
+	if repo.Spec.CACertificate == "" && !repo.Spec.InsecureSkipVerify {
+		return nil
+	}
+
+	return &repoclient.RepoConfig{
+		CACertificate: repo.Spec.CACertificate,
+		Insecure:      repo.Spec.InsecureSkipVerify,
 	}
 }
 

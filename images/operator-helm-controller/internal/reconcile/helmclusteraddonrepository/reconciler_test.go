@@ -105,7 +105,7 @@ func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object)
 	r := New(
 		c,
 		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
 		services.NewRepoSyncService(c, scheme, factory),
 		status.NewManager(c),
 	)

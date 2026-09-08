@@ -275,7 +275,7 @@ func newForceTestReconciler(
 	return New(
 		c,
 		services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
 		services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
 		services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
 		services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),

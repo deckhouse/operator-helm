@@ -42,7 +42,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	r := reconcile.New(
 		mgr.GetClient(),
 		services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
 		services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),

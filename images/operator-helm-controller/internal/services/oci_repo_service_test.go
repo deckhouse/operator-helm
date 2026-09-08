@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
@@ -27,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -49,7 +51,36 @@ func newOCIRepoService(t *testing.T, objects ...client.Object) (*OCIRepoService,
 		}).
 		Build()
 
-	return NewOCIRepoService(c, scheme, testNamespace), c
+	return NewOCIRepoService(c, scheme, testNamespace, nil), c
+}
+
+// countingResolver records how many times the registry was asked, which is the whole
+// point of the cache: in the steady state the answer must be zero.
+type countingResolver struct {
+	mediaType string
+	err       error
+	calls     int
+	refs      []string
+}
+
+func (r *countingResolver) ResolveChartArtifact(_ context.Context, ref string, _ *repoclient.RepoConfig) (string, error) {
+	r.calls++
+	r.refs = append(r.refs, ref)
+
+	return r.mediaType, r.err
+}
+
+func newOCIRepoServiceWithResolver(
+	t *testing.T,
+	resolver repoclient.ChartResolverInterface,
+	objects ...client.Object,
+) (*OCIRepoService, client.Client) {
+	t.Helper()
+
+	service, c := newOCIRepoService(t, objects...)
+	service.resolver = resolver
+
+	return service, c
 }
 
 func internalOCIRepository(addonName string) *sourcev1.OCIRepository {
@@ -342,7 +373,8 @@ func TestForceReconcileInternalRepositoriesToleratesMissingSource(t *testing.T) 
 // registry is a different host entirely.
 func TestEnsureInternalOCIRepositoryAddressesTheIndexReference(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
-	service, c := newOCIRepoService(t, addon, repo)
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.HelmClusterAddonChartVersion{
 		Version: "6.7.1",
@@ -386,7 +418,8 @@ func TestEnsureInternalOCIRepositoryAddressesTheIndexReference(t *testing.T) {
 // accepts only dockerconfigjson.
 func TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
-	service, c := newOCIRepoService(t, addon, repo)
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.HelmClusterAddonChartVersion{
 		Version: "6.7.1",
@@ -447,5 +480,183 @@ func TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials(t *testing.T) 
 	}
 	if ociRepo.Spec.CertSecretRef == nil {
 		t.Error("an oci repository's own CA must still be referenced")
+	}
+}
+
+func TestEnsureInternalOCIRepositoryProbesHybridVersion(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+
+	service.EnsureInternalOCIRepository(
+		context.Background(), addon, repo, ociSource(t, repo, version), version,
+	)
+
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+	}
+	if resolver.refs[0] != "oci://registry.example.com/charts/podinfo:6.7.1" {
+		t.Fatalf("probed %q, want the full reference", resolver.refs[0])
+	}
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+	if ociRepo.Spec.LayerSelector == nil || ociRepo.Spec.LayerSelector.MediaType != resolver.mediaType {
+		t.Fatalf("layer selector = %+v, want the probed media type", ociRepo.Spec.LayerSelector)
+	}
+}
+
+// TestEnsureInternalOCIRepositoryReusesTheInternalObjectAsCache is the steady state:
+// the internal object already addresses this artifact and carries the verdict, so the
+// registry must not be asked again on every pass.
+func TestEnsureInternalOCIRepositoryReusesTheInternalObjectAsCache(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+	source := ociSource(t, repo, version)
+
+	service.EnsureInternalOCIRepository(context.Background(), addon, repo, source, version)
+	service.EnsureInternalOCIRepository(context.Background(), addon, repo, source, version)
+
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1: the internal object is the cache", resolver.calls)
+	}
+}
+
+// TestEnsureInternalOCIRepositoryReprobesChangedReference covers a repository that
+// re-published the same version somewhere else: the cached verdict describes a
+// different artifact and must not be reused.
+func TestEnsureInternalOCIRepositoryReprobesChangedReference(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+
+	first := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, first), first)
+
+	second := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://mirror.example.com/charts/podinfo:6.7.1",
+	}
+	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, second), second)
+
+	if resolver.calls != 2 {
+		t.Fatalf("resolver calls = %d, want 2: the reference changed", resolver.calls)
+	}
+}
+
+// TestEnsureInternalOCIRepositoryForceBypassesCache: a force request means
+// "re-examine", the same thing it means for the repository catalog.
+func TestEnsureInternalOCIRepositoryForceBypassesCache(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+	source := ociSource(t, repo, version)
+
+	service.EnsureInternalOCIRepository(context.Background(), addon, repo, source, version)
+
+	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	service.EnsureInternalOCIRepository(context.Background(), addon, repo, source, version)
+
+	if resolver.calls != 2 {
+		t.Fatalf("resolver calls = %d, want 2: a force request re-examines the artifact", resolver.calls)
+	}
+}
+
+// TestEnsureInternalOCIRepositoryNeverProbesRecordedMediaType: an oci:// repository's
+// version carries the verdict from the catalog, so the registry is not asked at all.
+func TestEnsureInternalOCIRepositoryNeverProbesRecordedMediaType(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+	resolver := &countingResolver{mediaType: "should-not-be-used"}
+	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version:   "6.7.1",
+		MediaType: "application/tar+gzip",
+	}
+
+	service.EnsureInternalOCIRepository(
+		context.Background(), addon, repo, ociSource(t, repo, version), version,
+	)
+
+	if resolver.calls != 0 {
+		t.Fatalf("resolver calls = %d, want 0", resolver.calls)
+	}
+}
+
+func TestEnsureInternalOCIRepositoryReportsTerminalProbeFailure(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{err: &repoclient.TerminalError{
+		Reason:  helmv1alpha1.ReasonUnsupportedChartArtifact,
+		Message: "config media type is not a helm chart config",
+	}}
+	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+
+	result := service.EnsureInternalOCIRepository(
+		context.Background(), addon, repo, ociSource(t, repo, version), version,
+	)
+
+	if result.Status.Reason != helmv1alpha1.ReasonUnsupportedChartArtifact {
+		t.Fatalf("reason = %q, want %q", result.Status.Reason, helmv1alpha1.ReasonUnsupportedChartArtifact)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("requeue = %v, want none: the artifact will not become a chart on its own", result.RequeueAfter)
+	}
+
+	// Nothing must be created from a verdict that says the artifact is unusable: an
+	// OCIRepository with an empty layer selector would make the source controller
+	// guess the layer.
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err == nil {
+		t.Fatal("no internal oci repository must be created for an unusable artifact")
+	}
+}
+
+func TestEnsureInternalOCIRepositoryRequeuesRetriableProbeFailure(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{err: errors.New("429 Too Many Requests")}
+	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+
+	result := service.EnsureInternalOCIRepository(
+		context.Background(), addon, repo, ociSource(t, repo, version), version,
+	)
+
+	if result.Status.Status != metav1.ConditionFalse {
+		t.Fatalf("status = %q, want False", result.Status.Status)
+	}
+	if result.RequeueAfter != chartArtifactProbeRequeueInterval {
+		t.Fatalf("requeue = %v, want %v", result.RequeueAfter, chartArtifactProbeRequeueInterval)
 	}
 }
