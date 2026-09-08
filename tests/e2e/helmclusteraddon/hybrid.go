@@ -47,11 +47,12 @@ entries:
 generated: "2026-01-01T00:00:00Z"
 `
 
-// hybridIndexImage serves the index. If the e2e environment cannot pull from Docker
-// Hub, replace it with an equivalent static-file image from the registry the module's
-// own dev images come from (see DEV_REGISTRY_DOCKER_CONFIG in
-// tests/e2e/internal/framework/config.go).
-const hybridIndexImage = "nginx:1.27-alpine"
+// hybridIndexImage only has to serve a static file over HTTP; a rootless nginx does
+// that as well as any other web server. If the e2e environment mirrors images rather
+// than pulling from Docker Hub, substitute an equivalent rootless image, listening on
+// 8080, from the registry the module's own dev images come from (see
+// DEV_REGISTRY_DOCKER_CONFIG in tests/e2e/internal/framework/config.go).
+const hybridIndexImage = "nginxinc/nginx-unprivileged:1.27-alpine"
 
 var _ = Describe("Using a helm repository whose index publishes a version in a registry", Ordered, func() {
 	f := framework.NewFramework("addon-hybrid")
@@ -81,10 +82,12 @@ var _ = Describe("Using a helm repository whose index publishes a version in a r
 			Data:       map[string]string{"index.yaml": hybridIndex},
 		}
 
-		// A local var, not ptr.To: ptr is only an indirect dependency of this
-		// module and importing it for a single fixture field would needlessly
+		// Local vars, not ptr.To: ptr is only an indirect dependency of this
+		// module and importing it for a few fixture fields would needlessly
 		// promote it to a direct one.
 		replicas := int32(1)
+		runAsNonRoot := true
+		allowPrivilegeEscalation := false
 		deployment := &appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: indexName, Namespace: f.NamespaceName()},
 			Spec: appsv1.DeploymentSpec{
@@ -93,14 +96,27 @@ var _ = Describe("Using a helm repository whose index publishes a version in a r
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": indexName}},
 					Spec: corev1.PodSpec{
+						// The namespace the framework creates carries only its own e2e
+						// label (see Before() in internal/framework/framework.go), so
+						// whichever pod security standard the cluster enforces by
+						// default applies here. Meeting "restricted" keeps the fixture
+						// correct under either that or the more permissive "baseline".
+						SecurityContext: &corev1.PodSecurityContext{
+							RunAsNonRoot:   &runAsNonRoot,
+							SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+						},
 						Containers: []corev1.Container{{
 							Name:  "nginx",
 							Image: hybridIndexImage,
-							Ports: []corev1.ContainerPort{{ContainerPort: 80}},
+							Ports: []corev1.ContainerPort{{ContainerPort: 8080}},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      "index",
 								MountPath: "/usr/share/nginx/html",
 							}},
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+								Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+							},
 						}},
 						Volumes: []corev1.Volume{{
 							Name: "index",
@@ -121,7 +137,7 @@ var _ = Describe("Using a helm repository whose index publishes a version in a r
 				Selector: map[string]string{"app": indexName},
 				Ports: []corev1.ServicePort{{
 					Port:       80,
-					TargetPort: intstr.FromInt32(80),
+					TargetPort: intstr.FromInt32(8080),
 				}},
 			},
 		}
