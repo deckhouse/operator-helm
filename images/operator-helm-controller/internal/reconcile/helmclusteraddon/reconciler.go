@@ -220,57 +220,58 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		source, addonChartErr = utils.ResolveChartSource(repo, chartVersion)
 	}
 
-	switch repoType {
-	case utils.InternalHelmRepository:
-		if addonChartErr != nil {
-			chartRes = services.ChartResult{
-				Status: status.Failed(addon, helmv1alpha1.ReasonChartFetchFailed, "failed to get desired chart version", addonChartErr),
-			}
-
-			break
-		}
-
-		// URL change in the HelmClusterAddonRepository may lead to repository type change.
-		// If repository type changed from OCI to Helm, we need to remove previously created OCI repository.
-		if _, err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon); err != nil {
+	switch {
+	case addonChartErr != nil:
+		// One report for both branches: until the source is known, neither internal
+		// object may be touched, and which one would have been touched is precisely
+		// what could not be determined.
+		chartRes = services.ChartResult{Status: status.Failed(
+			addon,
+			helmv1alpha1.ReasonChartFetchFailed,
+			"Failed to resolve the desired chart version",
+			addonChartErr,
+		)}
+	case source.Kind == utils.InternalHelmRepository:
+		// The version may have moved out of a registry — either because the user
+		// repointed the repository, or because the index re-published it as an
+		// archive. Either way the internal OCIRepository is no longer the source.
+		superseded, err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon)
+		if err != nil {
 			chartRes = services.ChartResult{
 				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
 			}
+
 			break
 		}
+
+		r.logSourceKindFlip(ctx, addon, source.Kind, superseded != nil)
 
 		chartRes = r.chartService.EnsureHelmChart(ctx, addon)
-	case utils.InternalOCIRepository:
-		if addonChartErr != nil {
-			// addonChartErr, not err: err is the (nil) result of GetRepositoryType above,
-			// so passing it dropped the real cause.
-			repoRes = services.OCIRepoResult{
-				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "failed to get desired chart version", addonChartErr),
-			}
-
-			break
-		}
-
-		if _, err := r.chartService.CleanupHelmChart(ctx, addon); err != nil {
+	case source.Kind == utils.InternalOCIRepository:
+		superseded, err := r.chartService.CleanupHelmChart(ctx, addon)
+		if err != nil {
 			chartRes = services.ChartResult{
 				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
 			}
+
 			break
 		}
+
+		r.logSourceKindFlip(ctx, addon, source.Kind, superseded != nil)
 
 		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo, source, chartVersion)
 	default:
 		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
 			addon,
 			helmv1alpha1.ReasonFailed,
-			fmt.Sprintf("Unsupported repository type: %s", repoType),
-			fmt.Errorf("unsupported repository type: %s", repoType),
+			fmt.Sprintf("Unsupported chart source: %s", source.Kind),
+			fmt.Errorf("unsupported chart source: %s", source.Kind),
 		)})
 	}
 
 	if chartRes.HasArtifact() || repoRes.HasArtifact() {
 		var artifactRevision string
-		switch repoType {
+		switch source.Kind {
 		case utils.InternalHelmRepository:
 			if chartRes.Artifact != nil {
 				artifactRevision = chartRes.Artifact.Revision
@@ -281,13 +282,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			}
 		}
 
-		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, repoType, artifactRevision)
+		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, source.Kind, artifactRevision)
 	}
 
 	if err := r.statusManager.Update(
 		ctx,
 		addon,
-		setStatusAttrs(repoType, chartRes, repoRes, releaseRes, forceReconcileOutcome{
+		setStatusAttrs(source.Kind, chartRes, repoRes, releaseRes, forceReconcileOutcome{
 			forced: forced,
 			now:    time.Now().UTC(),
 		}),
@@ -305,7 +306,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 	}
 
-	return reconcile.Result{}, nil
+	// A probe that could not reach the registry asks for another pass: there is no
+	// watch that fires when a foreign registry starts answering again.
+	return reconcile.Result{RequeueAfter: repoRes.RequeueAfter}, nil
 }
 
 func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (reconcile.Result, error) {
@@ -500,11 +503,16 @@ func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, key client.Ob
 }
 
 // getHelmClusterAddonChart resolves the catalog entry for the version the addon asks
-// for. For an OCI repository an entry is usable only when it carries a media type:
-// that is exactly "we know enough to build the internal OCIRepository". A version
-// retained after its tag disappeared keeps its media type, so this gate stays open for
-// it and the addon keeps reconciling everything else — its values, its maintenance
-// mode, its removal.
+// for and rejects an entry that cannot be deployed. Two things make an entry
+// unusable: an index reference that cannot be addressed, and — for a version of an
+// oci:// repository — a missing media type, which is exactly "the catalog does not
+// yet know enough to build the internal OCIRepository". A version published in a
+// registry by a helm index carries no media type by design: its artifact is examined
+// at deploy time, so the second rule does not apply to it.
+//
+// A version retained after its tag disappeared keeps both its media type and its
+// reference, so this gate stays open for it and the addon keeps reconciling
+// everything else — its values, its maintenance mode, its removal.
 func (r *Reconciler) getHelmClusterAddonChart(
 	ctx context.Context,
 	addon *helmv1alpha1.HelmClusterAddon,
@@ -525,7 +533,18 @@ func (r *Reconciler) getHelmClusterAddonChart(
 			continue
 		}
 
-		if repoType == utils.InternalOCIRepository && version.MediaType == "" {
+		if version.UnavailableReason == helmv1alpha1.UnavailableReasonInvalidChartReference {
+			// The index publishes this version in a registry at a reference that
+			// cannot be addressed. Without this the version would fall back to the
+			// helm path and fail on the very same url, reported by the source
+			// controller as an opaque fetch error.
+			return nil, nil, fmt.Errorf(
+				"chart version %q cannot be deployed: %s",
+				version.Version, versionUnavailableDetail(*version),
+			)
+		}
+
+		if repoType == utils.InternalOCIRepository && version.OCIRef == "" && version.MediaType == "" {
 			return nil, nil, fmt.Errorf(
 				"chart version %q cannot be deployed: %s",
 				version.Version, versionUnavailableDetail(*version),
@@ -550,6 +569,36 @@ func versionUnavailableDetail(version helmv1alpha1.HelmClusterAddonChartVersion)
 	}
 }
 
+// logSourceKindFlip reports that the same chart version changed where it is
+// published: the repository index moved it between a chart archive and a registry.
+// Nothing else surfaces that — status records the applied version but not the source
+// it came from — and it upgrades a running release nobody asked to upgrade, so it has
+// to be findable in the log. superseded says whether an internal source of the other
+// kind was actually removed in this pass.
+func (r *Reconciler) logSourceKindFlip(
+	ctx context.Context,
+	addon *helmv1alpha1.HelmClusterAddon,
+	kind utils.InternalRepositoryType,
+	superseded bool,
+) {
+	if !superseded {
+		return
+	}
+
+	last := addon.Status.LastAppliedChart
+	if last == nil || last.Version != addon.Spec.Chart.Version {
+		// Not a flip: the addon is moving to another version (or another chart), and
+		// the superseded source belonged to the one it is leaving.
+		return
+	}
+
+	log.FromContext(ctx).Info(
+		"Chart version changed where it is published; the running release will be upgraded from the new source",
+		"version", addon.Spec.Chart.Version,
+		"source", kind,
+	)
+}
+
 // forceReconcileOutcome carries what the status mutator needs to close out a
 // forced pass. It is a struct so the clock stays with the caller: the mutator
 // runs inside the status manager, after it has snapshotted the object it diffs
@@ -560,7 +609,7 @@ type forceReconcileOutcome struct {
 }
 
 func setStatusAttrs(
-	repoType utils.InternalRepositoryType,
+	sourceKind utils.InternalRepositoryType,
 	chartRes services.ChartResult,
 	repoRes services.OCIRepoResult,
 	releaseRes services.ReleaseResult,
@@ -582,7 +631,7 @@ func setStatusAttrs(
 
 		var updateChart bool
 
-		switch repoType {
+		switch sourceKind {
 		case utils.InternalHelmRepository:
 			if chartRes.HasArtifact() && releaseRes.IsReady() && addon.IsChartStatusInfoOutdated() {
 				updateChart = true

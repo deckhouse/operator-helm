@@ -36,6 +36,7 @@ import (
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -187,6 +188,30 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			wantErr:        true,
 			wantErrContain: `does not have version "6.7.1"`,
 		},
+		{
+			// The hybrid case: the version lives in a registry, so its media type is
+			// resolved at deploy time and is deliberately absent here. The gate must
+			// not read that absence as "unresolved".
+			name: "helm repository version published in a registry passes without a media type",
+			version: helmv1alpha1.HelmClusterAddonChartVersion{
+				Version: "6.7.1",
+				OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+			},
+			repoType: utils.InternalHelmRepository,
+		},
+		{
+			// Left through, this version would be sent down the helm path and would
+			// fail on the same unusable url with an opaque source controller error.
+			name: "version with an unusable index reference is rejected",
+			version: helmv1alpha1.HelmClusterAddonChartVersion{
+				Version:            "6.7.1",
+				UnavailableReason:  helmv1alpha1.UnavailableReasonInvalidChartReference,
+				UnavailableMessage: "oci reference \"oci://BAD_HOST//:::\" is not a valid tagged reference",
+			},
+			repoType:       utils.InternalHelmRepository,
+			wantErr:        true,
+			wantErrContain: "InvalidChartReference",
+		},
 	}
 
 	for _, tt := range tests {
@@ -244,10 +269,41 @@ func TestGetHelmClusterAddonChartMissingChart(t *testing.T) {
 	}
 }
 
-// newForceTestReconciler builds a reconciler with the full service set, so a test
-// can drive a complete pass rather than a single helper.
+// stubChartResolver stands in for the registry so a reconcile never leaves the
+// process.
+type stubChartResolver struct {
+	mediaType string
+	err       error
+}
+
+func (r *stubChartResolver) ResolveChartArtifact(_ context.Context, _ string, _ *repoclient.RepoConfig) (string, error) {
+	return r.mediaType, r.err
+}
+
+func helmRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
+	return &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
+		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.invalid/stable"},
+	}
+}
+
 func newForceTestReconciler(
 	t *testing.T,
+	interceptors interceptor.Funcs,
+	objects ...client.Object,
+) (*Reconciler, client.Client) {
+	t.Helper()
+
+	return newFullReconciler(t, nil, interceptors, objects...)
+}
+
+// newFullReconciler builds a reconciler with the full service set, so a test can
+// drive a complete pass rather than a single helper. resolver is handed to the OCI
+// service; nil selects the real one, which tests that never reach the hybrid path can
+// use safely.
+func newFullReconciler(
+	t *testing.T,
+	resolver repoclient.ChartResolverInterface,
 	interceptors interceptor.Funcs,
 	objects ...client.Object,
 ) (*Reconciler, client.Client) {
@@ -275,7 +331,7 @@ func newForceTestReconciler(
 	return New(
 		c,
 		services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
+		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, resolver),
 		services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
 		services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
 		services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
@@ -307,6 +363,140 @@ func reconcileAddon(t *testing.T, r *Reconciler, name string) {
 		NamespacedName: types.NamespacedName{Name: name},
 	}); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
+	}
+}
+
+// TestReconcileHybridVersionUsesInternalOCIRepository is the end-to-end shape of the
+// feature: the repository is a classic helm one, and only the index entry of the
+// version points at a registry. The addon must be served by an internal
+// OCIRepository addressed by that entry, and no internal HelmChart must be created.
+func TestReconcileHybridVersionUsesInternalOCIRepository(t *testing.T) {
+	addon := testAddon()
+	resolver := &stubChartResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+
+	r, c := newFullReconciler(t, resolver, interceptor.Funcs{},
+		addon,
+		helmRepositoryFixture(),
+		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+			Version: "6.7.1",
+			OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+		}),
+	)
+
+	reconcileAddon(t, r, addon.Name)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	ociKey := client.ObjectKey{
+		Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}
+	if err := c.Get(context.Background(), ociKey, ociRepo); err != nil {
+		t.Fatalf("a version published in a registry must be served by an internal oci repository: %v", err)
+	}
+	if ociRepo.Spec.URL != "oci://registry.example.com/charts/podinfo" {
+		t.Fatalf("url = %q, want the address from the index entry", ociRepo.Spec.URL)
+	}
+	if ociRepo.Spec.Reference == nil || ociRepo.Spec.Reference.Tag != "6.7.1" {
+		t.Fatalf("reference = %+v, want tag 6.7.1", ociRepo.Spec.Reference)
+	}
+	if ociRepo.Spec.LayerSelector == nil || ociRepo.Spec.LayerSelector.MediaType != resolver.mediaType {
+		t.Fatalf("layer selector = %+v, want the examined media type", ociRepo.Spec.LayerSelector)
+	}
+
+	chart := &sourcev1.HelmChart{}
+	chartKey := client.ObjectKey{
+		Name:      utils.GetInternalHelmChartName(addon.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}
+	if err := c.Get(context.Background(), chartKey, chart); err == nil {
+		t.Fatal("no internal helm chart must be created for a version published in a registry")
+	}
+}
+
+// TestReconcileArchiveVersionOfHelmRepositoryStaysOnTheHelmPath is the complement:
+// the same repository, a version without an index reference, and nothing about the
+// hybrid path must engage.
+func TestReconcileArchiveVersionOfHelmRepositoryStaysOnTheHelmPath(t *testing.T) {
+	addon := testAddon()
+
+	r, c := newFullReconciler(t, &stubChartResolver{}, interceptor.Funcs{},
+		addon,
+		helmRepositoryFixture(),
+		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+			Version: "6.7.1",
+		}),
+	)
+
+	reconcileAddon(t, r, addon.Name)
+
+	chart := &sourcev1.HelmChart{}
+	chartKey := client.ObjectKey{
+		Name:      utils.GetInternalHelmChartName(addon.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}
+	if err := c.Get(context.Background(), chartKey, chart); err != nil {
+		t.Fatalf("an archive version must be served by an internal helm chart: %v", err)
+	}
+
+	ociRepo := &sourcev1.OCIRepository{}
+	ociKey := client.ObjectKey{
+		Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}
+	if err := c.Get(context.Background(), ociKey, ociRepo); err == nil {
+		t.Fatal("no internal oci repository must be created for an archive version")
+	}
+}
+
+// TestReconcileVersionMovedIntoRegistrySupersedesTheHelmChart is the flip: the index
+// re-published a version the addon is already running as an OCI artifact. The
+// superseded internal HelmChart is removed even though the new source has not
+// produced an artifact yet — a repository retracting a location is a fact the addon
+// state has to reflect, and keeping the old source would let the addon keep deploying
+// from a place the repository no longer offers. The running release is not torn down
+// by that: helm-controller does not uninstall a release because its source is gone.
+func TestReconcileVersionMovedIntoRegistrySupersedesTheHelmChart(t *testing.T) {
+	addon := testAddon()
+	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+		HelmClusterAddonRepository: "example",
+		HelmClusterAddonChartName:  "podinfo",
+		Version:                    "6.7.1",
+	}
+
+	supersededChart := &sourcev1.HelmChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalHelmChartName(addon.Name),
+			Namespace: helmv1alpha1.TargetNamespace,
+		},
+	}
+
+	r, c := newFullReconciler(t, &stubChartResolver{mediaType: "application/tar+gzip"}, interceptor.Funcs{},
+		addon,
+		helmRepositoryFixture(),
+		supersededChart,
+		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+			Version: "6.7.1",
+			OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+		}),
+	)
+
+	reconcileAddon(t, r, addon.Name)
+
+	chart := &sourcev1.HelmChart{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(supersededChart), chart); err == nil {
+		t.Error("the superseded internal helm chart must be removed")
+	}
+
+	ociRepo := &sourcev1.OCIRepository{}
+	ociKey := client.ObjectKey{
+		Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}
+	if err := c.Get(context.Background(), ociKey, ociRepo); err != nil {
+		t.Fatalf("the new source must be created in the same pass: %v", err)
+	}
+	if ociRepo.Spec.URL != "oci://registry.example.com/charts/podinfo" {
+		t.Fatalf("url = %q, want the address from the index entry", ociRepo.Spec.URL)
 	}
 }
 
