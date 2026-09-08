@@ -450,6 +450,55 @@ func TestReconcileArchiveVersionOfHelmRepositoryStaysOnTheHelmPath(t *testing.T)
 	}
 }
 
+// TestReconcileVersionMovedOutOfRegistrySupersedesTheOCIRepository is the mirror flip:
+// the index re-published a version the addon is already running as an archive from an
+// internal OCIRepository, either because the user repointed the repository or because
+// the index re-published it out of the registry. The superseded internal OCIRepository
+// is removed even though the new source has not produced an artifact yet, for the same
+// reason as its HelmChart counterpart: a repository retracting a location is a fact
+// the addon state has to reflect, and keeping the old source would let the addon keep
+// deploying from a place the repository no longer offers.
+func TestReconcileVersionMovedOutOfRegistrySupersedesTheOCIRepository(t *testing.T) {
+	addon := testAddon()
+	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+		HelmClusterAddonRepository: "example",
+		HelmClusterAddonChartName:  "podinfo",
+		Version:                    "6.7.1",
+	}
+
+	supersededOCIRepo := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+			Namespace: helmv1alpha1.TargetNamespace,
+		},
+	}
+
+	r, c := newFullReconciler(t, &stubChartResolver{}, interceptor.Funcs{},
+		addon,
+		helmRepositoryFixture(),
+		supersededOCIRepo,
+		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+			Version: "6.7.1",
+		}),
+	)
+
+	reconcileAddon(t, r, addon.Name)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(supersededOCIRepo), ociRepo); err == nil {
+		t.Error("the superseded internal oci repository must be removed")
+	}
+
+	chart := &sourcev1.HelmChart{}
+	chartKey := client.ObjectKey{
+		Name:      utils.GetInternalHelmChartName(addon.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}
+	if err := c.Get(context.Background(), chartKey, chart); err != nil {
+		t.Fatalf("the new source must be created in the same pass: %v", err)
+	}
+}
+
 // TestReconcileVersionMovedIntoRegistrySupersedesTheHelmChart is the flip: the index
 // re-published a version the addon is already running as an OCI artifact. The
 // superseded internal HelmChart is removed even though the new source has not
