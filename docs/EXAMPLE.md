@@ -119,3 +119,37 @@ The timestamp records that the request was acted on, not that it succeeded — t
 {{< alert level="warning" >}}
 A HelmClusterAddon in maintenance mode (`.spec.maintenance: NoResourceReconciliation`) is not reconciled at all, so a force request on it cannot be honoured. The controller discards the annotation instead of holding it until maintenance is lifted, and `.status.lastForceReconcileTime` is left untouched. Lift maintenance first, then request the reconciliation.
 {{< /alert >}}
+
+## Deploying a version published in an OCI registry
+
+A classic HTTP repository may publish some of its chart versions in an OCI registry. Such an entry names the artifact in `urls` instead of pointing at a `.tgz` archive:
+
+```yaml
+apiVersion: v1
+entries:
+  airflow:
+    - name: airflow
+      version: 25.0.2
+      urls:
+        - oci://registry-1.docker.io/bitnamicharts/airflow:25.0.2
+```
+
+Nothing about the HelmClusterAddonRepository or the HelmClusterAddon changes — the repository is still added by its HTTP url, and the addon still asks for the version by name:
+
+```yaml
+apiVersion: helm.deckhouse.io/v1alpha1
+kind: HelmClusterAddonRepository
+metadata:
+  name: bitnami
+spec:
+  url: https://charts.example.com/bitnami
+```
+
+The version is recorded in the catalog with the reference the index gave it:
+
+```console
+d8 k get helmclusteraddonchart bitnami-airflow -o jsonpath='{.status.versions[0]}'
+{"ociRef":"oci://registry-1.docker.io/bitnamicharts/airflow:25.0.2","version":"25.0.2"}
+```
+
+When an addon asks for that version, the controller pulls it from the registry rather than from the repository. The registry has to be publicly readable: the repository credentials are not sent to a host that only its index names.

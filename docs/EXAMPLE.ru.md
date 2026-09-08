@@ -119,3 +119,37 @@ d8 k get helmclusteraddonrepository podinfo -o jsonpath='{.status.lastForceRecon
 {{< alert level="warning" >}}
 HelmClusterAddon в режиме обслуживания (`.spec.maintenance: NoResourceReconciliation`) не согласовывается вовсе, поэтому запрос принудительной реконсиляции для него невыполним. Контроллер удаляет аннотацию, а не удерживает её до выхода из режима обслуживания; `.status.lastForceReconcileTime` при этом не меняется. Сначала выйдите из режима обслуживания, затем запрашивайте реконсиляцию.
 {{< /alert >}}
+
+## Развёртывание версии, опубликованной в OCI-регистри
+
+Классический HTTP-репозиторий может публиковать часть версий своих чартов в OCI-регистри. Такая запись указывает артефакт в `urls` вместо ссылки на архив `.tgz`:
+
+```yaml
+apiVersion: v1
+entries:
+  airflow:
+    - name: airflow
+      version: 25.0.2
+      urls:
+        - oci://registry-1.docker.io/bitnamicharts/airflow:25.0.2
+```
+
+Ни в HelmClusterAddonRepository, ни в HelmClusterAddon ничего менять не нужно: репозиторий по-прежнему добавляется по своему HTTP-адресу, а аддон по-прежнему запрашивает версию по имени:
+
+```yaml
+apiVersion: helm.deckhouse.io/v1alpha1
+kind: HelmClusterAddonRepository
+metadata:
+  name: bitnami
+spec:
+  url: https://charts.example.com/bitnami
+```
+
+Версия попадает в каталог вместе со ссылкой, которую дал ей индекс:
+
+```console
+d8 k get helmclusteraddonchart bitnami-airflow -o jsonpath='{.status.versions[0]}'
+{"ociRef":"oci://registry-1.docker.io/bitnamicharts/airflow:25.0.2","version":"25.0.2"}
+```
+
+Когда аддон запрашивает такую версию, контроллер скачивает её из регистри, а не из репозитория. Регистри должен быть доступен для чтения без аутентификации: креденшлы репозитория не отправляются на хост, который назван только в его индексе.

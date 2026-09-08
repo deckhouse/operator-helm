@@ -11,6 +11,7 @@ The module controller monitors the state of HelmClusterAddon resources and autom
 ## Main Features
 
 - Deploying Helm charts from classic HTTP/HTTPS repositories and OCI registries through a unified declarative API.
+- Deploying a chart version that a classic repository publishes in an OCI registry: when the repository index points a version at a registry, that version is pulled from the registry even though its repository is a classic one.
 - Automatic chart version discovery and tracking via HelmClusterAddonChart resources.
 - Configurable chart values through HelmClusterAddon resources.
 - Maintenance mode to pause reconciliation on managed releases.
@@ -30,6 +31,7 @@ The following custom resources are used to manage Helm charts in the module:
 
 - Admin privileges (the `cluster-admin` role) are required to manage HelmClusterAddon and HelmClusterAddonRepository resources.
 - A HelmClusterAddon resource referencing a specific HelmClusterAddonChart can only be created as a single instance in the cluster. This is because Helm charts can contain custom resource definitions (CRDs), and installing them multiple times at the cluster level is not allowed.
+- Credentials and TLS settings of a repository are not sent to a registry that only its index names: a chart version published in a registry on a different host is pulled anonymously, so such a registry has to be publicly readable.
 
 See [usage examples](example.html) for practical scenarios.
 
