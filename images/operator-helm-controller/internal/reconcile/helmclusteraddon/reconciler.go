@@ -212,6 +212,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	_, chartVersion, addonChartErr := r.getHelmClusterAddonChart(ctx, addon, repoType)
 
+	// The source is resolved once, before the branches: which internal object an
+	// addon needs is a property of the version it asks for, and a version whose
+	// source cannot be resolved is as unusable as a version that is missing.
+	var source utils.ChartSource
+	if addonChartErr == nil {
+		source, addonChartErr = utils.ResolveChartSource(repo, chartVersion)
+	}
+
 	switch repoType {
 	case utils.InternalHelmRepository:
 		if addonChartErr != nil {
@@ -250,7 +258,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			break
 		}
 
-		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo, chartVersion)
+		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo, source, chartVersion)
 	default:
 		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
 			addon,

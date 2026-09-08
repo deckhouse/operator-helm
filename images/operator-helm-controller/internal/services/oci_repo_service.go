@@ -88,6 +88,7 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 	ctx context.Context,
 	addon *helmv1alpha1.HelmClusterAddon,
 	repo *helmv1alpha1.HelmClusterAddonRepository,
+	source utils.ChartSource,
 	version *helmv1alpha1.HelmClusterAddonChartVersion,
 ) OCIRepoResult {
 	logger := log.FromContext(ctx)
@@ -100,7 +101,7 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		applyOCIRepositorySpec(addon, repo, version.MediaType, existing)
+		applyOCIRepositorySpec(addon, repo, source, version.MediaType, existing)
 
 		return nil
 	})
@@ -232,6 +233,7 @@ func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, addon *helmv1a
 func applyOCIRepositorySpec(
 	addon *helmv1alpha1.HelmClusterAddon,
 	repo *helmv1alpha1.HelmClusterAddonRepository,
+	source utils.ChartSource,
 	mediaType string,
 	existing *sourcev1.OCIRepository,
 ) {
@@ -239,30 +241,42 @@ func applyOCIRepositorySpec(
 		setReconcileRequestAnnotations(existing)
 	}
 
-	existing.Spec.URL = repo.Spec.URL
-	existing.Spec.Reference = &sourcev1.OCIRepositoryRef{
-		Tag: addon.Spec.Chart.Version,
-	}
+	existing.Spec.URL = source.URL
+	existing.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: source.Tag}
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
-	existing.Spec.Insecure = repo.Spec.InsecureSkipVerify
+	existing.Spec.Insecure = false
 	existing.Spec.CertSecretRef = nil
 	existing.Spec.SecretRef = nil
 
-	if repo.Spec.Auth != nil {
-		existing.Spec.SecretRef = &meta.LocalObjectReference{
-			Name: utils.GetInternalRepositoryAuthSecretName(repo.Name),
+	// The repository's transport settings and credentials describe the host it
+	// names. An artifact its index points at somewhere else is reached as a public
+	// registry: the settings do not describe that host, and the credentials must not
+	// be sent to it. For an oci:// repository the two hosts are the same one, so this
+	// is where its existing behaviour lives.
+	if sameRegistryHost(repo.Spec.URL, source.URL) {
+		existing.Spec.Insecure = repo.Spec.InsecureSkipVerify
+
+		if repo.Spec.CACertificate != "" {
+			existing.Spec.CertSecretRef = &meta.LocalObjectReference{
+				Name: utils.GetInternalRepositoryTLSSecretName(repo.Name),
+			}
+		}
+
+		// Only an oci:// repository keeps its credentials in the dockerconfigjson
+		// secret OCIRepository requires. A helm repository's secret is an Opaque
+		// username/password one, and referencing it here would break the pull with a
+		// less obvious error than not authenticating at all.
+		if repo.Spec.Auth != nil && repositoryIsOCI(repo) {
+			existing.Spec.SecretRef = &meta.LocalObjectReference{
+				Name: utils.GetInternalRepositoryAuthSecretName(repo.Name),
+			}
 		}
 	}
 
-	if repo.Spec.CACertificate != "" {
-		existing.Spec.CertSecretRef = &meta.LocalObjectReference{
-			Name: utils.GetInternalRepositoryTLSSecretName(repo.Name),
-		}
-	}
-
-	// The media type is the one recorded for this chart version by the repository
-	// synchronization: it differs between charts pushed by current and by older tooling.
-	// The caller guarantees it is non-empty.
+	// The media type is either the one recorded for this version by the repository
+	// synchronization or the one this pass read from the registry: it differs between
+	// charts pushed by current and by older tooling. The caller guarantees it is
+	// non-empty.
 	existing.Spec.LayerSelector = &sourcev1.OCILayerSelector{
 		MediaType: mediaType,
 		Operation: "copy",
@@ -272,4 +286,27 @@ func applyOCIRepositorySpec(
 		helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
 		helmv1alpha1.HelmClusterAddonLabelSourceName: addon.Name,
 	}
+}
+
+// sameRegistryHost reports whether the artifact lives on the host the repository
+// itself names. An unparsable url on either side means "not the same host", which is
+// the safe answer: it withholds credentials rather than misdirecting them.
+func sameRegistryHost(repoURL, artifactURL string) bool {
+	repoHost, err := utils.GetRegistryHost(repoURL)
+	if err != nil {
+		return false
+	}
+
+	artifactHost, err := utils.GetRegistryHost(artifactURL)
+	if err != nil {
+		return false
+	}
+
+	return repoHost == artifactHost
+}
+
+func repositoryIsOCI(repo *helmv1alpha1.HelmClusterAddonRepository) bool {
+	repoType, err := utils.GetRepositoryType(repo.Spec.URL)
+
+	return err == nil && repoType == utils.InternalOCIRepository
 }

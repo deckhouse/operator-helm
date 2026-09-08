@@ -82,6 +82,33 @@ func ociTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	}
 }
 
+// ociSource resolves the source the way the reconciler does, so the tests exercise
+// the real mapping instead of a hand-built one.
+func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.HelmClusterAddonChartVersion) utils.ChartSource {
+	t.Helper()
+
+	source, err := utils.ResolveChartSource(repo, version)
+	if err != nil {
+		t.Fatalf("resolving chart source: %v", err)
+	}
+
+	return source
+}
+
+// hybridTestRepository is a helm repository: its own url is served over https, and
+// only the index entry of a version points at a registry.
+func hybridTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
+	return &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
+		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{
+			URL:                "https://charts.example.invalid/stable",
+			Auth:               &helmv1alpha1.HelmClusterAddonRepositoryAuth{Username: "u", Password: "p"},
+			CACertificate:      "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+			InsecureSkipVerify: true,
+		},
+	}
+}
+
 func TestEnsureInternalOCIRepositoryUsesRecordedMediaType(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	service, c := newOCIRepoService(t, addon, repo)
@@ -91,7 +118,7 @@ func TestEnsureInternalOCIRepositoryUsesRecordedMediaType(t *testing.T) {
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, version)
+	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
 
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
@@ -117,7 +144,7 @@ func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
 		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
 	}
 
-	result := service.EnsureInternalOCIRepository(context.Background(), addon, repo, version)
+	result := service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
 
 	if result.Status.Reason != helmv1alpha1.ReasonChartVersionRemoved {
 		t.Fatalf("reason is %q, want %q", result.Status.Reason, helmv1alpha1.ReasonChartVersionRemoved)
@@ -183,7 +210,7 @@ func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *
 
 	service, _ := newOCIRepoService(t, addon, repo, internal)
 
-	result := service.EnsureInternalOCIRepository(context.Background(), addon, repo, version)
+	result := service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
 
 	if result.Status.Status != metav1.ConditionTrue {
 		t.Fatalf("expected the ready child's status to be mirrored as True, got %v", result.Status.Status)
@@ -213,7 +240,7 @@ func TestEnsureInternalOCIRepositoryForcesReconcileFromAddon(t *testing.T) {
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, version)
+	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
 
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
@@ -241,7 +268,7 @@ func TestEnsureInternalOCIRepositoryDoesNotForceReconcileWithoutAnnotation(t *te
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, version)
+	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
 
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
@@ -307,5 +334,118 @@ func TestForceReconcileInternalRepositoriesToleratesMissingSource(t *testing.T) 
 
 	if err := service.ForceReconcileInternalRepositories(context.Background(), "example"); err != nil {
 		t.Fatalf("a missing internal oci repository must not fail the force request: %v", err)
+	}
+}
+
+// TestEnsureInternalOCIRepositoryAddressesTheIndexReference pins that the artifact
+// address comes from the version, not from the repository: for a hybrid version the
+// registry is a different host entirely.
+func TestEnsureInternalOCIRepositoryAddressesTheIndexReference(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	service, c := newOCIRepoService(t, addon, repo)
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+
+	service.EnsureInternalOCIRepository(
+		context.Background(), addon, repo, ociSource(t, repo, version), version,
+	)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if ociRepo.Spec.URL != "oci://registry.example.com/charts/podinfo" {
+		t.Fatalf("url = %q, want the address from the index reference", ociRepo.Spec.URL)
+	}
+	if ociRepo.Spec.Reference == nil || ociRepo.Spec.Reference.Tag != "6.7.1" {
+		t.Fatalf("reference = %+v, want tag 6.7.1", ociRepo.Spec.Reference)
+	}
+
+	// Only public registries are supported, and the repository's transport settings
+	// describe its own host, not a third-party one.
+	if ociRepo.Spec.SecretRef != nil {
+		t.Errorf("credentials must not be sent to a registry the index merely names")
+	}
+	if ociRepo.Spec.CertSecretRef != nil {
+		t.Errorf("the repository CA does not apply to a different host")
+	}
+	if ociRepo.Spec.Insecure {
+		t.Errorf("insecure must not be carried to a different host")
+	}
+}
+
+// TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost covers the one case where
+// the repository's transport settings do apply: an internal host serving both the
+// index and the registry. The auth secret still cannot be referenced — a helm
+// repository stores it as an Opaque username/password secret, and OCIRepository
+// accepts only dockerconfigjson.
+func TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	service, c := newOCIRepoService(t, addon, repo)
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://charts.example.invalid/charts/podinfo:6.7.1",
+	}
+
+	service.EnsureInternalOCIRepository(
+		context.Background(), addon, repo, ociSource(t, repo, version), version,
+	)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if ociRepo.Spec.CertSecretRef == nil {
+		t.Error("the repository CA applies to its own host")
+	}
+	if !ociRepo.Spec.Insecure {
+		t.Error("insecure applies to the repository's own host")
+	}
+	if ociRepo.Spec.SecretRef != nil {
+		t.Error("a helm repository's Opaque auth secret must not be referenced by an OCIRepository")
+	}
+}
+
+// TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials is the regression
+// guard for the existing behaviour: for an oci:// repository the artifact host is the
+// repository host, so its auth and CA still apply.
+func TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+	repo.Spec.Auth = &helmv1alpha1.HelmClusterAddonRepositoryAuth{Username: "u", Password: "p"}
+	repo.Spec.CACertificate = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+
+	service, c := newOCIRepoService(t, addon, repo)
+
+	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+		Version:   "6.7.1",
+		MediaType: "application/tar+gzip",
+	}
+
+	service.EnsureInternalOCIRepository(
+		context.Background(), addon, repo, ociSource(t, repo, version), version,
+	)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if ociRepo.Spec.URL != repo.Spec.URL {
+		t.Fatalf("url = %q, want %q", ociRepo.Spec.URL, repo.Spec.URL)
+	}
+	if ociRepo.Spec.SecretRef == nil {
+		t.Error("an oci repository's own credentials must still be referenced")
+	}
+	if ociRepo.Spec.CertSecretRef == nil {
+		t.Error("an oci repository's own CA must still be referenced")
 	}
 }
