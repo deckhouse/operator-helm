@@ -1,8 +1,6 @@
-
 breaking: []
 features:
-  - "support chart versions published in an OCI registry by a helm index"
+  - "Added Helm repositories support where chart urls have OCI schemas"
 fixes: []
 security: []
 chore: []
-
