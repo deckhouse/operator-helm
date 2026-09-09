@@ -1,0 +1,8 @@
+
+breaking: []
+features:
+  - "support chart versions published in an OCI registry by a helm index"
+fixes: []
+security: []
+chore: []
+
