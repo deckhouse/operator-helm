@@ -112,7 +112,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			Err:     repoTypeErr,
 		}
 
-		return r.finish(ctx, &repo, in, repoType, false)
+		return r.finish(ctx, &repo, in, false)
 	}
 
 	// Both services embed the same BaseRepoService with the same target namespace,
@@ -151,7 +151,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		in.Catalog = &outcome.Catalog
 	}
 
-	return r.finish(ctx, &repo, in, repoType, in.Attempted)
+	return r.finish(ctx, &repo, in, in.Attempted)
 }
 
 // finish applies the decision and consumes the force annotation when an attempt
@@ -161,7 +161,6 @@ func (r *Reconciler) finish(
 	ctx context.Context,
 	repo *helmv1alpha1.HelmClusterAddonRepository,
 	in Inputs,
-	repoType utils.InternalRepositoryType,
 	attempted bool,
 ) (reconcile.Result, error) {
 	decision := Evaluate(in)
@@ -179,12 +178,14 @@ func (r *Reconciler) finish(
 	}
 
 	if attempted {
-		// An oci:// repository has no internal source object of its own, so a force
-		// request reaches the artifacts only through the addons' OCIRepositories.
-		// This runs before the annotation is consumed: a failure leaves the request
-		// in place to be retried. The helm:// path needs no equivalent - there the
-		// internal HelmRepository carries the request.
-		if repoType == utils.InternalOCIRepository && repo.ForceReconcileRequired() {
+		// A force request reaches an addon's artifact only through the addon's own
+		// internal OCIRepository, and any repository can have those: an oci:// one for
+		// every addon, a helm one for every version its index publishes in a registry.
+		// This runs before the annotation is consumed: a failure leaves the request in
+		// place to be retried. The versions a helm repository serves as archives need no
+		// equivalent — there the internal HelmRepository carries the request and its
+		// HelmCharts follow the re-indexed source on their own.
+		if repo.ForceReconcileRequired() {
 			if err := r.ociRepositoryService.ForceReconcileInternalRepositories(ctx, repo.Name); err != nil {
 				return reconcile.Result{}, fmt.Errorf("failed to force reconcile internal oci repositories: %w", err)
 			}

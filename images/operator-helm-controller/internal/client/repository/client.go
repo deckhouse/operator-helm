@@ -41,6 +41,10 @@ type ChartVersion struct {
 	// MediaType is the OCI media type of the layer holding this chart version. It is
 	// empty for helm repositories and for OCI versions that are not usable.
 	MediaType string
+	// OCIRef is the reference the repository index publishes this version at, set
+	// only when the index points it at a registry rather than at a chart archive.
+	// The tag is always explicit.
+	OCIRef string
 	// UnavailableReason and UnavailableMessage are set when the version cannot be
 	// deployed and are empty for a usable one.
 	UnavailableReason  string
@@ -89,6 +93,19 @@ func (o FetchOptions) NeedsExamination(chartName, tag string) bool {
 
 type ClientInterface interface {
 	FetchCharts(ctx context.Context, url string, config *RepoConfig, opts FetchOptions) ([]Chart, error)
+}
+
+// ChartResolverInterface examines one OCI tag and reports the media type of the
+// layer that holds the chart. It is separate from ClientInterface because it serves a
+// different question at a different time: ClientInterface reads a catalog on the
+// repository's schedule, this one answers "is this exact artifact a chart" when an
+// addon is about to be deployed.
+type ChartResolverInterface interface {
+	// ResolveChartArtifact returns the media type of the chart layer behind ref. A
+	// TerminalError means the verdict will not change by retrying — the artifact is
+	// not a chart, or the tag does not exist; any other error is worth another
+	// attempt.
+	ResolveChartArtifact(ctx context.Context, ref string, config *RepoConfig) (string, error)
 }
 
 func NewClient(repoType utils.InternalRepositoryType) (ClientInterface, error) {

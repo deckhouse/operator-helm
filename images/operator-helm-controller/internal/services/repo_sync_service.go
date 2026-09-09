@@ -37,15 +37,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-const (
-
-	// LabelRepositoryName stores HelmClusterAddonRepository name.
-	LabelRepositoryName = "repository"
-
-	// LabelChartName stores chart name.
-	LabelChartName = "chart"
-)
-
 type RepoSyncService struct {
 	BaseService
 
@@ -105,7 +96,7 @@ func (s *RepoSyncService) knownCharts(
 	repo *helmv1alpha1.HelmClusterAddonRepository,
 ) (repoclient.KnownCharts, error) {
 	var charts helmv1alpha1.HelmClusterAddonChartList
-	if err := s.Client.List(ctx, &charts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
+	if err := s.Client.List(ctx, &charts, client.MatchingLabels{helmv1alpha1.LabelRepositoryName: repo.Name}); err != nil {
 		return nil, fmt.Errorf("listing charts of repository %q: %w", repo.Name, err)
 	}
 
@@ -113,7 +104,7 @@ func (s *RepoSyncService) knownCharts(
 	known := make(repoclient.KnownCharts, len(charts.Items))
 
 	for _, chart := range charts.Items {
-		chartName := chart.Labels[LabelChartName]
+		chartName := chart.Labels[helmv1alpha1.LabelChartName]
 		if chartName == "" {
 			// The chart label is the only way back from the object name (a
 			// truncated hash) to the chart name it belongs to. Without it the
@@ -242,8 +233,8 @@ func (s *RepoSyncService) reconcileCatalog(
 			}
 			existing.Labels = map[string]string{
 				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
-				LabelRepositoryName:                 repo.Name,
-				LabelChartName:                      chart.Name,
+				helmv1alpha1.LabelRepositoryName:    repo.Name,
+				helmv1alpha1.LabelChartName:         chart.Name,
 			}
 
 			return nil
@@ -274,7 +265,7 @@ func (s *RepoSyncService) reconcileCatalog(
 	}
 
 	var existingCharts helmv1alpha1.HelmClusterAddonChartList
-	if err := s.Client.List(ctx, &existingCharts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
+	if err := s.Client.List(ctx, &existingCharts, client.MatchingLabels{helmv1alpha1.LabelRepositoryName: repo.Name}); err != nil {
 		return CatalogOutcome{Err: fmt.Errorf("listing charts for pruning: %w", err)}
 	}
 
@@ -283,7 +274,7 @@ func (s *RepoSyncService) reconcileCatalog(
 			continue
 		}
 
-		chartName := chart.Labels[LabelChartName]
+		chartName := chart.Labels[helmv1alpha1.LabelChartName]
 		if chartName == "" {
 			// The chart label is the only way back from the object name (a
 			// truncated hash) to the chart name an addon references, so
@@ -352,8 +343,8 @@ func (s *RepoSyncService) inUseVersions(ctx context.Context, repoName, chartName
 // mergeChartVersions builds the desired version list from the fetched entries and the
 // ones already recorded. A recorded version the registry no longer lists is dropped,
 // unless an addon still references it: then it is retained with RemovedFromRepository
-// and keeps its media type, without which the addon's internal OCIRepository could not
-// be built at all.
+// and keeps both its media type and its recorded OCI reference, without either of
+// which the addon's internal OCIRepository could not be built at all.
 //
 // The same protection applies to a version that is still listed but whose tag was
 // re-pushed as a non-chart artifact: the fresh verdict carries no media type, but if an
@@ -381,7 +372,12 @@ func mergeChartVersions(
 		listed[name] = struct{}{}
 
 		mediaType := version.MediaType
-		if mediaType == "" {
+		// The carry-forward only makes sense for a version that still resolves to an
+		// archive: a fresh entry that now carries an OCIRef must probe its own layer
+		// media type from scratch, or a stale value stamped here would be read by
+		// resolveMediaType before the force-reconcile cache bypass and the pull would
+		// fail forever with no way to correct it.
+		if mediaType == "" && version.OCIRef == "" {
 			if _, referenced := inUse[name]; referenced {
 				if old, recorded := currentByVersion[name]; recorded && old.MediaType != "" {
 					mediaType = old.MediaType
@@ -391,6 +387,7 @@ func mergeChartVersions(
 
 		merged = append(merged, helmv1alpha1.HelmClusterAddonChartVersion{
 			Version:            name,
+			OCIRef:             version.OCIRef,
 			MediaType:          mediaType,
 			UnavailableReason:  version.UnavailableReason,
 			UnavailableMessage: version.UnavailableMessage,

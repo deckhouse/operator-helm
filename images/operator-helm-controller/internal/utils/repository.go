@@ -21,6 +21,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/google/go-containerregistry/pkg/name"
 )
 
 type InternalRepositoryType string
@@ -29,6 +33,51 @@ const (
 	InternalHelmRepository InternalRepositoryType = "helm"
 	InternalOCIRepository  InternalRepositoryType = "oci"
 )
+
+// ChartSource is where one chart version is actually fetched from. It is not the
+// same thing as the repository type: the repository type follows the scheme of
+// spec.url and decides the catalog client, the shape of the auth secret and whether
+// an internal HelmRepository exists at all, while ChartSource decides which internal
+// source object one addon needs for the version it asks for. The two differ exactly
+// when a helm repository's index points a version at a registry.
+type ChartSource struct {
+	Kind InternalRepositoryType
+	// URL is the artifact address with the oci:// scheme and without the tag. It is
+	// empty for Kind == InternalHelmRepository.
+	URL string
+	// Tag is the artifact tag. It is empty for Kind == InternalHelmRepository.
+	Tag string
+}
+
+// ResolveChartSource decides where one chart version comes from. A recorded OCI
+// reference wins over the repository scheme: that is the hybrid case this exists for.
+func ResolveChartSource(
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	version *helmv1alpha1.HelmClusterAddonChartVersion,
+) (ChartSource, error) {
+	if version.OCIRef != "" {
+		// The recorded reference always carries a tag, so there is no fallback to
+		// offer here; a reference that cannot be split was never recorded by the
+		// catalog and can only come from data written by hand or by an older version.
+		url, tag, err := SplitOCIRef(version.OCIRef, "")
+		if err != nil {
+			return ChartSource{}, fmt.Errorf("resolving the source of version %q: %w", version.Version, err)
+		}
+
+		return ChartSource{Kind: InternalOCIRepository, URL: url, Tag: tag}, nil
+	}
+
+	repoType, err := GetRepositoryType(repo.Spec.URL)
+	if err != nil {
+		return ChartSource{}, fmt.Errorf("resolving the source of version %q: %w", version.Version, err)
+	}
+
+	if repoType == InternalOCIRepository {
+		return ChartSource{Kind: InternalOCIRepository, URL: repo.Spec.URL, Tag: version.Version}, nil
+	}
+
+	return ChartSource{Kind: InternalHelmRepository}, nil
+}
 
 func GetRepositoryType(s string) (InternalRepositoryType, error) {
 	parsedURL, err := url.Parse(s)
@@ -129,4 +178,26 @@ func registryAuthKeys(host string) []string {
 	}
 
 	return keys
+}
+
+// SplitOCIRef splits an oci:// reference taken from a repository index into the
+// repository address and the tag, and rejects a reference that is not addressable.
+//
+// The decomposition itself lives in the API module, because the chart-values service
+// splits the same recorded field. The validation stays here: this is the write side,
+// where a reference read from a third-party index is judged once and the verdict is
+// recorded on the version, so nothing downstream has to judge it again.
+func SplitOCIRef(ref, fallbackTag string) (string, string, error) {
+	url, tag, err := helmv1alpha1.SplitOCIRef(ref, fallbackTag)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Parsed only to reject the unaddressable; the returned address keeps the
+	// spelling the index used, which name.NewTag would normalize away.
+	if _, err := name.NewTag(strings.TrimPrefix(url, "oci://") + ":" + tag); err != nil {
+		return "", "", fmt.Errorf("oci reference %q is not a valid tagged reference: %w", ref, err)
+	}
+
+	return url, tag, nil
 }

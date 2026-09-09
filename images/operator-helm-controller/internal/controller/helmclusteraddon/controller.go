@@ -42,7 +42,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	r := reconcile.New(
 		mgr.GetClient(),
 		services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
 		services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
@@ -101,6 +101,15 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			&helmv1alpha1.HelmClusterAddonRepository{},
 			handler.EnqueueRequestsFromMapFunc(utils.MapRepositoryToAddons(client)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
+		Watches(
+			&helmv1alpha1.HelmClusterAddonChart{},
+			handler.EnqueueRequestsFromMapFunc(utils.MapChartToAddons(client)),
+			// A catalog write is a status-only change on the chart, so a
+			// generation-only predicate (as used for HelmClusterAddonRepository
+			// above) would never let it through; only a terminal probe verdict
+			// being reversible depends on this watch firing here.
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)
 }

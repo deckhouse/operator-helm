@@ -79,4 +79,8 @@ const (
 	ReasonOCIIncludeUnavailable = "OCIIncludeUnavailable"
 	ReasonOCIStorageFailed      = "OCIStorageFailed"
 	ReasonOCIVerificationFailed = "OCIVerificationFailed"
+	// ReasonUnsupportedChartArtifact means the tag an index entry points at was read
+	// but the artifact behind it is not a packaged Helm chart. It is a verdict about
+	// the artifact, so it is reported without scheduling a retry.
+	ReasonUnsupportedChartArtifact = "UnsupportedChartArtifact"
 )

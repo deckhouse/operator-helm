@@ -79,7 +79,7 @@ func (r ReleaseResult) GetConditionType() string {
 	return helmv1alpha1.ConditionTypeReady
 }
 
-func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, repoType utils.InternalRepositoryType, artifactRevision string) ReleaseResult {
+func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, sourceKind utils.InternalRepositoryType, artifactRevision string) ReleaseResult {
 	logger := log.FromContext(ctx)
 
 	existing := &helmv2.HelmRelease{
@@ -90,7 +90,7 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, addon *helmv1alp
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		return applyHelmReleaseSpec(addon, existing, repoType, s.TargetNamespace)
+		return applyHelmReleaseSpec(addon, existing, sourceKind, s.TargetNamespace)
 	})
 	if err != nil {
 		return ReleaseResult{Status: status.Failed(
@@ -171,7 +171,7 @@ func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, addon *helmv1alpha
 	return nil
 }
 
-func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2.HelmRelease, repoType utils.InternalRepositoryType, targetNamespace string) error {
+func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2.HelmRelease, sourceKind utils.InternalRepositoryType, targetNamespace string) error {
 	if addon.ForceReconcileRequired() {
 		setReconcileRequestAnnotations(existing)
 	}
@@ -199,7 +199,7 @@ func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2
 		Mode: helmv2.DriftDetectionEnabled,
 	}
 
-	switch repoType {
+	switch sourceKind {
 	case utils.InternalHelmRepository:
 		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
 			Kind:      sourcev1.HelmChartKind,
@@ -213,7 +213,7 @@ func applyHelmReleaseSpec(addon *helmv1alpha1.HelmClusterAddon, existing *helmv2
 			Namespace: targetNamespace,
 		}
 	default:
-		return fmt.Errorf("invalid repository type: %s", repoType)
+		return fmt.Errorf("invalid chart source: %s", sourceKind)
 	}
 
 	return nil

@@ -43,7 +43,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	r := reconcile.New(
 		client,
 		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
 		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient),
 		status.NewManager(client),
 	)
