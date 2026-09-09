@@ -1,0 +1,6 @@
+breaking: []
+features:
+  - "Добавлена поддержка репозиториев Helm, где URL-адреса чартов имеют схемы OCI"
+fixes: []
+security: []
+chore: []
