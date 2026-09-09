@@ -14,16 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package utils
 
 import (
 	"context"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/index"
 )
@@ -31,7 +34,13 @@ import (
 func newChartMapperClient(t *testing.T, objects ...client.Object) client.Client {
 	t.Helper()
 
-	scheme := testScheme(t)
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering client-go scheme: %v", err)
+	}
+	if err := helmv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering helm scheme: %v", err)
+	}
 
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -47,13 +56,39 @@ func newChartMapperClient(t *testing.T, objects ...client.Object) client.Client 
 		Build()
 }
 
+func chartObject(repoName, chartName string) *helmv1alpha1.HelmClusterAddonChart {
+	return &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: naming.HelmClusterAddonChartName(repoName, chartName),
+			Labels: map[string]string{
+				helmv1alpha1.LabelRepositoryName: repoName,
+				helmv1alpha1.LabelChartName:      chartName,
+			},
+		},
+	}
+}
+
+func addonUsingChart(repoName, chartName, version string) *helmv1alpha1.HelmClusterAddon {
+	return &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "consumer"},
+		Spec: helmv1alpha1.HelmClusterAddonSpec{
+			Namespace: "app",
+			Chart: helmv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonRepository: repoName,
+				HelmClusterAddonChartName:  chartName,
+				Version:                    version,
+			},
+		},
+	}
+}
+
 // TestMapChartToAddonsEnqueuesTheClaimingAddon covers the reason this watch exists:
 // after a terminal probe verdict the addon has no internal HelmChart or OCIRepository
 // left for any other watch to catch, so a status change on the chart itself must be
 // the thing that wakes it.
 func TestMapChartToAddonsEnqueuesTheClaimingAddon(t *testing.T) {
-	chart := existingChart("repo-a", "podinfo")
-	addon := addonUsing("repo-a", "podinfo", "6.7.1")
+	chart := chartObject("repo-a", "podinfo")
+	addon := addonUsingChart("repo-a", "podinfo", "6.7.1")
 
 	c := newChartMapperClient(t, chart, addon)
 
@@ -70,7 +105,7 @@ func TestMapChartToAddonsEnqueuesTheClaimingAddon(t *testing.T) {
 // TestMapChartToAddonsNoAddonClaimsTheChart covers the case where nothing references
 // the chart yet: no request should be produced.
 func TestMapChartToAddonsNoAddonClaimsTheChart(t *testing.T) {
-	chart := existingChart("repo-a", "podinfo")
+	chart := chartObject("repo-a", "podinfo")
 
 	c := newChartMapperClient(t, chart)
 
@@ -80,13 +115,14 @@ func TestMapChartToAddonsNoAddonClaimsTheChart(t *testing.T) {
 }
 
 // TestMapChartToAddonsMissingLabels covers a chart object with no repository or chart
-// label: knownCharts treats that the same way (fail open, log and move on), and this
-// map function must not panic or list every addon by an empty index value.
+// label: the catalog synchronization treats that the same way (fail open, log and move
+// on), and this map function must not panic or list every addon by an empty index
+// value.
 func TestMapChartToAddonsMissingLabels(t *testing.T) {
 	chart := &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{Name: "orphan-chart"},
 	}
-	addon := addonUsing("repo-a", "podinfo", "6.7.1")
+	addon := addonUsingChart("repo-a", "podinfo", "6.7.1")
 
 	c := newChartMapperClient(t, chart, addon)
 

@@ -87,7 +87,7 @@ func existingChart(repoName, chartName string, versions ...helmv1alpha1.HelmClus
 	return &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   naming.HelmClusterAddonChartName(repoName, chartName),
-			Labels: map[string]string{LabelRepositoryName: repoName, LabelChartName: chartName},
+			Labels: map[string]string{helmv1alpha1.LabelRepositoryName: repoName, helmv1alpha1.LabelChartName: chartName},
 		},
 		Status: helmv1alpha1.HelmClusterAddonChartStatus{Versions: versions},
 	}
@@ -153,7 +153,7 @@ func TestSyncPrunesStaleCharts(t *testing.T) {
 	stale := &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   naming.HelmClusterAddonChartName(repo.Name, "removed"),
-			Labels: map[string]string{LabelRepositoryName: repo.Name, LabelChartName: "removed"},
+			Labels: map[string]string{helmv1alpha1.LabelRepositoryName: repo.Name, helmv1alpha1.LabelChartName: "removed"},
 		},
 	}
 

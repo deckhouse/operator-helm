@@ -104,7 +104,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Watches(
 			&helmv1alpha1.HelmClusterAddonChart{},
-			handler.EnqueueRequestsFromMapFunc(services.MapChartToAddons(client)),
+			handler.EnqueueRequestsFromMapFunc(utils.MapChartToAddons(client)),
 			// A catalog write is a status-only change on the chart, so a
 			// generation-only predicate (as used for HelmClusterAddonRepository
 			// above) would never let it through; only a terminal probe verdict

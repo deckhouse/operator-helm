@@ -26,6 +26,14 @@ const (
 
 	HelmClusterAddonChartLabelSourceName = "helm.deckhouse.io/cluster-addon-chart"
 
+	// LabelRepositoryName and LabelChartName are set on every HelmClusterAddonChart and
+	// carry the repository/chart pair the object mirrors. They are the only way back
+	// from the object name — a truncated hash — to the pair it belongs to, which is why
+	// both the catalog synchronization and the watch that maps a chart to the addons
+	// using it read them.
+	LabelRepositoryName = "repository"
+	LabelChartName      = "chart"
+
 	// UnavailableReason* are the values of HelmClusterAddonChartVersion.UnavailableReason.
 	// They are field values rather than condition reasons, so they live next to the
 	// type that carries them instead of conditions.go.

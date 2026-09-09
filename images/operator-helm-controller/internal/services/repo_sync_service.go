@@ -37,15 +37,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-const (
-
-	// LabelRepositoryName stores HelmClusterAddonRepository name.
-	LabelRepositoryName = "repository"
-
-	// LabelChartName stores chart name.
-	LabelChartName = "chart"
-)
-
 type RepoSyncService struct {
 	BaseService
 
@@ -105,7 +96,7 @@ func (s *RepoSyncService) knownCharts(
 	repo *helmv1alpha1.HelmClusterAddonRepository,
 ) (repoclient.KnownCharts, error) {
 	var charts helmv1alpha1.HelmClusterAddonChartList
-	if err := s.Client.List(ctx, &charts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
+	if err := s.Client.List(ctx, &charts, client.MatchingLabels{helmv1alpha1.LabelRepositoryName: repo.Name}); err != nil {
 		return nil, fmt.Errorf("listing charts of repository %q: %w", repo.Name, err)
 	}
 
@@ -113,7 +104,7 @@ func (s *RepoSyncService) knownCharts(
 	known := make(repoclient.KnownCharts, len(charts.Items))
 
 	for _, chart := range charts.Items {
-		chartName := chart.Labels[LabelChartName]
+		chartName := chart.Labels[helmv1alpha1.LabelChartName]
 		if chartName == "" {
 			// The chart label is the only way back from the object name (a
 			// truncated hash) to the chart name it belongs to. Without it the
@@ -242,8 +233,8 @@ func (s *RepoSyncService) reconcileCatalog(
 			}
 			existing.Labels = map[string]string{
 				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
-				LabelRepositoryName:                 repo.Name,
-				LabelChartName:                      chart.Name,
+				helmv1alpha1.LabelRepositoryName:    repo.Name,
+				helmv1alpha1.LabelChartName:         chart.Name,
 			}
 
 			return nil
@@ -274,7 +265,7 @@ func (s *RepoSyncService) reconcileCatalog(
 	}
 
 	var existingCharts helmv1alpha1.HelmClusterAddonChartList
-	if err := s.Client.List(ctx, &existingCharts, client.MatchingLabels{LabelRepositoryName: repo.Name}); err != nil {
+	if err := s.Client.List(ctx, &existingCharts, client.MatchingLabels{helmv1alpha1.LabelRepositoryName: repo.Name}); err != nil {
 		return CatalogOutcome{Err: fmt.Errorf("listing charts for pruning: %w", err)}
 	}
 
@@ -283,7 +274,7 @@ func (s *RepoSyncService) reconcileCatalog(
 			continue
 		}
 
-		chartName := chart.Labels[LabelChartName]
+		chartName := chart.Labels[helmv1alpha1.LabelChartName]
 		if chartName == "" {
 			// The chart label is the only way back from the object name (a
 			// truncated hash) to the chart name an addon references, so
