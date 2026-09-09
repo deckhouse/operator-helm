@@ -11,7 +11,6 @@ The module controller monitors the state of HelmClusterAddon resources and autom
 ## Main Features
 
 - Deploying Helm charts from classic HTTP/HTTPS repositories and OCI registries through a unified declarative API.
-- Deploying a chart version that a classic repository publishes in an OCI registry: when the repository index points a version at a registry, that version is pulled from the registry even though its repository is a classic one.
 - Automatic chart version discovery and tracking via HelmClusterAddonChart resources.
 - Configurable chart values through HelmClusterAddon resources.
 - Maintenance mode to pause reconciliation on managed releases.
@@ -31,41 +30,5 @@ The following custom resources are used to manage Helm charts in the module:
 
 - Admin privileges (the `cluster-admin` role) are required to manage HelmClusterAddon and HelmClusterAddonRepository resources.
 - A HelmClusterAddon resource referencing a specific HelmClusterAddonChart can only be created as a single instance in the cluster. This is because Helm charts can contain custom resource definitions (CRDs), and installing them multiple times at the cluster level is not allowed.
-- Credentials and TLS settings of a repository are not sent to a registry that only its index names, and a classic repository's credentials are withheld even from a registry at its own host, because it stores them as a plain username/password secret that only its own HelmRepository accepts rather than the dockerconfigjson secret an OCIRepository requires; a chart version published in a registry is therefore always pulled anonymously, so that registry has to be publicly readable.
 
 See [usage examples](example.html) for practical scenarios.
-
-## Repository Status
-
-`HelmClusterAddonRepository` reports four conditions.
-
-`Ready` tells whether the repository is usable: its auxiliary resources are in
-place, its internal source object is healthy, and the repository responded to a
-catalog read on the current spec. A transient read failure does not flip `Ready`
-to `False` — installed addons keep working and only the catalog goes stale.
-
-`Synced` tells whether the chart catalog is up to date.
-
-`Reconciling` and `Stalled` follow the kstatus convention and are present only
-while they apply. `Reconciling` means work is in progress or a retry is
-scheduled; `Stalled` means the repository will not recover on its own.
-
-| Ready | Synced | What it means | What to do |
-|---|---|---|---|
-| True | True | The repository is healthy. | Nothing. |
-| True | False | The catalog read failed but the repository was usable before. | Check the `Reconciling` message and `Last Sync`. Retries are already scheduled. |
-| False | True | The catalog is fresh, but the source of chart artifacts is unhealthy. | Check the `Ready` message: it is translated from the internal source object. |
-| False | False | The repository is unreachable or misconfigured. | Check `Stalled`: `AuthenticationFailed`, `SourceNotFound` and `InvalidRepositoryURL` need a change in `spec`. |
-| Unknown | any | The first catalog read on the current spec has not succeeded yet. | Wait for the next attempt shown in `Next Sync`. |
-
-Synchronization runs every 5 minutes. After a failed read the delay doubles —
-5m, 10m, 20m, 40m — up to one hour, and the repository is reported as `Stalled`
-with reason `RetriesExceeded` once the delay reaches the cap. Retries continue
-at that cadence, because the cause may disappear on the repository side. The
-schedule is visible in `status.nextSyncTime` and with
-`kubectl get helmclusteraddonrepository -o wide`. `kubectl get
-helmclusteraddonrepository` shows the `Last Sync` and `Age` columns by
-default, and `-o wide` adds `Next Sync` and the `Ready` message. The same
-values are in the status itself as `lastSuccessfulSyncTime` and
-`nextSyncTime`, alongside `consecutiveFetchFailures`, which counts the
-consecutive failed reads driving the backoff.
