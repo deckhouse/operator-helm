@@ -127,19 +127,14 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 	}
 }
 
-// chartVersion reads the catalog entry for the requested version. The chart status is
-// the catalog's own record of where a version lives and, for a version of an oci://
-// repository, which layer holds it.
+// chartVersion finds the catalog entry for the requested version. It reports only
+// whether the entry exists: what the entry means differs per repository kind, and
+// judging it here is what made every archive version look unresolved.
 //
-// A version that a helm repository's index publishes in a registry is the one case
-// where that record is deliberately incomplete: the operator resolves its media type
-// when an addon is deployed and does not persist it, so the entry carries only the
-// reference and this service probes the artifact itself.
-//
-// A missing entry is reported as pending for either kind of repository. The catalog is
-// what says where a version lives, and choosing a source without it would mean falling
-// back to guessing from the repository url — the very thing that sends a version
-// published in a registry down the HTTP path.
+// A missing chart object or a missing version is pending. The catalog is what says
+// where a version lives, and choosing a source without it would mean falling back to
+// guessing from the repository url — the very thing that sends a version published in
+// a registry down the HTTP path.
 //
 // A non-nil Result means the caller must stop and return it.
 func (r *Resolver) chartVersion(ctx context.Context, req Request) (*helmv1alpha1.HelmClusterAddonChartVersion, *Result, error) {
@@ -162,42 +157,60 @@ func (r *Resolver) chartVersion(ctx context.Context, req Request) (*helmv1alpha1
 			continue
 		}
 
-		// Either half is enough to act on: a recorded media type names the layer
-		// outright, and a recorded reference is what this service probes. A version
-		// carrying one of them is served even when it also carries an unavailable
-		// reason — a tag removed from the index may still be pullable, and the pull
-		// failing is reported by the source object rather than guessed at here.
-		if version.MediaType != "" || version.OCIRef != "" {
-			return version, nil, nil
+		if version.UnavailableReason == helmv1alpha1.UnavailableReasonInvalidChartReference {
+			// The index points this version at a registry with a reference that cannot
+			// be addressed. Left through it would fall to the archive path and fail on
+			// the very same url, reported by the source controller as an opaque fetch
+			// error.
+			return nil, &Result{
+				Outcome: OutcomeValuesNotFound,
+				Message: fmt.Sprintf("chart version %s is not readable (%s)", req.Version, versionDetail(version)),
+			}, nil
 		}
 
-		if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending || version.UnavailableReason == "" {
-			// Both an explicit ResolvePending and an empty reason mean the catalog has
-			// not reached a verdict yet, so the caller should retry rather than being
-			// told the version is permanently unreadable. An empty reason alongside an
-			// empty media type is the pre-upgrade shape of a version entry (written
-			// before this controller recorded verdicts at all): the client's
-			// KnownVersions treats it as never examined and re-resolves it on the very
-			// next normal synchronization, exactly like ResolvePending.
-			return nil, &Result{Outcome: OutcomePending}, nil
-		}
-
-		// Every other reason is a durable verdict that will not change without a
-		// change in the repository (an unsupported media type, an unaddressable index
-		// reference, or a removed tag with nothing on record), so it is reported as
-		// values-not-found, naming why.
-		detail := version.UnavailableReason
-		if version.UnavailableMessage != "" {
-			detail += ": " + version.UnavailableMessage
-		}
-
-		return nil, &Result{
-			Outcome: OutcomeValuesNotFound,
-			Message: fmt.Sprintf("chart version %s is not readable (%s)", req.Version, detail),
-		}, nil
+		return version, nil, nil
 	}
 
 	return nil, &Result{Outcome: OutcomePending}, nil
+}
+
+// ociMediaType reports the layer media type the catalog recorded for a version of an
+// oci:// repository. Such a version is only readable once the catalog has reached a
+// verdict on it, so an empty media type is a state rather than a value.
+//
+// A non-nil Result means the caller must stop and return it.
+func ociMediaType(req Request, version *helmv1alpha1.HelmClusterAddonChartVersion) (string, *Result) {
+	if version.MediaType != "" {
+		return version.MediaType, nil
+	}
+
+	if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending || version.UnavailableReason == "" {
+		// Both an explicit ResolvePending and an empty reason mean the catalog has not
+		// reached a verdict yet, so the caller should retry rather than being told the
+		// version is permanently unreadable. An empty reason alongside an empty media
+		// type is the pre-upgrade shape of a version entry (written before verdicts
+		// were recorded at all): the operator re-resolves it on its next normal
+		// synchronization, exactly like ResolvePending.
+		return "", &Result{Outcome: OutcomePending}
+	}
+
+	// Every other reason is a durable verdict that will not change without a change in
+	// the repository (an unsupported media type, or a removed tag with no media type on
+	// record), so it is reported as values-not-found, naming why.
+	return "", &Result{
+		Outcome: OutcomeValuesNotFound,
+		Message: fmt.Sprintf("chart version %s is not readable (%s)", req.Version, versionDetail(version)),
+	}
+}
+
+// versionDetail renders why a catalog entry is unusable.
+func versionDetail(version *helmv1alpha1.HelmClusterAddonChartVersion) string {
+	detail := version.UnavailableReason
+	if version.UnavailableMessage != "" {
+		detail += ": " + version.UnavailableMessage
+	}
+
+	return detail
 }
 
 // resolveHelmClusterAddon ensures the auxiliary source resource for a chart from
@@ -248,7 +261,12 @@ func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Re
 		}
 		conditions, art = ociRepo.Status.Conditions, ociRepo.Status.Artifact
 	case isOCI(repo.Spec.URL):
-		ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt, repo.Spec.URL, req.Version, version.MediaType, true, true)
+		mediaType, done := ociMediaType(req, version)
+		if done != nil {
+			return *done, nil
+		}
+
+		ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt, repo.Spec.URL, req.Version, mediaType, true, true)
 		if err != nil {
 			return Result{}, err
 		}
