@@ -181,43 +181,23 @@ func registryAuthKeys(host string) []string {
 }
 
 // SplitOCIRef splits an oci:// reference taken from a repository index into the
-// repository address and the tag. fallbackTag is used when the reference carries no
-// tag of its own, which is how an index entry that relies on its own version field
-// spells the reference.
+// repository address and the tag, and rejects a reference that is not addressable.
 //
-// The returned address deliberately keeps the spelling the index used instead of
-// being rebuilt from the parsed reference: go-containerregistry normalizes some
-// registry hosts (docker.io becomes index.docker.io), and the internal OCIRepository
-// must address the registry the repository actually named. Parsing is still done, but
-// only to reject a reference that is not addressable.
+// The decomposition itself lives in the API module, because the chart-values service
+// splits the same recorded field. The validation stays here: this is the write side,
+// where a reference read from a third-party index is judged once and the verdict is
+// recorded on the version, so nothing downstream has to judge it again.
 func SplitOCIRef(ref, fallbackTag string) (string, string, error) {
-	trimmed := strings.TrimPrefix(ref, "oci://")
-
-	if strings.Contains(trimmed, "@") {
-		return "", "", fmt.Errorf("oci reference %q addresses a digest, which cannot be expressed as a chart version tag", ref)
+	url, tag, err := helmv1alpha1.SplitOCIRef(ref, fallbackTag)
+	if err != nil {
+		return "", "", err
 	}
 
-	slash := strings.LastIndex(trimmed, "/")
-	if slash < 0 {
-		return "", "", fmt.Errorf("oci reference %q carries no chart path", ref)
-	}
-
-	repository, tag := trimmed, fallbackTag
-
-	// The colon is looked for after the last slash only: a registry port lives
-	// before it and is not a tag.
-	if colon := strings.LastIndex(trimmed[slash+1:], ":"); colon >= 0 {
-		repository = trimmed[:slash+1+colon]
-		tag = trimmed[slash+1+colon+1:]
-	}
-
-	if tag == "" {
-		return "", "", fmt.Errorf("oci reference %q carries no tag and the index entry offers no version to use instead", ref)
-	}
-
-	if _, err := name.NewTag(repository + ":" + tag); err != nil {
+	// Parsed only to reject the unaddressable; the returned address keeps the
+	// spelling the index used, which name.NewTag would normalize away.
+	if _, err := name.NewTag(strings.TrimPrefix(url, "oci://") + ":" + tag); err != nil {
 		return "", "", fmt.Errorf("oci reference %q is not a valid tagged reference: %w", ref, err)
 	}
 
-	return "oci://" + repository, tag, nil
+	return url, tag, nil
 }

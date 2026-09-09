@@ -22,22 +22,9 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
-
-// supportedChartConfigMediaTypes identify an OCI artifact as a packaged Helm chart.
-// The layer media type alone cannot: application/tar+gzip is generic and any tarball
-// may carry it, so the config is the authoritative marker.
-var supportedChartConfigMediaTypes = []types.MediaType{
-	"application/vnd.cncf.helm.config.v1+json",
-}
-
-// supportedChartLayerMediaTypes hold a packaged chart, in priority order. The first
-// entry present in the manifest wins regardless of the order of layers inside it, so
-// an artifact carrying two supported layers resolves deterministically.
-var supportedChartLayerMediaTypes = []types.MediaType{
-	"application/vnd.cncf.helm.chart.content.v1.tar+gzip",
-	"application/tar+gzip",
-}
 
 // chartVerdict is the outcome of examining one tag. MediaType is set only for an
 // artifact recognized as a chart; Message explains a negative verdict and is meant
@@ -61,16 +48,16 @@ func examineManifest(descMediaType types.MediaType, manifest *v1.Manifest) chart
 		}
 	}
 
-	if !isSupportedChartConfig(manifest.Config.MediaType) {
+	if !helmv1alpha1.IsChartConfigMediaType(string(manifest.Config.MediaType)) {
 		return chartVerdict{
 			Message: fmt.Sprintf("config media type %q is not a helm chart config", manifest.Config.MediaType),
 		}
 	}
 
-	for _, supported := range supportedChartLayerMediaTypes {
+	for _, supported := range helmv1alpha1.ChartLayerMediaTypes {
 		for _, layer := range manifest.Layers {
-			if layer.MediaType == supported {
-				return chartVerdict{MediaType: string(supported)}
+			if string(layer.MediaType) == supported {
+				return chartVerdict{MediaType: supported}
 			}
 		}
 	}
@@ -78,16 +65,6 @@ func examineManifest(descMediaType types.MediaType, manifest *v1.Manifest) chart
 	return chartVerdict{
 		Message: fmt.Sprintf("no supported chart layer, the artifact has [%s]", layerMediaTypes(manifest)),
 	}
-}
-
-func isSupportedChartConfig(mediaType types.MediaType) bool {
-	for _, supported := range supportedChartConfigMediaTypes {
-		if mediaType == supported {
-			return true
-		}
-	}
-
-	return false
 }
 
 func layerMediaTypes(manifest *v1.Manifest) string {

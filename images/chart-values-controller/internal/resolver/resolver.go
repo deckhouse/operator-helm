@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 
 	"github.com/deckhouse/chart-values-controller/internal/artifact"
 	"github.com/deckhouse/chart-values-controller/internal/cache"
+	"github.com/deckhouse/chart-values-controller/internal/chartartifact"
 	"github.com/deckhouse/chart-values-controller/internal/labels"
 	"github.com/deckhouse/chart-values-controller/internal/naming"
 	apinaming "github.com/deckhouse/operator-helm/api/naming"
@@ -91,6 +93,7 @@ type Resolver struct {
 	ttl              time.Duration
 	sourceInterval   metav1.Duration
 	maxArtifactBytes int64
+	prober           chartartifact.Prober
 }
 
 func New(c client.Client, valuesCache *cache.Cache, httpClient *http.Client, namespace string, ttl, sourceInterval time.Duration, maxArtifactBytes int64) *Resolver {
@@ -102,6 +105,7 @@ func New(c client.Client, valuesCache *cache.Cache, httpClient *http.Client, nam
 		ttl:              ttl,
 		sourceInterval:   metav1.Duration{Duration: sourceInterval},
 		maxArtifactBytes: maxArtifactBytes,
+		prober:           chartartifact.Default,
 	}
 }
 
@@ -123,13 +127,22 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 	}
 }
 
-// chartVersionMediaType reads the OCI layer media type recorded for the requested
-// version by operator-helm-controller. That status is the single source of truth:
-// resolving the media type here would duplicate the logic and spend registry requests
-// on an answer that is already in the cluster.
+// chartVersion reads the catalog entry for the requested version. The chart status is
+// the catalog's own record of where a version lives and, for a version of an oci://
+// repository, which layer holds it.
+//
+// A version that a helm repository's index publishes in a registry is the one case
+// where that record is deliberately incomplete: the operator resolves its media type
+// when an addon is deployed and does not persist it, so the entry carries only the
+// reference and this service probes the artifact itself.
+//
+// A missing entry is reported as pending for either kind of repository. The catalog is
+// what says where a version lives, and choosing a source without it would mean falling
+// back to guessing from the repository url — the very thing that sends a version
+// published in a registry down the HTTP path.
 //
 // A non-nil Result means the caller must stop and return it.
-func (r *Resolver) chartVersionMediaType(ctx context.Context, req Request) (string, *Result, error) {
+func (r *Resolver) chartVersion(ctx context.Context, req Request) (*helmv1alpha1.HelmClusterAddonChartVersion, *Result, error) {
 	chart := &helmv1alpha1.HelmClusterAddonChart{}
 	key := types.NamespacedName{Name: apinaming.HelmClusterAddonChartName(req.RepositoryName, req.Chart)}
 
@@ -137,48 +150,54 @@ func (r *Resolver) chartVersionMediaType(ctx context.Context, req Request) (stri
 		if apierrors.IsNotFound(err) {
 			// The chart object is created by operator-helm-controller when it synchronizes
 			// the repository: until then the catalog simply has not caught up.
-			return "", &Result{Outcome: OutcomePending}, nil
+			return nil, &Result{Outcome: OutcomePending}, nil
 		}
 
-		return "", nil, fmt.Errorf("getting chart: %w", err)
+		return nil, nil, fmt.Errorf("getting chart: %w", err)
 	}
 
-	for _, version := range chart.Status.Versions {
+	for i := range chart.Status.Versions {
+		version := &chart.Status.Versions[i]
 		if version.Version != req.Version {
 			continue
 		}
 
-		if version.MediaType == "" {
-			if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending || version.UnavailableReason == "" {
-				// Both an explicit ResolvePending and an empty reason mean the catalog has
-				// not reached a verdict yet, so the caller should retry rather than being
-				// told the version is permanently unreadable. An empty reason alongside an
-				// empty media type is the pre-upgrade shape of a version entry (written
-				// before this controller recorded verdicts at all): the client's
-				// KnownVersions treats it as never examined and re-resolves it on the very
-				// next normal synchronization, exactly like ResolvePending.
-				return "", &Result{Outcome: OutcomePending}, nil
-			}
-
-			// Every other reason is a durable verdict that will not change without a
-			// change in the repository (e.g. an unsupported media type, or a removed tag
-			// with no media type on record), so it is reported as values-not-found,
-			// naming why.
-			detail := version.UnavailableReason
-			if version.UnavailableMessage != "" {
-				detail += ": " + version.UnavailableMessage
-			}
-
-			return "", &Result{
-				Outcome: OutcomeValuesNotFound,
-				Message: fmt.Sprintf("chart version %s is not readable (%s)", req.Version, detail),
-			}, nil
+		// Either half is enough to act on: a recorded media type names the layer
+		// outright, and a recorded reference is what this service probes. A version
+		// carrying one of them is served even when it also carries an unavailable
+		// reason — a tag removed from the index may still be pullable, and the pull
+		// failing is reported by the source object rather than guessed at here.
+		if version.MediaType != "" || version.OCIRef != "" {
+			return version, nil, nil
 		}
 
-		return version.MediaType, nil, nil
+		if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending || version.UnavailableReason == "" {
+			// Both an explicit ResolvePending and an empty reason mean the catalog has
+			// not reached a verdict yet, so the caller should retry rather than being
+			// told the version is permanently unreadable. An empty reason alongside an
+			// empty media type is the pre-upgrade shape of a version entry (written
+			// before this controller recorded verdicts at all): the client's
+			// KnownVersions treats it as never examined and re-resolves it on the very
+			// next normal synchronization, exactly like ResolvePending.
+			return nil, &Result{Outcome: OutcomePending}, nil
+		}
+
+		// Every other reason is a durable verdict that will not change without a
+		// change in the repository (an unsupported media type, an unaddressable index
+		// reference, or a removed tag with nothing on record), so it is reported as
+		// values-not-found, naming why.
+		detail := version.UnavailableReason
+		if version.UnavailableMessage != "" {
+			detail += ": " + version.UnavailableMessage
+		}
+
+		return nil, &Result{
+			Outcome: OutcomeValuesNotFound,
+			Message: fmt.Sprintf("chart version %s is not readable (%s)", req.Version, detail),
+		}, nil
 	}
 
-	return "", &Result{Outcome: OutcomePending}, nil
+	return nil, &Result{Outcome: OutcomePending}, nil
 }
 
 // resolveHelmClusterAddon ensures the auxiliary source resource for a chart from
@@ -204,20 +223,32 @@ func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Re
 
 	expiresAt := time.Now().UTC().Add(r.ttl).Format(time.RFC3339)
 
+	version, done, err := r.chartVersion(ctx, req)
+	if err != nil {
+		return Result{}, err
+	}
+	if done != nil {
+		return *done, nil
+	}
+
 	var conditions []metav1.Condition
 	var art *meta.Artifact
 
 	switch {
-	case isOCI(repo.Spec.URL):
-		mediaType, done, err := r.chartVersionMediaType(ctx, req)
+	case version.OCIRef != "":
+		// The index publishes this version in a registry, whatever the repository's
+		// own url scheme is. Reading it through a HelmChart would make the source
+		// controller download the index url over HTTP and fail on the oci:// scheme.
+		ociRepo, done, err := r.ensureHybridOCIRepository(ctx, repo, req, name, expiresAt, version)
 		if err != nil {
 			return Result{}, err
 		}
 		if done != nil {
 			return *done, nil
 		}
-
-		ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt, mediaType)
+		conditions, art = ociRepo.Status.Conditions, ociRepo.Status.Artifact
+	case isOCI(repo.Spec.URL):
+		ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt, repo.Spec.URL, req.Version, version.MediaType, true, true)
 		if err != nil {
 			return Result{}, err
 		}
@@ -297,7 +328,17 @@ func (r *Resolver) ensureHelmChart(ctx context.Context, repo *helmv1alpha1.HelmC
 	return chart, false, nil
 }
 
-func (r *Resolver) ensureOCIRepository(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, req Request, name, expiresAt, mediaType string) (*sourcev1.OCIRepository, error) {
+// ensureOCIRepository creates or updates the auxiliary OCIRepository. The address and
+// tag are passed in rather than derived from the repository, because a version its
+// index publishes elsewhere lives at a different address entirely. credentials and tls
+// say whether the repository's own secrets describe the host being addressed.
+func (r *Resolver) ensureOCIRepository(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	req Request,
+	name, expiresAt, url, tag, mediaType string,
+	credentials, tls bool,
+) (*sourcev1.OCIRepository, error) {
 	authSecret, tlsSecret, err := r.findRepositorySecretNames(ctx, repo.Name)
 	if err != nil {
 		return nil, err
@@ -312,22 +353,25 @@ func (r *Resolver) ensureOCIRepository(ctx context.Context, repo *helmv1alpha1.H
 
 	if _, err := controllerutil.CreateOrPatch(ctx, r.client, ociRepo, func() error {
 		applyManagedMeta(ociRepo, expiresAt)
-		ociRepo.Spec.URL = repo.Spec.URL
-		ociRepo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: req.Version}
+		ociRepo.Spec.URL = url
+		ociRepo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: tag}
 		ociRepo.Spec.Interval = r.sourceInterval
-		ociRepo.Spec.Insecure = repo.Spec.InsecureSkipVerify
 		ociRepo.Spec.LayerSelector = &sourcev1.OCILayerSelector{
 			MediaType: mediaType,
 			Operation: "copy",
 		}
 
+		ociRepo.Spec.Insecure = false
 		ociRepo.Spec.SecretRef = nil
 		ociRepo.Spec.CertSecretRef = nil
-		if repo.Spec.Auth != nil && authSecret != "" {
-			ociRepo.Spec.SecretRef = &meta.LocalObjectReference{Name: authSecret}
+		if tls {
+			ociRepo.Spec.Insecure = repo.Spec.InsecureSkipVerify
+			if repo.Spec.CACertificate != "" && tlsSecret != "" {
+				ociRepo.Spec.CertSecretRef = &meta.LocalObjectReference{Name: tlsSecret}
+			}
 		}
-		if repo.Spec.CACertificate != "" && tlsSecret != "" {
-			ociRepo.Spec.CertSecretRef = &meta.LocalObjectReference{Name: tlsSecret}
+		if credentials && repo.Spec.Auth != nil && authSecret != "" {
+			ociRepo.Spec.SecretRef = &meta.LocalObjectReference{Name: authSecret}
 		}
 
 		return nil
@@ -336,6 +380,77 @@ func (r *Resolver) ensureOCIRepository(ctx context.Context, repo *helmv1alpha1.H
 	}
 
 	return ociRepo, nil
+}
+
+// ensureHybridOCIRepository builds the source object for a version that a helm
+// repository's index publishes in a registry. Its media type is not in the catalog by
+// design, so it is probed here; the probe is the only registry call this service makes
+// and its answer is then carried by the source object's layer selector.
+func (r *Resolver) ensureHybridOCIRepository(
+	ctx context.Context,
+	repo *helmv1alpha1.HelmClusterAddonRepository,
+	req Request,
+	name, expiresAt string,
+	version *helmv1alpha1.HelmClusterAddonChartVersion,
+) (*sourcev1.OCIRepository, *Result, error) {
+	url, tag, err := helmv1alpha1.SplitOCIRef(version.OCIRef, "")
+	if err != nil {
+		// The reference was validated when the operator recorded it, so a failure here
+		// means the field was written by hand or by an older version.
+		return nil, &Result{Outcome: OutcomeFetchFailed, Message: err.Error()}, nil
+	}
+
+	// The repository's transport settings describe the host it names. A registry only
+	// its index names is reached as a public one, and its credentials are never sent
+	// there.
+	sameHost := sameRegistryHost(repo.Spec.URL, url)
+
+	mediaType := version.MediaType
+	if mediaType == "" {
+		var rt http.RoundTripper
+		if sameHost {
+			rt = chartartifact.Transport(repo.Spec.CACertificate, repo.Spec.InsecureSkipVerify)
+		}
+
+		mediaType, err = r.prober.ChartLayerMediaType(ctx, version.OCIRef, rt)
+		if err != nil {
+			if errors.Is(err, chartartifact.ErrNotAChart) || errors.Is(err, chartartifact.ErrTagNotFound) {
+				// A verdict about the artifact: retrying cannot change it, so it is
+				// reported the same way as a version the catalog found unreadable.
+				return nil, &Result{Outcome: OutcomeValuesNotFound, Message: err.Error()}, nil
+			}
+
+			// Anything else may pass on its own — a rate limit, a transport failure —
+			// so the client is told to retry rather than that the values do not exist.
+			log.FromContext(ctx).Info("Probing the chart artifact failed", "ref", version.OCIRef, "error", err.Error())
+
+			return nil, &Result{Outcome: OutcomePending}, nil
+		}
+	}
+
+	ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt, url, tag, mediaType, false, sameHost)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return ociRepo, nil, nil
+}
+
+// sameRegistryHost reports whether the artifact lives on the host the repository
+// itself names. An unparsable url on either side means "not the same host", which is
+// the safe answer: it withholds settings rather than misapplying them.
+func sameRegistryHost(repoURL, artifactURL string) bool {
+	repoHost, err := neturl.Parse(repoURL)
+	if err != nil || repoHost.Host == "" {
+		return false
+	}
+
+	artifactHost, err := neturl.Parse(artifactURL)
+	if err != nil || artifactHost.Host == "" {
+		return false
+	}
+
+	return repoHost.Host == artifactHost.Host
 }
 
 func (r *Resolver) findHelmRepositoryName(ctx context.Context, repoName string) (string, error) {

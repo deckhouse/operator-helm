@@ -18,15 +18,21 @@ package resolver
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/deckhouse/chart-values-controller/internal/cache"
+	"github.com/deckhouse/chart-values-controller/internal/chartartifact"
+	cvnaming "github.com/deckhouse/chart-values-controller/internal/naming"
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
@@ -54,7 +60,7 @@ func chartWithVersions(repoName, chartName string, versions ...helmv1alpha1.Helm
 	}
 }
 
-func TestChartVersionMediaType(t *testing.T) {
+func TestChartVersion(t *testing.T) {
 	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
 
 	t.Run("a usable version returns its media type", func(t *testing.T) {
@@ -62,22 +68,22 @@ func TestChartVersionMediaType(t *testing.T) {
 			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
 		))
 
-		mediaType, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		version, done, err := resolver.chartVersion(context.Background(), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if done != nil {
 			t.Fatalf("expected to continue, got outcome %q", done.Outcome)
 		}
-		if mediaType != "application/tar+gzip" {
-			t.Fatalf("media type is %q", mediaType)
+		if version.MediaType != "application/tar+gzip" {
+			t.Fatalf("media type is %q", version.MediaType)
 		}
 	})
 
 	t.Run("a missing chart is pending", func(t *testing.T) {
 		resolver := newTestResolver(t)
 
-		_, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -91,7 +97,7 @@ func TestChartVersionMediaType(t *testing.T) {
 			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
 		))
 
-		_, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -109,7 +115,7 @@ func TestChartVersionMediaType(t *testing.T) {
 			},
 		))
 
-		_, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -129,7 +135,7 @@ func TestChartVersionMediaType(t *testing.T) {
 			},
 		))
 
-		_, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -147,7 +153,7 @@ func TestChartVersionMediaType(t *testing.T) {
 			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1"},
 		))
 
-		_, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -165,15 +171,129 @@ func TestChartVersionMediaType(t *testing.T) {
 			},
 		))
 
-		mediaType, done, err := resolver.chartVersionMediaType(context.Background(), req)
+		version, done, err := resolver.chartVersion(context.Background(), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if done != nil {
 			t.Fatalf("expected to continue, got outcome %q", done.Outcome)
 		}
-		if mediaType != "application/tar+gzip" {
-			t.Fatalf("media type is %q", mediaType)
+		if version.MediaType != "application/tar+gzip" {
+			t.Fatalf("media type is %q", version.MediaType)
 		}
 	})
+}
+
+// stubProber stands in for the registry: the hybrid path probes the artifact, and a
+// unit test must not leave the process to do it.
+type stubProber struct {
+	mediaType string
+	err       error
+	calls     int
+	refs      []string
+}
+
+func (p *stubProber) ChartLayerMediaType(_ context.Context, ref string, _ http.RoundTripper) (string, error) {
+	p.calls++
+	p.refs = append(p.refs, ref)
+
+	return p.mediaType, p.err
+}
+
+// newHybridResolver builds a resolver able to create auxiliary source objects, which
+// the media-type-only tests above do not need.
+func newHybridResolver(t *testing.T, prober chartartifact.Prober, objects ...client.Object) (*Resolver, client.Client) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		clientgoscheme.AddToScheme,
+		helmv1alpha1.AddToScheme,
+		sourcev1.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatalf("registering scheme: %v", err)
+		}
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+
+	return &Resolver{
+		client:           c,
+		cache:            cache.New(t.TempDir()),
+		namespace:        "d8-operator-helm",
+		ttl:              time.Minute,
+		sourceInterval:   metav1.Duration{Duration: time.Minute},
+		maxArtifactBytes: 1 << 20,
+		prober:           prober,
+	}, c
+}
+
+// TestResolveHybridVersionUsesOCIRepository pins the whole point of a hybrid
+// repository for this controller: a classic HTTP repository whose index publishes one
+// version in a registry must have that version read through an OCIRepository. Sending
+// it down the HelmChart path makes the source controller resolve the version to the
+// index url — an oci:// one — and fail with `unsupported protocol scheme "oci"`.
+func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.invalid/stable"},
+	}
+	chart := chartWithVersions("example", "nginx", helmv1alpha1.HelmClusterAddonChartVersion{
+		Version: "0.1.0",
+		OCIRef:  "oci://ghcr.io/drey/nginx/nginx:0.1.0",
+	})
+
+	req := Request{
+		Kind:           RepositoryKindHelmClusterAddon,
+		RepositoryName: "example",
+		Chart:          "nginx",
+		Version:        "0.1.0",
+	}
+
+	prober := &stubProber{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+
+	resolver, c := newHybridResolver(t, prober, repo, chart)
+
+	if _, err := resolver.resolveHelmClusterAddon(context.Background(), req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	name := cvnaming.AuxResourceName(string(req.Kind), req.RepositoryName, req.Chart, req.Version)
+	key := client.ObjectKey{Name: name, Namespace: "d8-operator-helm"}
+
+	ociRepo := &sourcev1.OCIRepository{}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("a version published in a registry must be read through an oci repository: %v", err)
+	}
+	if ociRepo.Spec.URL != "oci://ghcr.io/drey/nginx/nginx" {
+		t.Fatalf("url = %q, want the address from the index reference", ociRepo.Spec.URL)
+	}
+	if ociRepo.Spec.Reference == nil || ociRepo.Spec.Reference.Tag != "0.1.0" {
+		t.Fatalf("reference = %+v, want tag 0.1.0", ociRepo.Spec.Reference)
+	}
+
+	if ociRepo.Spec.LayerSelector == nil || ociRepo.Spec.LayerSelector.MediaType != prober.mediaType {
+		t.Fatalf("layer selector = %+v, want the probed media type", ociRepo.Spec.LayerSelector)
+	}
+
+	// The catalog does not record a media type for such a version, so the probe is the
+	// only way this service can learn the layer.
+	if prober.calls != 1 {
+		t.Fatalf("prober calls = %d, want 1", prober.calls)
+	}
+	if prober.refs[0] != "oci://ghcr.io/drey/nginx/nginx:0.1.0" {
+		t.Fatalf("probed %q, want the recorded reference", prober.refs[0])
+	}
+
+	// Only public registries are supported for such a version: the repository's own
+	// credentials describe a different host.
+	if ociRepo.Spec.SecretRef != nil || ociRepo.Spec.CertSecretRef != nil {
+		t.Error("the repository's secrets must not be attached to a foreign registry")
+	}
+
+	helmChart := &sourcev1.HelmChart{}
+	if err := c.Get(context.Background(), key, helmChart); err == nil {
+		t.Fatal("no helm chart must be created for a version published in a registry")
+	}
 }
