@@ -38,6 +38,7 @@ import (
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
@@ -840,7 +841,7 @@ func TestReconcileSittingInMaintenanceDiscardsForceReconcile(t *testing.T) {
 
 	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
 
-	if !addon.MaintenanceModeEnabled() || r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
+	if !addon.MaintenanceModeEnabled() || r.maintenanceService.IsMaintenanceModeChangeRequired(adapter.NewAddonRelease(addon)) {
 		t.Fatal("the fixture must already be in maintenance, otherwise the test takes the wrong branch")
 	}
 
@@ -875,7 +876,7 @@ func TestReconcileLeavingMaintenanceKeepsForceReconcile(t *testing.T) {
 
 	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
 
-	if addon.MaintenanceModeActivated() || !r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
+	if addon.MaintenanceModeActivated() || !r.maintenanceService.IsMaintenanceModeChangeRequired(adapter.NewAddonRelease(addon)) {
 		t.Fatal("the fixture must be leaving maintenance, otherwise the test proves nothing")
 	}
 

@@ -22,10 +22,12 @@ import (
 
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -42,6 +44,15 @@ func newChartService(t *testing.T, objects ...client.Object) (*ChartService, cli
 	return NewChartService(c, scheme, testNamespace), c
 }
 
+// chartTestRepository is the repository the test addon references; the chart
+// service reads the internal HelmRepository name from it.
+func chartTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
+	return &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
+	}
+}
+
 // TestEnsureHelmChartForcesReconcileFromAddon covers the force reconcile
 // annotation applied to the HelmClusterAddon: on the internal Helm repository
 // path it must reach the HelmChart, so that a forced addon re-pulls its source
@@ -51,7 +62,7 @@ func TestEnsureHelmChartForcesReconcileFromAddon(t *testing.T) {
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
 	service, c := newChartService(t, addon)
 
-	service.EnsureHelmChart(context.Background(), addon)
+	service.EnsureHelmChart(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository()))
 
 	chart := &sourcev1.HelmChart{}
 	key := client.ObjectKey{Name: utils.GetInternalHelmChartName(addon.Name), Namespace: testNamespace}
@@ -74,7 +85,7 @@ func TestEnsureHelmChartDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
 	addon := testAddon()
 	service, c := newChartService(t, addon)
 
-	service.EnsureHelmChart(context.Background(), addon)
+	service.EnsureHelmChart(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository()))
 
 	chart := &sourcev1.HelmChart{}
 	key := client.ObjectKey{Name: utils.GetInternalHelmChartName(addon.Name), Namespace: testNamespace}

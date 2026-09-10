@@ -37,6 +37,7 @@ import (
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -97,6 +98,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("getting helm cluster addon: %w", err)
 	}
 
+	rel := adapter.NewAddonRelease(addon)
+
 	if !addon.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, addon)
 	}
@@ -148,8 +151,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
 	}
 
-	if r.maintenanceService.IsMaintenanceModeChangeRequired(addon) {
-		maintenanceRes := r.maintenanceService.EnsureMaintenanceMode(ctx, addon)
+	if r.maintenanceService.IsMaintenanceModeChangeRequired(rel) {
+		maintenanceRes := r.maintenanceService.EnsureMaintenanceMode(ctx, rel)
 		if err := r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, maintenanceRes, status.AsCondition(maintenanceRes, "Ready")); err != nil {
 			return reconcile.Result{}, err
 		}
@@ -217,7 +220,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// source cannot be resolved is as unusable as a version that is missing.
 	var source utils.ChartSource
 	if addonChartErr == nil {
-		source, addonChartErr = utils.ResolveChartSource(repo, chartVersion)
+		source, addonChartErr = utils.ResolveChartSource(repo.Spec.URL, chartVersion)
 	}
 
 	switch {
@@ -246,9 +249,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		r.logSourceKindFlip(ctx, addon, source.Kind, superseded != nil)
 
-		chartRes = r.chartService.EnsureHelmChart(ctx, addon)
+		chartRes = r.chartService.EnsureHelmChart(ctx, rel, adapter.NewAddonRepository(repo))
 	case source.Kind == utils.InternalOCIRepository:
-		superseded, err := r.chartService.CleanupHelmChart(ctx, addon)
+		superseded, err := r.chartService.CleanupHelmChart(ctx, rel.InternalNames())
 		if err != nil {
 			chartRes = services.ChartResult{
 				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
@@ -282,7 +285,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			}
 		}
 
-		releaseRes = r.releaseService.EnsureHelmRelease(ctx, addon, source.Kind, artifactRevision)
+		releaseRes = r.releaseService.EnsureHelmRelease(ctx, rel, source.Kind, artifactRevision)
 	}
 
 	if err := r.statusManager.Update(
@@ -318,6 +321,9 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		return reconcile.Result{}, nil
 	}
 
+	rel := adapter.NewAddonRelease(addon)
+	names := rel.InternalNames()
+
 	// The finalizer must stay until the internal resources are actually gone.
 	// A Delete only sets a deletion timestamp; the downstream controllers keep
 	// their finalizers until they finish tearing the underlying release/source
@@ -328,7 +334,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 	// chart/repository sources it referenced. Each step waits for the resource to
 	// actually disappear and surfaces the blocking resource's readiness on the
 	// addon so the reason a deletion stalls is observable.
-	release, err := r.releaseService.CleanupHelmRelease(ctx, addon)
+	release, err := r.releaseService.CleanupHelmRelease(ctx, names)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -337,13 +343,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		// blocks helm uninstall is propagated into the release. Keep re-applying
 		// the (possibly corrected) addon spec to the still-present release so the
 		// uninstall can be fixed via the addon even while it is being deleted.
-		if err := r.releaseService.SyncReleaseSpec(ctx, addon, release); err != nil {
+		if err := r.releaseService.SyncReleaseSpec(ctx, rel, release); err != nil {
 			return reconcile.Result{}, err
 		}
 		return r.awaitInternalResourceDeletion(ctx, addon, "internal release", release)
 	}
 
-	chart, err := r.chartService.CleanupHelmChart(ctx, addon)
+	chart, err := r.chartService.CleanupHelmChart(ctx, names)
 	if err != nil {
 		return reconcile.Result{}, err
 	}

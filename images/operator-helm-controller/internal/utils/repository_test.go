@@ -263,7 +263,7 @@ func TestResolveChartSource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ResolveChartSource(tt.repo, &tt.version)
+			got, err := ResolveChartSource(tt.repo.Spec.URL, &tt.version)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got %+v", got)

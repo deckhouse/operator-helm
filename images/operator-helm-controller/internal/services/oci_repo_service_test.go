@@ -118,7 +118,7 @@ func ociTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.ChartVersion) utils.ChartSource {
 	t.Helper()
 
-	source, err := utils.ResolveChartSource(repo, version)
+	source, err := utils.ResolveChartSource(repo.Spec.URL, version)
 	if err != nil {
 		t.Fatalf("resolving chart source: %v", err)
 	}
