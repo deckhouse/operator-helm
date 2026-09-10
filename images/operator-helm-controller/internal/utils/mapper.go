@@ -61,6 +61,45 @@ func MapInternalResources(controllerName, targetNamespace, labelManagedBy, label
 	}
 }
 
+// MapNamespacedInternalResources is MapInternalResources for a namespaced source
+// kind: the request it enqueues carries the namespace recorded in
+// labelSourceNamespace next to the name. Internal objects of every family live in
+// targetNamespace, so the name alone would not identify a namespaced source. An
+// object carrying only one of the two labels cannot be mapped and is skipped.
+func MapNamespacedInternalResources(
+	controllerName, targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName, labelSourceNamespace string,
+) handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		logger := log.FromContext(ctx)
+
+		if obj.GetNamespace() != targetNamespace {
+			return nil
+		}
+
+		labels := obj.GetLabels()
+		if labels[labelManagedBy] != labelManagedByValue {
+			return nil
+		}
+
+		sourceName, sourceNamespace := labels[labelSourceName], labels[labelSourceNamespace]
+		if sourceName == "" || sourceNamespace == "" {
+			logger.Info("resource missing source labels, skipping",
+				"controller", controllerName, "name", obj.GetName(), "namespace", obj.GetNamespace())
+
+			return nil
+		}
+
+		return []reconcile.Request{
+			{
+				NamespacedName: types.NamespacedName{
+					Name:      sourceName,
+					Namespace: sourceNamespace,
+				},
+			},
+		}
+	}
+}
+
 func MapRepositoryToAddons(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		addonList := &helmv1alpha1.HelmClusterAddonList{}
