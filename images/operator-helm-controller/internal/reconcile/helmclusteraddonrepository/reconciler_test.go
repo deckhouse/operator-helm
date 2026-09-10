@@ -116,14 +116,14 @@ func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object)
 func ociRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "oci://ghcr.io/example/podinfo"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://ghcr.io/example/podinfo"},
 	}
 }
 
 func helmRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.invalid/stable"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
 }
 
@@ -322,7 +322,7 @@ func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
 			DeletionTimestamp: &now,
 		},
 		// Passes the CRD rule ^(https?|oci)://.+$ and fails url.Parse.
-		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://exa mple.invalid/charts"},
+		Spec: helmv1alpha1.RepositorySpec{URL: "https://exa mple.invalid/charts"},
 	}
 
 	if _, err := utils.GetRepositoryType(repo.Spec.URL); err == nil {

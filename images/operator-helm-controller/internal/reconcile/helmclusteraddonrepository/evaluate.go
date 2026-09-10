@@ -35,7 +35,7 @@ type Inputs struct {
 	Generation int64
 	Now        time.Time
 	Jitter     float64
-	Current    helmv1alpha1.HelmClusterAddonRepositoryStatus
+	Current    helmv1alpha1.RepositoryStatus
 
 	SecretsErr            error
 	InternalRepositoryErr error
@@ -56,7 +56,7 @@ type Inputs struct {
 // Decision is the full desired status plus the scheduling verdict. Removing a
 // condition is expressed by its absence from Status.Conditions.
 type Decision struct {
-	Status       helmv1alpha1.HelmClusterAddonRepositoryStatus
+	Status       helmv1alpha1.RepositoryStatus
 	RequeueAfter time.Duration
 	Err          error
 }
@@ -71,7 +71,7 @@ type abnormalCondition struct {
 // Evaluate derives the desired repository status from the results of a single
 // reconcile pass.
 func Evaluate(in Inputs) Decision {
-	var status helmv1alpha1.HelmClusterAddonRepositoryStatus
+	var status helmv1alpha1.RepositoryStatus
 	in.Current.DeepCopyInto(&status)
 	status.ObservedGeneration = in.Generation
 
@@ -310,7 +310,7 @@ func carriesCatalogFailure(in Inputs) bool {
 
 // hasEvidence reports whether the repository is already proven usable on the
 // current generation: a fetch succeeded for this spec.
-func hasEvidence(current helmv1alpha1.HelmClusterAddonRepositoryStatus, generation int64) bool {
+func hasEvidence(current helmv1alpha1.RepositoryStatus, generation int64) bool {
 	// Evidence is "a fetch succeeded on this spec". Ready alone cannot carry it:
 	// a higher-priority rule (an unhealthy internal repository, a failed secret)
 	// owns Ready on the very pass where the fetch succeeded, overwriting it.
@@ -328,7 +328,7 @@ func hasEvidence(current helmv1alpha1.HelmClusterAddonRepositoryStatus, generati
 }
 
 func setCondition(
-	status *helmv1alpha1.HelmClusterAddonRepositoryStatus,
+	status *helmv1alpha1.RepositoryStatus,
 	in Inputs,
 	conditionType string,
 	conditionStatus metav1.ConditionStatus,
@@ -345,7 +345,7 @@ func setCondition(
 }
 
 func applyAbnormal(
-	status *helmv1alpha1.HelmClusterAddonRepositoryStatus,
+	status *helmv1alpha1.RepositoryStatus,
 	in Inputs,
 	conditionType string,
 	cond abnormalCondition,
@@ -399,7 +399,7 @@ const (
 // ShouldAttempt reports whether a synchronization attempt is due. The caller
 // additionally requires the auxiliary resources to be in place.
 func ShouldAttempt(
-	current helmv1alpha1.HelmClusterAddonRepositoryStatus,
+	current helmv1alpha1.RepositoryStatus,
 	generation int64,
 	now time.Time,
 	forced bool,

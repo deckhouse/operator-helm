@@ -107,7 +107,7 @@ func (s *BaseRepoService) EnsureSecrets(
 // auth.
 func (s *BaseRepoService) reconcileBasicAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeOpaque,
-		func(auth *helmv1alpha1.HelmClusterAddonRepositoryAuth) (map[string]string, error) {
+		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
 			return map[string]string{
 				"username": auth.Username,
 				"password": auth.Password,
@@ -121,7 +121,7 @@ func (s *BaseRepoService) reconcileBasicAuthSecret(ctx context.Context, repo *he
 // its spec.secretRef.
 func (s *BaseRepoService) reconcileDockerConfigAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeDockerConfigJson,
-		func(auth *helmv1alpha1.HelmClusterAddonRepositoryAuth) (map[string]string, error) {
+		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
 			config, err := utils.BuildDockerConfigJSON(repo.Spec.URL, auth.Username, auth.Password)
 			if err != nil {
 				return nil, fmt.Errorf("building docker config: %w", err)
@@ -136,7 +136,7 @@ func (s *BaseRepoService) reconcileAuthSecret(
 	ctx context.Context,
 	repo *helmv1alpha1.HelmClusterAddonRepository,
 	secretType corev1.SecretType,
-	buildData func(auth *helmv1alpha1.HelmClusterAddonRepositoryAuth) (map[string]string, error),
+	buildData func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error),
 ) error {
 	secretName := utils.GetInternalRepositoryAuthSecretName(repo.Name)
 	nn := types.NamespacedName{Name: secretName, Namespace: s.TargetNamespace}

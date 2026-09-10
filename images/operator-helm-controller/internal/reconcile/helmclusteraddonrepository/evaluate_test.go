@@ -31,8 +31,8 @@ import (
 var testNow = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
 // readyStatus builds a status that already carries proven Ready for the given generation.
-func readyStatus(generation int64) helmv1alpha1.HelmClusterAddonRepositoryStatus {
-	return helmv1alpha1.HelmClusterAddonRepositoryStatus{
+func readyStatus(generation int64) helmv1alpha1.RepositoryStatus {
+	return helmv1alpha1.RepositoryStatus{
 		ObservedGeneration: generation,
 		Conditions: []metav1.Condition{
 			{
@@ -56,7 +56,7 @@ func readyStatus(generation int64) helmv1alpha1.HelmClusterAddonRepositoryStatus
 // stalledStatus builds a status like readyStatus, plus a Stalled=True condition
 // recorded for staleGeneration — used to test that a generation bump voids a
 // carried-forward Stalled reason that described the previous spec.
-func stalledStatus(generation, staleGeneration int64, reason string) helmv1alpha1.HelmClusterAddonRepositoryStatus {
+func stalledStatus(generation, staleGeneration int64, reason string) helmv1alpha1.RepositoryStatus {
 	status := readyStatus(generation)
 	status.Conditions = append(status.Conditions, metav1.Condition{
 		Type:               helmv1alpha1.ConditionTypeStalled,
@@ -73,8 +73,8 @@ func stalledStatus(generation, staleGeneration int64, reason string) helmv1alpha
 // first fetch succeeded while the internal repository was still unhealthy:
 // Synced records the successful read, but Ready was written False by the
 // higher-priority internal-repository rule, so Ready alone carries no evidence.
-func syncedNotReadyStatus(generation int64) helmv1alpha1.HelmClusterAddonRepositoryStatus {
-	return helmv1alpha1.HelmClusterAddonRepositoryStatus{
+func syncedNotReadyStatus(generation int64) helmv1alpha1.RepositoryStatus {
+	return helmv1alpha1.RepositoryStatus{
 		ObservedGeneration: generation,
 		Conditions: []metav1.Condition{
 			{
@@ -107,7 +107,7 @@ func syncedNotReadyStatus(generation int64) helmv1alpha1.HelmClusterAddonReposit
 // catalogFailedStatus builds the status left behind by a pass whose fetch
 // succeeded and whose catalog write failed: Ready stays latched True, Synced is
 // False with CatalogUpdateFailed and Reconciling carries the retry.
-func catalogFailedStatus(generation int64) helmv1alpha1.HelmClusterAddonRepositoryStatus {
+func catalogFailedStatus(generation int64) helmv1alpha1.RepositoryStatus {
 	status := readyStatus(generation)
 	apimeta.SetStatusCondition(&status.Conditions, metav1.Condition{
 		Type:               helmv1alpha1.ConditionTypeSynced,
@@ -129,7 +129,7 @@ func catalogFailedStatus(generation int64) helmv1alpha1.HelmClusterAddonReposito
 	return status
 }
 
-func conditionOf(t *testing.T, status helmv1alpha1.HelmClusterAddonRepositoryStatus, conditionType string) *metav1.Condition {
+func conditionOf(t *testing.T, status helmv1alpha1.RepositoryStatus, conditionType string) *metav1.Condition {
 	t.Helper()
 
 	return apimeta.FindStatusCondition(status.Conditions, conditionType)
@@ -489,7 +489,7 @@ func TestEvaluatePreservesFailuresWhenNoFetchWasAttempted(t *testing.T) {
 	in := Inputs{
 		Generation: 1,
 		Now:        testNow,
-		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+		Current: helmv1alpha1.RepositoryStatus{
 			ObservedGeneration:       1,
 			ConsecutiveFetchFailures: 3,
 		},
@@ -568,7 +568,7 @@ func TestEvaluatePartialSyncAfterFullOneStaysSynced(t *testing.T) {
 		Attempted:  true,
 		Fetch:      &services.FetchOutcome{Pending: 1},
 		Catalog:    &services.CatalogOutcome{},
-		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+		Current: helmv1alpha1.RepositoryStatus{
 			ObservedGeneration:     1,
 			LastSuccessfulSyncTime: &earlier,
 		},
@@ -586,7 +586,7 @@ func TestEvaluatePartialSyncAfterFullOneStaysSynced(t *testing.T) {
 }
 
 func TestEvaluatePartialSyncNeverStalls(t *testing.T) {
-	current := helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1}
+	current := helmv1alpha1.RepositoryStatus{ObservedGeneration: 1}
 
 	for range MaxFetchFailures + 2 {
 		decision := Evaluate(Inputs{
@@ -623,7 +623,7 @@ func TestEvaluateFullSyncAdvancesLastSuccessfulSyncTime(t *testing.T) {
 	}
 }
 
-func assertAbnormal(t *testing.T, status helmv1alpha1.HelmClusterAddonRepositoryStatus, conditionType, wantReason string) {
+func assertAbnormal(t *testing.T, status helmv1alpha1.RepositoryStatus, conditionType, wantReason string) {
 	t.Helper()
 
 	cond := conditionOf(t, status, conditionType)

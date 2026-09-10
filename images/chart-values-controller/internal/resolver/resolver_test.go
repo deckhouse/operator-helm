@@ -268,7 +268,7 @@ func newHybridResolver(t *testing.T, prober chartartifact.Prober, objects ...cli
 func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.invalid/stable"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
 	chart := chartWithVersions("example", "nginx", helmv1alpha1.HelmClusterAddonChartVersion{
 		Version: "0.1.0",
@@ -339,7 +339,7 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "bitnami"},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.invalid/bitnami"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/bitnami"},
 	}
 	helmRepo := &sourcev1.HelmRepository{
 		ObjectMeta: metav1.ObjectMeta{

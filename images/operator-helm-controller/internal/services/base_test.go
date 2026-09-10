@@ -65,9 +65,9 @@ func newBaseRepoService(t *testing.T, objects ...client.Object) (*BaseRepoServic
 func TestEnsureSecretsCreatesAuthAndTLS(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
-		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{
+		Spec: helmv1alpha1.RepositorySpec{
 			URL:           "https://example.invalid/charts",
-			Auth:          &helmv1alpha1.HelmClusterAddonRepositoryAuth{Username: "user", Password: "secret"},
+			Auth:          &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"},
 			CACertificate: "-----BEGIN CERTIFICATE-----",
 		},
 	}
@@ -99,7 +99,7 @@ func TestEnsureSecretsCreatesAuthAndTLS(t *testing.T) {
 func TestEnsureSecretsRemovesObsoleteSecrets(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://example.invalid/charts"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://example.invalid/charts"},
 	}
 	obsolete := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -123,9 +123,9 @@ func TestEnsureSecretsRemovesObsoleteSecrets(t *testing.T) {
 func TestEnsureSecretsUsesDockerConfigForOCIRepositories(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
-		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{
+		Spec: helmv1alpha1.RepositorySpec{
 			URL:  "oci://ghcr.io/example/podinfo",
-			Auth: &helmv1alpha1.HelmClusterAddonRepositoryAuth{Username: "user", Password: "secret"},
+			Auth: &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"},
 		},
 	}
 

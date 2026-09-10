@@ -285,7 +285,7 @@ func (r *stubChartResolver) ResolveChartArtifact(_ context.Context, _ string, _ 
 func helmRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.invalid/stable"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
 }
 
@@ -344,7 +344,7 @@ func newFullReconciler(
 func ociRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "oci://ghcr.io/example/podinfo"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://ghcr.io/example/podinfo"},
 	}
 }
 

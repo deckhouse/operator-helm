@@ -62,7 +62,7 @@ func newHelmRepoService(t *testing.T, objects ...client.Object) *HelmRepoService
 func testRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://example.invalid/charts"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://example.invalid/charts"},
 	}
 }
 

@@ -109,7 +109,7 @@ func testAddon() *helmv1alpha1.HelmClusterAddon {
 func ociTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "oci://example.invalid/podinfo"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://example.invalid/podinfo"},
 	}
 }
 
@@ -131,9 +131,9 @@ func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, vers
 func hybridTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
-		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{
+		Spec: helmv1alpha1.RepositorySpec{
 			URL:                "https://charts.example.invalid/stable",
-			Auth:               &helmv1alpha1.HelmClusterAddonRepositoryAuth{Username: "u", Password: "p"},
+			Auth:               &helmv1alpha1.RepositoryAuth{Username: "u", Password: "p"},
 			CACertificate:      "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
 			InsecureSkipVerify: true,
 		},
@@ -452,7 +452,7 @@ func TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost(t *testing.T) {
 // repository host, so its auth and CA still apply.
 func TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
-	repo.Spec.Auth = &helmv1alpha1.HelmClusterAddonRepositoryAuth{Username: "u", Password: "p"}
+	repo.Spec.Auth = &helmv1alpha1.RepositoryAuth{Username: "u", Password: "p"}
 	repo.Spec.CACertificate = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
 
 	service, c := newOCIRepoService(t, addon, repo)

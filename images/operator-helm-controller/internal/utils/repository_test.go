@@ -201,10 +201,10 @@ func TestSplitOCIRef(t *testing.T) {
 
 func TestResolveChartSource(t *testing.T) {
 	helmRepo := &helmv1alpha1.HelmClusterAddonRepository{
-		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.com/stable"},
+		Spec: helmv1alpha1.RepositorySpec{URL: "https://charts.example.com/stable"},
 	}
 	ociRepo := &helmv1alpha1.HelmClusterAddonRepository{
-		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "oci://registry.example.com/charts/podinfo"},
+		Spec: helmv1alpha1.RepositorySpec{URL: "oci://registry.example.com/charts/podinfo"},
 	}
 
 	tests := []struct {
@@ -254,7 +254,7 @@ func TestResolveChartSource(t *testing.T) {
 		{
 			name: "unsupported repository scheme is an error",
 			repo: &helmv1alpha1.HelmClusterAddonRepository{
-				Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "ftp://charts.example.com"},
+				Spec: helmv1alpha1.RepositorySpec{URL: "ftp://charts.example.com"},
 			},
 			version: helmv1alpha1.HelmClusterAddonChartVersion{Version: "1.0.0"},
 			wantErr: true,

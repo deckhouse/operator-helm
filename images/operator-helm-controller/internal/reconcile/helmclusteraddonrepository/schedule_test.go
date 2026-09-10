@@ -49,7 +49,7 @@ func TestBackoffProgression(t *testing.T) {
 			got := Evaluate(Inputs{
 				Generation: 1,
 				Now:        testNow,
-				Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+				Current: helmv1alpha1.RepositoryStatus{
 					ObservedGeneration:       1,
 					ConsecutiveFetchFailures: tc.failuresIn,
 				},
@@ -78,7 +78,7 @@ func TestSuccessResetsCounterAndRecordsSyncTime(t *testing.T) {
 	got := Evaluate(Inputs{
 		Generation: 1,
 		Now:        testNow,
-		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+		Current: helmv1alpha1.RepositoryStatus{
 			ObservedGeneration:       1,
 			ConsecutiveFetchFailures: 3,
 		},
@@ -105,7 +105,7 @@ func TestCatalogFailureDoesNotRecordSyncTime(t *testing.T) {
 	got := Evaluate(Inputs{
 		Generation: 1,
 		Now:        testNow,
-		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+		Current: helmv1alpha1.RepositoryStatus{
 			ObservedGeneration:     1,
 			LastSuccessfulSyncTime: &previous,
 		},
@@ -130,7 +130,7 @@ func TestTerminalFetchSaturatesCounter(t *testing.T) {
 	got := Evaluate(Inputs{
 		Generation:         1,
 		Now:                testNow,
-		Current:            helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1},
+		Current:            helmv1alpha1.RepositoryStatus{ObservedGeneration: 1},
 		InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
 		Fetch: &services.FetchOutcome{
@@ -151,7 +151,7 @@ func TestConfigErrorDoesNotRequeue(t *testing.T) {
 	got := Evaluate(Inputs{
 		Generation: 1,
 		Now:        testNow,
-		Current:    helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1},
+		Current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 1},
 		ConfigErr: &services.ConfigOutcome{
 			Reason:  helmv1alpha1.ReasonUnsupportedRepositoryType,
 			Message: "unsupported repository schema in use: ftp",
@@ -167,7 +167,7 @@ func TestGenerationBumpResetsCounter(t *testing.T) {
 	got := Evaluate(Inputs{
 		Generation: 2,
 		Now:        testNow,
-		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+		Current: helmv1alpha1.RepositoryStatus{
 			ObservedGeneration:       1,
 			ConsecutiveFetchFailures: 4,
 		},
@@ -188,7 +188,7 @@ func TestPassWithoutAttemptKeepsSchedule(t *testing.T) {
 	got := Evaluate(Inputs{
 		Generation: 1,
 		Now:        testNow,
-		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+		Current: helmv1alpha1.RepositoryStatus{
 			ObservedGeneration:       1,
 			NextSyncTime:             &next,
 			ConsecutiveFetchFailures: 2,
@@ -222,7 +222,7 @@ func TestOverdueScheduleWithoutAttemptFloorsRequeue(t *testing.T) {
 	got := Evaluate(Inputs{
 		Generation: 1,
 		Now:        testNow,
-		Current: helmv1alpha1.HelmClusterAddonRepositoryStatus{
+		Current: helmv1alpha1.RepositoryStatus{
 			ObservedGeneration: 1,
 			NextSyncTime:       &overdue,
 		},
@@ -242,40 +242,40 @@ func TestShouldAttempt(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		current    helmv1alpha1.HelmClusterAddonRepositoryStatus
+		current    helmv1alpha1.RepositoryStatus
 		generation int64
 		forced     bool
 		want       bool
 	}{
-		{name: "fresh object", current: helmv1alpha1.HelmClusterAddonRepositoryStatus{}, generation: 1, want: true},
+		{name: "fresh object", current: helmv1alpha1.RepositoryStatus{}, generation: 1, want: true},
 		{
 			name:       "schedule not reached",
-			current:    helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1, NextSyncTime: &future},
+			current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 1, NextSyncTime: &future},
 			generation: 1,
 			want:       false,
 		},
 		{
 			name:       "schedule reached",
-			current:    helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1, NextSyncTime: &past},
+			current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 1, NextSyncTime: &past},
 			generation: 1,
 			want:       true,
 		},
 		{
 			name:       "forced beats the schedule",
-			current:    helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1, NextSyncTime: &future},
+			current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 1, NextSyncTime: &future},
 			generation: 1,
 			forced:     true,
 			want:       true,
 		},
 		{
 			name:       "spec change beats the schedule",
-			current:    helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1, NextSyncTime: &future},
+			current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 1, NextSyncTime: &future},
 			generation: 2,
 			want:       true,
 		},
 		{
 			name:       "schedule never set on a matching generation",
-			current:    helmv1alpha1.HelmClusterAddonRepositoryStatus{ObservedGeneration: 1, NextSyncTime: nil},
+			current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 1, NextSyncTime: nil},
 			generation: 1,
 			want:       true,
 		},

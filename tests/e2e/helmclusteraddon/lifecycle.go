@@ -57,7 +57,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: repoName,
 				},
-				Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+				Spec: apiv1alpha1.RepositorySpec{
 					URL:                repoURL,
 					InsecureSkipVerify: false,
 				},

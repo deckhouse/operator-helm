@@ -28,9 +28,9 @@ const (
 	HelmClusterApplicationRepositoryLabelSourceName = "helm.deckhouse.io/cluster-application-repository"
 )
 
-// The spec and status of this kind are the shared ApplicationRepositorySpec and
-// ApplicationRepositoryStatus declared next to HelmApplicationRepository: the two
-// kinds differ only in scope.
+// The spec and status of this kind are the shared RepositorySpec and
+// RepositoryStatus declared in repository_types.go: every repository kind of the
+// module has the same shape.
 //
 // The "Next Sync" print column below is a string, not a date, on purpose: a date
 // column prints how long ago its value was, and kubectl renders any instant more
@@ -64,8 +64,8 @@ type HelmClusterApplicationRepository struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ApplicationRepositorySpec   `json:"spec"`
-	Status ApplicationRepositoryStatus `json:"status,omitempty"`
+	Spec   RepositorySpec   `json:"spec"`
+	Status RepositoryStatus `json:"status,omitempty"`
 }
 
 func (r *HelmClusterApplicationRepository) GetConditions() *[]metav1.Condition {
