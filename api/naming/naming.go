@@ -23,10 +23,31 @@ import (
 )
 
 // HelmClusterAddonChartName derives the name of the HelmClusterAddonChart object
-// that mirrors one chart of a repository. It lives in the api module because
-// operator-helm-controller writes those objects while chart-values-controller reads
-// them: the name is a truncated hash, so both must derive it identically.
+// that mirrors one chart of a repository.
 func HelmClusterAddonChartName(repoName, chartName string) string {
+	return chartObjectName(repoName, chartName)
+}
+
+// ApplicationChartName derives the name of the HelmApplicationChart object that
+// mirrors one chart of a HelmApplicationRepository. The object is namespaced, so
+// the name only has to be unique inside the repository's namespace.
+func ApplicationChartName(repoName, chartName string) string {
+	return chartObjectName(repoName, chartName)
+}
+
+// ClusterApplicationChartName derives the name of the HelmClusterApplicationChart
+// object that mirrors one chart of a HelmClusterApplicationRepository.
+func ClusterApplicationChartName(repoName, chartName string) string {
+	return chartObjectName(repoName, chartName)
+}
+
+// chartObjectName is the single naming scheme behind every chart catalog kind. It
+// lives in the api module because operator-helm-controller writes those objects
+// while chart-values-controller reads them: the name is a truncated hash, so both
+// must derive it identically. Names coincide across families on purpose — the
+// objects differ in kind, and the namespaced and cluster variants live in
+// different scopes, so a shared name cannot collide.
+func chartObjectName(repoName, chartName string) string {
 	hash := hash(fmt.Sprintf("%s-chart-%s", repoName, chartName))
 
 	var result, postfix string
