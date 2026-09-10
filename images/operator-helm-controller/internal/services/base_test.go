@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -74,7 +75,7 @@ func TestEnsureSecretsCreatesAuthAndTLS(t *testing.T) {
 
 	service, c := newBaseRepoService(t, repo)
 
-	if err := service.EnsureSecrets(context.Background(), repo, utils.InternalHelmRepository); err != nil {
+	if err := service.EnsureSecrets(context.Background(), adapter.NewAddonRepository(repo), utils.InternalHelmRepository); err != nil {
 		t.Fatalf("EnsureSecrets returned %v", err)
 	}
 
@@ -110,7 +111,7 @@ func TestEnsureSecretsRemovesObsoleteSecrets(t *testing.T) {
 
 	service, c := newBaseRepoService(t, repo, obsolete)
 
-	if err := service.EnsureSecrets(context.Background(), repo, utils.InternalHelmRepository); err != nil {
+	if err := service.EnsureSecrets(context.Background(), adapter.NewAddonRepository(repo), utils.InternalHelmRepository); err != nil {
 		t.Fatalf("EnsureSecrets returned %v", err)
 	}
 
@@ -131,7 +132,7 @@ func TestEnsureSecretsUsesDockerConfigForOCIRepositories(t *testing.T) {
 
 	service, c := newBaseRepoService(t, repo)
 
-	if err := service.EnsureSecrets(context.Background(), repo, utils.InternalOCIRepository); err != nil {
+	if err := service.EnsureSecrets(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository); err != nil {
 		t.Fatalf("EnsureSecrets returned %v", err)
 	}
 

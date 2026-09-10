@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -70,7 +71,7 @@ func TestEnsureInternalHelmRepositoryReportsNotObservedAsNotReady(t *testing.T) 
 	repo := testRepository()
 	service := newHelmRepoService(t, repo)
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), repo)
+	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
 		t.Fatalf("EnsureInternalHelmRepository returned %v", err)
 	}
@@ -118,7 +119,7 @@ func TestEnsureInternalHelmRepositoryMirrorsConditions(t *testing.T) {
 	// The fixture is created with generation 0 and the condition observes 0, so
 	// the state must mirror the condition rather than report "not observed yet".
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), repo)
+	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
 		t.Fatalf("EnsureInternalHelmRepository returned %v", err)
 	}
@@ -154,7 +155,7 @@ func TestEnsureInternalHelmRepositoryReportsStalled(t *testing.T) {
 
 	service := newHelmRepoService(t, repo, internal)
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), repo)
+	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
 		t.Fatalf("EnsureInternalHelmRepository returned %v", err)
 	}
@@ -212,7 +213,7 @@ func TestEnsureInternalHelmRepositoryStalledPrecedesReady(t *testing.T) {
 
 	service := newHelmRepoService(t, repo, internal)
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), repo)
+	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
 		t.Fatalf("EnsureInternalHelmRepository returned %v", err)
 	}
@@ -251,7 +252,7 @@ func TestEnsureInternalHelmRepositoryReturnsAPIError(t *testing.T) {
 
 	service := NewHelmRepoService(c, scheme, testNamespace)
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), repo)
+	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
 	if err == nil {
 		t.Fatal("EnsureInternalHelmRepository must return an error when the API call fails")
 	}

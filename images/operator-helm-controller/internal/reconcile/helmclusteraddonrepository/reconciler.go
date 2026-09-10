@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -81,6 +82,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	repoType, repoTypeErr := utils.GetRepositoryType(repo.Spec.URL)
+	src := adapter.NewAddonRepository(&repo)
 
 	if !repo.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &repo, repoType)
@@ -117,16 +119,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// Both services embed the same BaseRepoService with the same target namespace,
 	// so one of them reconciles the auxiliary secrets for either repository type.
-	in.SecretsErr = r.helmRepositoryService.EnsureSecrets(ctx, &repo, repoType)
+	in.SecretsErr = r.helmRepositoryService.EnsureSecrets(ctx, src, repoType)
 
 	if in.SecretsErr == nil {
 		switch repoType {
 		case utils.InternalHelmRepository:
-			in.InternalRepository, in.InternalRepositoryErr = r.helmRepositoryService.EnsureInternalHelmRepository(ctx, &repo)
+			in.InternalRepository, in.InternalRepositoryErr = r.helmRepositoryService.EnsureInternalHelmRepository(ctx, src)
 		case utils.InternalOCIRepository:
 			// The url may have changed from helm to oci: drop the internal object
 			// that is no longer used. OCI repositories have none of their own.
-			in.InternalRepositoryErr = r.helmRepositoryService.RemoveHelmRepository(ctx, repo.Name)
+			in.InternalRepositoryErr = r.helmRepositoryService.RemoveHelmRepository(ctx, src.InternalNames())
 		}
 	}
 
@@ -212,6 +214,8 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 		return reconcile.Result{}, nil
 	}
 
+	names := adapter.NewAddonRepository(repo).InternalNames()
+
 	switch repoType {
 	case utils.InternalOCIRepository:
 		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
@@ -226,7 +230,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 		// longer parses and then deleted. Cleaning up the helm way is safe for
 		// either type — it removes both auxiliary secrets and tolerates a missing
 		// internal repository — and leaving it out would orphan them.
-		helmRepo, err := r.helmRepositoryService.CleanupHelmRepository(ctx, repo.Name)
+		helmRepo, err := r.helmRepositoryService.CleanupHelmRepository(ctx, names)
 		if err != nil && !apierrors.IsNotFound(err) {
 			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
 			return reconcile.Result{}, err

@@ -34,7 +34,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
-	"github.com/deckhouse/operator-helm/internal/utils"
+	"github.com/deckhouse/operator-helm/internal/source"
 )
 
 const InternalRepositoryInterval = 5 * time.Minute
@@ -61,13 +61,13 @@ func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace 
 // error and is reported through the state instead.
 func (s *HelmRepoService) EnsureInternalHelmRepository(
 	ctx context.Context,
-	repo *helmv1alpha1.HelmClusterAddonRepository,
+	repo source.Repository,
 ) (InternalRepositoryState, error) {
 	logger := log.FromContext(ctx)
 
 	existing := &sourcev1.HelmRepository{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.GetInternalHelmRepositoryName(repo.Name),
+			Name:      repo.InternalNames().HelmRepository,
 			Namespace: s.TargetNamespace,
 		},
 	}
@@ -111,9 +111,8 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(
 	return state, nil
 }
 
-func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, repoName string) error {
-	name := utils.GetInternalHelmRepositoryName(repoName)
-	nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
+func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, names source.InternalNames) error {
+	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.TargetNamespace}
 	if err := s.ensureResourceDeleted(ctx, nn, &sourcev1.HelmRepository{}); err != nil {
 		return fmt.Errorf("removing helm repository: %w", err)
 	}
@@ -126,20 +125,15 @@ func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, repoName str
 // returning it while it is still present so the caller can inspect its conditions
 // and wait for nelm-source-controller to finish removing it. It returns nil once
 // the HelmRepository is gone.
-func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName string) (*sourcev1.HelmRepository, error) {
-	secrets := []string{
-		utils.GetInternalRepositoryAuthSecretName(repoName),
-		utils.GetInternalRepositoryTLSSecretName(repoName),
-	}
-
-	for _, name := range secrets {
+func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, names source.InternalNames) (*sourcev1.HelmRepository, error) {
+	for _, name := range []string{names.AuthSecret, names.TLSSecret} {
 		nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
 		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {
 			return nil, fmt.Errorf("cleaning up secret %s: %w", name, err)
 		}
 	}
 
-	nn := types.NamespacedName{Name: utils.GetInternalHelmRepositoryName(repoName), Namespace: s.TargetNamespace}
+	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.TargetNamespace}
 	helmRepo := &sourcev1.HelmRepository{}
 	exists, err := s.deleteAndCheck(ctx, nn, helmRepo)
 	if err != nil {
@@ -152,7 +146,7 @@ func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, repoName st
 	return helmRepo, nil
 }
 
-func applyHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, existing *sourcev1.HelmRepository) {
+func applyHelmRepositorySpec(repo source.Repository, existing *sourcev1.HelmRepository) {
 	if repo.ForceReconcileRequired() {
 		if existing.Annotations == nil {
 			existing.Annotations = map[string]string{}
@@ -162,27 +156,26 @@ func applyHelmRepositorySpec(repo *helmv1alpha1.HelmClusterAddonRepository, exis
 		existing.Annotations[meta.ReconcileRequestAnnotation] = ts
 	}
 
-	existing.Spec.URL = repo.Spec.URL
+	names := repo.InternalNames()
+
+	existing.Spec.URL = repo.URL()
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
-	existing.Spec.Insecure = repo.Spec.InsecureSkipVerify
+	existing.Spec.Insecure = repo.InsecureSkipVerify()
 	existing.Spec.CertSecretRef = nil
 	existing.Spec.SecretRef = nil
 
-	if repo.Spec.Auth != nil {
+	if repo.Auth() != nil {
 		existing.Spec.SecretRef = &meta.LocalObjectReference{
-			Name: utils.GetInternalRepositoryAuthSecretName(repo.Name),
+			Name: names.AuthSecret,
 		}
 		existing.Spec.PassCredentials = true
 	}
 
-	if repo.Spec.CACertificate != "" {
+	if repo.CACertificate() != "" {
 		existing.Spec.CertSecretRef = &meta.LocalObjectReference{
-			Name: utils.GetInternalRepositoryTLSSecretName(repo.Name),
+			Name: names.TLSSecret,
 		}
 	}
 
-	existing.Labels = map[string]string{
-		helmv1alpha1.LabelManagedBy:                            helmv1alpha1.LabelManagedByValue,
-		helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repo.Name,
-	}
+	existing.Labels = repo.SourceLabels()
 }
