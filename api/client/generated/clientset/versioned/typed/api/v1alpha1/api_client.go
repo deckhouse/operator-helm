@@ -33,6 +33,7 @@ type HelmV1alpha1Interface interface {
 	HelmClusterAddonsGetter
 	HelmClusterAddonChartsGetter
 	HelmClusterAddonRepositoriesGetter
+	HelmClusterApplicationChartsGetter
 	HelmClusterApplicationRepositoriesGetter
 }
 
@@ -59,6 +60,10 @@ func (c *HelmV1alpha1Client) HelmClusterAddonCharts() HelmClusterAddonChartInter
 
 func (c *HelmV1alpha1Client) HelmClusterAddonRepositories() HelmClusterAddonRepositoryInterface {
 	return newHelmClusterAddonRepositories(c)
+}
+
+func (c *HelmV1alpha1Client) HelmClusterApplicationCharts() HelmClusterApplicationChartInterface {
+	return newHelmClusterApplicationCharts(c)
 }
 
 func (c *HelmV1alpha1Client) HelmClusterApplicationRepositories() HelmClusterApplicationRepositoryInterface {

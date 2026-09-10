@@ -28,4 +28,6 @@ type HelmClusterAddonChartExpansion interface{}
 
 type HelmClusterAddonRepositoryExpansion interface{}
 
+type HelmClusterApplicationChartExpansion interface{}
+
 type HelmClusterApplicationRepositoryExpansion interface{}

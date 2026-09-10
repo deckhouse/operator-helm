@@ -37,6 +37,7 @@ spec:
         resources:
           - "helmclusteraddoncharts"
           - "helmapplicationcharts"
+          - "helmclusterapplicationcharts"
   validations:
     - expression: |
         request.userInfo.username.startsWith("system:serviceaccount:kube-system:") ||

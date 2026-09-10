@@ -48,6 +48,10 @@ func (c *FakeHelmV1alpha1) HelmClusterAddonRepositories() v1alpha1.HelmClusterAd
 	return newFakeHelmClusterAddonRepositories(c)
 }
 
+func (c *FakeHelmV1alpha1) HelmClusterApplicationCharts() v1alpha1.HelmClusterApplicationChartInterface {
+	return newFakeHelmClusterApplicationCharts(c)
+}
+
 func (c *FakeHelmV1alpha1) HelmClusterApplicationRepositories() v1alpha1.HelmClusterApplicationRepositoryInterface {
 	return newFakeHelmClusterApplicationRepositories(c)
 }
