@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddonrepository"
@@ -44,7 +45,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		client,
 		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
-		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient),
+		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewAddonCatalog(client)),
 		status.NewManager(client),
 	)
 

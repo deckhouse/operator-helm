@@ -140,7 +140,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, err
 		}
 
-		outcome := r.chartSyncService.Sync(ctx, &repo, repoType)
+		outcome := r.chartSyncService.Sync(ctx, src, repoType)
 
 		in.Attempted = true
 		if outcome.FetchAttempted {
@@ -218,7 +218,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo *helmv1alpha1.Hel
 
 	switch repoType {
 	case utils.InternalOCIRepository:
-		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, repo.Name); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, names); err != nil && !apierrors.IsNotFound(err) {
 			_ = r.statusManager.MarkDeletionFailed(ctx, repo, "internal repository", err)
 			return reconcile.Result{}, err
 		}

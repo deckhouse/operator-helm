@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
@@ -106,7 +107,7 @@ func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object)
 		c,
 		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
 		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
-		services.NewRepoSyncService(c, scheme, factory),
+		services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
 		status.NewManager(c),
 	)
 

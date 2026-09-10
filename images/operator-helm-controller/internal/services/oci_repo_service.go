@@ -36,6 +36,7 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
+	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -58,6 +59,8 @@ type OCIRepoService struct {
 
 	resolver repoclient.ChartResolverInterface
 }
+
+var _ source.ConsumerForcer = (*OCIRepoService)(nil)
 
 // NewOCIRepoService builds the service. A nil resolver selects the default one; tests
 // pass their own so they never reach a registry.
@@ -311,25 +314,18 @@ func (s *OCIRepoService) ForceReconcileInternalRepositories(ctx context.Context,
 	return nil
 }
 
-func (s *OCIRepoService) CleanupOCIRepository(ctx context.Context, repoName string) error {
-	resources := []struct {
-		name string
-		obj  client.Object
-	}{
-		{
-			name: utils.GetInternalRepositoryAuthSecretName(repoName),
-			obj:  &corev1.Secret{},
-		},
-		{
-			name: utils.GetInternalRepositoryTLSSecretName(repoName),
-			obj:  &corev1.Secret{},
-		},
-	}
+// ForceReconcileConsumers is the source.ConsumerForcer of the addon family: the
+// consumers of a HelmClusterAddonRepository are the HelmClusterAddon objects
+// referencing it, each with its own internal OCIRepository.
+func (s *OCIRepoService) ForceReconcileConsumers(ctx context.Context, repo source.Repository) error {
+	return s.ForceReconcileInternalRepositories(ctx, repo.Name())
+}
 
-	for _, r := range resources {
-		nn := types.NamespacedName{Name: r.name, Namespace: s.TargetNamespace}
-		if err := s.ensureResourceDeleted(ctx, nn, r.obj); err != nil {
-			return fmt.Errorf("cleaning up %T %s: %w", r.obj, r.name, err)
+func (s *OCIRepoService) CleanupOCIRepository(ctx context.Context, names source.InternalNames) error {
+	for _, name := range []string{names.AuthSecret, names.TLSSecret} {
+		nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
+		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {
+			return fmt.Errorf("cleaning up secret %s: %w", name, err)
 		}
 	}
 
