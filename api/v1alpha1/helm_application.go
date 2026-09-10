@@ -52,7 +52,7 @@ const (
 // These notes are deliberately outside the doc comment below — controller-gen folds
 // every non-marker line of that block into the resource's API description.
 
-// HelmApplication represents an installation of a Helm chart inside a single namespace. The release is deployed into the namespace of the resource itself, so it requires no cluster-wide permissions.
+// HelmApplication represents an installation of a Helm chart inside a single namespace. The release is deployed into the namespace of the resource itself.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

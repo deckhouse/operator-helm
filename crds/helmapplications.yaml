@@ -48,7 +48,7 @@ spec:
       openAPIV3Schema:
         description: HelmApplication represents an installation of a Helm chart inside
           a single namespace. The release is deployed into the namespace of the resource
-          itself, so it requires no cluster-wide permissions.
+          itself.
         properties:
           apiVersion:
             description: |-
