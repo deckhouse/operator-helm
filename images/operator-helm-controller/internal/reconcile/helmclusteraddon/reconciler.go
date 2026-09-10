@@ -111,7 +111,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// because a duplicate that loses the race must not accrue a finalizer it would
 	// otherwise have to clean up: it simply surfaces the conflict on its status and
 	// requeues, recovering on its own once the owner releases the pair.
-	acquired, holder, err := r.claimService.Acquire(ctx, addon)
+	acquired, holder, err := r.claimService.Acquire(ctx, rel)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("acquiring chart claim: %w", err)
 	}
@@ -147,7 +147,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// would not trigger a follow-up reconcile.
 	}
 
-	if err := r.claimService.ReleaseStale(ctx, addon); err != nil {
+	if err := r.claimService.ReleaseStale(ctx, rel); err != nil {
 		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
 	}
 
@@ -369,7 +369,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 	// earlier would let another addon start reconciling the same chart while this
 	// one's release is still being uninstalled — exactly the collision the claim
 	// prevents.
-	if err := r.claimService.Release(ctx, addon); err != nil {
+	if err := r.claimService.Release(ctx, rel); err != nil {
 		return reconcile.Result{}, fmt.Errorf("releasing chart claim: %w", err)
 	}
 
