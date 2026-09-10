@@ -45,6 +45,11 @@ func addonClient(t *testing.T, objects ...client.Object) client.Client {
 
 			return []string{index.AddonChartValue(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName)}
 		}).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonRepository, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{addon.Spec.Chart.HelmClusterAddonRepository}
+		}).
 		Build()
 }
 
