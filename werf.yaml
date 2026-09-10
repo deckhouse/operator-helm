@@ -67,7 +67,7 @@ shell:
       cat images_digests.json
 ---
 image: bundle
-fromImage: builder/scratch
+fromImage: base/scratch
 import:
 - image: prepare-bundle
   add: /prep-bundle
@@ -119,7 +119,7 @@ shell:
     - ls -la /prep-bundle
 ---
 image: release-channel-version
-fromImage: builder/scratch
+fromImage: base/scratch
 import:
 - image: prepare-bundle
   add: /prep-bundle
