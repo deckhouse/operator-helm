@@ -91,6 +91,9 @@ rules:
   - helmclusterapplicationrepositories/finalizers
   - helmapplicationcharts/finalizers
   - helmclusterapplicationcharts/finalizers
+  - helmapplications
+  - helmapplications/status
+  - helmapplications/finalizers
   verbs:
   - create
   - delete
@@ -99,6 +102,21 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+  - escalate
+  - bind
 - apiGroups:
   - helm.internal.operator-helm.deckhouse.io
   resources:
@@ -184,6 +202,7 @@ rules:
   resources:
   - configmaps
   - secrets
+  - serviceaccounts
   verbs:
   - get
   - list

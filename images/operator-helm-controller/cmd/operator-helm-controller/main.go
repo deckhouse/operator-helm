@@ -31,11 +31,13 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/controller/helmapplication"
 	"github.com/deckhouse/operator-helm/internal/controller/helmapplicationrepository"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddon"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonrepository"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusterapplicationrepository"
 	"github.com/deckhouse/operator-helm/internal/index"
+	helmapplicationwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmapplication"
 	helmclusteraddonwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmclusteraddon"
 )
 
@@ -84,6 +86,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := index.SetupApplicationRepository(mgr); err != nil {
+		logger.Error(err, "unable to setup indexes", "index", index.ApplicationRepository)
+		os.Exit(1)
+	}
+
+	if err := index.SetupApplicationChart(mgr); err != nil {
+		logger.Error(err, "unable to setup indexes", "index", index.ApplicationChart)
+		os.Exit(1)
+	}
+
 	if err := helmclusteraddonrepository.SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to setup HelmClusterAddonRepository controller")
 		os.Exit(1)
@@ -99,6 +111,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := helmapplication.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmApplication controller")
+		os.Exit(1)
+	}
+
 	if err := helmclusteraddon.SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to setup HelmClusterAddon controller")
 		os.Exit(1)
@@ -111,6 +128,11 @@ func main() {
 
 	if err = helmclusteraddonwebhook.SetupWebhookWithManager(mgr); err != nil {
 		logger.Error(err, "unable to create webhook", "webhook", "HelmClusterAddon")
+		os.Exit(1)
+	}
+
+	if err = helmapplicationwebhook.SetupWebhookWithManager(mgr); err != nil {
+		logger.Error(err, "unable to create webhook", "webhook", "HelmApplication")
 		os.Exit(1)
 	}
 
