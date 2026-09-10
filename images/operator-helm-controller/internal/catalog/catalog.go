@@ -70,7 +70,8 @@ func (t *typed[C, CL]) list(ctx context.Context, repo source.Repository) ([]C, e
 		client.InNamespace(repo.Namespace()),
 		client.MatchingLabels{helmv1alpha1.LabelRepositoryName: repo.Name()},
 	); err != nil {
-		return nil, fmt.Errorf("listing %s objects of repository %q: %w", t.cfg.Kind, repo.Name(), err)
+		repoKey := client.ObjectKey{Namespace: repo.Namespace(), Name: repo.Name()}
+		return nil, fmt.Errorf("listing %s objects of repository %s: %w", t.cfg.Kind, repoKey, err)
 	}
 
 	return t.cfg.Items(list), nil
@@ -146,7 +147,7 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 			return nil
 		})
 		if err != nil {
-			return fmt.Errorf("creating or updating chart %q: %w", name, err)
+			return fmt.Errorf("creating or updating chart %s: %w", client.ObjectKeyFromObject(existing), err)
 		}
 
 		if op != controllerutil.OperationResultNone {
@@ -167,7 +168,7 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse)
 
 		if err := t.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
-			return fmt.Errorf("updating versions of chart %q: %w", name, err)
+			return fmt.Errorf("updating versions of chart %s: %w", client.ObjectKeyFromObject(existing), err)
 		}
 	}
 

@@ -44,7 +44,7 @@ func MapInternalResources(controllerName, targetNamespace, labelManagedBy, label
 
 		sourceName := labels[labelSourceName]
 		if sourceName == "" {
-			logger.Info("resource missing source label, skipping",
+			logger.V(1).Info("resource missing source label, skipping",
 				"controller", controllerName, "name", obj.GetName(), "namespace", obj.GetNamespace())
 
 			return nil
@@ -65,7 +65,9 @@ func MapInternalResources(controllerName, targetNamespace, labelManagedBy, label
 // kind: the request it enqueues carries the namespace recorded in
 // labelSourceNamespace next to the name. Internal objects of every family live in
 // targetNamespace, so the name alone would not identify a namespaced source. An
-// object carrying only one of the two labels cannot be mapped and is skipped.
+// object carrying only one of the two labels cannot be mapped and is skipped, at
+// debug verbosity, because internal objects of the other families legitimately
+// match the managed-by filter.
 func MapNamespacedInternalResources(
 	controllerName, targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName, labelSourceNamespace string,
 ) handler.MapFunc {
@@ -83,7 +85,7 @@ func MapNamespacedInternalResources(
 
 		sourceName, sourceNamespace := labels[labelSourceName], labels[labelSourceNamespace]
 		if sourceName == "" || sourceNamespace == "" {
-			logger.Info("resource missing source labels, skipping",
+			logger.V(1).Info("resource missing source labels, skipping",
 				"controller", controllerName, "name", obj.GetName(), "namespace", obj.GetNamespace())
 
 			return nil

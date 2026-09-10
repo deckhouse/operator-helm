@@ -55,6 +55,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		ociRepositoryService,
 		// HelmApplication is not reconciled yet: a force request has no consumer
 		// sources to reach. The HelmApplication controller replaces this.
+		// TODO(stage 5): replaced by the HelmApplication consumer forcer.
 		source.NoConsumers{},
 		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewApplicationCatalog(client)),
 		status.NewManager(client),

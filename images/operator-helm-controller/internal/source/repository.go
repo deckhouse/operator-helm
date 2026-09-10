@@ -26,7 +26,7 @@ import (
 )
 
 // InternalNames are the names of the internal objects derived from one
-// repository. They are computed once by the adapter: the scheme differs between
+// repository. They are computed by the adapter: the scheme differs between
 // the addon family (frozen, hash only on truncation) and the application family
 // (namespace-aware, hash always present), and no service should know which is
 // which.

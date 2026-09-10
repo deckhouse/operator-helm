@@ -87,6 +87,10 @@ rules:
   - helmapplicationcharts/status
   - helmclusterapplicationcharts
   - helmclusterapplicationcharts/status
+  - helmapplicationrepositories/finalizers
+  - helmclusterapplicationrepositories/finalizers
+  - helmapplicationcharts/finalizers
+  - helmclusterapplicationcharts/finalizers
   verbs:
   - create
   - delete

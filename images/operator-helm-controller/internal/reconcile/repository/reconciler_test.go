@@ -18,6 +18,7 @@ package repository
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -41,6 +43,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -112,6 +115,51 @@ func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object)
 		ociRepositoryService,
 		ociRepositoryService,
 		services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
+		status.NewManager(c),
+	)
+
+	return r, c
+}
+
+// newApplicationReconciler wires the reconciler for the namespaced kind. The
+// addon fixture above stays the default; this one exists to prove the same
+// reconciler composes with a namespaced adapter and catalog.
+func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object) (*Reconciler, client.Client) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		clientgoscheme.AddToScheme,
+		helmv1alpha1.AddToScheme,
+		sourcev1.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatalf("registering scheme: %v", err)
+		}
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithStatusSubresource(
+			&helmv1alpha1.HelmApplicationRepository{},
+			&helmv1alpha1.HelmApplicationChart{},
+		).
+		Build()
+
+	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+		return stub, nil
+	}
+
+	ociRepositoryService := services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil)
+
+	r := New(
+		c,
+		adapter.EmptyApplicationRepository,
+		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		ociRepositoryService,
+		source.NoConsumers{},
+		services.NewRepoSyncService(c, scheme, factory, adapter.NewApplicationCatalog(c)),
 		status.NewManager(c),
 	)
 
@@ -732,5 +780,82 @@ func TestReconcileSkippedSynchronizationReportsNoProgress(t *testing.T) {
 	}
 	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
 		t.Fatalf("a pass without an attempt must not report Reconciling, got %+v", cond)
+	}
+}
+
+// TestReconcileNamespacedRepositoryDerivesNamespacedInternalObjects proves the
+// composition the per-package tests cannot: a namespaced repository read through
+// its adapter yields internal objects in the operator namespace under derived,
+// namespace-aware names with both source labels, a catalog object next to the
+// repository, and a status patched on the namespaced object.
+func TestReconcileNamespacedRepositoryDerivesNamespacedInternalObjects(t *testing.T) {
+	repo := &helmv1alpha1.HelmApplicationRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a", Generation: 1},
+		Spec: helmv1alpha1.RepositorySpec{
+			URL:  "https://charts.example.invalid/stable",
+			Auth: &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"},
+		},
+	}
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newApplicationReconciler(t, stub, repo)
+
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: "team-a", Name: "stable"},
+		}); err != nil {
+			t.Fatalf("Reconcile returned %v", err)
+		}
+	}
+
+	wantLabels := map[string]string{
+		helmv1alpha1.LabelManagedBy:                           helmv1alpha1.LabelManagedByValue,
+		helmv1alpha1.HelmApplicationRepositoryLabelSourceName: "stable",
+		helmv1alpha1.LabelSourceNamespace:                     "team-a",
+	}
+
+	helmRepo := &sourcev1.HelmRepository{}
+	if err := c.Get(context.Background(), client.ObjectKey{
+		Namespace: helmv1alpha1.TargetNamespace, Name: "hapr-team-a-stable-42df68033b1e",
+	}, helmRepo); err != nil {
+		t.Fatalf("internal helm repository with a derived name was not created in the operator namespace: %v", err)
+	}
+	if !reflect.DeepEqual(helmRepo.Labels, wantLabels) {
+		t.Fatalf("internal helm repository labels = %v, want %v", helmRepo.Labels, wantLabels)
+	}
+	if helmRepo.Spec.SecretRef == nil || helmRepo.Spec.SecretRef.Name != adapter.NewApplicationRepository(repo).InternalNames().AuthSecret {
+		t.Fatalf("internal helm repository must reference the derived auth secret, got %+v", helmRepo.Spec.SecretRef)
+	}
+
+	authSecret := &corev1.Secret{}
+	if err := c.Get(context.Background(), client.ObjectKey{
+		Namespace: helmv1alpha1.TargetNamespace, Name: helmRepo.Spec.SecretRef.Name,
+	}, authSecret); err != nil {
+		t.Fatalf("derived auth secret was not created in the operator namespace: %v", err)
+	}
+	if !reflect.DeepEqual(authSecret.Labels, wantLabels) {
+		t.Fatalf("auth secret labels = %v, want %v", authSecret.Labels, wantLabels)
+	}
+
+	var charts helmv1alpha1.HelmApplicationChartList
+	if err := c.List(context.Background(), &charts, client.InNamespace("team-a")); err != nil {
+		t.Fatalf("listing charts: %v", err)
+	}
+	if len(charts.Items) != 1 || charts.Items[0].Labels[helmv1alpha1.LabelChartName] != "podinfo" {
+		t.Fatalf("charts in team-a = %v, want exactly podinfo", charts.Items)
+	}
+
+	updated := &helmv1alpha1.HelmApplicationRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), updated); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(updated, helmv1alpha1.FinalizerName) {
+		t.Fatal("finalizer must be added to the namespaced repository")
+	}
+	if updated.Status.ObservedGeneration != 1 {
+		t.Fatalf("status was not patched on the namespaced object: %+v", updated.Status)
 	}
 }

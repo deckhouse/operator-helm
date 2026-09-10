@@ -53,16 +53,21 @@ func TestHelmClusterApplicationChartGetConditionTypesForUpdate(t *testing.T) {
 	}
 }
 
-// TestChartCatalogStatusIsShared pins that both chart catalog kinds are built on
-// one status type. If someone later splits them into per-kind copies, the two
+// TestChartCatalogStatusIsShared pins that every chart catalog kind is built on
+// one status type. If someone later splits them into per-kind copies, the
 // schemas start drifting apart silently; this assignment stops compiling instead.
 func TestChartCatalogStatusIsShared(t *testing.T) {
 	namespaced := &HelmApplicationChart{}
 	cluster := &HelmClusterApplicationChart{}
+	addon := &HelmClusterAddonChart{}
 
 	namespaced.Status = cluster.Status
+	addon.Status = namespaced.Status
 
 	if namespaced.Status.IconURL != "" {
 		t.Fatalf("unexpected iconURL after the assignment: %q", namespaced.Status.IconURL)
+	}
+	if addon.Status.IconURL != "" {
+		t.Fatalf("unexpected iconURL after the assignment: %q", addon.Status.IconURL)
 	}
 }
