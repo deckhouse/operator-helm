@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package helmclusteraddonrepository
+package repository
 
 import (
 	"context"
@@ -103,10 +103,14 @@ func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object)
 		return stub, nil
 	}
 
+	ociRepositoryService := services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil)
+
 	r := New(
 		c,
+		adapter.EmptyAddonRepository,
 		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
+		ociRepositoryService,
+		ociRepositoryService,
 		services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
 		status.NewManager(c),
 	)

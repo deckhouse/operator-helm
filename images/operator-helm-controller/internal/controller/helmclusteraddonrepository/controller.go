@@ -29,7 +29,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
-	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddonrepository"
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/repository"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -41,10 +41,14 @@ const (
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
+	ociRepositoryService := services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil)
+
 	r := reconcile.New(
 		client,
+		adapter.EmptyAddonRepository,
 		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
+		ociRepositoryService,
+		ociRepositoryService,
 		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewAddonCatalog(client)),
 		status.NewManager(client),
 	)
