@@ -43,7 +43,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
-	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -160,7 +159,7 @@ func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...cli
 		adapter.EmptyApplicationRepository,
 		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
 		ociRepositoryService,
-		source.NoConsumers{},
+		services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(c)),
 		services.NewRepoSyncService(c, scheme, factory, adapter.NewApplicationCatalog(c)),
 		status.NewManager(c),
 	)

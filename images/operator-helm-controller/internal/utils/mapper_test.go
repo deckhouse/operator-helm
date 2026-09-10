@@ -192,3 +192,94 @@ func TestMapNamespacedInternalResources(t *testing.T) {
 		})
 	}
 }
+
+func applicationMapperClient(t *testing.T, objects ...client.Object) client.Client {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	if err := helmv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering helm scheme: %v", err)
+	}
+
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationRepository, index.ApplicationRepositoryIndexer).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationChart, index.ApplicationChartIndexer).
+		Build()
+}
+
+func application(namespace, name, repository, clusterRepository string) *helmv1alpha1.HelmApplication {
+	return &helmv1alpha1.HelmApplication{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: helmv1alpha1.HelmApplicationSpec{
+			Chart: helmv1alpha1.HelmApplicationChartRef{
+				Name: "podinfo", Repository: repository, ClusterRepository: clusterRepository, Version: "6.7.1",
+			},
+		},
+	}
+}
+
+func requestSet(reqs []reconcile.Request) map[types.NamespacedName]bool {
+	out := make(map[types.NamespacedName]bool, len(reqs))
+	for _, r := range reqs {
+		out[r.NamespacedName] = true
+	}
+
+	return out
+}
+
+// TestMapRepositoryToApplications pins that a namespaced repository enqueues only the
+// applications of its own namespace referencing it, and a cluster repository the
+// applications of every namespace referencing it by its field.
+func TestMapRepositoryToApplications(t *testing.T) {
+	c := applicationMapperClient(t,
+		application("team-a", "a1", "stable", ""),
+		application("team-b", "b1", "stable", ""),
+		application("team-b", "b2", "", "stable"),
+	)
+
+	namespaced := MapRepositoryToApplications(c, helmv1alpha1.HelmApplicationRepositoryKind)
+	got := namespaced(context.Background(), &helmv1alpha1.HelmApplicationRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a"},
+	})
+	want := map[types.NamespacedName]bool{{Namespace: "team-a", Name: "a1"}: true}
+	if !reflect.DeepEqual(requestSet(got), want) {
+		t.Fatalf("namespaced mapping = %v, want %v", got, want)
+	}
+
+	cluster := MapRepositoryToApplications(c, helmv1alpha1.HelmClusterApplicationRepositoryKind)
+	got = cluster(context.Background(), &helmv1alpha1.HelmClusterApplicationRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable"},
+	})
+	want = map[types.NamespacedName]bool{{Namespace: "team-b", Name: "b2"}: true}
+	if !reflect.DeepEqual(requestSet(got), want) {
+		t.Fatalf("cluster mapping = %v, want %v", got, want)
+	}
+}
+
+func TestMapChartToApplications(t *testing.T) {
+	c := applicationMapperClient(t,
+		application("team-a", "a1", "stable", ""),
+		application("team-a", "other", "stable", ""),
+		application("team-b", "b1", "stable", ""),
+	)
+	mapper := MapChartToApplications(c, helmv1alpha1.HelmApplicationRepositoryKind)
+
+	got := mapper(context.Background(), &helmv1alpha1.HelmApplicationChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "stable-chart-podinfo", Namespace: "team-a",
+			Labels: map[string]string{helmv1alpha1.LabelRepositoryName: "stable", helmv1alpha1.LabelChartName: "podinfo"},
+		},
+	})
+	want := map[types.NamespacedName]bool{{Namespace: "team-a", Name: "a1"}: true, {Namespace: "team-a", Name: "other"}: true}
+	if !reflect.DeepEqual(requestSet(got), want) {
+		t.Fatalf("chart mapping = %v, want %v", got, want)
+	}
+
+	if got := mapper(context.Background(), &helmv1alpha1.HelmApplicationChart{
+		ObjectMeta: metav1.ObjectMeta{Name: "unlabelled", Namespace: "team-a"},
+	}); got != nil {
+		t.Fatalf("a chart object without labels cannot be mapped, got %v", got)
+	}
+}

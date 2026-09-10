@@ -159,3 +159,60 @@ func MapChartToAddons(c client.Client) handler.MapFunc {
 		return requests
 	}
 }
+
+// MapRepositoryToApplications enqueues the HelmApplication objects referencing a
+// repository object of the given kind. The index value carries the kind and the
+// repository namespace, so a namespaced repository reaches only the applications of
+// its own namespace and never a same-named repository's consumers elsewhere.
+func MapRepositoryToApplications(c client.Client, repositoryKind string) handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var apps helmv1alpha1.HelmApplicationList
+		if err := c.List(ctx, &apps, client.MatchingFields{
+			index.ApplicationRepository: index.ApplicationRepositoryValue(repositoryKind, obj.GetNamespace(), obj.GetName()),
+		}); err != nil {
+			log.FromContext(ctx).Error(err, "Failed to list HelmApplications for repository mapping")
+
+			return nil
+		}
+
+		return applicationRequests(apps)
+	}
+}
+
+// MapChartToApplications enqueues the HelmApplication objects using a chart catalog
+// object of the family whose repository kind is given. Like MapChartToAddons, this is
+// the only watch that fires on a catalog write, which a terminal probe verdict being
+// reversible depends on. The repository is identified by the catalog object's
+// namespace and repository label.
+func MapChartToApplications(c client.Client, repositoryKind string) handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		labels := obj.GetLabels()
+		repoName := labels[helmv1alpha1.LabelRepositoryName]
+		chartName := labels[helmv1alpha1.LabelChartName]
+		if repoName == "" || chartName == "" {
+			log.FromContext(ctx).Info("Chart object missing repository or chart label, cannot map to applications", "name", obj.GetName(), "namespace", obj.GetNamespace())
+
+			return nil
+		}
+
+		var apps helmv1alpha1.HelmApplicationList
+		if err := c.List(ctx, &apps, client.MatchingFields{
+			index.ApplicationChart: index.ApplicationChartValue(repositoryKind, obj.GetNamespace(), repoName, chartName),
+		}); err != nil {
+			log.FromContext(ctx).Error(err, "Failed to list HelmApplications for chart mapping")
+
+			return nil
+		}
+
+		return applicationRequests(apps)
+	}
+}
+
+func applicationRequests(apps helmv1alpha1.HelmApplicationList) []reconcile.Request {
+	requests := make([]reconcile.Request, 0, len(apps.Items))
+	for _, app := range apps.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: app.Namespace, Name: app.Name}})
+	}
+
+	return requests
+}

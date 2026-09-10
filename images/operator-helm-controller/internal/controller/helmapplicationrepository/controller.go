@@ -35,7 +35,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/repository"
 	"github.com/deckhouse/operator-helm/internal/services"
-	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -53,10 +52,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		adapter.EmptyApplicationRepository,
 		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		ociRepositoryService,
-		// HelmApplication is not reconciled yet: a force request has no consumer
-		// sources to reach. The HelmApplication controller replaces this.
-		// TODO(stage 5): replaced by the HelmApplication consumer forcer.
-		source.NoConsumers{},
+		services.NewForceService(client, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(client)),
 		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewApplicationCatalog(client)),
 		status.NewManager(client),
 	)
