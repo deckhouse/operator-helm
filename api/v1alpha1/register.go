@@ -33,6 +33,7 @@ var (
 	HelmClusterAddonGVK           = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
 	HelmClusterAddonRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonRepositoryKind}
 	HelmClusterAddonChartGVK      = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonChartKind}
+	HelmApplicationRepositoryGVK  = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmApplicationRepositoryKind}
 )
 
 func Kind(kind string) schema.GroupKind {
@@ -60,6 +61,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&HelmClusterAddonRepositoryList{},
 		&HelmClusterAddonChart{},
 		&HelmClusterAddonChartList{},
+		&HelmApplicationRepository{},
+		&HelmApplicationRepositoryList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
