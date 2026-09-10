@@ -1,24 +1,12 @@
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
-fromImage: builder/src
+fromImage: builder/distroless
 git:
 - add: {{ .ModuleDir }}/api
   to: /src/api
-  stageDependencies:
-    install:
-      - go.mod
-      - go.sum
-    setup:
-      - "**/*.go"
 - add: {{ .ModuleDir }}/images/{{ .ImageName }}
   to: /src/images/operator-helm-controller-artifact
-  stageDependencies:
-    install:
-    - go.mod
-    - go.sum
-    setup:
-    - "**/*.go"
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
 final: false
@@ -28,16 +16,17 @@ import:
   add: /src
   to: /src
   before: install
-secrets:
-- id: GOPROXY
-  value: {{ .GOPROXY }}
 mount:
   - fromPath: ~/go-pkg-cache
     to: /go/pkg
+packages:
+  - type: go-mod
+    workdir: /src/images/operator-helm-controller-artifact
+    env:
+      GOPROXY: "{{ .GOPROXY }}"
 shell:
   install:
   - cd /src/images/operator-helm-controller-artifact
-  - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
   - mkdir /out
   - export GOOS=linux
   - export GOARCH=amd64
@@ -46,7 +35,7 @@ shell:
     echo "Build operator-helm-controller binary"
     {{- $_ := set $ "ProjectName" (list $.ImageName "operator-helm-controller" | join "/") }}
 
-    {{-   $buildCommand := printf "go build -ldflags=\"-s -w\" -tags %s -v -a -o /out/operator-helm-controller ./cmd/operator-helm-controller" .MODULE_EDITION -}}
+    {{-   $buildCommand := printf "go build -mod=readonly -ldflags=\"-s -w\" -tags %s -v -a -o /out/operator-helm-controller ./cmd/operator-helm-controller" .MODULE_EDITION -}}
     {{-   include "image-build.build" (set $ "BuildCommand" $buildCommand) | nindent 4 }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
