@@ -79,6 +79,14 @@ rules:
   - helmclusteraddoncharts/status
   - helmclusteraddonrepositories
   - helmclusteraddonrepositories/status
+  - helmapplicationrepositories
+  - helmapplicationrepositories/status
+  - helmclusterapplicationrepositories
+  - helmclusterapplicationrepositories/status
+  - helmapplicationcharts
+  - helmapplicationcharts/status
+  - helmclusterapplicationcharts
+  - helmclusterapplicationcharts/status
   verbs:
   - create
   - delete

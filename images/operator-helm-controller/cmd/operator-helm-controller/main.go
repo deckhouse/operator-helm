@@ -31,8 +31,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/controller/helmapplicationrepository"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddon"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonrepository"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusterapplicationrepository"
 	"github.com/deckhouse/operator-helm/internal/index"
 	helmclusteraddonwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmclusteraddon"
 )
@@ -84,6 +86,16 @@ func main() {
 
 	if err := helmclusteraddonrepository.SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to setup HelmClusterAddonRepository controller")
+		os.Exit(1)
+	}
+
+	if err := helmapplicationrepository.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmApplicationRepository controller")
+		os.Exit(1)
+	}
+
+	if err := helmclusterapplicationrepository.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmClusterApplicationRepository controller")
 		os.Exit(1)
 	}
 
