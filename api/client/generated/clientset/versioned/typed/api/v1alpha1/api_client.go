@@ -28,6 +28,7 @@ import (
 
 type HelmV1alpha1Interface interface {
 	RESTClient() rest.Interface
+	HelmApplicationChartsGetter
 	HelmApplicationRepositoriesGetter
 	HelmClusterAddonsGetter
 	HelmClusterAddonChartsGetter
@@ -38,6 +39,10 @@ type HelmV1alpha1Interface interface {
 // HelmV1alpha1Client is used to interact with features provided by the helm.deckhouse.io group.
 type HelmV1alpha1Client struct {
 	restClient rest.Interface
+}
+
+func (c *HelmV1alpha1Client) HelmApplicationCharts(namespace string) HelmApplicationChartInterface {
+	return newHelmApplicationCharts(c, namespace)
 }
 
 func (c *HelmV1alpha1Client) HelmApplicationRepositories(namespace string) HelmApplicationRepositoryInterface {

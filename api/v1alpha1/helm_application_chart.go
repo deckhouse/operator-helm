@@ -21,52 +21,67 @@ import (
 )
 
 const (
-	HelmClusterAddonChartKind     = "HelmClusterAddonChart"
-	HelmClusterAddonChartResource = "helmclusteraddoncharts"
+	HelmApplicationChartKind     = "HelmApplicationChart"
+	HelmApplicationChartResource = "helmapplicationcharts"
 
-	HelmClusterAddonChartLabelSourceName = "helm.deckhouse.io/cluster-addon-chart"
+	HelmApplicationChartLabelSourceName = "helm.deckhouse.io/application-chart"
 )
 
-// HelmClusterAddonChart represents a specific Helm chart discovered within a HelmClusterAddonRepository. These resources are automatically managed during repository synchronization and are immutable to user modifications.
+// The object carries no spec on purpose: it is a projection of a repository catalog,
+// not user input. Writes by anyone other than the module's service accounts are
+// refused by the ValidatingAdmissionPolicy in templates/admision-policy.yaml.
+//
+// This note is deliberately outside the doc comment below — controller-gen folds
+// every non-marker line of that block into the resource's API description.
+
+// HelmApplicationChart represents a specific Helm chart discovered within a HelmApplicationRepository. These resources are automatically managed during repository synchronization and are immutable to user modifications.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
-// +kubebuilder:resource:singular=helmclusteraddonchart,scope=Cluster
+// +kubebuilder:resource:singular=helmapplicationchart,scope=Namespaced
 // +genclient
-// +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type HelmClusterAddonChart struct {
+type HelmApplicationChart struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Status HelmClusterAddonChartStatus `json:"status,omitempty"`
+	Status ApplicationChartStatus `json:"status,omitempty"`
 }
 
-func (r *HelmClusterAddonChart) GetConditions() *[]metav1.Condition {
+func (r *HelmApplicationChart) GetConditions() *[]metav1.Condition {
 	return &r.Status.Conditions
 }
 
-func (r *HelmClusterAddonChart) SetObservedGeneration(generation int64) {
+func (r *HelmApplicationChart) SetObservedGeneration(generation int64) {
 	r.Status.ObservedGeneration = generation
 }
 
-func (r *HelmClusterAddonChart) GetObservedGeneration() int64 {
+func (r *HelmApplicationChart) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
 }
 
-func (r *HelmClusterAddonChart) GetStatus() any {
+func (r *HelmApplicationChart) GetStatus() any {
 	return r.Status
 }
 
-func (r *HelmClusterAddonChart) GetConditionTypesForUpdate() []string {
-	return []string{"Ready"}
+func (r *HelmApplicationChart) GetConditionTypesForUpdate() []string {
+	return []string{ConditionTypeReady}
 }
 
-type HelmClusterAddonChartStatus struct {
+// ApplicationChartStatus and ApplicationChartVersion below are shared by
+// HelmApplicationChart and HelmClusterApplicationChart: the two kinds differ only
+// in scope. Declaring them once makes a divergence between the two schemas
+// impossible by construction, and keeps a single translation for both in
+// crds/doc-ru-*.yaml.
+//
+// This note is outside every doc comment on purpose: a doc comment on a Status type
+// becomes the description of the status field in the CRD.
+
+type ApplicationChartStatus struct {
 	// IconURL is the URL to the Helm chart icon (applicable to Helm Chart repository charts only).
 	IconURL string `json:"iconURL,omitempty"`
-	// Conditions represent the latest available observations of the addon chart state.
+	// Conditions represent the latest available observations of the chart state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
@@ -75,10 +90,10 @@ type HelmClusterAddonChartStatus struct {
 	// usable when it has no unavailableReason; for an OCI repository a usable version
 	// also carries the media type of the layer that holds it.
 	// +optional
-	Versions []HelmClusterAddonChartVersion `json:"versions"`
+	Versions []ApplicationChartVersion `json:"versions"`
 }
 
-type HelmClusterAddonChartVersion struct {
+type ApplicationChartVersion struct {
 	// Helm chart version
 	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`
@@ -108,13 +123,13 @@ type HelmClusterAddonChartVersion struct {
 	UnavailableMessage string `json:"unavailableMessage,omitempty"`
 }
 
-// HelmClusterAddonChartList contains a list of HelmClusterAddonCharts.
+// HelmApplicationChartList contains a list of HelmApplicationCharts.
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type HelmClusterAddonChartList struct {
+type HelmApplicationChartList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
 
-	// Items provides a list of HelmClusterAddonCharts.
-	Items []HelmClusterAddonChart `json:"items"`
+	// Items provides a list of HelmApplicationCharts.
+	Items []HelmApplicationChart `json:"items"`
 }

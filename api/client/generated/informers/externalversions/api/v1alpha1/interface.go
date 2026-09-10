@@ -24,6 +24,8 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
+	// HelmApplicationCharts returns a HelmApplicationChartInformer.
+	HelmApplicationCharts() HelmApplicationChartInformer
 	// HelmApplicationRepositories returns a HelmApplicationRepositoryInformer.
 	HelmApplicationRepositories() HelmApplicationRepositoryInformer
 	// HelmClusterAddons returns a HelmClusterAddonInformer.
@@ -45,6 +47,11 @@ type version struct {
 // New returns a new Interface.
 func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakListOptions internalinterfaces.TweakListOptionsFunc) Interface {
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
+}
+
+// HelmApplicationCharts returns a HelmApplicationChartInformer.
+func (v *version) HelmApplicationCharts() HelmApplicationChartInformer {
+	return &helmApplicationChartInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // HelmApplicationRepositories returns a HelmApplicationRepositoryInformer.

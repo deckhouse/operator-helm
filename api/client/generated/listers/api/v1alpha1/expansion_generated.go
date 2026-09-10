@@ -18,6 +18,14 @@ limitations under the License.
 
 package v1alpha1
 
+// HelmApplicationChartListerExpansion allows custom methods to be added to
+// HelmApplicationChartLister.
+type HelmApplicationChartListerExpansion interface{}
+
+// HelmApplicationChartNamespaceListerExpansion allows custom methods to be added to
+// HelmApplicationChartNamespaceLister.
+type HelmApplicationChartNamespaceListerExpansion interface{}
+
 // HelmApplicationRepositoryListerExpansion allows custom methods to be added to
 // HelmApplicationRepositoryLister.
 type HelmApplicationRepositoryListerExpansion interface{}

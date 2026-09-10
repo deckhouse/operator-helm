@@ -36,6 +36,7 @@ spec:
           - "DELETE"
         resources:
           - "helmclusteraddoncharts"
+          - "helmapplicationcharts"
   validations:
     - expression: |
         request.userInfo.username.startsWith("system:serviceaccount:kube-system:") ||

@@ -33,4 +33,35 @@ const (
 	LabelDeckhouseHeritageValue = "deckhouse"
 
 	AnnotationForceReconcile = "reconcile.helm.deckhouse.io/force"
+
+	// LabelRepositoryName and LabelChartName are set on every chart catalog object —
+	// HelmClusterAddonChart, HelmApplicationChart and HelmClusterApplicationChart —
+	// and carry the repository/chart pair the object mirrors. They are the only way
+	// back from the object name — a truncated hash — to the pair it belongs to, which
+	// is why both the catalog synchronization and the watch that maps a chart to the
+	// resources using it read them.
+	LabelRepositoryName = "repository"
+	LabelChartName      = "chart"
+
+	// UnavailableReason* are the values of the UnavailableReason field of a chart
+	// catalog version, in every family. They are field values rather than condition
+	// reasons, and they describe OCI artifacts rather than resource kinds, so they
+	// live here instead of conditions.go or next to one family's chart type.
+	//
+	// UnavailableReasonRemovedFromRepository means the tag is no longer offered by the
+	// repository. The entry is retained only because a resource still references it, and
+	// the marker is dropped automatically once the tag is listed again.
+	UnavailableReasonRemovedFromRepository = "RemovedFromRepository"
+	// UnavailableReasonUnsupportedMediaType means the manifest was read but the artifact
+	// is not a packaged Helm chart. It is a verdict about the artifact, so it is kept
+	// until a force reconcile re-examines every tag.
+	UnavailableReasonUnsupportedMediaType = "UnsupportedMediaType"
+	// UnavailableReasonResolvePending means the manifest request failed and no verdict
+	// was reached. Such a tag is re-examined on every normal synchronization.
+	UnavailableReasonResolvePending = "ResolvePending"
+	// UnavailableReasonInvalidChartReference means the repository index points this
+	// version at a registry, but the reference it gives is not a valid tagged
+	// reference. It is a verdict about the index entry rather than about the
+	// artifact, so it is kept until the repository publishes a usable reference.
+	UnavailableReasonInvalidChartReference = "InvalidChartReference"
 )
