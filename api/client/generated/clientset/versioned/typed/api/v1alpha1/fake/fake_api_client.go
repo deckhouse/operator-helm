@@ -44,6 +44,10 @@ func (c *FakeHelmV1alpha1) HelmClusterAddonRepositories() v1alpha1.HelmClusterAd
 	return newFakeHelmClusterAddonRepositories(c)
 }
 
+func (c *FakeHelmV1alpha1) HelmClusterApplicationRepositories() v1alpha1.HelmClusterApplicationRepositoryInterface {
+	return newFakeHelmClusterApplicationRepositories(c)
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeHelmV1alpha1) RESTClient() rest.Interface {

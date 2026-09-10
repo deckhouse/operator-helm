@@ -37,3 +37,7 @@ type HelmClusterAddonChartListerExpansion interface{}
 // HelmClusterAddonRepositoryListerExpansion allows custom methods to be added to
 // HelmClusterAddonRepositoryLister.
 type HelmClusterAddonRepositoryListerExpansion interface{}
+
+// HelmClusterApplicationRepositoryListerExpansion allows custom methods to be added to
+// HelmClusterApplicationRepositoryLister.
+type HelmClusterApplicationRepositoryListerExpansion interface{}

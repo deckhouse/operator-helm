@@ -32,6 +32,8 @@ type Interface interface {
 	HelmClusterAddonCharts() HelmClusterAddonChartInformer
 	// HelmClusterAddonRepositories returns a HelmClusterAddonRepositoryInformer.
 	HelmClusterAddonRepositories() HelmClusterAddonRepositoryInformer
+	// HelmClusterApplicationRepositories returns a HelmClusterApplicationRepositoryInformer.
+	HelmClusterApplicationRepositories() HelmClusterApplicationRepositoryInformer
 }
 
 type version struct {
@@ -63,4 +65,9 @@ func (v *version) HelmClusterAddonCharts() HelmClusterAddonChartInformer {
 // HelmClusterAddonRepositories returns a HelmClusterAddonRepositoryInformer.
 func (v *version) HelmClusterAddonRepositories() HelmClusterAddonRepositoryInformer {
 	return &helmClusterAddonRepositoryInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// HelmClusterApplicationRepositories returns a HelmClusterApplicationRepositoryInformer.
+func (v *version) HelmClusterApplicationRepositories() HelmClusterApplicationRepositoryInformer {
+	return &helmClusterApplicationRepositoryInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }

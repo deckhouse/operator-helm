@@ -32,6 +32,7 @@ type HelmV1alpha1Interface interface {
 	HelmClusterAddonsGetter
 	HelmClusterAddonChartsGetter
 	HelmClusterAddonRepositoriesGetter
+	HelmClusterApplicationRepositoriesGetter
 }
 
 // HelmV1alpha1Client is used to interact with features provided by the helm.deckhouse.io group.
@@ -53,6 +54,10 @@ func (c *HelmV1alpha1Client) HelmClusterAddonCharts() HelmClusterAddonChartInter
 
 func (c *HelmV1alpha1Client) HelmClusterAddonRepositories() HelmClusterAddonRepositoryInterface {
 	return newHelmClusterAddonRepositories(c)
+}
+
+func (c *HelmV1alpha1Client) HelmClusterApplicationRepositories() HelmClusterApplicationRepositoryInterface {
+	return newHelmClusterApplicationRepositories(c)
 }
 
 // NewForConfig creates a new HelmV1alpha1Client for the given config.

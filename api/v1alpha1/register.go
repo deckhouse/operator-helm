@@ -30,10 +30,11 @@ const (
 var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: Version}
 
 var (
-	HelmClusterAddonGVK           = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
-	HelmClusterAddonRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonRepositoryKind}
-	HelmClusterAddonChartGVK      = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonChartKind}
-	HelmApplicationRepositoryGVK  = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmApplicationRepositoryKind}
+	HelmClusterAddonGVK                 = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
+	HelmClusterAddonRepositoryGVK       = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonRepositoryKind}
+	HelmClusterAddonChartGVK            = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonChartKind}
+	HelmApplicationRepositoryGVK        = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmApplicationRepositoryKind}
+	HelmClusterApplicationRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterApplicationRepositoryKind}
 )
 
 func Kind(kind string) schema.GroupKind {
@@ -63,6 +64,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&HelmClusterAddonChartList{},
 		&HelmApplicationRepository{},
 		&HelmApplicationRepositoryList{},
+		&HelmClusterApplicationRepository{},
+		&HelmClusterApplicationRepositoryList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
