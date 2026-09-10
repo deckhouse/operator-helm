@@ -133,3 +133,40 @@ func GetInternalHelmRepositoryName(addonRepositoryName string) string {
 
 	return strings.TrimRight(result, "-") + postfix
 }
+
+// derivedPartLimit bounds the namespace and the name parts of a derived name. With
+// the longest prefix in use ("hcapr-auth", 10 characters), two parts of this size, a
+// 12-character hash and three dashes the result is 61 characters, under the
+// 63-character limit shared by object names and label values.
+const derivedPartLimit = 18
+
+// DerivedName builds the name of an internal object derived from a source of the
+// application family. Unlike the addon scheme above, the hash is always present and
+// covers the kind, the namespace and the name of the source: internal objects of
+// every family share one namespace, so two same-named sources in different
+// namespaces, or in different kinds, must never derive the same internal name. The
+// namespace part is omitted for a cluster-scoped source.
+//
+// The addon functions above keep their own scheme on purpose: their output names
+// live objects, and changing it would re-create them.
+func DerivedName(prefix, kind, namespace, name string) string {
+	hash := GetHash(kind + "/" + namespace + "/" + name)
+
+	parts := []string{prefix}
+	if namespace != "" {
+		parts = append(parts, truncatePart(namespace))
+	}
+	parts = append(parts, truncatePart(name), hash)
+
+	return strings.Join(parts, "-")
+}
+
+// truncatePart cuts a name part to derivedPartLimit and drops a dash the cut may
+// have left at the end, so the joined name never carries a double dash.
+func truncatePart(part string) string {
+	if len(part) > derivedPartLimit {
+		part = part[:derivedPartLimit]
+	}
+
+	return strings.TrimRight(part, "-")
+}

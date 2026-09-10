@@ -29,6 +29,13 @@ const (
 	// LabelManagedByValue is the value for the managed-by label.
 	LabelManagedByValue = "operator-helm"
 
+	// LabelSourceNamespace carries the namespace of the namespaced source resource an
+	// internal object was derived from. Internal objects of every family live in
+	// TargetNamespace, so the source-name label alone cannot identify a namespaced
+	// source; the two labels are kept separate because a joined "namespace/name" can
+	// exceed the 63-character limit of a label value while each part fits.
+	LabelSourceNamespace = "helm.deckhouse.io/source-namespace"
+
 	LabelDeckhouseHeritage      = "heritage"
 	LabelDeckhouseHeritageValue = "deckhouse"
 
