@@ -48,7 +48,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		adapter.EmptyAddonRepository,
 		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		ociRepositoryService,
-		ociRepositoryService,
+		services.NewForceService(client, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(client)),
 		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewAddonCatalog(client)),
 		status.NewManager(client),
 	)

@@ -18,14 +18,12 @@ package adapter
 
 import (
 	"context"
-	"fmt"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/catalog"
-	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/source"
 )
 
@@ -41,7 +39,7 @@ func NewAddonCatalog(c client.Client) source.Catalog {
 		},
 		Status:     func(o *helmv1alpha1.HelmClusterAddonChart) *helmv1alpha1.ChartCatalogStatus { return &o.Status },
 		ObjectName: naming.HelmClusterAddonChartName,
-		Consumers:  addonChartConsumers(c),
+		Consumers:  chartConsumers(ListAddonReleases(c)),
 	})
 }
 
@@ -90,31 +88,26 @@ func pointers[T any](items []T) []*T {
 	return out
 }
 
-// addonChartConsumers returns the chart versions referenced by the addon that uses
-// a repository/chart pair. The webhook and the claim Lease enforce one addon per
-// pair, so at most one is found; both its desired and its last applied version
-// count, since they differ during an upgrade.
-func addonChartConsumers(c client.Client) func(context.Context, source.Repository, string) (map[string]struct{}, error) {
+// chartConsumers derives the in-use versions of a chart from the releases that
+// reference it. Both the desired version and the last applied one count, since
+// they differ during an upgrade — the latter only while it still names this
+// repository/chart pair: LastAppliedChart can lag behind the spec after a release
+// was repointed at another chart, and a stale entry would protect a phantom version
+// on the new chart while no longer protecting the version applied on the old one.
+func chartConsumers(list source.ReleaseLister) func(context.Context, source.Repository, string) (map[string]struct{}, error) {
 	return func(ctx context.Context, repo source.Repository, chartName string) (map[string]struct{}, error) {
-		var addons helmv1alpha1.HelmClusterAddonList
-		if err := c.List(ctx, &addons, client.MatchingFields{
-			index.AddonChart: index.AddonChartValue(repo.Name(), chartName),
-		}); err != nil {
-			return nil, fmt.Errorf("listing addons of chart %q: %w", chartName, err)
+		releases, err := list(ctx, repo, chartName)
+		if err != nil {
+			return nil, err
 		}
 
-		inUse := make(map[string]struct{}, 2)
+		pair := source.RepositoryRef{Kind: repo.OwnerGVK().Kind, Namespace: repo.Namespace(), Name: repo.Name()}
+		inUse := make(map[string]struct{}, 2*len(releases))
 
-		for _, addon := range addons.Items {
-			inUse[addon.Spec.Chart.Version] = struct{}{}
+		for _, rel := range releases {
+			inUse[rel.ChartRef().Version] = struct{}{}
 
-			// LastAppliedChart carries its own repository/chart identity and can lag
-			// behind Spec.Chart when an addon is switched to a different chart: only
-			// credit it here when it still names this repository/chart pair, or a
-			// stale entry would protect a phantom version on the new chart while no
-			// longer protecting the version actually applied on the old one.
-			if last := addon.Status.LastAppliedChart; last != nil &&
-				last.HelmClusterAddonChartName == chartName && last.HelmClusterAddonRepository == repo.Name() {
+			if last := rel.LastAppliedChart(); last != nil && last.Chart == chartName && last.Repository == pair {
 				inUse[last.Version] = struct{}{}
 			}
 		}

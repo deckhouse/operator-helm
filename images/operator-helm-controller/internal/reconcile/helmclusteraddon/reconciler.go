@@ -238,7 +238,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// The version may have moved out of a registry — either because the user
 		// repointed the repository, or because the index re-published it as an
 		// archive. Either way the internal OCIRepository is no longer the source.
-		superseded, err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon)
+		superseded, err := r.ociRepositoryService.RemoveOCIRepository(ctx, rel.InternalNames())
 		if err != nil {
 			chartRes = services.ChartResult{
 				Status: status.Failed(addon, helmv1alpha1.ReasonFailed, "Repository change failed", err),
@@ -262,7 +262,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		r.logSourceKindFlip(ctx, addon, source.Kind, superseded != nil)
 
-		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, addon, repo, source, chartVersion)
+		repoRes = r.ociRepositoryService.EnsureInternalOCIRepository(ctx, rel, adapter.NewAddonRepository(repo), source, chartVersion)
 	default:
 		return reconcile.Result{}, r.statusManager.Update(ctx, addon, status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
 			addon,
@@ -357,7 +357,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, addon *helmv1alpha1.He
 		return r.awaitInternalResourceDeletion(ctx, addon, "internal chart", chart)
 	}
 
-	ociRepo, err := r.ociRepositoryService.RemoveOCIRepository(ctx, addon)
+	ociRepo, err := r.ociRepositoryService.RemoveOCIRepository(ctx, names)
 	if err != nil {
 		return reconcile.Result{}, err
 	}

@@ -113,7 +113,7 @@ func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object)
 		adapter.EmptyAddonRepository,
 		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
 		ociRepositoryService,
-		ociRepositoryService,
+		services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(c)),
 		services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
 		status.NewManager(c),
 	)

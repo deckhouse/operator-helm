@@ -24,7 +24,6 @@ import (
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,7 +33,6 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
-	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -59,8 +57,6 @@ type OCIRepoService struct {
 
 	resolver repoclient.ChartResolverInterface
 }
-
-var _ source.ConsumerForcer = (*OCIRepoService)(nil)
 
 // NewOCIRepoService builds the service. A nil resolver selects the default one; tests
 // pass their own so they never reach a registry.
@@ -115,34 +111,34 @@ func (r OCIRepoResult) GetConditionType() string {
 
 func (s *OCIRepoService) EnsureInternalOCIRepository(
 	ctx context.Context,
-	addon *helmv1alpha1.HelmClusterAddon,
-	repo *helmv1alpha1.HelmClusterAddonRepository,
-	source utils.ChartSource,
+	rel source.Release,
+	repo source.Repository,
+	src utils.ChartSource,
 	version *helmv1alpha1.ChartVersion,
 ) OCIRepoResult {
 	logger := log.FromContext(ctx)
 
-	mediaType, failure := s.resolveMediaType(ctx, addon, repo, source, version)
+	mediaType, failure := s.resolveMediaType(ctx, rel, repo, src, version)
 	if failure != nil {
 		return *failure
 	}
 
 	existing := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+			Name:      rel.InternalNames().OCIRepository,
 			Namespace: s.TargetNamespace,
 		},
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		applyOCIRepositorySpec(addon, repo, source, mediaType, existing)
+		applyOCIRepositorySpec(rel, repo, src, mediaType, existing)
 
 		return nil
 	})
 	if err != nil {
 		return OCIRepoResult{
 			Status: status.Failed(
-				addon,
+				rel.Object(),
 				helmv1alpha1.ReasonFailed,
 				"Failed to reconcile oci repository",
 				fmt.Errorf("creating oci repository: %w", err),
@@ -155,7 +151,7 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 	}
 
 	processedStatus := status.ProcessChildConditions(
-		existing.Status.Conditions, existing.Generation, addon, ociRepositoryErrorRules,
+		existing.Status.Conditions, existing.Generation, rel.Object(), ociRepositoryErrorRules,
 	)
 
 	if version.UnavailableReason == helmv1alpha1.UnavailableReasonRemovedFromRepository &&
@@ -166,7 +162,7 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 		processedStatus.Reason = helmv1alpha1.ReasonChartVersionRemoved
 		processedStatus.Message = fmt.Sprintf(
 			"Version %s is no longer offered by repository %s: %s",
-			version.Version, repo.Name, processedStatus.Message,
+			version.Version, repo.Name(), processedStatus.Message,
 		)
 	}
 
@@ -188,35 +184,35 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 // — or when a force request asks for a re-examination.
 func (s *OCIRepoService) resolveMediaType(
 	ctx context.Context,
-	addon *helmv1alpha1.HelmClusterAddon,
-	repo *helmv1alpha1.HelmClusterAddonRepository,
-	source utils.ChartSource,
+	rel source.Release,
+	repo source.Repository,
+	src utils.ChartSource,
 	version *helmv1alpha1.ChartVersion,
 ) (string, *OCIRepoResult) {
 	if version.MediaType != "" {
 		return version.MediaType, nil
 	}
 
-	if !addon.ForceReconcileRequired() {
-		if cached := s.cachedMediaType(ctx, addon, source); cached != "" {
+	if !rel.ForceReconcileRequired() {
+		if cached := s.cachedMediaType(ctx, rel.InternalNames(), src); cached != "" {
 			return cached, nil
 		}
 	}
 
-	mediaType, err := s.resolver.ResolveChartArtifact(ctx, source.URL+":"+source.Tag, artifactRepoConfig(repo, source))
+	mediaType, err := s.resolver.ResolveChartArtifact(ctx, src.URL+":"+src.Tag, artifactRepoConfig(repo, src))
 	if err == nil {
 		return mediaType, nil
 	}
 
 	if terminal, ok := repoclient.AsTerminal(err); ok {
 		return "", &OCIRepoResult{
-			Status: status.Failed(addon, terminal.Reason, terminal.Message, err),
+			Status: status.Failed(rel.Object(), terminal.Reason, terminal.Message, err),
 		}
 	}
 
 	return "", &OCIRepoResult{
 		Status: status.Failed(
-			addon,
+			rel.Object(),
 			helmv1alpha1.ReasonOCIFetchFailed,
 			"Failed to examine the chart artifact: "+err.Error(),
 			err,
@@ -229,11 +225,11 @@ func (s *OCIRepoService) resolveMediaType(
 // is a verdict about this exact artifact.
 func (s *OCIRepoService) cachedMediaType(
 	ctx context.Context,
-	addon *helmv1alpha1.HelmClusterAddon,
-	source utils.ChartSource,
+	names source.ReleaseNames,
+	src utils.ChartSource,
 ) string {
 	nn := types.NamespacedName{
-		Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+		Name:      names.OCIRepository,
 		Namespace: s.TargetNamespace,
 	}
 
@@ -242,10 +238,10 @@ func (s *OCIRepoService) cachedMediaType(
 		return ""
 	}
 
-	if existing.Spec.URL != source.URL {
+	if existing.Spec.URL != src.URL {
 		return ""
 	}
-	if existing.Spec.Reference == nil || existing.Spec.Reference.Tag != source.Tag {
+	if existing.Spec.Reference == nil || existing.Spec.Reference.Tag != src.Tag {
 		return ""
 	}
 
@@ -256,69 +252,19 @@ func (s *OCIRepoService) cachedMediaType(
 // the host the repository names gets them, and credentials are never included: the
 // internal OCIRepository pulls a foreign registry anonymously, and a probe that
 // authenticated would report a chart the pull could not fetch.
-func artifactRepoConfig(repo *helmv1alpha1.HelmClusterAddonRepository, source utils.ChartSource) *repoclient.RepoConfig {
-	if !sameRegistryHost(repo.Spec.URL, source.URL) {
+func artifactRepoConfig(repo source.Repository, src utils.ChartSource) *repoclient.RepoConfig {
+	if !sameRegistryHost(repo.URL(), src.URL) {
 		return nil
 	}
 
-	if repo.Spec.CACertificate == "" && !repo.Spec.InsecureSkipVerify {
+	if repo.CACertificate() == "" && !repo.InsecureSkipVerify() {
 		return nil
 	}
 
 	return &repoclient.RepoConfig{
-		CACertificate: repo.Spec.CACertificate,
-		Insecure:      repo.Spec.InsecureSkipVerify,
+		CACertificate: repo.CACertificate(),
+		Insecure:      repo.InsecureSkipVerify(),
 	}
-}
-
-// ForceReconcileInternalRepositories stamps the reconcile request annotations on
-// the internal OCIRepository of every addon that references repoName.
-//
-// An artifact pulled per addon has no internal source object shared by the
-// repository, so a force request reaches it only through the addons' own
-// OCIRepositories. That is every addon of an oci:// repository, and every addon of a
-// helm repository whose version the index publishes in a registry.
-//
-// An addon whose internal OCIRepository does not exist yet is skipped: the force
-// request must not be blocked by an addon that has not reached the point of
-// building one.
-func (s *OCIRepoService) ForceReconcileInternalRepositories(ctx context.Context, repoName string) error {
-	addons := &helmv1alpha1.HelmClusterAddonList{}
-	if err := s.Client.List(ctx, addons, client.MatchingFields{index.AddonRepository: repoName}); err != nil {
-		return fmt.Errorf("listing addons of repository %s: %w", repoName, err)
-	}
-
-	for i := range addons.Items {
-		name := utils.GetInternalOCIRepositoryName(addons.Items[i].Name)
-		nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
-
-		ociRepo := &sourcev1.OCIRepository{}
-		if err := s.Client.Get(ctx, nn, ociRepo); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-
-			return fmt.Errorf("getting internal oci repository %s: %w", name, err)
-		}
-
-		base := ociRepo.DeepCopy()
-		setReconcileRequestAnnotations(ociRepo)
-
-		// The internal repository may be removed between the get and the patch,
-		// which is the same case as the one skipped above.
-		if err := s.Client.Patch(ctx, ociRepo, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("requesting reconciliation of internal oci repository %s: %w", name, err)
-		}
-	}
-
-	return nil
-}
-
-// ForceReconcileConsumers is the source.ConsumerForcer of the addon family: the
-// consumers of a HelmClusterAddonRepository are the HelmClusterAddon objects
-// referencing it, each with its own internal OCIRepository.
-func (s *OCIRepoService) ForceReconcileConsumers(ctx context.Context, repo source.Repository) error {
-	return s.ForceReconcileInternalRepositories(ctx, repo.Name())
 }
 
 func (s *OCIRepoService) CleanupOCIRepository(ctx context.Context, names source.InternalNames) error {
@@ -336,9 +282,8 @@ func (s *OCIRepoService) CleanupOCIRepository(ctx context.Context, names source.
 // it while it is still present, so the caller can inspect its conditions and wait
 // for nelm-source-controller to finish removing it. It returns nil once the
 // OCIRepository is gone.
-func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*sourcev1.OCIRepository, error) {
-	name := utils.GetInternalOCIRepositoryName(addon.Name)
-	nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
+func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, names source.ReleaseNames) (*sourcev1.OCIRepository, error) {
+	nn := types.NamespacedName{Name: names.OCIRepository, Namespace: s.TargetNamespace}
 	ociRepo := &sourcev1.OCIRepository{}
 	exists, err := s.deleteAndCheck(ctx, nn, ociRepo)
 	if err != nil {
@@ -352,34 +297,36 @@ func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, addon *helmv1a
 }
 
 func applyOCIRepositorySpec(
-	addon *helmv1alpha1.HelmClusterAddon,
-	repo *helmv1alpha1.HelmClusterAddonRepository,
-	source utils.ChartSource,
+	rel source.Release,
+	repo source.Repository,
+	src utils.ChartSource,
 	mediaType string,
 	existing *sourcev1.OCIRepository,
 ) {
-	if addon.ForceReconcileRequired() {
+	if rel.ForceReconcileRequired() {
 		setReconcileRequestAnnotations(existing)
 	}
 
-	existing.Spec.URL = source.URL
-	existing.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: source.Tag}
+	existing.Spec.URL = src.URL
+	existing.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: src.Tag}
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
 	existing.Spec.Insecure = false
 	existing.Spec.CertSecretRef = nil
 	existing.Spec.SecretRef = nil
+
+	names := repo.InternalNames()
 
 	// The repository's transport settings and credentials describe the host it
 	// names. An artifact its index points at somewhere else is reached as a public
 	// registry: the settings do not describe that host, and the credentials must not
 	// be sent to it. For an oci:// repository the two hosts are the same one, so this
 	// is where its existing behaviour lives.
-	if sameRegistryHost(repo.Spec.URL, source.URL) {
-		existing.Spec.Insecure = repo.Spec.InsecureSkipVerify
+	if sameRegistryHost(repo.URL(), src.URL) {
+		existing.Spec.Insecure = repo.InsecureSkipVerify()
 
-		if repo.Spec.CACertificate != "" {
+		if repo.CACertificate() != "" {
 			existing.Spec.CertSecretRef = &meta.LocalObjectReference{
-				Name: utils.GetInternalRepositoryTLSSecretName(repo.Name),
+				Name: names.TLSSecret,
 			}
 		}
 
@@ -387,9 +334,9 @@ func applyOCIRepositorySpec(
 		// secret OCIRepository requires. A helm repository's secret is an Opaque
 		// username/password one, and referencing it here would break the pull with a
 		// less obvious error than not authenticating at all.
-		if repo.Spec.Auth != nil && repositoryIsOCI(repo) {
+		if repo.Auth() != nil && repositoryIsOCI(repo) {
 			existing.Spec.SecretRef = &meta.LocalObjectReference{
-				Name: utils.GetInternalRepositoryAuthSecretName(repo.Name),
+				Name: names.AuthSecret,
 			}
 		}
 	}
@@ -403,10 +350,7 @@ func applyOCIRepositorySpec(
 		Operation: "copy",
 	}
 
-	existing.Labels = map[string]string{
-		helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
-		helmv1alpha1.HelmClusterAddonLabelSourceName: addon.Name,
-	}
+	existing.Labels = rel.SourceLabels()
 }
 
 // sameRegistryHost reports whether the artifact lives on the host the repository
@@ -426,8 +370,8 @@ func sameRegistryHost(repoURL, artifactURL string) bool {
 	return repoHost == artifactHost
 }
 
-func repositoryIsOCI(repo *helmv1alpha1.HelmClusterAddonRepository) bool {
-	repoType, err := utils.GetRepositoryType(repo.Spec.URL)
+func repositoryIsOCI(repo source.Repository) bool {
+	repoType, err := utils.GetRepositoryType(repo.URL())
 
 	return err == nil && repoType == utils.InternalOCIRepository
 }
