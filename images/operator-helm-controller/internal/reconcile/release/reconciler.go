@@ -421,6 +421,10 @@ func (r *Reconciler) awaitInternalResourceDeletion(ctx context.Context, rel sour
 	return reconcile.Result{RequeueAfter: internalResourceDeletionRequeueInterval}, nil
 }
 
+// markForceReconcileInProgress publishes Reconciling before the work a force
+// request asks for begins. A forced pass is the one case where someone is
+// watching: they annotated the object a moment ago and want to see it was picked
+// up. The condition is removed again by the status update that ends the pass.
 func (r *Reconciler) markForceReconcileInProgress(ctx context.Context, rel source.Release) error {
 	err := r.deps.Status.PatchStatus(ctx, rel.Object(), func() {
 		apimeta.SetStatusCondition(rel.Object().GetConditions(), metav1.Condition{

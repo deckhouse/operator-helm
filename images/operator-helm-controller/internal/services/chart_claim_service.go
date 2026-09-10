@@ -38,6 +38,11 @@ import (
 // server's only atomic cross-object primitive — the uniqueness of an object name.
 // Each repository/chart pair maps to a single Lease name; whoever creates that
 // Lease first owns the pair, and every other addon reconciles into a conflict.
+//
+// It is addon-only in substance, not just by convention: the Lease name carries
+// neither the release kind nor a namespace, and the holder recorded on it is read
+// back as a HelmClusterAddon. Another family needing uniqueness would have to
+// bring its own implementation of source.ChartClaim rather than reuse this one.
 type ClaimService struct {
 	// reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
 	// controller cache: an acquisition decision must never be made against stale data.

@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/werf/3p-fluxcd-pkg/apis/meta"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
@@ -143,7 +144,13 @@ func applyHelmChartSpec(rel source.Release, repo source.Repository, existing *so
 		setReconcileRequestAnnotations(existing)
 	}
 
-	existing.Labels = rel.HelmChartLabels()
+	// Merge rather than replace: the internal HelmChart may carry labels put there
+	// by someone else (a policy engine, a cost allocator), and dropping them on
+	// every pass would fight whoever set them.
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+	maps.Copy(existing.Labels, rel.HelmChartLabels())
 
 	ref := rel.ChartRef()
 	existing.Spec.Chart = ref.Chart

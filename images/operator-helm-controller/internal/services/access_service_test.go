@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -119,6 +120,43 @@ func TestEnsureAccessLeavesAnEditedRoleAlone(t *testing.T) {
 	}
 	if !reflect.DeepEqual(role.Rules, edited.Rules) {
 		t.Fatalf("an existing role must not be rewritten, rules = %+v", role.Rules)
+	}
+}
+
+// TestEnsureAccessRefusesToAdoptAForeignRoleBinding pins that a binding already
+// living under our name but pointing at someone else's role is reported, not
+// reused: adding our account as its subject would silently grant that account
+// whatever that role grants. The object is left exactly as it was — deleting a
+// binding we did not create is not ours to do either.
+func TestEnsureAccessRefusesToAdoptAForeignRoleBinding(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+	foreign := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: rel.InternalNames().ServiceAccount, Namespace: "team-a"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "someone-elses-role"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "someone-else"}},
+	}
+	service, c := newAccessService(t, foreign)
+
+	err := service.EnsureAccess(context.Background(), rel)
+	if err == nil {
+		t.Fatal("a binding pointing at a foreign role must be reported, not adopted")
+	}
+	if !strings.Contains(err.Error(), "someone-elses-role") {
+		t.Fatalf("error %q must name the existing roleRef", err.Error())
+	}
+
+	stored := &rbacv1.RoleBinding{}
+	if getErr := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), stored); getErr != nil {
+		t.Fatalf("the foreign binding must survive: %v", getErr)
+	}
+	if stored.RoleRef != foreign.RoleRef {
+		t.Fatalf("roleRef = %+v, want it untouched", stored.RoleRef)
+	}
+	if !reflect.DeepEqual(stored.Subjects, foreign.Subjects) {
+		t.Fatalf("subjects = %+v, want them untouched", stored.Subjects)
+	}
+	if len(stored.Labels) != 0 {
+		t.Fatalf("labels = %v, want the foreign binding left unlabelled", stored.Labels)
 	}
 }
 

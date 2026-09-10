@@ -97,3 +97,36 @@ func TestEnsureHelmChartDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
 		t.Errorf("%s must not be stamped without a force request", meta.ReconcileRequestAnnotation)
 	}
 }
+
+// TestEnsureHelmChartKeepsForeignLabels pins that our labels are merged into the
+// internal chart rather than replacing what is there. Something else in the
+// cluster may label the object — a policy engine, a cost allocator — and wiping
+// those labels on every pass would fight whoever set them.
+func TestEnsureHelmChartKeepsForeignLabels(t *testing.T) {
+	addon := testAddon()
+	existing := &sourcev1.HelmChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalHelmChartName(addon.Name),
+			Namespace: testNamespace,
+			Labels:    map[string]string{"cost-center": "team-a"},
+		},
+	}
+	service, c := newChartService(t, addon, existing)
+
+	rel := adapter.NewAddonRelease(addon)
+	service.EnsureHelmChart(context.Background(), rel, adapter.NewAddonRepository(chartTestRepository()))
+
+	chart := &sourcev1.HelmChart{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(existing), chart); err != nil {
+		t.Fatalf("getting helm chart: %v", err)
+	}
+
+	if chart.Labels["cost-center"] != "team-a" {
+		t.Fatalf("labels = %v, want the foreign label preserved", chart.Labels)
+	}
+	for key, want := range rel.HelmChartLabels() {
+		if chart.Labels[key] != want {
+			t.Fatalf("label %q = %q, want %q", key, chart.Labels[key], want)
+		}
+	}
+}

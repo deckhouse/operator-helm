@@ -47,6 +47,10 @@ var _ source.AccessManager = (*AccessService)(nil)
 // namespace boundary: cluster-scoped resources are unreachable regardless of its
 // content. It is also the one object a namespace owner may edit to cut the rights
 // down — which is why it is created once and never reconciled afterwards.
+//
+// Neither the account nor the binding is watched, so an out-of-band deletion of
+// either is not noticed immediately; it is repaired on the release's next
+// reconcile.
 type AccessService struct {
 	BaseService
 
@@ -69,15 +73,17 @@ func (s *AccessService) EnsureAccess(ctx context.Context, rel source.Release) er
 		return nil
 	}
 
+	namespace := rel.TargetNamespace()
+
 	if err := s.ensureServiceAccount(ctx, rel, name); err != nil {
 		return fmt.Errorf("ensuring service account: %w", err)
 	}
 
-	if err := s.seedRole(ctx, rel.TargetNamespace()); err != nil {
+	if err := s.seedRole(ctx, namespace); err != nil {
 		return fmt.Errorf("seeding role: %w", err)
 	}
 
-	if err := s.ensureRoleBinding(ctx, rel, name); err != nil {
+	if err := s.ensureRoleBinding(ctx, rel, namespace, name); err != nil {
 		return fmt.Errorf("ensuring role binding: %w", err)
 	}
 
@@ -145,24 +151,35 @@ func (s *AccessService) seedRole(ctx context.Context, namespace string) error {
 	return client.IgnoreAlreadyExists(s.Client.Create(ctx, role))
 }
 
-// ensureRoleBinding binds the account to the namespace Role. roleRef is immutable in
-// Kubernetes, so it is set only when the binding is created; the subjects and labels
-// are reconciled on every pass.
-func (s *AccessService) ensureRoleBinding(ctx context.Context, rel source.Release, name string) error {
+// ensureRoleBinding binds the account to the namespace Role. roleRef is immutable
+// in Kubernetes, so it is only ever written on create or written back unchanged;
+// the subjects and labels are reconciled on every pass.
+//
+// A binding that already exists under our name but points at a different role is
+// not ours to reuse: adding our account as its subject would grant that account
+// whatever the foreign role grants. Such a binding is reported and left exactly as
+// it is — never patched, never deleted — so its owner decides what happens to it.
+func (s *AccessService) ensureRoleBinding(ctx context.Context, rel source.Release, namespace, name string) error {
+	desiredRef := rbacv1.RoleRef{
+		APIGroup: rbacv1.GroupName,
+		Kind:     "Role",
+		Name:     ApplicationRoleName,
+	}
+
 	binding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: rel.TargetNamespace()},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 	}
 
 	_, err := controllerutil.CreateOrPatch(ctx, s.Client, binding, func() error {
-		binding.Labels = rel.SourceLabels()
-
-		if binding.RoleRef.Name == "" {
-			binding.RoleRef = rbacv1.RoleRef{
-				APIGroup: rbacv1.GroupName,
-				Kind:     "Role",
-				Name:     ApplicationRoleName,
-			}
+		if binding.RoleRef.Name != "" && binding.RoleRef != desiredRef {
+			return fmt.Errorf(
+				"role binding %s/%s already binds %s/%s; refusing to adopt it",
+				namespace, name, binding.RoleRef.Kind, binding.RoleRef.Name,
+			)
 		}
+
+		binding.Labels = rel.SourceLabels()
+		binding.RoleRef = desiredRef
 
 		binding.Subjects = []rbacv1.Subject{{
 			Kind:      rbacv1.ServiceAccountKind,

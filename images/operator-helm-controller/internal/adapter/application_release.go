@@ -226,7 +226,7 @@ func ListApplicationReleases(c client.Client) source.ReleaseLister {
 
 		var apps helmv1alpha1.HelmApplicationList
 		if err := c.List(ctx, &apps, selector); err != nil {
-			return nil, fmt.Errorf("listing applications of repository %s/%s: %w", repo.Namespace(), repo.Name(), err)
+			return nil, fmt.Errorf("listing applications of repository %s %s/%s: %w", kind, repo.Namespace(), repo.Name(), err)
 		}
 
 		releases := make([]source.Release, 0, len(apps.Items))

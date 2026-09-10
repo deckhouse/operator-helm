@@ -18,13 +18,17 @@ package release
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr/funcr"
+	fluxmeta "github.com/werf/3p-fluxcd-pkg/apis/meta"
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +44,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/source"
@@ -344,6 +349,273 @@ func newFullReconciler(
 		Access:       source.NoAccess{},
 		Status:       status.NewManager(c),
 	}), c
+}
+
+// newApplicationFullReconciler is the sibling of newFullReconciler for the
+// application family: the same services, wired to the namespaced adapters. It is
+// what lets a test prove that one reconciler serves both families. access is the
+// identity manager; nil selects the real one over the same fake client.
+func newApplicationFullReconciler(
+	t *testing.T,
+	access source.AccessManager,
+	objects ...client.Object,
+) (*Reconciler, client.Client) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		clientgoscheme.AddToScheme,
+		helmv1alpha1.AddToScheme,
+		sourcev1.AddToScheme,
+		helmv2.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatalf("registering scheme: %v", err)
+		}
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithStatusSubresource(&helmv1alpha1.HelmApplication{}).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationRepository, index.ApplicationRepositoryIndexer).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationChart, index.ApplicationChartIndexer).
+		Build()
+
+	if access == nil {
+		access = services.NewAccessService(c, helmv1alpha1.TargetNamespace)
+	}
+
+	return New(c, Deps{
+		NewRelease:   adapter.EmptyApplicationRelease,
+		Repositories: adapter.NewApplicationRepositoryResolver(c),
+		Chart:        services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
+		OCI:          services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
+		Release:      services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
+		Maintenance:  services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
+		Claim:        source.NoChartClaim{},
+		Namespaces:   source.ExistingTargetNamespace{},
+		Access:       access,
+		Status:       status.NewManager(c),
+	}), c
+}
+
+func testApplication() *helmv1alpha1.HelmApplication {
+	return &helmv1alpha1.HelmApplication{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "team-a", Generation: 1},
+		Spec: helmv1alpha1.HelmApplicationSpec{
+			Chart: helmv1alpha1.HelmApplicationChartRef{
+				Repository: "stable",
+				Name:       "podinfo",
+				Version:    "6.7.1",
+			},
+		},
+	}
+}
+
+// applicationFixtures builds the objects an application needs to reconcile: the
+// namespaced repository it points at and the catalog entry offering its version.
+func applicationFixtures() []client.Object {
+	return []client.Object{
+		&helmv1alpha1.HelmApplicationRepository{
+			ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a", Generation: 1},
+			Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
+		},
+		&helmv1alpha1.HelmApplicationChart{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      naming.ApplicationChartName("stable", "podinfo"),
+				Namespace: "team-a",
+				Labels: map[string]string{
+					helmv1alpha1.LabelRepositoryName: "stable",
+					helmv1alpha1.LabelChartName:      "podinfo",
+				},
+			},
+			Status: helmv1alpha1.ChartCatalogStatus{
+				Versions: []helmv1alpha1.ChartVersion{{Version: "6.7.1"}},
+			},
+		},
+	}
+}
+
+func reconcileApplication(t *testing.T, r *Reconciler, app *helmv1alpha1.HelmApplication) {
+	t.Helper()
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: app.Namespace, Name: app.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+}
+
+// markInternalChartReady stands in for nelm-source-controller: the internal
+// HelmChart only reports an artifact once that controller has pulled it, and the
+// release stage is reached only when it has.
+func markInternalChartReady(t *testing.T, c client.Client, name string) {
+	t.Helper()
+
+	chart := &sourcev1.HelmChart{}
+	key := client.ObjectKey{Name: name, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), key, chart); err != nil {
+		t.Fatalf("the internal helm chart must exist before it can report an artifact: %v", err)
+	}
+
+	chart.Status.Artifact = &fluxmeta.Artifact{Revision: "6.7.1"}
+	chart.Status.Conditions = []metav1.Condition{{
+		Type:               "Ready",
+		Status:             metav1.ConditionTrue,
+		Reason:             "Succeeded",
+		ObservedGeneration: chart.Generation,
+		LastTransitionTime: metav1.Now(),
+	}}
+	// A plain Update, not Status().Update: the fake client is not told to give
+	// HelmChart a status subresource, and the controller never writes that status
+	// itself, so there is nothing for a subresource to protect here.
+	if err := c.Update(context.Background(), chart); err != nil {
+		t.Fatalf("updating internal helm chart status: %v", err)
+	}
+}
+
+// TestReconcileApplicationAppliesTheChartAsItsOwnIdentity is the central claim of
+// the namespaced family: the release is created in the operator namespace, but it
+// is applied as an account of the application's own making, and its storage lives
+// in the application's namespace — so an application can never reach outside it.
+func TestReconcileApplicationAppliesTheChartAsItsOwnIdentity(t *testing.T) {
+	app := testApplication()
+
+	r, c := newApplicationFullReconciler(t, nil, append(applicationFixtures(), app)...)
+
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	// The first pass adds the finalizer and creates the internal chart; the second
+	// one reaches the release, once that chart reports an artifact.
+	reconcileApplication(t, r, app)
+	markInternalChartReady(t, c, names.HelmChart)
+	reconcileApplication(t, r, app)
+
+	account := &corev1.ServiceAccount{}
+	accountKey := client.ObjectKey{Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), accountKey, account); err != nil {
+		t.Fatalf("the identity must be created next to the release: %v", err)
+	}
+	if account.AutomountServiceAccountToken == nil || *account.AutomountServiceAccountToken {
+		t.Fatal("the account is only a subject name: no token must be mounted for it")
+	}
+
+	release := &helmv2.HelmRelease{}
+	releaseKey := client.ObjectKey{Name: names.HelmRelease, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), releaseKey, release); err != nil {
+		t.Fatalf("the internal release was not created: %v", err)
+	}
+	if release.Spec.ServiceAccountName != names.ServiceAccount {
+		t.Fatalf("serviceAccountName = %q, want %q", release.Spec.ServiceAccountName, names.ServiceAccount)
+	}
+	if release.Spec.StorageNamespace != "team-a" {
+		t.Fatalf("storageNamespace = %q, want the application namespace", release.Spec.StorageNamespace)
+	}
+
+	chartKey := client.ObjectKey{Name: names.HelmChart, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), chartKey, &sourcev1.HelmChart{}); err != nil {
+		t.Fatalf("the internal chart was not created: %v", err)
+	}
+}
+
+// TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace is the other
+// half of the same claim: everything the controller runs on lives in the operator
+// namespace. The application namespace only ever receives the two RBAC objects
+// that grant the identity its rights there.
+func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *testing.T) {
+	app := testApplication()
+
+	r, c := newApplicationFullReconciler(t, nil, append(applicationFixtures(), app)...)
+
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	reconcileApplication(t, r, app)
+	markInternalChartReady(t, c, names.HelmChart)
+	reconcileApplication(t, r, app)
+
+	inNamespace := client.InNamespace("team-a")
+
+	empty := []struct {
+		name string
+		list client.ObjectList
+	}{
+		{"config maps", &corev1.ConfigMapList{}},
+		{"secrets", &corev1.SecretList{}},
+		{"helm charts", &sourcev1.HelmChartList{}},
+		{"helm releases", &helmv2.HelmReleaseList{}},
+		{"oci repositories", &sourcev1.OCIRepositoryList{}},
+		{"service accounts", &corev1.ServiceAccountList{}},
+	}
+	for _, tt := range empty {
+		if err := c.List(context.Background(), tt.list, inNamespace); err != nil {
+			t.Fatalf("listing %s: %v", tt.name, err)
+		}
+		items, err := apimeta.ExtractList(tt.list)
+		if err != nil {
+			t.Fatalf("extracting %s: %v", tt.name, err)
+		}
+		if len(items) != 0 {
+			t.Fatalf("%d %s were created in the application namespace, want none: %v", len(items), tt.name, items)
+		}
+	}
+
+	var roles rbacv1.RoleList
+	if err := c.List(context.Background(), &roles, inNamespace); err != nil {
+		t.Fatalf("listing roles: %v", err)
+	}
+	if len(roles.Items) != 1 || roles.Items[0].Name != services.ApplicationRoleName {
+		t.Fatalf("roles = %+v, want only %s", roles.Items, services.ApplicationRoleName)
+	}
+
+	var bindings rbacv1.RoleBindingList
+	if err := c.List(context.Background(), &bindings, inNamespace); err != nil {
+		t.Fatalf("listing role bindings: %v", err)
+	}
+	if len(bindings.Items) != 1 || bindings.Items[0].Name != names.ServiceAccount {
+		t.Fatalf("role bindings = %+v, want only %s", bindings.Items, names.ServiceAccount)
+	}
+}
+
+// failingAccess is an AccessManager whose identity setup never succeeds.
+type failingAccess struct{}
+
+func (failingAccess) EnsureAccess(context.Context, source.Release) error {
+	return errors.New("service account is forbidden")
+}
+
+func (failingAccess) CleanupAccess(context.Context, source.Release) error { return nil }
+
+// TestReconcileApplicationReportsAccessSetupFailure pins that the pass stops at the
+// identity. A release applied without one would run as helm-controller itself,
+// which is exactly the privilege the namespaced family exists to avoid, so the
+// failure has to be reported instead of worked around.
+func TestReconcileApplicationReportsAccessSetupFailure(t *testing.T) {
+	app := testApplication()
+
+	r, c := newApplicationFullReconciler(t, failingAccess{}, append(applicationFixtures(), app)...)
+
+	reconcileApplication(t, r, app)
+
+	settled := &helmv1alpha1.HelmApplication{}
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+	if err := c.Get(context.Background(), key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil {
+		t.Fatalf("Ready must be reported, conditions: %v", settled.Status.Conditions)
+	}
+	if ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonAccessSetupFailed {
+		t.Fatalf("Ready is %s/%s, want False/%s", ready.Status, ready.Reason, helmv1alpha1.ReasonAccessSetupFailed)
+	}
+
+	names := adapter.NewApplicationRelease(app).InternalNames()
+	releaseKey := client.ObjectKey{Name: names.HelmRelease, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), releaseKey, &helmv2.HelmRelease{}); err == nil {
+		t.Fatal("no release must be created for an application whose identity could not be set up")
+	}
 }
 
 func ociRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {

@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -177,7 +178,13 @@ func applyHelmReleaseSpec(rel source.Release, existing *helmv2.HelmRelease, sour
 		setReconcileRequestAnnotations(existing)
 	}
 
-	existing.Labels = rel.SourceLabels()
+	// Merge rather than replace: the internal HelmRelease may carry labels put
+	// there by someone else (a policy engine, a cost allocator), and dropping them
+	// on every pass would fight whoever set them.
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+	maps.Copy(existing.Labels, rel.SourceLabels())
 
 	names := rel.InternalNames()
 

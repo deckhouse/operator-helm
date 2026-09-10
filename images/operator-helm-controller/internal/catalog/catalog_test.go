@@ -166,10 +166,11 @@ func TestClusterCatalogObjectsHaveNoNamespace(t *testing.T) {
 	}
 }
 
-// TestWithoutConsumersEveryUnlistedVersionIsPruned pins the behaviour of the
-// application catalogs until HelmApplication is reconciled: nothing can reference
-// a chart, so nothing is protected from pruning.
-func TestWithoutConsumersEveryUnlistedVersionIsPruned(t *testing.T) {
+// TestUnreferencedVersionsArePruned pins what happens to a version nothing uses.
+// The application catalogs do have consumers — the HelmApplication objects of the
+// repository — but this fixture creates none, so no version is protected and every
+// unlisted one goes away.
+func TestUnreferencedVersionsArePruned(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c)
 	repo := applicationRepo("team-a", "stable")
