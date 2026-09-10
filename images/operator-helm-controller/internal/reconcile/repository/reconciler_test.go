@@ -145,6 +145,8 @@ func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...cli
 			&helmv1alpha1.HelmApplicationRepository{},
 			&helmv1alpha1.HelmApplicationChart{},
 		).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationRepository, index.ApplicationRepositoryIndexer).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationChart, index.ApplicationChartIndexer).
 		Build()
 
 	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {

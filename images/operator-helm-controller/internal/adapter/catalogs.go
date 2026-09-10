@@ -43,9 +43,7 @@ func NewAddonCatalog(c client.Client) source.Catalog {
 	})
 }
 
-// NewApplicationCatalog builds the HelmApplicationChart catalog. Consumers is nil
-// until the HelmApplication controller exists: nothing can reference a chart yet.
-// TODO(stage 5): replaced by the HelmApplication consumers lookup.
+// NewApplicationCatalog builds the HelmApplicationChart catalog; its consumers are the HelmApplication objects of the repository's namespace.
 func NewApplicationCatalog(c client.Client) source.Catalog {
 	return catalog.New(c, catalog.Config[*helmv1alpha1.HelmApplicationChart, *helmv1alpha1.HelmApplicationChartList]{
 		Kind:      helmv1alpha1.HelmApplicationChartKind,
@@ -56,12 +54,11 @@ func NewApplicationCatalog(c client.Client) source.Catalog {
 		},
 		Status:     func(o *helmv1alpha1.HelmApplicationChart) *helmv1alpha1.ChartCatalogStatus { return &o.Status },
 		ObjectName: naming.ApplicationChartName,
+		Consumers:  chartConsumers(ListApplicationReleases(c)),
 	})
 }
 
-// NewClusterApplicationCatalog builds the HelmClusterApplicationChart catalog.
-// Consumers is nil for the same reason as in NewApplicationCatalog.
-// TODO(stage 5): replaced by the HelmApplication consumers lookup.
+// NewClusterApplicationCatalog builds the HelmClusterApplicationChart catalog; its consumers are the HelmApplication objects of every namespace.
 func NewClusterApplicationCatalog(c client.Client) source.Catalog {
 	return catalog.New(c, catalog.Config[*helmv1alpha1.HelmClusterApplicationChart, *helmv1alpha1.HelmClusterApplicationChartList]{
 		Kind:      helmv1alpha1.HelmClusterApplicationChartKind,
@@ -74,6 +71,7 @@ func NewClusterApplicationCatalog(c client.Client) source.Catalog {
 		},
 		Status:     func(o *helmv1alpha1.HelmClusterApplicationChart) *helmv1alpha1.ChartCatalogStatus { return &o.Status },
 		ObjectName: naming.ClusterApplicationChartName,
+		Consumers:  chartConsumers(ListApplicationReleases(c)),
 	})
 }
 

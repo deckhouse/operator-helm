@@ -101,3 +101,24 @@ func TestAddonCatalogInUseVersionsCountsDesiredAndLastApplied(t *testing.T) {
 		t.Fatalf("in use = %v, want exactly two versions", inUse)
 	}
 }
+
+// TestApplicationCatalogInUseVersionsSeesOnlyItsOwnNamespace pins spec 6.2: the
+// in-use versions of a namespaced repository's chart come from the applications of
+// that namespace, or a same-named repository elsewhere would keep versions alive.
+func TestApplicationCatalogInUseVersionsSeesOnlyItsOwnNamespace(t *testing.T) {
+	inA := namespacedApp("team-a", "a1", "stable")
+	inB := namespacedApp("team-b", "b1", "stable")
+	inB.Spec.Chart.Version = "9.9.9"
+
+	c := applicationClient(t, inA, inB)
+	cat := NewApplicationCatalog(c)
+	repo := NewApplicationRepository(&helmv1alpha1.HelmApplicationRepository{ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a"}})
+
+	inUse, err := cat.InUseVersions(context.Background(), repo, "podinfo")
+	if err != nil {
+		t.Fatalf("InUseVersions returned %v", err)
+	}
+	if _, ok := inUse["6.7.1"]; !ok || len(inUse) != 1 {
+		t.Fatalf("in use = %v, want only team-a's 6.7.1", inUse)
+	}
+}
