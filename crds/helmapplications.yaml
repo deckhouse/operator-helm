@@ -48,7 +48,10 @@ spec:
       openAPIV3Schema:
         description: HelmApplication represents an installation of a Helm chart inside
           a single namespace. The release is deployed into the namespace of the resource
-          itself.
+          itself. The chart is applied with a ServiceAccount bound to a Role that
+          grants every permission inside that namespace, so the right to create a
+          HelmApplication is equivalent to administrator rights in its namespace;
+          the Role is created once and may be narrowed by the namespace owner afterwards.
         properties:
           apiVersion:
             description: |-
