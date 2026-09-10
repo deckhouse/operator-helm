@@ -53,6 +53,8 @@ func (f *genericInformer) Lister() cache.GenericLister {
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
 	// Group=helm.deckhouse.io, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithResource("helmapplications"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmApplications().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("helmapplicationcharts"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmApplicationCharts().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("helmapplicationrepositories"):

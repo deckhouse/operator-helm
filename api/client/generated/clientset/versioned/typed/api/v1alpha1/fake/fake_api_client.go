@@ -28,6 +28,10 @@ type FakeHelmV1alpha1 struct {
 	*testing.Fake
 }
 
+func (c *FakeHelmV1alpha1) HelmApplications(namespace string) v1alpha1.HelmApplicationInterface {
+	return newFakeHelmApplications(c, namespace)
+}
+
 func (c *FakeHelmV1alpha1) HelmApplicationCharts(namespace string) v1alpha1.HelmApplicationChartInterface {
 	return newFakeHelmApplicationCharts(c, namespace)
 }
