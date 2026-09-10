@@ -53,7 +53,7 @@ type ChartSource struct {
 // reference wins over the repository scheme: that is the hybrid case this exists for.
 func ResolveChartSource(
 	repo *helmv1alpha1.HelmClusterAddonRepository,
-	version *helmv1alpha1.HelmClusterAddonChartVersion,
+	version *helmv1alpha1.ChartVersion,
 ) (ChartSource, error) {
 	if version.OCIRef != "" {
 		// The recorded reference always carries a tag, so there is no fallback to

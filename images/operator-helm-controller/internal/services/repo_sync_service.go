@@ -356,13 +356,13 @@ func (s *RepoSyncService) inUseVersions(ctx context.Context, repoName, chartName
 // the source controller instead.
 func mergeChartVersions(
 	fetched []repoclient.ChartVersion,
-	current []helmv1alpha1.HelmClusterAddonChartVersion,
+	current []helmv1alpha1.ChartVersion,
 	inUse map[string]struct{},
-) []helmv1alpha1.HelmClusterAddonChartVersion {
-	merged := make([]helmv1alpha1.HelmClusterAddonChartVersion, 0, len(fetched)+len(current))
+) []helmv1alpha1.ChartVersion {
+	merged := make([]helmv1alpha1.ChartVersion, 0, len(fetched)+len(current))
 	listed := make(map[string]struct{}, len(fetched))
 
-	currentByVersion := make(map[string]helmv1alpha1.HelmClusterAddonChartVersion, len(current))
+	currentByVersion := make(map[string]helmv1alpha1.ChartVersion, len(current))
 	for _, version := range current {
 		currentByVersion[version.Version] = version
 	}
@@ -385,7 +385,7 @@ func mergeChartVersions(
 			}
 		}
 
-		merged = append(merged, helmv1alpha1.HelmClusterAddonChartVersion{
+		merged = append(merged, helmv1alpha1.ChartVersion{
 			Version:            name,
 			OCIRef:             version.OCIRef,
 			MediaType:          mediaType,
@@ -423,7 +423,7 @@ func mergeChartVersions(
 // be deterministic regardless: the merge goes through maps, and an unstable order
 // would produce a status patch on every synchronization for a catalog that did not
 // change.
-func sortChartVersions(versions []helmv1alpha1.HelmClusterAddonChartVersion) {
+func sortChartVersions(versions []helmv1alpha1.ChartVersion) {
 	sort.SliceStable(versions, func(i, j int) bool {
 		left, leftErr := semver.NewVersion(versions[i].Version)
 		right, rightErr := semver.NewVersion(versions[j].Version)

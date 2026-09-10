@@ -81,12 +81,12 @@ func testAddon() *helmv1alpha1.HelmClusterAddon {
 	}
 }
 
-func addonChartFixture(repoName, chartName string, versions ...helmv1alpha1.HelmClusterAddonChartVersion) *helmv1alpha1.HelmClusterAddonChart {
+func addonChartFixture(repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
 	return &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: naming.HelmClusterAddonChartName(repoName, chartName),
 		},
-		Status: helmv1alpha1.HelmClusterAddonChartStatus{Versions: versions},
+		Status: helmv1alpha1.ChartCatalogStatus{Versions: versions},
 	}
 }
 
@@ -102,14 +102,14 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 		// version is the sole entry seeded into the HelmClusterAddonChart's
 		// Status.Versions. Its own Version field decides whether the lookup by
 		// addon.Spec.Chart.Version ("6.7.1") hits or misses.
-		version        helmv1alpha1.HelmClusterAddonChartVersion
+		version        helmv1alpha1.ChartVersion
 		repoType       utils.InternalRepositoryType
 		wantErr        bool
 		wantErrContain string
 	}{
 		{
 			name: "oci version with a media type passes",
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version:   "6.7.1",
 				MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
 			},
@@ -120,7 +120,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			// retained with its media type so the addon keeps reconciling everything
 			// else. The real pull failure is reported by the source controller.
 			name: "oci version removed from repository but with a media type still passes",
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version:           "6.7.1",
 				MediaType:         "application/tar+gzip",
 				UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
@@ -129,7 +129,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 		},
 		{
 			name: "oci version stuck resolving is rejected with reason and message",
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version:            "6.7.1",
 				UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
 				UnavailableMessage: "manifest request failed",
@@ -140,7 +140,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 		},
 		{
 			name: "oci version with unsupported media type and no message is rejected with reason alone",
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version:           "6.7.1",
 				UnavailableReason: helmv1alpha1.UnavailableReasonUnsupportedMediaType,
 			},
@@ -153,7 +153,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			// never carry a media type: a stricter gate here would break every Helm
 			// addon, so the presence check alone must let it through.
 			name: "the same empty media type entry passes for a helm repository",
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version:           "6.7.1",
 				UnavailableReason: helmv1alpha1.UnavailableReasonUnsupportedMediaType,
 			},
@@ -164,7 +164,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			// catalog entry is still OCI-era (it carries a media type from the last
 			// OCI sync), but the Helm gate never reads the media type, so it passes.
 			name: "oci-era entry with a media type still passes right after switching to a helm repository",
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version:   "6.7.1",
 				MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
 			},
@@ -176,7 +176,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			// still Helm-era (no media type, no reason), so the OCI gate must reject
 			// it rather than let an unresolved layer through.
 			name: "helm-era entry with no media type is rejected right after switching to an oci repository",
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version: "6.7.1",
 			},
 			repoType:       utils.InternalOCIRepository,
@@ -185,7 +185,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 		},
 		{
 			name:           "a version the addon does not reference is rejected",
-			version:        helmv1alpha1.HelmClusterAddonChartVersion{Version: "9.9.9"},
+			version:        helmv1alpha1.ChartVersion{Version: "9.9.9"},
 			repoType:       utils.InternalOCIRepository,
 			wantErr:        true,
 			wantErrContain: `does not have version "6.7.1"`,
@@ -195,7 +195,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			// resolved at deploy time and is deliberately absent here. The gate must
 			// not read that absence as "unresolved".
 			name: "helm repository version published in a registry passes without a media type",
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version: "6.7.1",
 				OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 			},
@@ -205,7 +205,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			// Left through, this version would be sent down the helm path and would
 			// fail on the same unusable url with an opaque source controller error.
 			name: "version with an unusable index reference is rejected",
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version:            "6.7.1",
 				UnavailableReason:  helmv1alpha1.UnavailableReasonInvalidChartReference,
 				UnavailableMessage: "oci reference \"oci://BAD_HOST//:::\" is not a valid tagged reference",
@@ -351,7 +351,7 @@ func ociRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 func forceTestFixtures() []client.Object {
 	return []client.Object{
 		ociRepositoryFixture(),
-		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+		addonChartFixture("example", "podinfo", helmv1alpha1.ChartVersion{
 			Version:   "6.7.1",
 			MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
 		}),
@@ -379,7 +379,7 @@ func TestReconcileHybridVersionUsesInternalOCIRepository(t *testing.T) {
 	r, c := newFullReconciler(t, resolver, interceptor.Funcs{},
 		addon,
 		helmRepositoryFixture(),
-		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+		addonChartFixture("example", "podinfo", helmv1alpha1.ChartVersion{
 			Version: "6.7.1",
 			OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 		}),
@@ -424,7 +424,7 @@ func TestReconcileArchiveVersionOfHelmRepositoryStaysOnTheHelmPath(t *testing.T)
 	r, c := newFullReconciler(t, &stubChartResolver{}, interceptor.Funcs{},
 		addon,
 		helmRepositoryFixture(),
-		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+		addonChartFixture("example", "podinfo", helmv1alpha1.ChartVersion{
 			Version: "6.7.1",
 		}),
 	)
@@ -477,7 +477,7 @@ func TestReconcileVersionMovedOutOfRegistrySupersedesTheOCIRepository(t *testing
 		addon,
 		helmRepositoryFixture(),
 		supersededOCIRepo,
-		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+		addonChartFixture("example", "podinfo", helmv1alpha1.ChartVersion{
 			Version: "6.7.1",
 		}),
 	)
@@ -525,7 +525,7 @@ func TestReconcileVersionMovedIntoRegistrySupersedesTheHelmChart(t *testing.T) {
 		addon,
 		helmRepositoryFixture(),
 		supersededChart,
-		addonChartFixture("example", "podinfo", helmv1alpha1.HelmClusterAddonChartVersion{
+		addonChartFixture("example", "podinfo", helmv1alpha1.ChartVersion{
 			Version: "6.7.1",
 			OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 		}),

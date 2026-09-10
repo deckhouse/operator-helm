@@ -53,10 +53,10 @@ func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 	return &Resolver{client: c}
 }
 
-func chartWithVersions(repoName, chartName string, versions ...helmv1alpha1.HelmClusterAddonChartVersion) *helmv1alpha1.HelmClusterAddonChart {
+func chartWithVersions(repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
 	return &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{Name: naming.HelmClusterAddonChartName(repoName, chartName)},
-		Status:     helmv1alpha1.HelmClusterAddonChartStatus{Versions: versions},
+		Status:     helmv1alpha1.ChartCatalogStatus{Versions: versions},
 	}
 }
 
@@ -68,7 +68,7 @@ func TestOCIMediaType(t *testing.T) {
 	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
 
 	t.Run("a usable version returns its media type", func(t *testing.T) {
-		mediaType, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{
+		mediaType, done := ociMediaType(req, &helmv1alpha1.ChartVersion{
 			Version: "6.7.1", MediaType: "application/tar+gzip",
 		})
 		if done != nil {
@@ -80,7 +80,7 @@ func TestOCIMediaType(t *testing.T) {
 	})
 
 	t.Run("an unusable version is values_not_found with the reason", func(t *testing.T) {
-		_, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{
+		_, done := ociMediaType(req, &helmv1alpha1.ChartVersion{
 			Version:            "6.7.1",
 			UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
 			UnavailableMessage: "config media type \"application/vnd.unknown.config.v1+json\" is not a helm chart config",
@@ -94,7 +94,7 @@ func TestOCIMediaType(t *testing.T) {
 	})
 
 	t.Run("a resolve-pending version is pending, not values_not_found", func(t *testing.T) {
-		_, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{
+		_, done := ociMediaType(req, &helmv1alpha1.ChartVersion{
 			Version:           "6.7.1",
 			UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending,
 		})
@@ -108,14 +108,14 @@ func TestOCIMediaType(t *testing.T) {
 		// oci:// repository had before this controller started recording verdicts. The
 		// migration path (client.KnownVersions) treats this exactly like ResolvePending
 		// and re-resolves it on the next normal synchronization.
-		_, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1"})
+		_, done := ociMediaType(req, &helmv1alpha1.ChartVersion{Version: "6.7.1"})
 		if done == nil || done.Outcome != OutcomePending {
 			t.Fatalf("outcome is %+v, want pending: an empty verdict is the pre-upgrade migration state and must be retried, not reported as a permanent failure", done)
 		}
 	})
 
 	t.Run("a removed version keeps its media type usable", func(t *testing.T) {
-		mediaType, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{
+		mediaType, done := ociMediaType(req, &helmv1alpha1.ChartVersion{
 			Version:           "6.7.1",
 			MediaType:         "application/tar+gzip",
 			UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
@@ -135,7 +135,7 @@ func TestChartVersion(t *testing.T) {
 
 	t.Run("an existing version is returned as recorded", func(t *testing.T) {
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
-			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+			helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
 		))
 
 		version, done, err := resolver.chartVersion(context.Background(), req)
@@ -155,7 +155,7 @@ func TestChartVersion(t *testing.T) {
 		// verdict is a perfectly normal archive version, and reading it as "unresolved"
 		// made every such version report pending forever.
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
-			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1"},
+			helmv1alpha1.ChartVersion{Version: "6.7.1"},
 		))
 
 		version, done, err := resolver.chartVersion(context.Background(), req)
@@ -172,7 +172,7 @@ func TestChartVersion(t *testing.T) {
 
 	t.Run("an unaddressable index reference is values_not_found", func(t *testing.T) {
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
-			helmv1alpha1.HelmClusterAddonChartVersion{
+			helmv1alpha1.ChartVersion{
 				Version:            "6.7.1",
 				UnavailableReason:  helmv1alpha1.UnavailableReasonInvalidChartReference,
 				UnavailableMessage: "oci reference \"oci://BAD_HOST//:::\" is not a valid tagged reference",
@@ -202,7 +202,7 @@ func TestChartVersion(t *testing.T) {
 
 	t.Run("a missing version is pending", func(t *testing.T) {
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
-			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
+			helmv1alpha1.ChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
 		))
 
 		_, done, err := resolver.chartVersion(context.Background(), req)
@@ -270,7 +270,7 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
 		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
-	chart := chartWithVersions("example", "nginx", helmv1alpha1.HelmClusterAddonChartVersion{
+	chart := chartWithVersions("example", "nginx", helmv1alpha1.ChartVersion{
 		Version: "0.1.0",
 		OCIRef:  "oci://ghcr.io/drey/nginx/nginx:0.1.0",
 	})
@@ -348,7 +348,7 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 			Labels:    map[string]string{helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: "bitnami"},
 		},
 	}
-	chart := chartWithVersions("bitnami", "nginx", helmv1alpha1.HelmClusterAddonChartVersion{Version: "0.2.0"})
+	chart := chartWithVersions("bitnami", "nginx", helmv1alpha1.ChartVersion{Version: "0.2.0"})
 
 	req := Request{
 		Kind:           RepositoryKindHelmClusterAddon,

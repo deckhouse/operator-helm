@@ -137,7 +137,7 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 // a registry down the HTTP path.
 //
 // A non-nil Result means the caller must stop and return it.
-func (r *Resolver) chartVersion(ctx context.Context, req Request) (*helmv1alpha1.HelmClusterAddonChartVersion, *Result, error) {
+func (r *Resolver) chartVersion(ctx context.Context, req Request) (*helmv1alpha1.ChartVersion, *Result, error) {
 	chart := &helmv1alpha1.HelmClusterAddonChart{}
 	key := types.NamespacedName{Name: apinaming.HelmClusterAddonChartName(req.RepositoryName, req.Chart)}
 
@@ -179,7 +179,7 @@ func (r *Resolver) chartVersion(ctx context.Context, req Request) (*helmv1alpha1
 // verdict on it, so an empty media type is a state rather than a value.
 //
 // A non-nil Result means the caller must stop and return it.
-func ociMediaType(req Request, version *helmv1alpha1.HelmClusterAddonChartVersion) (string, *Result) {
+func ociMediaType(req Request, version *helmv1alpha1.ChartVersion) (string, *Result) {
 	if version.MediaType != "" {
 		return version.MediaType, nil
 	}
@@ -204,7 +204,7 @@ func ociMediaType(req Request, version *helmv1alpha1.HelmClusterAddonChartVersio
 }
 
 // versionDetail renders why a catalog entry is unusable.
-func versionDetail(version *helmv1alpha1.HelmClusterAddonChartVersion) string {
+func versionDetail(version *helmv1alpha1.ChartVersion) string {
 	detail := version.UnavailableReason
 	if version.UnavailableMessage != "" {
 		detail += ": " + version.UnavailableMessage
@@ -409,7 +409,7 @@ func (r *Resolver) ensureHybridOCIRepository(
 	repo *helmv1alpha1.HelmClusterAddonRepository,
 	req Request,
 	name, expiresAt string,
-	version *helmv1alpha1.HelmClusterAddonChartVersion,
+	version *helmv1alpha1.ChartVersion,
 ) (*sourcev1.OCIRepository, *Result, error) {
 	url, tag, err := helmv1alpha1.SplitOCIRef(version.OCIRef, "")
 	if err != nil {

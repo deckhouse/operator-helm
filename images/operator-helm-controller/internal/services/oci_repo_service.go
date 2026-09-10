@@ -115,7 +115,7 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 	addon *helmv1alpha1.HelmClusterAddon,
 	repo *helmv1alpha1.HelmClusterAddonRepository,
 	source utils.ChartSource,
-	version *helmv1alpha1.HelmClusterAddonChartVersion,
+	version *helmv1alpha1.ChartVersion,
 ) OCIRepoResult {
 	logger := log.FromContext(ctx)
 
@@ -188,7 +188,7 @@ func (s *OCIRepoService) resolveMediaType(
 	addon *helmv1alpha1.HelmClusterAddon,
 	repo *helmv1alpha1.HelmClusterAddonRepository,
 	source utils.ChartSource,
-	version *helmv1alpha1.HelmClusterAddonChartVersion,
+	version *helmv1alpha1.ChartVersion,
 ) (string, *OCIRepoResult) {
 	if version.MediaType != "" {
 		return version.MediaType, nil

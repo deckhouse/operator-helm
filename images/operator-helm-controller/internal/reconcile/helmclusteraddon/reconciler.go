@@ -517,7 +517,7 @@ func (r *Reconciler) getHelmClusterAddonChart(
 	ctx context.Context,
 	addon *helmv1alpha1.HelmClusterAddon,
 	repoType utils.InternalRepositoryType,
-) (*helmv1alpha1.HelmClusterAddonChart, *helmv1alpha1.HelmClusterAddonChartVersion, error) {
+) (*helmv1alpha1.HelmClusterAddonChart, *helmv1alpha1.ChartVersion, error) {
 	addonChartName := naming.HelmClusterAddonChartName(
 		addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName,
 	)
@@ -558,7 +558,7 @@ func (r *Reconciler) getHelmClusterAddonChart(
 }
 
 // versionUnavailableDetail explains why a catalog entry is not deployable.
-func versionUnavailableDetail(version helmv1alpha1.HelmClusterAddonChartVersion) string {
+func versionUnavailableDetail(version helmv1alpha1.ChartVersion) string {
 	switch {
 	case version.UnavailableReason == "":
 		return "the repository catalog has not resolved it yet"

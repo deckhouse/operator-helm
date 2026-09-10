@@ -46,7 +46,7 @@ type HelmApplicationChart struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Status ApplicationChartStatus `json:"status,omitempty"`
+	Status ChartCatalogStatus `json:"status,omitempty"`
 }
 
 func (r *HelmApplicationChart) GetConditions() *[]metav1.Condition {
@@ -67,60 +67,6 @@ func (r *HelmApplicationChart) GetStatus() any {
 
 func (r *HelmApplicationChart) GetConditionTypesForUpdate() []string {
 	return []string{ConditionTypeReady}
-}
-
-// ApplicationChartStatus and ApplicationChartVersion below are shared by
-// HelmApplicationChart and HelmClusterApplicationChart: the two kinds differ only
-// in scope. Declaring them once makes a divergence between the two schemas
-// impossible by construction, and keeps a single translation for both in
-// crds/doc-ru-*.yaml.
-//
-// This note is outside every doc comment on purpose: a doc comment on a Status type
-// becomes the description of the status field in the CRD.
-
-type ApplicationChartStatus struct {
-	// IconURL is the URL to the Helm chart icon (applicable to Helm Chart repository charts only).
-	IconURL string `json:"iconURL,omitempty"`
-	// Conditions represent the latest available observations of the chart state.
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generation represents resource generation that was last processed by the controller.
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// Versions lists every chart version the controller has examined. A version is
-	// usable when it has no unavailableReason; for an OCI repository a usable version
-	// also carries the media type of the layer that holds it.
-	// +optional
-	Versions []ApplicationChartVersion `json:"versions"`
-}
-
-type ApplicationChartVersion struct {
-	// Helm chart version
-	// +kubebuilder:validation:MinLength=1
-	Version string `json:"version"`
-	// OCIRef is the OCI reference this version is published at, as recorded from
-	// the repository index. It is set only for a version of a helm repository whose
-	// index entry points at a registry instead of a chart archive; such a version is
-	// deployed through an internal OCIRepository even though its repository is a helm
-	// one. The registry host and path keep the spelling the index used, and the tag is
-	// always explicit: an index entry without one is recorded with its own version as
-	// the tag.
-	// +optional
-	OCIRef string `json:"ociRef,omitempty"`
-	// MediaType is the OCI media type of the layer that holds this chart version. It
-	// is set only for a version of an oci:// repository, and only when the layer is
-	// supported: an empty value there means the version cannot be deployed. It stays
-	// empty for a version carrying OCIRef — the layer of such an artifact is examined
-	// at deploy time and is not recorded here.
-	// +optional
-	MediaType string `json:"mediaType,omitempty"`
-	// UnavailableReason explains why this version cannot be deployed. Its absence means
-	// the version is usable.
-	// +optional
-	// +kubebuilder:validation:Enum=RemovedFromRepository;UnsupportedMediaType;ResolvePending;InvalidChartReference
-	UnavailableReason string `json:"unavailableReason,omitempty"`
-	// UnavailableMessage carries human readable detail for UnavailableReason.
-	// +optional
-	UnavailableMessage string `json:"unavailableMessage,omitempty"`
 }
 
 // HelmApplicationChartList contains a list of HelmApplicationCharts.

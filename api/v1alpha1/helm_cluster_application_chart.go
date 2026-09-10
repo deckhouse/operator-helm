@@ -27,8 +27,8 @@ const (
 	HelmClusterApplicationChartLabelSourceName = "helm.deckhouse.io/cluster-application-chart"
 )
 
-// The status of this kind is the shared ApplicationChartStatus declared next to
-// HelmApplicationChart: the two kinds differ only in scope.
+// The status of this kind is the shared ChartCatalogStatus declared in
+// chart_catalog_types.go: every chart catalog kind of the module has the same shape.
 //
 // The object carries no spec on purpose: it is a projection of a repository catalog,
 // not user input. Writes by anyone other than the module's service accounts are
@@ -50,7 +50,7 @@ type HelmClusterApplicationChart struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Status ApplicationChartStatus `json:"status,omitempty"`
+	Status ChartCatalogStatus `json:"status,omitempty"`
 }
 
 func (r *HelmClusterApplicationChart) GetConditions() *[]metav1.Condition {

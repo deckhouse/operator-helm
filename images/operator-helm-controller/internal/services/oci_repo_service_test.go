@@ -115,7 +115,7 @@ func ociTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 
 // ociSource resolves the source the way the reconciler does, so the tests exercise
 // the real mapping instead of a hand-built one.
-func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.HelmClusterAddonChartVersion) utils.ChartSource {
+func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.ChartVersion) utils.ChartSource {
 	t.Helper()
 
 	source, err := utils.ResolveChartSource(repo, version)
@@ -144,7 +144,7 @@ func TestEnsureInternalOCIRepositoryUsesRecordedMediaType(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	service, c := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
@@ -169,7 +169,7 @@ func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	service, _ := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:           "6.7.1",
 		MediaType:         "application/tar+gzip",
 		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
@@ -200,7 +200,7 @@ func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
 func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:           "6.7.1",
 		MediaType:         "application/tar+gzip",
 		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
@@ -266,7 +266,7 @@ func TestEnsureInternalOCIRepositoryForcesReconcileFromAddon(t *testing.T) {
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
 	service, c := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
@@ -294,7 +294,7 @@ func TestEnsureInternalOCIRepositoryDoesNotForceReconcileWithoutAnnotation(t *te
 	addon, repo := testAddon(), ociTestRepository()
 	service, c := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
@@ -376,7 +376,7 @@ func TestEnsureInternalOCIRepositoryAddressesTheIndexReference(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
@@ -421,7 +421,7 @@ func TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://charts.example.invalid/charts/podinfo:6.7.1",
 	}
@@ -457,7 +457,7 @@ func TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials(t *testing.T) 
 
 	service, c := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
@@ -488,7 +488,7 @@ func TestEnsureInternalOCIRepositoryProbesHybridVersion(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
@@ -522,7 +522,7 @@ func TestEnsureInternalOCIRepositoryReusesTheInternalObjectAsCache(t *testing.T)
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
@@ -544,13 +544,13 @@ func TestEnsureInternalOCIRepositoryReprobesChangedReference(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	first := &helmv1alpha1.HelmClusterAddonChartVersion{
+	first := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, first), first)
 
-	second := &helmv1alpha1.HelmClusterAddonChartVersion{
+	second := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://mirror.example.com/charts/podinfo:6.7.1",
 	}
@@ -568,7 +568,7 @@ func TestEnsureInternalOCIRepositoryForceBypassesCache(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
@@ -591,7 +591,7 @@ func TestEnsureInternalOCIRepositoryNeverProbesRecordedMediaType(t *testing.T) {
 	resolver := &countingResolver{mediaType: "should-not-be-used"}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
@@ -613,7 +613,7 @@ func TestEnsureInternalOCIRepositoryReportsTerminalProbeFailure(t *testing.T) {
 	}}
 	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
@@ -644,7 +644,7 @@ func TestEnsureInternalOCIRepositoryRequeuesRetriableProbeFailure(t *testing.T) 
 	resolver := &countingResolver{err: errors.New("429 Too Many Requests")}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}

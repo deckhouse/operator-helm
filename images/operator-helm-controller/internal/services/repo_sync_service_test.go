@@ -83,13 +83,13 @@ func ociVersion(version, mediaType string) repoclient.ChartVersion {
 	return repoclient.ChartVersion{Version: semver.MustParse(version), MediaType: mediaType}
 }
 
-func existingChart(repoName, chartName string, versions ...helmv1alpha1.HelmClusterAddonChartVersion) *helmv1alpha1.HelmClusterAddonChart {
+func existingChart(repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
 	return &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   naming.HelmClusterAddonChartName(repoName, chartName),
 			Labels: map[string]string{helmv1alpha1.LabelRepositoryName: repoName, helmv1alpha1.LabelChartName: chartName},
 		},
-		Status: helmv1alpha1.HelmClusterAddonChartStatus{Versions: versions},
+		Status: helmv1alpha1.ChartCatalogStatus{Versions: versions},
 	}
 }
 
@@ -107,7 +107,7 @@ func addonUsing(repoName, chartName, version string) *helmv1alpha1.HelmClusterAd
 	}
 }
 
-func chartStatus(t *testing.T, c client.Client, repoName, chartName string) helmv1alpha1.HelmClusterAddonChartStatus {
+func chartStatus(t *testing.T, c client.Client, repoName, chartName string) helmv1alpha1.ChartCatalogStatus {
 	t.Helper()
 
 	chart := &helmv1alpha1.HelmClusterAddonChart{}
@@ -210,8 +210,8 @@ func TestSyncReportsTransientFetchFailure(t *testing.T) {
 func TestSyncPassesKnownVersionsToTheClient(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",
-		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
-		helmv1alpha1.HelmClusterAddonChartVersion{
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+		helmv1alpha1.ChartVersion{
 			Version:            "6.7.2",
 			UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
 			UnavailableMessage: "layer media type application/vnd.example is not a chart",
@@ -271,8 +271,8 @@ func TestSyncRequestsFullPassOnForceReconcile(t *testing.T) {
 func TestSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",
-		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
-		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+		helmv1alpha1.ChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
 	)
 	addon := addonUsing(repo.Name, "podinfo", "6.7.1")
 
@@ -321,8 +321,8 @@ func TestSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
 func TestSyncRetainsMediaTypeForReferencedUnsupportedVersion(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",
-		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
-		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+		helmv1alpha1.ChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
 	)
 	addon := addonUsing(repo.Name, "podinfo", "6.7.1")
 
@@ -435,7 +435,7 @@ func TestSyncCreatesChartWithNoUsableVersions(t *testing.T) {
 func TestSyncKeepsChartReferencedByAddon(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",
-		helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
 	)
 	addon := addonUsing(repo.Name, "podinfo", "6.7.1")
 
@@ -508,7 +508,7 @@ func TestMergeChartVersionsCarriesOCIRef(t *testing.T) {
 		{Version: semver.MustParse("2.0.0")},
 	}
 
-	current := []helmv1alpha1.HelmClusterAddonChartVersion{
+	current := []helmv1alpha1.ChartVersion{
 		{Version: "2.0.0", OCIRef: "oci://registry.example.com/charts/podinfo:2.0.0"},
 		{Version: "1.0.0", OCIRef: "oci://registry.example.com/charts/podinfo:1.0.0"},
 	}
@@ -517,7 +517,7 @@ func TestMergeChartVersionsCarriesOCIRef(t *testing.T) {
 
 	merged := mergeChartVersions(fetched, current, inUse)
 
-	byVersion := map[string]helmv1alpha1.HelmClusterAddonChartVersion{}
+	byVersion := map[string]helmv1alpha1.ChartVersion{}
 	for _, version := range merged {
 		byVersion[version.Version] = version
 	}
@@ -554,7 +554,7 @@ func TestMergeChartVersionsDoesNotCarryMediaTypeOntoOCIRef(t *testing.T) {
 		{Version: semver.MustParse("6.7.1"), OCIRef: "oci://other-registry.example.com/x/podinfo:6.7.1"},
 	}
 
-	current := []helmv1alpha1.HelmClusterAddonChartVersion{
+	current := []helmv1alpha1.ChartVersion{
 		{Version: "6.7.1", MediaType: "application/tar+gzip"},
 	}
 
