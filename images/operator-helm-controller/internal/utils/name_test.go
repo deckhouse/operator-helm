@@ -130,3 +130,33 @@ func TestDerivedNameStaysWithinTheLabelLimitForTheLongestPrefix(t *testing.T) {
 		t.Fatalf("%q is %d characters, the limit is 63", got, len(got))
 	}
 }
+
+// TestHelmReleaseName pins the release-name rule: Helm rejects names longer than 53
+// characters. A name within the limit passes through untouched — every addon that
+// exists today keeps its release — and a longer one is cut and suffixed with a hash
+// of the full name so two long names sharing a prefix stay distinct.
+func TestHelmReleaseName(t *testing.T) {
+	const long = "abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefg"
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"short name is used as is", "podinfo", "podinfo"},
+		{"a name of exactly 53 characters is used as is", strings.Repeat("a", 53), strings.Repeat("a", 53)},
+		{"a longer name is cut to 40 characters and hashed", long, "abcdefghijklmnopqrstuvwxyz-abcdefghijklm-ddc3f43e8c75"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := HelmReleaseName(tc.in)
+			if got != tc.want {
+				t.Fatalf("HelmReleaseName(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if len(got) > 53 {
+				t.Fatalf("%q is %d characters, Helm accepts at most 53", got, len(got))
+			}
+		})
+	}
+}

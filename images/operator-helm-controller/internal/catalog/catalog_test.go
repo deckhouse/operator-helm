@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -191,5 +192,31 @@ func TestWithoutConsumersEveryUnlistedVersionIsPruned(t *testing.T) {
 	}
 	if len(inUse) != 0 {
 		t.Fatalf("InUseVersions = %v, want none without consumers", inUse)
+	}
+}
+
+func TestLookupReturnsTheCatalogObjectAndItsStatus(t *testing.T) {
+	c := newClient(t)
+	cat := adapter.NewApplicationCatalog(c)
+	repo := applicationRepo("team-a", "stable")
+
+	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	obj, status, err := cat.Lookup(context.Background(), repo, "podinfo")
+	if err != nil {
+		t.Fatalf("Lookup returned %v", err)
+	}
+	if obj.GetNamespace() != "team-a" || obj.GetName() != naming.ApplicationChartName("stable", "podinfo") {
+		t.Fatalf("Lookup returned %s/%s, want the catalog object next to the repository", obj.GetNamespace(), obj.GetName())
+	}
+	if len(status.Versions) != 1 || status.Versions[0].Version != "6.7.1" {
+		t.Fatalf("status versions = %+v, want [6.7.1]", status.Versions)
+	}
+
+	_, _, err = cat.Lookup(context.Background(), repo, "missing")
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("Lookup of an unknown chart must be a NotFound error, got %v", err)
 	}
 }

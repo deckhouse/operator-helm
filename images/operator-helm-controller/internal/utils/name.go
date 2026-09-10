@@ -170,3 +170,19 @@ func truncatePart(part string) string {
 
 	return strings.TrimRight(part, "-")
 }
+
+// helmReleaseNameLimit is the longest release name Helm accepts.
+const helmReleaseNameLimit = 53
+
+// HelmReleaseName bounds a release name to what Helm accepts. A name within the
+// limit is used as is — that keeps every existing addon release untouched — and a
+// longer one is cut to 40 characters and suffixed with a 12-character hash of the
+// full name, so two long names that share a prefix stay distinct. The cut is
+// trimmed of a trailing dash so the joined name never carries a double dash.
+func HelmReleaseName(name string) string {
+	if len(name) <= helmReleaseNameLimit {
+		return name
+	}
+
+	return strings.TrimRight(name[:40], "-") + "-" + GetHash(name)
+}

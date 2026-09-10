@@ -220,3 +220,14 @@ func (t *typed[C, CL]) InUseVersions(ctx context.Context, repo source.Repository
 
 	return t.cfg.Consumers(ctx, repo, chartName)
 }
+
+func (t *typed[C, CL]) Lookup(ctx context.Context, repo source.Repository, chartName string) (client.Object, *helmv1alpha1.ChartCatalogStatus, error) {
+	obj := t.cfg.NewObject()
+	key := client.ObjectKey{Namespace: repo.Namespace(), Name: t.cfg.ObjectName(repo.Name(), chartName)}
+
+	if err := t.client.Get(ctx, key, obj); err != nil {
+		return nil, nil, fmt.Errorf("getting %s %s: %w", t.cfg.Kind, key, err)
+	}
+
+	return obj, t.cfg.Status(obj), nil
+}

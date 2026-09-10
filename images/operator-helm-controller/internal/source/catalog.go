@@ -19,6 +19,9 @@ package source
 import (
 	"context"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 )
 
@@ -36,4 +39,8 @@ type Catalog interface {
 	// InUseVersions reports the versions of one chart still referenced by the
 	// consumers of this family. An empty chart name yields no versions.
 	InUseVersions(ctx context.Context, repo Repository, chartName string) (map[string]struct{}, error)
+	// Lookup returns the catalog object of one chart and its status, so a release
+	// can find the version it asks for. The error is a NotFound when the repository
+	// does not offer the chart.
+	Lookup(ctx context.Context, repo Repository, chartName string) (client.Object, *helmv1alpha1.ChartCatalogStatus, error)
 }
