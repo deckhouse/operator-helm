@@ -42,6 +42,13 @@ const (
 // object to already store a composite value. Both columns carry priority=1, so the
 // default output shows neither and -o wide shows both, exactly one of them filled.
 //
+// The name is bounded because the controller stores it as the value of a source
+// label on the internal resources it creates, and a label value cannot exceed 63
+// characters. There is no lower bound: nothing references a HelmApplication by
+// name. The Helm release name, which Helm caps at 53 characters, is not what this
+// rule guards — the controller derives that by truncation plus hash, the way
+// utils/name.go already derives internal object names.
+//
 // These notes are deliberately outside the doc comment below — controller-gen folds
 // every non-marker line of that block into the resource's API description.
 
@@ -51,6 +58,7 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:singular=helmapplication,scope=Namespaced
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="application name must be at most 63 characters long"
 // +kubebuilder:printcolumn:name="Chart",type="string",JSONPath=".spec.chart.name",description="Helm release chart name."
 // +kubebuilder:printcolumn:name="Chart Version",type="string",JSONPath=".spec.chart.version",description="Helm release chart version."
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the application"
@@ -255,6 +263,10 @@ type HelmApplicationStatus struct {
 // the kind of the repository the release was last deployed from, so no separate
 // kind field is needed. No validation is declared here: the status is written by
 // the controller, and a rule would only be able to block a write.
+//
+// The controller must replace this struct wholesale rather than merge into it: a
+// merge would leave a stale repository alongside a new clusterRepository, both
+// fields would be set, and IsChartStatusInfoOutdated would pin to true forever.
 
 type HelmApplicationLastAppliedChartRef struct {
 	// Specifies the name of the Helm chart the release was last deployed from.
@@ -271,6 +283,30 @@ type HelmApplicationLastAppliedChartRef struct {
 	// Version holds the chart version the release was last deployed from.
 	// +optional
 	Version string `json:"version,omitempty"`
+}
+
+// RepositoryName returns the name of the repository the release was last deployed
+// from, whichever of the two mutually exclusive reference fields is set.
+func (r *HelmApplicationLastAppliedChartRef) RepositoryName() string {
+	if r.Repository != "" {
+		return r.Repository
+	}
+
+	return r.ClusterRepository
+}
+
+// RepositoryKind returns the kind of the repository the release was last deployed
+// from, or an empty string when neither reference is set — which is what the status
+// holds before the first successful deployment.
+func (r *HelmApplicationLastAppliedChartRef) RepositoryKind() string {
+	switch {
+	case r.Repository != "":
+		return HelmApplicationRepositoryKind
+	case r.ClusterRepository != "":
+		return HelmClusterApplicationRepositoryKind
+	default:
+		return ""
+	}
 }
 
 // HelmApplicationList contains a list of HelmApplications.

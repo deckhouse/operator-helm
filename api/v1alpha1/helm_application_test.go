@@ -92,6 +92,74 @@ func TestHelmApplicationRepositoryKind(t *testing.T) {
 	}
 }
 
+func TestHelmApplicationLastAppliedChartRefRepositoryName(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  HelmApplicationLastAppliedChartRef
+		want string
+	}{
+		{
+			name: "a namespaced repository",
+			ref:  HelmApplicationLastAppliedChartRef{Repository: "myapp-repo"},
+			want: "myapp-repo",
+		},
+		{
+			name: "a cluster repository",
+			ref:  HelmApplicationLastAppliedChartRef{ClusterRepository: "shared-repo"},
+			want: "shared-repo",
+		},
+		{
+			name: "neither reference set",
+			ref:  HelmApplicationLastAppliedChartRef{},
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := tc.ref
+
+			if got := ref.RepositoryName(); got != tc.want {
+				t.Fatalf("RepositoryName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHelmApplicationLastAppliedChartRefRepositoryKind(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  HelmApplicationLastAppliedChartRef
+		want string
+	}{
+		{
+			name: "a namespaced repository",
+			ref:  HelmApplicationLastAppliedChartRef{Repository: "myapp-repo"},
+			want: HelmApplicationRepositoryKind,
+		},
+		{
+			name: "a cluster repository",
+			ref:  HelmApplicationLastAppliedChartRef{ClusterRepository: "shared-repo"},
+			want: HelmClusterApplicationRepositoryKind,
+		},
+		{
+			name: "neither reference set is reported as unknown, not as a cluster repository",
+			ref:  HelmApplicationLastAppliedChartRef{},
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := tc.ref
+
+			if got := ref.RepositoryKind(); got != tc.want {
+				t.Fatalf("RepositoryKind() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestHelmApplicationIsChartStatusInfoOutdated(t *testing.T) {
 	spec := HelmApplicationChartRef{
 		Name:       "nginx",
@@ -180,7 +248,7 @@ func TestHelmApplicationGetConditionTypesForUpdate(t *testing.T) {
 	applied := &HelmApplicationLastAppliedChartRef{Name: "nginx", Repository: "myapp-repo", Version: "1.0.0"}
 	installed := []metav1.Condition{{Type: ConditionTypeInstalled, Status: metav1.ConditionTrue}}
 
-	t.Run("nothing installed yet asks only about Installed", func(t *testing.T) {
+	t.Run("nothing installed yet asks about Installed and not about UpdateInstalled", func(t *testing.T) {
 		app := &HelmApplication{Spec: HelmApplicationSpec{Chart: chart}}
 
 		got := app.GetConditionTypesForUpdate()
@@ -237,6 +305,74 @@ func TestHelmApplicationGetConditionTypesForUpdate(t *testing.T) {
 			t.Fatalf("GetConditionTypesForUpdate() = %v, want it to contain %s", got, ConditionTypeConfigurationApplied)
 		}
 	})
+}
+
+func TestHelmApplicationConfigurationApplyInProgress(t *testing.T) {
+	cases := []struct {
+		name       string
+		conditions []metav1.Condition
+		want       bool
+	}{
+		{
+			name:       "no conditions at all",
+			conditions: nil,
+			want:       false,
+		},
+		{
+			name:       "the condition is unknown but for a different reason",
+			conditions: []metav1.Condition{{Type: ConditionTypeConfigurationApplied, Status: metav1.ConditionUnknown, Reason: ReasonFailed}},
+			want:       false,
+		},
+		{
+			name:       "the condition is unknown while reconciling",
+			conditions: []metav1.Condition{{Type: ConditionTypeConfigurationApplied, Status: metav1.ConditionUnknown, Reason: ReasonReconciling}},
+			want:       true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &HelmApplication{Status: HelmApplicationStatus{Conditions: tc.conditions}}
+
+			if got := app.ConfigurationApplyInProgress(); got != tc.want {
+				t.Fatalf("ConfigurationApplyInProgress() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHelmApplicationUpdateInstallInProgress(t *testing.T) {
+	cases := []struct {
+		name       string
+		conditions []metav1.Condition
+		want       bool
+	}{
+		{
+			name:       "no conditions at all",
+			conditions: nil,
+			want:       false,
+		},
+		{
+			name:       "the condition is unknown but for a different reason",
+			conditions: []metav1.Condition{{Type: ConditionTypeUpdateInstalled, Status: metav1.ConditionUnknown, Reason: ReasonFailed}},
+			want:       false,
+		},
+		{
+			name:       "the condition is unknown while reconciling",
+			conditions: []metav1.Condition{{Type: ConditionTypeUpdateInstalled, Status: metav1.ConditionUnknown, Reason: ReasonReconciling}},
+			want:       true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &HelmApplication{Status: HelmApplicationStatus{Conditions: tc.conditions}}
+
+			if got := app.UpdateInstallInProgress(); got != tc.want {
+				t.Fatalf("UpdateInstallInProgress() = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestHelmApplicationMaintenanceModeActivated(t *testing.T) {
