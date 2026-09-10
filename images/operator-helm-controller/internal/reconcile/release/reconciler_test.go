@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package helmclusteraddon
+package release
 
 import (
 	"context"
@@ -42,6 +42,7 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -59,13 +60,13 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-func newTestReconciler(t *testing.T, objects ...client.Object) *Reconciler {
+func newTestReconciler(t *testing.T, objects ...client.Object) (*Reconciler, client.Client) {
 	t.Helper()
 
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return &Reconciler{Client: c}
+	return &Reconciler{Client: c}, c
 }
 
 func testAddon() *helmv1alpha1.HelmClusterAddon {
@@ -222,9 +223,9 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			chart := addonChartFixture(
 				addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName, tt.version,
 			)
-			r := newTestReconciler(t, chart)
+			r, c := newTestReconciler(t, chart)
 
-			gotChart, gotVersion, err := r.getHelmClusterAddonChart(context.Background(), addon, tt.repoType)
+			gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c), adapter.NewAddonRepository(helmRepositoryFixture()), adapter.NewAddonRelease(addon), tt.repoType)
 
 			if tt.wantErr {
 				if err == nil {
@@ -261,9 +262,9 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 
 func TestGetHelmClusterAddonChartMissingChart(t *testing.T) {
 	addon := testAddon()
-	r := newTestReconciler(t)
+	r, c := newTestReconciler(t)
 
-	gotChart, gotVersion, err := r.getHelmClusterAddonChart(context.Background(), addon, utils.InternalOCIRepository)
+	gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c), adapter.NewAddonRepository(helmRepositoryFixture()), adapter.NewAddonRelease(addon), utils.InternalOCIRepository)
 	if err == nil {
 		t.Fatalf("expected an error when the addon chart does not exist, got version %+v", gotVersion)
 	}
@@ -331,15 +332,18 @@ func newFullReconciler(
 		WithInterceptorFuncs(interceptors).
 		Build()
 
-	return New(
-		c,
-		services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, resolver),
-		services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
-		status.NewManager(c),
-	), c
+	return New(c, Deps{
+		NewRelease:   adapter.EmptyAddonRelease,
+		Repositories: adapter.NewAddonRepositoryResolver(c),
+		Chart:        services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
+		OCI:          services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, resolver),
+		Release:      services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
+		Maintenance:  services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
+		Claim:        services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
+		Namespaces:   services.NewNamespaceService(c),
+		Access:       source.NoAccess{},
+		Status:       status.NewManager(c),
+	}), c
 }
 
 func ociRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
@@ -609,7 +613,7 @@ func TestLogSourceKindFlipIgnoresStaleEntryFromADifferentChartOrRepository(t *te
 			ctx := log.IntoContext(context.Background(), logger)
 
 			r := &Reconciler{}
-			r.logSourceKindFlip(ctx, addon, utils.InternalOCIRepository, true)
+			r.logSourceKindFlip(ctx, adapter.NewAddonRelease(addon), utils.InternalOCIRepository, true)
 
 			if logged != tt.wantLogged {
 				t.Fatalf("logged = %v, want %v", logged, tt.wantLogged)
@@ -841,7 +845,7 @@ func TestReconcileSittingInMaintenanceDiscardsForceReconcile(t *testing.T) {
 
 	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
 
-	if !addon.MaintenanceModeEnabled() || r.maintenanceService.IsMaintenanceModeChangeRequired(adapter.NewAddonRelease(addon)) {
+	if !addon.MaintenanceModeEnabled() || r.deps.Maintenance.IsMaintenanceModeChangeRequired(adapter.NewAddonRelease(addon)) {
 		t.Fatal("the fixture must already be in maintenance, otherwise the test takes the wrong branch")
 	}
 
@@ -876,7 +880,7 @@ func TestReconcileLeavingMaintenanceKeepsForceReconcile(t *testing.T) {
 
 	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
 
-	if addon.MaintenanceModeActivated() || !r.maintenanceService.IsMaintenanceModeChangeRequired(adapter.NewAddonRelease(addon)) {
+	if addon.MaintenanceModeActivated() || !r.deps.Maintenance.IsMaintenanceModeChangeRequired(adapter.NewAddonRelease(addon)) {
 		t.Fatal("the fixture must be leaving maintenance, otherwise the test proves nothing")
 	}
 
