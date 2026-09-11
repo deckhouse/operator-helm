@@ -299,3 +299,52 @@ func TestHandleInvalidRequestOutcome(t *testing.T) {
 	}
 	assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
 }
+
+// TestHandleUnknownRepositoryKind pins the response contract for a kind the server
+// does not recognise: it must be reported as UNSUPPORTED_REPOSITORY_KIND, the same
+// code the resolver's own outcome of that name maps to, not a generic INVALID_REQUEST.
+func TestHandleUnknownRepositoryKind(t *testing.T) {
+	rec := do(t, fakeResolver{}, `{"repositoryKind":"SomethingElse","repositoryName":"github","chart":"podinfo","version":"6.7.1"}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "UNSUPPORTED_REPOSITORY_KIND")
+	assertCode(t, rec.Body.Bytes(), "error", `unsupported repository kind "SomethingElse"`)
+}
+
+// TestHandleForbiddenMessageNamesTheResourceKind pins the FORBIDDEN message's
+// wording: it names the Kubernetes kind the caller may not create (e.g.
+// "HelmClusterAddon"), not the lower-cased plural resource string used in the
+// SubjectAccessReview.
+func TestHandleForbiddenMessageNamesTheResourceKind(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantMsg string
+	}{
+		{"addon", validBody, "not allowed to create HelmClusterAddon"},
+		{
+			"namespaced application repository",
+			`{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
+			"not allowed to create HelmApplication",
+		},
+		{
+			"cluster application repository",
+			`{"repositoryKind":"HelmClusterApplicationRepository","namespace":"team-a","repositoryName":"shared","chart":"podinfo","version":"6.7.1"}`,
+			"not allowed to create HelmApplication",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doAuth(t, fakeResolver{}, fakeReviewer{result: auth.Result{Authenticated: true, Authorized: false}}, tc.body)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+			assertCode(t, rec.Body.Bytes(), "code", "FORBIDDEN")
+			assertCode(t, rec.Body.Bytes(), "error", tc.wantMsg)
+		})
+	}
+}

@@ -138,9 +138,9 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 	// Answering exposes the values that feed into the resource of the repository's
 	// family, so the caller must be allowed to create one — in the namespace it
 	// would be created in, when that resource is namespaced.
-	access, ok := accessFor(req.RepositoryKind, req.Namespace)
+	access, displayKind, ok := accessFor(req.RepositoryKind, req.Namespace)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+		writeError(w, http.StatusBadRequest, "UNSUPPORTED_REPOSITORY_KIND",
 			fmt.Sprintf("unsupported repository kind %q", req.RepositoryKind))
 		return
 	}
@@ -148,7 +148,7 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "namespace is required for this repository kind")
 		return
 	}
-	if !s.authorize(w, r, access) {
+	if !s.authorize(w, r, access, displayKind) {
 		return
 	}
 
@@ -194,27 +194,28 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 }
 
 // accessFor maps a repository kind to the permission that answering for it
-// requires. Values of a chart from an application repository — namespaced or
-// cluster-wide — feed into a HelmApplication in the request's namespace, so that is
-// what the caller must be allowed to create; values from an addon repository feed
-// into the cluster-scoped HelmClusterAddon.
-func accessFor(kind, namespace string) (auth.Access, bool) {
+// requires, plus the Kubernetes kind that permission is expressed in, for use in a
+// message to the caller. Values of a chart from an application repository —
+// namespaced or cluster-wide — feed into a HelmApplication in the request's
+// namespace, so that is what the caller must be allowed to create; values from an
+// addon repository feed into the cluster-scoped HelmClusterAddon.
+func accessFor(kind, namespace string) (access auth.Access, displayKind string, ok bool) {
 	switch strings.ToLower(kind) {
 	case string(resolver.RepositoryKindHelmClusterAddon):
 		return auth.Access{
 			Group:    helmv1alpha1.GroupName,
 			Resource: helmv1alpha1.HelmClusterAddonResource,
 			Verb:     "create",
-		}, true
+		}, helmv1alpha1.HelmClusterAddonKind, true
 	case string(resolver.RepositoryKindHelmApplication), string(resolver.RepositoryKindHelmClusterApplication):
 		return auth.Access{
 			Group:     helmv1alpha1.GroupName,
 			Resource:  helmv1alpha1.HelmApplicationResource,
 			Verb:      "create",
 			Namespace: namespace,
-		}, true
+		}, helmv1alpha1.HelmApplicationKind, true
 	default:
-		return auth.Access{}, false
+		return auth.Access{}, "", false
 	}
 }
 
@@ -232,8 +233,9 @@ func requiresNamespace(kind string) bool {
 
 // authorize reviews the request's bearer token against access and reports whether
 // it may proceed. On any negative outcome it writes the response itself and returns
-// false.
-func (s *Server) authorize(w http.ResponseWriter, r *http.Request, access auth.Access) bool {
+// false. displayKind names the Kubernetes kind access.Resource stands for, for the
+// FORBIDDEN message.
+func (s *Server) authorize(w http.ResponseWriter, r *http.Request, access auth.Access, displayKind string) bool {
 	logger := log.FromContext(r.Context())
 
 	token, ok := bearerToken(r)
@@ -253,7 +255,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, access auth.A
 		return false
 	}
 	if !result.Authorized {
-		writeError(w, http.StatusForbidden, "FORBIDDEN", fmt.Sprintf("not allowed to create %s", access.Resource))
+		writeError(w, http.StatusForbidden, "FORBIDDEN", fmt.Sprintf("not allowed to create %s", displayKind))
 		return false
 	}
 
