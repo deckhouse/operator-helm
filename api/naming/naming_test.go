@@ -51,6 +51,15 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 			chart: "podinfo",
 			want:  "abcdefghijklmnopqrs-chart-podinfo-0fe4a214e986",
 		},
+		{
+			// A repository name at or under the length limit is not truncated,
+			// but a trailing dot still has to be dropped before the separator:
+			// the final trim only reaches the end of the whole name.
+			name:  "an untruncated name ending in a dot still drops it",
+			repo:  "abcdefghijklmnopqrs.",
+			chart: "podinfo",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-b5579464eede",
+		},
 	}
 
 	for _, tc := range cases {
@@ -94,6 +103,15 @@ func TestApplicationChartName(t *testing.T) {
 			repo:  "abcdefghijklmnopqrs.x",
 			chart: "podinfo",
 			want:  "abcdefghijklmnopqrs-chart-podinfo-0fe4a214e986",
+		},
+		{
+			// A repository name at or under the length limit is not truncated,
+			// but a trailing dot still has to be dropped before the separator:
+			// the final trim only reaches the end of the whole name.
+			name:  "an untruncated name ending in a dot still drops it",
+			repo:  "abcdefghijklmnopqrs.",
+			chart: "podinfo",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-b5579464eede",
 		},
 	}
 

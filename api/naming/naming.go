@@ -62,7 +62,10 @@ func chartObjectName(repoName, chartName string) string {
 		// the whole name.
 		result += strings.TrimRight(repoName[:20], "-.") + "-chart-"
 	} else {
-		result += repoName + "-chart-"
+		// Same reasoning as the truncated branch above: repoName is followed by
+		// a separator here too, so a trailing dash or dot has to be trimmed
+		// before it, not left for the final trim to reach.
+		result += strings.TrimRight(repoName, "-.") + "-chart-"
 	}
 
 	if len(chartName) > 20 {
