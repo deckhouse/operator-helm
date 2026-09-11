@@ -31,7 +31,7 @@ import (
 // namespaced resource's authorization meaningful: without the namespace the API
 // server answers for the cluster scope, which is a different question entirely.
 func TestReviewCarriesTheNamespaceIntoTheAccessReview(t *testing.T) {
-	clientset := fake.NewSimpleClientset()
+	clientset := fake.NewClientset()
 
 	clientset.PrependReactor("create", "tokenreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, &authnv1.TokenReview{

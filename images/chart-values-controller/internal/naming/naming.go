@@ -32,7 +32,7 @@ const (
 
 	// maxNamespacedPartLen is the same bound for a namespaced name, which carries
 	// one part more: "tmp-" (4) + namespace (<=12) + "-" + repo (<=12) + "-" +
-	// chart (<=12) + "-" + hash (16) = 60.
+	// chart (<=12) + "-" + hash (16) = 59, within the 63-character limit.
 	maxNamespacedPartLen = 12
 )
 

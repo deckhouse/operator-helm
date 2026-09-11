@@ -138,13 +138,13 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 	// Answering exposes the values that feed into the resource of the repository's
 	// family, so the caller must be allowed to create one — in the namespace it
 	// would be created in, when that resource is namespaced.
-	access, displayKind, ok := accessFor(req.RepositoryKind, req.Namespace)
+	access, displayKind, namespaced, ok := accessFor(req.RepositoryKind, req.Namespace)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "UNSUPPORTED_REPOSITORY_KIND",
 			fmt.Sprintf("unsupported repository kind %q", req.RepositoryKind))
 		return
 	}
-	if access.Namespace == "" && requiresNamespace(req.RepositoryKind) {
+	if namespaced && req.Namespace == "" {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "namespace is required for this repository kind")
 		return
 	}
@@ -194,40 +194,30 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 }
 
 // accessFor maps a repository kind to the permission that answering for it
-// requires, plus the Kubernetes kind that permission is expressed in, for use in a
-// message to the caller. Values of a chart from an application repository —
-// namespaced or cluster-wide — feed into a HelmApplication in the request's
-// namespace, so that is what the caller must be allowed to create; values from an
-// addon repository feed into the cluster-scoped HelmClusterAddon.
-func accessFor(kind, namespace string) (access auth.Access, displayKind string, ok bool) {
+// requires, plus the Kubernetes kind that permission is expressed in (for use in a
+// message to the caller) and whether that permission is a namespaced question. Both
+// application kinds are namespaced: even the cluster-wide repository's values reach
+// a HelmApplication that lives in a namespace. Values of a chart from an application
+// repository — namespaced or cluster-wide — feed into a HelmApplication in the
+// request's namespace, so that is what the caller must be allowed to create; values
+// from an addon repository feed into the cluster-scoped HelmClusterAddon.
+func accessFor(kind, namespace string) (access auth.Access, displayKind string, namespaced, ok bool) {
 	switch strings.ToLower(kind) {
 	case string(resolver.RepositoryKindHelmClusterAddon):
 		return auth.Access{
 			Group:    helmv1alpha1.GroupName,
 			Resource: helmv1alpha1.HelmClusterAddonResource,
 			Verb:     "create",
-		}, helmv1alpha1.HelmClusterAddonKind, true
+		}, helmv1alpha1.HelmClusterAddonKind, false, true
 	case string(resolver.RepositoryKindHelmApplication), string(resolver.RepositoryKindHelmClusterApplication):
 		return auth.Access{
 			Group:     helmv1alpha1.GroupName,
 			Resource:  helmv1alpha1.HelmApplicationResource,
 			Verb:      "create",
 			Namespace: namespace,
-		}, helmv1alpha1.HelmApplicationKind, true
+		}, helmv1alpha1.HelmApplicationKind, true, true
 	default:
-		return auth.Access{}, "", false
-	}
-}
-
-// requiresNamespace reports whether answering for a kind is a namespaced question.
-// Both application kinds are: even the cluster-wide repository's values reach a
-// HelmApplication that lives in a namespace.
-func requiresNamespace(kind string) bool {
-	switch strings.ToLower(kind) {
-	case string(resolver.RepositoryKindHelmApplication), string(resolver.RepositoryKindHelmClusterApplication):
-		return true
-	default:
-		return false
+		return auth.Access{}, "", false, false
 	}
 }
 

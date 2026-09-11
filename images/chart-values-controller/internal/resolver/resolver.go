@@ -44,7 +44,7 @@ import (
 )
 
 // RepositoryKind identifies the kind of repository a chart lives in. New
-// repository kinds are added as new constants plus a case in Resolve.
+// repository kinds are added as new constants plus a registry entry in families.
 type RepositoryKind string
 
 const (
@@ -76,7 +76,7 @@ const (
 	OutcomeValuesNotFound            Outcome = "values_not_found"
 
 	// OutcomeInvalidRequest means the request itself does not make sense for the
-	// kind it names — a namespaced kind without a namespace, or the reverse.
+	// kind it names — a namespaced kind without a namespace.
 	OutcomeInvalidRequest Outcome = "invalid_request"
 )
 
@@ -344,7 +344,7 @@ func (r *Resolver) ensureHelmChart(ctx context.Context, family repositoryFamily,
 	}
 	if helmRepoName == "" {
 		// The backing HelmRepository is created by operator-helm-controller when
-		// it reconciles the HelmClusterAddonRepository; until then, wait.
+		// it reconciles the repository; until then, wait.
 		return nil, true, nil
 	}
 
