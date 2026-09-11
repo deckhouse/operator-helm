@@ -47,10 +47,12 @@ func ClusterApplicationChartName(repoName, chartName string) string {
 //
 // Joining the two parts with a separator that may itself appear inside them is not
 // injective: "abc" + "def-chart-ghi" and "abc-chart-def" + "ghi" produce the same
-// string, and the two repositories then fight over one catalog object. The hash of
-// the pair is what separates them, so every family always carries it.
+// readable part, and the two repositories then fight over one catalog object. The
+// hash is what separates them, so every family always carries it — and it is taken
+// over the two parts joined by a byte no object name can hold, because hashing the
+// readable join would reproduce the very ambiguity it is there to resolve.
 func chartObjectName(repoName, chartName string) string {
-	hash := hash(fmt.Sprintf("%s-chart-%s", repoName, chartName))
+	hash := hash(repoName + "\x00" + chartName)
 
 	var result string
 

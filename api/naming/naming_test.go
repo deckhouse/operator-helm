@@ -29,19 +29,19 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 			name:  "short names are joined and hashed",
 			repo:  "example",
 			chart: "podinfo",
-			want:  "example-chart-podinfo-aa661c3516b2",
+			want:  "example-chart-podinfo-015bdf9886f6",
 		},
 		{
 			name:  "long names are truncated and suffixed with a hash",
 			repo:  "yandex-cloud-marketplace-mirror",
 			chart: "cert-manager-webhook-yandex",
-			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-a3ee4a8a584e",
+			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-cb0f7a51035d",
 		},
 		{
 			name:  "an empty chart name leaves no trailing dash before the hash",
 			repo:  "repo",
 			chart: "",
-			want:  "repo-chart-4e5d8120682c",
+			want:  "repo-chart-8549288388a9",
 		},
 		{
 			// A repository name is a DNS subdomain and a chart name comes from
@@ -49,7 +49,7 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 			name:  "a truncation that ends in a dot drops it",
 			repo:  "abcdefghijklmnopqrs.x",
 			chart: "podinfo",
-			want:  "abcdefghijklmnopqrs-chart-podinfo-da22920998cb",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-0fe4a214e986",
 		},
 	}
 
@@ -73,19 +73,19 @@ func TestApplicationChartName(t *testing.T) {
 			name:  "short names are joined and hashed",
 			repo:  "example",
 			chart: "podinfo",
-			want:  "example-chart-podinfo-aa661c3516b2",
+			want:  "example-chart-podinfo-015bdf9886f6",
 		},
 		{
 			name:  "long names are truncated and suffixed with a hash",
 			repo:  "yandex-cloud-marketplace-mirror",
 			chart: "cert-manager-webhook-yandex",
-			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-a3ee4a8a584e",
+			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-cb0f7a51035d",
 		},
 		{
 			name:  "an empty chart name leaves no trailing dash before the hash",
 			repo:  "repo",
 			chart: "",
-			want:  "repo-chart-4e5d8120682c",
+			want:  "repo-chart-8549288388a9",
 		},
 		{
 			// A repository name is a DNS subdomain and a chart name comes from
@@ -93,7 +93,7 @@ func TestApplicationChartName(t *testing.T) {
 			name:  "a truncation that ends in a dot drops it",
 			repo:  "abcdefghijklmnopqrs.x",
 			chart: "podinfo",
-			want:  "abcdefghijklmnopqrs-chart-podinfo-da22920998cb",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-0fe4a214e986",
 		},
 	}
 
@@ -117,13 +117,13 @@ func TestClusterApplicationChartName(t *testing.T) {
 			name:  "short names are joined and hashed",
 			repo:  "shared",
 			chart: "nginx",
-			want:  "shared-chart-nginx-7f9acafe347b",
+			want:  "shared-chart-nginx-a2f6f72110ff",
 		},
 		{
 			name:  "long names are truncated and suffixed with a hash",
 			repo:  "yandex-cloud-marketplace-mirror",
 			chart: "cert-manager-webhook-yandex",
-			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-a3ee4a8a584e",
+			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-cb0f7a51035d",
 		},
 	}
 
@@ -158,17 +158,27 @@ func TestChartNameSchemeIsShared(t *testing.T) {
 	}
 }
 
-// TestHelmClusterAddonChartNameNoLongerCollidesOnATrailingDot pins that the addon
-// family closed its collision gap too. Under its old scheme (a hash only past the
-// truncation threshold), the two names below both trimmed to "foo-chart-bar" and
-// collided: the trailing dot only vanishes from the untrimmed pair after it is
-// already inside the joined string. The hash is computed from that untrimmed pair,
-// so making it unconditional is what tells the two names apart now.
-func TestHelmClusterAddonChartNameNoLongerCollidesOnATrailingDot(t *testing.T) {
+// TestChartNameSeparatesAnAmbiguousPair pins the reason the hash is taken over the
+// two parts joined by a NUL rather than over the readable name: the readable join
+// is ambiguous, so hashing it would reproduce exactly the collision the hash exists
+// to resolve. Both pairs below build the same readable part.
+func TestChartNameSeparatesAnAmbiguousPair(t *testing.T) {
+	left := HelmClusterAddonChartName("abc", "def-chart-ghi")
+	right := HelmClusterAddonChartName("abc-chart-def", "ghi")
+
+	if left == right {
+		t.Fatalf("(%q, %q) and (%q, %q) both produce %q", "abc", "def-chart-ghi", "abc-chart-def", "ghi", left)
+	}
+}
+
+// TestChartNameSeparatesATrailingDot pins a second ambiguity the join alone cannot
+// carry: a part ending in a dot is trimmed inside the readable name, so two charts
+// that differ only by it would otherwise share an object.
+func TestChartNameSeparatesATrailingDot(t *testing.T) {
 	withDot := HelmClusterAddonChartName("foo", "bar.")
 	withoutDot := HelmClusterAddonChartName("foo", "bar")
 
 	if withDot == withoutDot {
-		t.Fatalf("HelmClusterAddonChartName(%q, %q) = %q, collides with (%q, %q)", "foo", "bar.", withDot, "foo", "bar")
+		t.Fatalf("(%q, %q) and (%q, %q) both produce %q", "foo", "bar.", "foo", "bar", withDot)
 	}
 }

@@ -51,7 +51,7 @@ func TestAddonFamilyReadsTheClusterScopedRepositoryAndCatalog(t *testing.T) {
 	// under test calls: otherwise a wrong naming scheme in the family could never be
 	// caught, since the fixture would always agree with whatever the family did.
 	chart := &helmv1alpha1.HelmClusterAddonChart{
-		ObjectMeta: metav1.ObjectMeta{Name: "example-chart-podinfo-aa661c3516b2"},
+		ObjectMeta: metav1.ObjectMeta{Name: "example-chart-podinfo-015bdf9886f6"},
 		Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "6.7.1"}}},
 	}
 
@@ -124,7 +124,7 @@ func TestApplicationFamiliesReadTheirOwnObjects(t *testing.T) {
 	// Both catalog objects are named with a literal, not apinaming.*ChartName, for the
 	// same reason as the addon fixture above.
 	namespacedChart := &helmv1alpha1.HelmApplicationChart{
-		ObjectMeta: metav1.ObjectMeta{Name: "stable-chart-podinfo-cb815671ddc8", Namespace: "team-a"},
+		ObjectMeta: metav1.ObjectMeta{Name: "stable-chart-podinfo-d433c642288b", Namespace: "team-a"},
 		Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "6.7.1"}}},
 	}
 	cluster := &helmv1alpha1.HelmClusterApplicationRepository{
@@ -132,7 +132,7 @@ func TestApplicationFamiliesReadTheirOwnObjects(t *testing.T) {
 		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://ghcr.io/example/charts"},
 	}
 	clusterChart := &helmv1alpha1.HelmClusterApplicationChart{
-		ObjectMeta: metav1.ObjectMeta{Name: "shared-chart-podinfo-83fd5aa25c3a"},
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-chart-podinfo-6c7443a6e003"},
 		Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "1.2.3"}}},
 	}
 
