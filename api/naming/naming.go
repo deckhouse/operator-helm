@@ -23,29 +23,58 @@ import (
 )
 
 // HelmClusterAddonChartName derives the name of the HelmClusterAddonChart object
-// that mirrors one chart of a repository. It lives in the api module because
-// operator-helm-controller writes those objects while chart-values-controller reads
-// them: the name is a truncated hash, so both must derive it identically.
+// that mirrors one chart of a repository.
 func HelmClusterAddonChartName(repoName, chartName string) string {
-	hash := hash(fmt.Sprintf("%s-chart-%s", repoName, chartName))
+	return chartObjectName(repoName, chartName)
+}
 
-	var result, postfix string
+// ApplicationChartName derives the name of the HelmApplicationChart object that
+// mirrors one chart of a HelmApplicationRepository. The object is namespaced, so
+// the name only has to be unique inside the repository's namespace.
+func ApplicationChartName(repoName, chartName string) string {
+	return chartObjectName(repoName, chartName)
+}
+
+// ClusterApplicationChartName derives the name of the HelmClusterApplicationChart
+// object that mirrors one chart of a HelmClusterApplicationRepository.
+func ClusterApplicationChartName(repoName, chartName string) string {
+	return chartObjectName(repoName, chartName)
+}
+
+// chartObjectName is the naming scheme behind every chart catalog kind. It lives in
+// the api module because operator-helm-controller writes those objects while
+// chart-values-controller reads them, so both must derive the name identically.
+//
+// Joining the two parts with a separator that may itself appear inside them is not
+// injective: "abc" + "def-chart-ghi" and "abc-chart-def" + "ghi" produce the same
+// readable part, and the two repositories then fight over one catalog object. The
+// hash is what separates them, so every family always carries it — and it is taken
+// over the two parts joined by a byte no object name can hold, because hashing the
+// readable join would reproduce the very ambiguity it is there to resolve.
+func chartObjectName(repoName, chartName string) string {
+	hash := hash(repoName + "\x00" + chartName)
+
+	var result string
 
 	if len(repoName) > 20 {
-		result += repoName[:20] + "-chart-"
-		postfix = "-" + hash
+		// The truncated part is followed by a separator, so a dash or a dot the
+		// cut left behind has to go here: the final trim only reaches the end of
+		// the whole name.
+		result += strings.TrimRight(repoName[:20], "-.") + "-chart-"
 	} else {
-		result += repoName + "-chart-"
+		// Same reasoning as the truncated branch above: repoName is followed by
+		// a separator here too, so a trailing dash or dot has to be trimmed
+		// before it, not left for the final trim to reach.
+		result += strings.TrimRight(repoName, "-.") + "-chart-"
 	}
 
 	if len(chartName) > 20 {
 		result += chartName[:20]
-		postfix = "-" + hash
 	} else {
 		result += chartName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + "-" + hash
 }
 
 func hash(s string) string {

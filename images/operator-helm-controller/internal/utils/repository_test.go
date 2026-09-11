@@ -201,16 +201,16 @@ func TestSplitOCIRef(t *testing.T) {
 
 func TestResolveChartSource(t *testing.T) {
 	helmRepo := &helmv1alpha1.HelmClusterAddonRepository{
-		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.com/stable"},
+		Spec: helmv1alpha1.RepositorySpec{URL: "https://charts.example.com/stable"},
 	}
 	ociRepo := &helmv1alpha1.HelmClusterAddonRepository{
-		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "oci://registry.example.com/charts/podinfo"},
+		Spec: helmv1alpha1.RepositorySpec{URL: "oci://registry.example.com/charts/podinfo"},
 	}
 
 	tests := []struct {
 		name    string
 		repo    *helmv1alpha1.HelmClusterAddonRepository
-		version helmv1alpha1.HelmClusterAddonChartVersion
+		version helmv1alpha1.ChartVersion
 		want    ChartSource
 		wantErr bool
 	}{
@@ -219,7 +219,7 @@ func TestResolveChartSource(t *testing.T) {
 			// repository scheme.
 			name: "index entry pointing at a registry wins over the repository scheme",
 			repo: helmRepo,
-			version: helmv1alpha1.HelmClusterAddonChartVersion{
+			version: helmv1alpha1.ChartVersion{
 				Version: "25.0.2",
 				OCIRef:  "oci://registry-1.docker.io/bitnamicharts/airflow:25.0.2",
 			},
@@ -232,13 +232,13 @@ func TestResolveChartSource(t *testing.T) {
 		{
 			name:    "helm repository without an oci reference stays on the helm path",
 			repo:    helmRepo,
-			version: helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1"},
+			version: helmv1alpha1.ChartVersion{Version: "6.7.1"},
 			want:    ChartSource{Kind: InternalHelmRepository},
 		},
 		{
 			name:    "oci repository addresses its own url at the version tag",
 			repo:    ociRepo,
-			version: helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+			version: helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
 			want: ChartSource{
 				Kind: InternalOCIRepository,
 				URL:  "oci://registry.example.com/charts/podinfo",
@@ -248,22 +248,22 @@ func TestResolveChartSource(t *testing.T) {
 		{
 			name:    "unparsable recorded reference is an error",
 			repo:    helmRepo,
-			version: helmv1alpha1.HelmClusterAddonChartVersion{Version: "1.0.0", OCIRef: "oci://BAD_HOST//:::"},
+			version: helmv1alpha1.ChartVersion{Version: "1.0.0", OCIRef: "oci://BAD_HOST//:::"},
 			wantErr: true,
 		},
 		{
 			name: "unsupported repository scheme is an error",
 			repo: &helmv1alpha1.HelmClusterAddonRepository{
-				Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "ftp://charts.example.com"},
+				Spec: helmv1alpha1.RepositorySpec{URL: "ftp://charts.example.com"},
 			},
-			version: helmv1alpha1.HelmClusterAddonChartVersion{Version: "1.0.0"},
+			version: helmv1alpha1.ChartVersion{Version: "1.0.0"},
 			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ResolveChartSource(tt.repo, &tt.version)
+			got, err := ResolveChartSource(tt.repo.Spec.URL, &tt.version)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got %+v", got)

@@ -50,13 +50,13 @@ func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return &Resolver{client: c}
+	return &Resolver{client: c, cache: cache.New(t.TempDir())}
 }
 
-func chartWithVersions(repoName, chartName string, versions ...helmv1alpha1.HelmClusterAddonChartVersion) *helmv1alpha1.HelmClusterAddonChart {
+func chartWithVersions(repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
 	return &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{Name: naming.HelmClusterAddonChartName(repoName, chartName)},
-		Status:     helmv1alpha1.HelmClusterAddonChartStatus{Versions: versions},
+		Status:     helmv1alpha1.ChartCatalogStatus{Versions: versions},
 	}
 }
 
@@ -68,7 +68,7 @@ func TestOCIMediaType(t *testing.T) {
 	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
 
 	t.Run("a usable version returns its media type", func(t *testing.T) {
-		mediaType, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{
+		mediaType, done := ociMediaType(req, &helmv1alpha1.ChartVersion{
 			Version: "6.7.1", MediaType: "application/tar+gzip",
 		})
 		if done != nil {
@@ -80,7 +80,7 @@ func TestOCIMediaType(t *testing.T) {
 	})
 
 	t.Run("an unusable version is values_not_found with the reason", func(t *testing.T) {
-		_, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{
+		_, done := ociMediaType(req, &helmv1alpha1.ChartVersion{
 			Version:            "6.7.1",
 			UnavailableReason:  helmv1alpha1.UnavailableReasonUnsupportedMediaType,
 			UnavailableMessage: "config media type \"application/vnd.unknown.config.v1+json\" is not a helm chart config",
@@ -94,7 +94,7 @@ func TestOCIMediaType(t *testing.T) {
 	})
 
 	t.Run("a resolve-pending version is pending, not values_not_found", func(t *testing.T) {
-		_, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{
+		_, done := ociMediaType(req, &helmv1alpha1.ChartVersion{
 			Version:           "6.7.1",
 			UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending,
 		})
@@ -108,14 +108,14 @@ func TestOCIMediaType(t *testing.T) {
 		// oci:// repository had before this controller started recording verdicts. The
 		// migration path (client.KnownVersions) treats this exactly like ResolvePending
 		// and re-resolves it on the next normal synchronization.
-		_, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1"})
+		_, done := ociMediaType(req, &helmv1alpha1.ChartVersion{Version: "6.7.1"})
 		if done == nil || done.Outcome != OutcomePending {
 			t.Fatalf("outcome is %+v, want pending: an empty verdict is the pre-upgrade migration state and must be retried, not reported as a permanent failure", done)
 		}
 	})
 
 	t.Run("a removed version keeps its media type usable", func(t *testing.T) {
-		mediaType, done := ociMediaType(req, &helmv1alpha1.HelmClusterAddonChartVersion{
+		mediaType, done := ociMediaType(req, &helmv1alpha1.ChartVersion{
 			Version:           "6.7.1",
 			MediaType:         "application/tar+gzip",
 			UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
@@ -135,10 +135,10 @@ func TestChartVersion(t *testing.T) {
 
 	t.Run("an existing version is returned as recorded", func(t *testing.T) {
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
-			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
+			helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
 		))
 
-		version, done, err := resolver.chartVersion(context.Background(), req)
+		version, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -155,10 +155,10 @@ func TestChartVersion(t *testing.T) {
 		// verdict is a perfectly normal archive version, and reading it as "unresolved"
 		// made every such version report pending forever.
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
-			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.1"},
+			helmv1alpha1.ChartVersion{Version: "6.7.1"},
 		))
 
-		version, done, err := resolver.chartVersion(context.Background(), req)
+		version, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -172,14 +172,14 @@ func TestChartVersion(t *testing.T) {
 
 	t.Run("an unaddressable index reference is values_not_found", func(t *testing.T) {
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
-			helmv1alpha1.HelmClusterAddonChartVersion{
+			helmv1alpha1.ChartVersion{
 				Version:            "6.7.1",
 				UnavailableReason:  helmv1alpha1.UnavailableReasonInvalidChartReference,
 				UnavailableMessage: "oci reference \"oci://BAD_HOST//:::\" is not a valid tagged reference",
 			},
 		))
 
-		_, done, err := resolver.chartVersion(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -191,7 +191,7 @@ func TestChartVersion(t *testing.T) {
 	t.Run("a missing chart is pending", func(t *testing.T) {
 		resolver := newTestResolver(t)
 
-		_, done, err := resolver.chartVersion(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -202,10 +202,10 @@ func TestChartVersion(t *testing.T) {
 
 	t.Run("a missing version is pending", func(t *testing.T) {
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
-			helmv1alpha1.HelmClusterAddonChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
+			helmv1alpha1.ChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
 		))
 
-		_, done, err := resolver.chartVersion(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -268,9 +268,9 @@ func newHybridResolver(t *testing.T, prober chartartifact.Prober, objects ...cli
 func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.invalid/stable"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
-	chart := chartWithVersions("example", "nginx", helmv1alpha1.HelmClusterAddonChartVersion{
+	chart := chartWithVersions("example", "nginx", helmv1alpha1.ChartVersion{
 		Version: "0.1.0",
 		OCIRef:  "oci://ghcr.io/drey/nginx/nginx:0.1.0",
 	})
@@ -286,11 +286,11 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 
 	resolver, c := newHybridResolver(t, prober, repo, chart)
 
-	if _, err := resolver.resolveHelmClusterAddon(context.Background(), req); err != nil {
+	if _, err := resolver.resolveChart(context.Background(), mustFamily(t, req.Kind), req); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	name := cvnaming.AuxResourceName(string(req.Kind), req.RepositoryName, req.Chart, req.Version)
+	name := cvnaming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version)
 	key := client.ObjectKey{Name: name, Namespace: "d8-operator-helm"}
 
 	ociRepo := &sourcev1.OCIRepository{}
@@ -339,7 +339,7 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "bitnami"},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "https://charts.example.invalid/bitnami"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/bitnami"},
 	}
 	helmRepo := &sourcev1.HelmRepository{
 		ObjectMeta: metav1.ObjectMeta{
@@ -348,7 +348,7 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 			Labels:    map[string]string{helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: "bitnami"},
 		},
 	}
-	chart := chartWithVersions("bitnami", "nginx", helmv1alpha1.HelmClusterAddonChartVersion{Version: "0.2.0"})
+	chart := chartWithVersions("bitnami", "nginx", helmv1alpha1.ChartVersion{Version: "0.2.0"})
 
 	req := Request{
 		Kind:           RepositoryKindHelmClusterAddon,
@@ -359,7 +359,7 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 
 	resolver, c := newHybridResolver(t, nil, repo, chart, helmRepo)
 
-	result, err := resolver.resolveHelmClusterAddon(context.Background(), req)
+	result, err := resolver.resolveChart(context.Background(), mustFamily(t, req.Kind), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 		t.Fatalf("an archive version must not be reported as unreadable: %+v", result)
 	}
 
-	name := cvnaming.AuxResourceName(string(req.Kind), req.RepositoryName, req.Chart, req.Version)
+	name := cvnaming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version)
 	key := client.ObjectKey{Name: name, Namespace: "d8-operator-helm"}
 
 	helmChart := &sourcev1.HelmChart{}
@@ -377,4 +377,106 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 	if helmChart.Spec.Version != "0.2.0" {
 		t.Fatalf("chart version = %q, want 0.2.0", helmChart.Spec.Version)
 	}
+}
+
+// TestResolveDispatchesOnTheRequestShape covers what the HTTP layer cannot: an
+// unknown kind and a namespaced kind without a namespace are request errors,
+// distinguishable from "the repository is gone". A namespace on a cluster-scoped
+// kind is not a request error — see TestClusterScopedRequestsIgnoreAStrayNamespace
+// for what happens to it instead.
+func TestResolveDispatchesOnTheRequestShape(t *testing.T) {
+	r := newTestResolver(t)
+
+	cases := []struct {
+		name string
+		req  Request
+		want Outcome
+	}{
+		{
+			name: "unknown kind",
+			req:  Request{Kind: "somethingelse", RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeUnsupportedRepositoryKind,
+		},
+		{
+			name: "namespaced kind without a namespace",
+			req:  Request{Kind: RepositoryKindHelmApplication, RepositoryName: "stable", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeInvalidRequest,
+		},
+		{
+			name: "cluster addon kind with a namespace is not rejected",
+			req:  Request{Kind: RepositoryKindHelmClusterAddon, Namespace: "team-a", RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeRepositoryNotFound,
+		},
+		{
+			// The spec requires a namespace here for authorization, even though it is a
+			// cluster-scoped repository kind: it must not be rejected, and it does not
+			// identify the repository, so "example" is still looked up cluster-wide.
+			name: "cluster application kind with a namespace is not rejected",
+			req:  Request{Kind: RepositoryKindHelmClusterApplication, Namespace: "team-a", RepositoryName: "shared", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeRepositoryNotFound,
+		},
+		{
+			name: "kind casing does not matter",
+			req:  Request{Kind: "HelmApplicationRepository", Namespace: "team-a", RepositoryName: "missing", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeRepositoryNotFound,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := r.Resolve(context.Background(), tc.req)
+			if err != nil {
+				t.Fatalf("Resolve returned %v", err)
+			}
+			if got.Outcome != tc.want {
+				t.Fatalf("outcome = %q, want %q (message %q)", got.Outcome, tc.want, got.Message)
+			}
+		})
+	}
+}
+
+// TestClusterScopedRequestsIgnoreAStrayNamespace pins the rule the spec draws for
+// the request namespace: it is part of a chart's identity only for a namespaced
+// family. For a cluster-scoped kind — the addon family, whose contract must not
+// move, and the cluster application family, which the caller must authorize through
+// a namespace it does not otherwise use — a namespace on the request must resolve to
+// the exact same auxiliary resource name and cache entry as a request without one.
+// Otherwise the same chart would get a second, per-namespace copy of its internal
+// objects for every namespace a caller happens to send.
+func TestClusterScopedRequestsIgnoreAStrayNamespace(t *testing.T) {
+	for _, kind := range []RepositoryKind{RepositoryKindHelmClusterAddon, RepositoryKindHelmClusterApplication} {
+		t.Run(string(kind), func(t *testing.T) {
+			r := newTestResolver(t)
+
+			req := Request{Kind: kind, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
+			name := cvnaming.AuxResourceName(string(kind), "", req.RepositoryName, req.Chart, req.Version)
+			if err := r.cache.Put(name, []byte("replicaCount: 1\n")); err != nil {
+				t.Fatalf("seeding cache: %v", err)
+			}
+
+			withNamespace := req
+			withNamespace.Namespace = "team-a"
+
+			got, err := r.Resolve(context.Background(), withNamespace)
+			if err != nil {
+				t.Fatalf("Resolve returned %v", err)
+			}
+			if got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
+				t.Fatalf("got %+v, want the entry cached without a namespace: a stray namespace must not miss it or create a second identity", got)
+			}
+		})
+	}
+}
+
+// mustFamily resolves the family of a request's kind, failing the test if the kind
+// is unknown.
+func mustFamily(t *testing.T, kind RepositoryKind) repositoryFamily {
+	t.Helper()
+
+	family, ok := familyFor(kind)
+	if !ok {
+		t.Fatalf("no family for kind %q", kind)
+	}
+
+	return family
 }

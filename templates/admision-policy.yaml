@@ -35,7 +35,21 @@ spec:
           - "UPDATE"
           - "DELETE"
         resources:
+          # The status subresource is listed explicitly: the Role seeded in an
+          # application namespace grants resources: ["*"], which matches
+          # subresources too, so without these entries an application's service
+          # account could patch its namespace's catalog status.
           - "helmclusteraddoncharts"
+          - "helmclusteraddoncharts/status"
+          - "helmapplicationcharts"
+          - "helmapplicationcharts/status"
+          - "helmclusterapplicationcharts"
+          - "helmclusterapplicationcharts/status"
+          # Same reasoning for the namespaced kinds an application's account can
+          # reach: their spec stays open, only the status the controller owns is
+          # closed.
+          - "helmapplications/status"
+          - "helmapplicationrepositories/status"
   validations:
     - expression: |
         request.userInfo.username.startsWith("system:serviceaccount:kube-system:") ||

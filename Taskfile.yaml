@@ -6,8 +6,12 @@ vars:
   deckhouse_lib_helm_ver: 1.71.2
   target: ""
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
-  golangciLintVersion: "v2.8.0"
+  golangciLintVersion: "v2.13.2"
 
+# Only the modules this repository authors are listed. images/kube-api-rewriter is a
+# separate upstream module vendored in for the build, and images/helm-controller and
+# images/nelm-source-controller carry nothing but their werf files, so none of them is
+# ours to lint, format or test here.
 includes:
   api:
     taskfile: ./api/Taskfile.dist.yaml
@@ -18,10 +22,10 @@ includes:
   hooks:
     taskfile: ./images/hooks/Taskfile.dist.yaml
     dir: ./images/hooks
-  artifact:
+  operator-helm-controller:
     taskfile: ./images/operator-helm-controller/Taskfile.dist.yaml
     dir: ./images/operator-helm-controller
-  chart-values-artifact:
+  chart-values-controller:
     taskfile: ./images/chart-values-controller/Taskfile.dist.yaml
     dir: ./images/chart-values-controller
 
@@ -54,6 +58,30 @@ tasks:
     desc: "Run API generation and verify committed files."
     cmds:
       - task: api:ci:generate
+
+  # The shared deps task installs golangci-lint through the upstream install.sh,
+  # whose checksum lookup is an unanchored grep: releases now ship an SBOM entry
+  # next to the archive, both lines match, and the verification fails for every
+  # version past v2.8.0. Building the binary with the toolchain already present
+  # sidesteps the download and keeps the linter new enough to read a module that
+  # targets this repository's Go version.
+  install:golangci-lint:
+    desc: "Install golangci-lint binary to bin/golangci-lint-<version>."
+    status:
+      - test -x bin/golangci-lint-{{.golangciLintVersion}}
+    cmds:
+      - mkdir -p bin
+      - GOBIN="$(pwd)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.golangciLintVersion}}
+      - mv bin/golangci-lint bin/golangci-lint-{{.golangciLintVersion}}
+
+  test:unit:
+    desc: "Run the unit tests of every module."
+    cmds:
+      - task: api:test:unit
+      - task: hooks:test:unit
+      - task: operator-helm-controller:test:unit
+      - task: chart-values-controller:test:unit
+      - task: e2e:test:unit
 
   test:e2e:setup:
     desc: "Setup environment for e2e tests."
@@ -116,16 +144,18 @@ tasks:
     cmds:
       - task: api:format
       - task: hooks:format
-      - task: artifact:format
-      - task: chart-values-artifact:format
+      - task: operator-helm-controller:format
+      - task: chart-values-controller:format
       - task: e2e:format
 
   lint:
+    deps:
+      - install:golangci-lint
     cmds:
       - task: api:lint
       - task: hooks:lint
-      - task: artifact:lint
-      - task: chart-values-artifact:lint
+      - task: operator-helm-controller:lint
+      - task: chart-values-controller:lint
       - task: e2e:lint
       - task: lint:doc-ru
 

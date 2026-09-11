@@ -1,0 +1,31 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  # This module's subsystem is delivery (see module.yaml), but user-authz ships no
+  # delivery manage role to aggregate into, so aggregating there would silently
+  # grant nobody anything. The right to view a cluster-scoped application
+  # repository lands with kubernetes subsystem administrators instead, the same
+  # subsystem kube-proxy, kube-dns and control-plane-manager aggregate their manage
+  # roles into. The real fix is adding delivery roles upstream in deckhouse/deckhouse.
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "manage" "rbac.deckhouse.io/level" "module" "rbac.deckhouse.io/namespace" (printf "d8-%s" .Chart.Name) "rbac.deckhouse.io/aggregate-to-kubernetes-as" "viewer")) | nindent 2 }}
+  name: d8:manage:permission:module:{{ .Chart.Name }}:view
+rules:
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusterapplicationrepositories
+  - helmclusterapplicationcharts
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - deckhouse.io
+  resourceNames:
+  - {{ .Chart.Name }}
+  resources:
+  - moduleconfigs
+  verbs:
+  - get
+  - list
+  - watch

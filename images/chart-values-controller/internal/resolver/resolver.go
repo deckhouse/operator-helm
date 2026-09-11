@@ -31,7 +31,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -41,12 +40,11 @@ import (
 	"github.com/deckhouse/chart-values-controller/internal/chartartifact"
 	"github.com/deckhouse/chart-values-controller/internal/labels"
 	"github.com/deckhouse/chart-values-controller/internal/naming"
-	apinaming "github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 // RepositoryKind identifies the kind of repository a chart lives in. New
-// repository kinds are added as new constants plus a case in Resolve.
+// repository kinds are added as new constants plus a registry entry in families.
 type RepositoryKind string
 
 const (
@@ -54,6 +52,16 @@ const (
 	// HelmClusterAddonRepository custom resource. Kind values are stored and
 	// compared in lower case, so the request casing does not matter.
 	RepositoryKindHelmClusterAddon RepositoryKind = "helmclusteraddonrepository"
+
+	// RepositoryKindHelmApplication is a chart referenced by a
+	// HelmApplicationRepository, the namespaced repository of the application
+	// family: a request for it must name the namespace.
+	RepositoryKindHelmApplication RepositoryKind = "helmapplicationrepository"
+
+	// RepositoryKindHelmClusterApplication is a chart referenced by a
+	// HelmClusterApplicationRepository, the cluster-wide repository of the
+	// application family.
+	RepositoryKindHelmClusterApplication RepositoryKind = "helmclusterapplicationrepository"
 )
 
 // Outcome enumerates the possible results of resolving a chart-values request.
@@ -66,12 +74,19 @@ const (
 	OutcomeUnsupportedRepositoryKind Outcome = "unsupported_repository_kind"
 	OutcomeFetchFailed               Outcome = "fetch_failed"
 	OutcomeValuesNotFound            Outcome = "values_not_found"
+
+	// OutcomeInvalidRequest means the request itself does not make sense for the
+	// kind it names — a namespaced kind without a namespace.
+	OutcomeInvalidRequest Outcome = "invalid_request"
 )
 
-// Request identifies a chart by repository kind, repository name, chart name and
-// chart version.
+// Request identifies a chart by repository kind, repository namespace, repository
+// name, chart name and chart version. Namespace identifies the repository only for a
+// namespaced repository kind; for a cluster-scoped one it may still be set (it is the
+// caller's authorization context) but Resolve does not use it to find the chart.
 type Request struct {
 	Kind           RepositoryKind
+	Namespace      string
 	RepositoryName string
 	Chart          string
 	Version        string
@@ -119,12 +134,24 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 	requested := req.Kind
 	req.Kind = RepositoryKind(strings.ToLower(string(req.Kind)))
 
-	switch req.Kind {
-	case RepositoryKindHelmClusterAddon:
-		return r.resolveHelmClusterAddon(ctx, req)
-	default:
+	family, ok := familyFor(req.Kind)
+	if !ok {
 		return Result{Outcome: OutcomeUnsupportedRepositoryKind, Message: fmt.Sprintf("unsupported repository kind %q", requested)}, nil
 	}
+
+	if err := family.requireNamespace(req.Namespace); err != nil {
+		return Result{Outcome: OutcomeInvalidRequest, Message: err.Error()}, nil
+	}
+
+	if !family.Namespaced {
+		// The namespace is part of a chart's identity only for a namespaced family: for
+		// a cluster-scoped one it is just the caller's authorization context and must not
+		// reach the resource name, the cache key or the family's lookups, or the same
+		// chart would resolve to a different auxiliary object per namespace.
+		req.Namespace = ""
+	}
+
+	return r.resolveChart(ctx, family, req)
 }
 
 // chartVersion finds the catalog entry for the requested version. It reports only
@@ -137,11 +164,9 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 // a registry down the HTTP path.
 //
 // A non-nil Result means the caller must stop and return it.
-func (r *Resolver) chartVersion(ctx context.Context, req Request) (*helmv1alpha1.HelmClusterAddonChartVersion, *Result, error) {
-	chart := &helmv1alpha1.HelmClusterAddonChart{}
-	key := types.NamespacedName{Name: apinaming.HelmClusterAddonChartName(req.RepositoryName, req.Chart)}
-
-	if err := r.client.Get(ctx, key, chart); err != nil {
+func (r *Resolver) chartVersion(ctx context.Context, family repositoryFamily, req Request) (*helmv1alpha1.ChartVersion, *Result, error) {
+	versions, err := family.ChartVersions(ctx, r.client, req.Namespace, req.RepositoryName, req.Chart)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// The chart object is created by operator-helm-controller when it synchronizes
 			// the repository: until then the catalog simply has not caught up.
@@ -151,8 +176,8 @@ func (r *Resolver) chartVersion(ctx context.Context, req Request) (*helmv1alpha1
 		return nil, nil, fmt.Errorf("getting chart: %w", err)
 	}
 
-	for i := range chart.Status.Versions {
-		version := &chart.Status.Versions[i]
+	for i := range versions {
+		version := &versions[i]
 		if version.Version != req.Version {
 			continue
 		}
@@ -179,7 +204,7 @@ func (r *Resolver) chartVersion(ctx context.Context, req Request) (*helmv1alpha1
 // verdict on it, so an empty media type is a state rather than a value.
 //
 // A non-nil Result means the caller must stop and return it.
-func ociMediaType(req Request, version *helmv1alpha1.HelmClusterAddonChartVersion) (string, *Result) {
+func ociMediaType(req Request, version *helmv1alpha1.ChartVersion) (string, *Result) {
 	if version.MediaType != "" {
 		return version.MediaType, nil
 	}
@@ -204,7 +229,7 @@ func ociMediaType(req Request, version *helmv1alpha1.HelmClusterAddonChartVersio
 }
 
 // versionDetail renders why a catalog entry is unusable.
-func versionDetail(version *helmv1alpha1.HelmClusterAddonChartVersion) string {
+func versionDetail(version *helmv1alpha1.ChartVersion) string {
 	detail := version.UnavailableReason
 	if version.UnavailableMessage != "" {
 		detail += ": " + version.UnavailableMessage
@@ -213,11 +238,13 @@ func versionDetail(version *helmv1alpha1.HelmClusterAddonChartVersion) string {
 	return detail
 }
 
-// resolveHelmClusterAddon ensures the auxiliary source resource for a chart from
-// a HelmClusterAddonRepository exists, inspects its status and returns the
-// chart's values.yaml once the artifact is ready.
-func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Result, error) {
-	name := naming.AuxResourceName(string(req.Kind), req.RepositoryName, req.Chart, req.Version)
+// resolveChart ensures the auxiliary source resource for one chart exists, inspects
+// its status and returns the chart's values.yaml once the artifact is ready. Every
+// repository kind takes this path; what differs — where the repository and its
+// catalog are read from, and how its internal objects are recognised — arrives in
+// the family.
+func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, req Request) (Result, error) {
+	name := naming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version)
 
 	// Fast path: the cache (keyed by the auxiliary resource name) is kept fresh by
 	// the auxiliary-resource controller via a watch with a revision-change predicate,
@@ -226,8 +253,8 @@ func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Re
 		return Result{Outcome: OutcomeReady, Values: values}, nil
 	}
 
-	repo := &helmv1alpha1.HelmClusterAddonRepository{}
-	if err := r.client.Get(ctx, types.NamespacedName{Name: req.RepositoryName}, repo); err != nil {
+	repo, err := family.GetRepository(ctx, r.client, req.Namespace, req.RepositoryName)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return Result{Outcome: OutcomeRepositoryNotFound, Message: fmt.Sprintf("repository %q not found", req.RepositoryName)}, nil
 		}
@@ -236,7 +263,7 @@ func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Re
 
 	expiresAt := time.Now().UTC().Add(r.ttl).Format(time.RFC3339)
 
-	version, done, err := r.chartVersion(ctx, req)
+	version, done, err := r.chartVersion(ctx, family, req)
 	if err != nil {
 		return Result{}, err
 	}
@@ -252,7 +279,7 @@ func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Re
 		// The index publishes this version in a registry, whatever the repository's
 		// own url scheme is. Reading it through a HelmChart would make the source
 		// controller download the index url over HTTP and fail on the oci:// scheme.
-		ociRepo, done, err := r.ensureHybridOCIRepository(ctx, repo, req, name, expiresAt, version)
+		ociRepo, done, err := r.ensureHybridOCIRepository(ctx, family, repo, req, name, expiresAt, version)
 		if err != nil {
 			return Result{}, err
 		}
@@ -260,19 +287,19 @@ func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Re
 			return *done, nil
 		}
 		conditions, art = ociRepo.Status.Conditions, ociRepo.Status.Artifact
-	case isOCI(repo.Spec.URL):
+	case isOCI(repo.URL):
 		mediaType, done := ociMediaType(req, version)
 		if done != nil {
 			return *done, nil
 		}
 
-		ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt, repo.Spec.URL, req.Version, mediaType, true, true)
+		ociRepo, err := r.ensureOCIRepository(ctx, family, repo, req, name, expiresAt, repo.URL, req.Version, mediaType, true, true)
 		if err != nil {
 			return Result{}, err
 		}
 		conditions, art = ociRepo.Status.Conditions, ociRepo.Status.Artifact
-	case isHelm(repo.Spec.URL):
-		chart, pending, err := r.ensureHelmChart(ctx, repo, req, name, expiresAt)
+	case isHelm(repo.URL):
+		chart, pending, err := r.ensureHelmChart(ctx, family, req, name, expiresAt)
 		if err != nil {
 			return Result{}, err
 		}
@@ -281,7 +308,7 @@ func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Re
 		}
 		conditions, art = chart.Status.Conditions, chart.Status.Artifact
 	default:
-		return Result{Outcome: OutcomeFetchFailed, Message: fmt.Sprintf("unsupported repository URL scheme: %q", repo.Spec.URL)}, nil
+		return Result{Outcome: OutcomeFetchFailed, Message: fmt.Sprintf("unsupported repository URL scheme: %q", repo.URL)}, nil
 	}
 
 	switch outcome, message := classify(conditions, art); outcome {
@@ -310,14 +337,14 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 	return Result{Outcome: OutcomeReady, Values: values}, nil
 }
 
-func (r *Resolver) ensureHelmChart(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository, req Request, name, expiresAt string) (*sourcev1.HelmChart, bool, error) {
-	helmRepoName, err := r.findHelmRepositoryName(ctx, repo.Name)
+func (r *Resolver) ensureHelmChart(ctx context.Context, family repositoryFamily, req Request, name, expiresAt string) (*sourcev1.HelmChart, bool, error) {
+	helmRepoName, err := r.findHelmRepositoryName(ctx, family, req)
 	if err != nil {
 		return nil, false, err
 	}
 	if helmRepoName == "" {
 		// The backing HelmRepository is created by operator-helm-controller when
-		// it reconciles the HelmClusterAddonRepository; until then, wait.
+		// it reconciles the repository; until then, wait.
 		return nil, true, nil
 	}
 
@@ -352,12 +379,13 @@ func (r *Resolver) ensureHelmChart(ctx context.Context, repo *helmv1alpha1.HelmC
 // say whether the repository's own secrets describe the host being addressed.
 func (r *Resolver) ensureOCIRepository(
 	ctx context.Context,
-	repo *helmv1alpha1.HelmClusterAddonRepository,
+	family repositoryFamily,
+	repo *repositorySpec,
 	req Request,
 	name, expiresAt, url, tag, mediaType string,
 	credentials, tls bool,
 ) (*sourcev1.OCIRepository, error) {
-	authSecret, tlsSecret, err := r.findRepositorySecretNames(ctx, repo.Name)
+	authSecret, tlsSecret, err := r.findRepositorySecretNames(ctx, family, req)
 	if err != nil {
 		return nil, err
 	}
@@ -383,12 +411,12 @@ func (r *Resolver) ensureOCIRepository(
 		ociRepo.Spec.SecretRef = nil
 		ociRepo.Spec.CertSecretRef = nil
 		if tls {
-			ociRepo.Spec.Insecure = repo.Spec.InsecureSkipVerify
-			if repo.Spec.CACertificate != "" && tlsSecret != "" {
+			ociRepo.Spec.Insecure = repo.InsecureSkipVerify
+			if repo.CACertificate != "" && tlsSecret != "" {
 				ociRepo.Spec.CertSecretRef = &meta.LocalObjectReference{Name: tlsSecret}
 			}
 		}
-		if credentials && repo.Spec.Auth != nil && authSecret != "" {
+		if credentials && repo.Auth != nil && authSecret != "" {
 			ociRepo.Spec.SecretRef = &meta.LocalObjectReference{Name: authSecret}
 		}
 
@@ -406,10 +434,11 @@ func (r *Resolver) ensureOCIRepository(
 // and its answer is then carried by the source object's layer selector.
 func (r *Resolver) ensureHybridOCIRepository(
 	ctx context.Context,
-	repo *helmv1alpha1.HelmClusterAddonRepository,
+	family repositoryFamily,
+	repo *repositorySpec,
 	req Request,
 	name, expiresAt string,
-	version *helmv1alpha1.HelmClusterAddonChartVersion,
+	version *helmv1alpha1.ChartVersion,
 ) (*sourcev1.OCIRepository, *Result, error) {
 	url, tag, err := helmv1alpha1.SplitOCIRef(version.OCIRef, "")
 	if err != nil {
@@ -421,13 +450,13 @@ func (r *Resolver) ensureHybridOCIRepository(
 	// The repository's transport settings describe the host it names. A registry only
 	// its index names is reached as a public one, and its credentials are never sent
 	// there.
-	sameHost := sameRegistryHost(repo.Spec.URL, url)
+	sameHost := sameRegistryHost(repo.URL, url)
 
 	mediaType := version.MediaType
 	if mediaType == "" {
 		var rt http.RoundTripper
 		if sameHost {
-			rt = chartartifact.Transport(repo.Spec.CACertificate, repo.Spec.InsecureSkipVerify)
+			rt = chartartifact.Transport(repo.CACertificate, repo.InsecureSkipVerify)
 		}
 
 		mediaType, err = r.prober.ChartLayerMediaType(ctx, version.OCIRef, rt)
@@ -446,7 +475,7 @@ func (r *Resolver) ensureHybridOCIRepository(
 		}
 	}
 
-	ociRepo, err := r.ensureOCIRepository(ctx, repo, req, name, expiresAt, url, tag, mediaType, false, sameHost)
+	ociRepo, err := r.ensureOCIRepository(ctx, family, repo, req, name, expiresAt, url, tag, mediaType, false, sameHost)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -471,12 +500,16 @@ func sameRegistryHost(repoURL, artifactURL string) bool {
 	return repoHost.Host == artifactHost.Host
 }
 
-func (r *Resolver) findHelmRepositoryName(ctx context.Context, repoName string) (string, error) {
+// findHelmRepositoryName finds the internal HelmRepository operator-helm-controller
+// derived from this repository. It is selected by the source labels of the
+// repository's own kind: internal objects of every family live in one namespace, so
+// the labels are what tell them apart.
+func (r *Resolver) findHelmRepositoryName(ctx context.Context, family repositoryFamily, req Request) (string, error) {
 	var list sourcev1.HelmRepositoryList
 	if err := r.client.List(
 		ctx, &list,
 		client.InNamespace(r.namespace),
-		client.MatchingLabels{helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repoName},
+		client.MatchingLabels(family.InternalLabels(req.Namespace, req.RepositoryName)),
 	); err != nil {
 		return "", fmt.Errorf("listing helm repositories: %w", err)
 	}
@@ -488,12 +521,12 @@ func (r *Resolver) findHelmRepositoryName(ctx context.Context, repoName string) 
 	return list.Items[0].Name, nil
 }
 
-func (r *Resolver) findRepositorySecretNames(ctx context.Context, repoName string) (auth, tls string, err error) {
+func (r *Resolver) findRepositorySecretNames(ctx context.Context, family repositoryFamily, req Request) (auth, tls string, err error) {
 	var list corev1.SecretList
 	if err := r.client.List(
 		ctx, &list,
 		client.InNamespace(r.namespace),
-		client.MatchingLabels{helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repoName},
+		client.MatchingLabels(family.InternalLabels(req.Namespace, req.RepositoryName)),
 	); err != nil {
 		return "", "", fmt.Errorf("listing repository secrets: %w", err)
 	}

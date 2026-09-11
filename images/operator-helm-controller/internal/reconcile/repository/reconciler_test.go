@@ -1,0 +1,1057 @@
+/*
+Copyright 2026 Flant JSC.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package repository
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Masterminds/semver/v3"
+	"github.com/werf/3p-fluxcd-pkg/apis/meta"
+	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	"github.com/deckhouse/operator-helm/api/naming"
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
+	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/index"
+	"github.com/deckhouse/operator-helm/internal/manager/status"
+	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/utils"
+)
+
+type stubRepoClient struct {
+	charts []repoclient.Chart
+	err    error
+	// onFetch runs at the moment the repository is read, which is the only point
+	// from which a test can observe the status the controller publishes *while* it
+	// is working rather than the one it leaves behind.
+	onFetch func()
+}
+
+// The receiver is a pointer so a test can change what the repository returns
+// between reconcile passes.
+func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, _ repoclient.FetchOptions) ([]repoclient.Chart, error) {
+	if s.onFetch != nil {
+		s.onFetch()
+	}
+
+	return s.charts, s.err
+}
+
+func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object) (*Reconciler, client.Client) {
+	t.Helper()
+
+	return newReconcilerWithInterceptor(t, interceptor.Funcs{}, stub, objects...)
+}
+
+func newReconcilerWithInterceptor(
+	t *testing.T,
+	funcs interceptor.Funcs,
+	stub *stubRepoClient,
+	objects ...client.Object,
+) (*Reconciler, client.Client) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		clientgoscheme.AddToScheme,
+		helmv1alpha1.AddToScheme,
+		sourcev1.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatalf("registering scheme: %v", err)
+		}
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(funcs).
+		WithObjects(objects...).
+		WithStatusSubresource(
+			&helmv1alpha1.HelmClusterAddonRepository{},
+			&helmv1alpha1.HelmClusterAddonChart{},
+		).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonChart, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{index.AddonChartValue(
+				addon.Spec.Chart.HelmClusterAddonRepository,
+				addon.Spec.Chart.HelmClusterAddonChartName,
+			)}
+		}).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonRepository, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{addon.Spec.Chart.HelmClusterAddonRepository}
+		}).
+		Build()
+
+	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+		return stub, nil
+	}
+
+	ociRepositoryService := services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil)
+
+	r := New(
+		c,
+		adapter.EmptyAddonRepository,
+		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		ociRepositoryService,
+		services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(c)),
+		services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
+		status.NewManager(c),
+	)
+
+	return r, c
+}
+
+// newApplicationReconciler wires the reconciler for the namespaced kind. The
+// addon fixture above stays the default; this one exists to prove the same
+// reconciler composes with a namespaced adapter and catalog.
+func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object) (*Reconciler, client.Client) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{
+		clientgoscheme.AddToScheme,
+		helmv1alpha1.AddToScheme,
+		sourcev1.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatalf("registering scheme: %v", err)
+		}
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithStatusSubresource(
+			&helmv1alpha1.HelmApplicationRepository{},
+			&helmv1alpha1.HelmApplicationChart{},
+		).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationRepository, index.ApplicationRepositoryIndexer).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationChart, index.ApplicationChartIndexer).
+		Build()
+
+	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+		return stub, nil
+	}
+
+	ociRepositoryService := services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil)
+
+	r := New(
+		c,
+		adapter.EmptyApplicationRepository,
+		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		ociRepositoryService,
+		services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(c)),
+		services.NewRepoSyncService(c, scheme, factory, adapter.NewApplicationCatalog(c)),
+		status.NewManager(c),
+	)
+
+	return r, c
+}
+
+func ociRepository() *helmv1alpha1.HelmClusterAddonRepository {
+	return &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://ghcr.io/example/podinfo"},
+	}
+}
+
+func helmRepository() *helmv1alpha1.HelmClusterAddonRepository {
+	return &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
+	}
+}
+
+func reconcileUntilStable(t *testing.T, r *Reconciler, name string) reconcile.Result {
+	t.Helper()
+
+	var result reconcile.Result
+	// The first pass only adds the finalizer path; two passes are enough to reach
+	// a stable state for a repository whose source responds.
+	for range 2 {
+		var err error
+		result, err = r.Reconcile(context.Background(), reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: name},
+		})
+		if err != nil {
+			t.Fatalf("Reconcile returned %v", err)
+		}
+	}
+
+	return result
+}
+
+func TestReconcileOCIRepositoryBecomesReady(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+	result := reconcileUntilStable(t, r, repo.Name)
+
+	if result.RequeueAfter <= 0 || result.RequeueAfter > time.Hour {
+		t.Fatalf("expected a scheduled requeue, got %s", result.RequeueAfter)
+	}
+
+	updated := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), updated); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	if !apimeta.IsStatusConditionTrue(updated.Status.Conditions, helmv1alpha1.ConditionTypeReady) {
+		t.Fatalf("Ready must be True, conditions: %v", updated.Status.Conditions)
+	}
+	if !apimeta.IsStatusConditionTrue(updated.Status.Conditions, helmv1alpha1.ConditionTypeSynced) {
+		t.Fatal("Synced must be True")
+	}
+	if apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeReconciling) != nil {
+		t.Fatal("Reconciling must be absent on a healthy repository")
+	}
+	if apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeStalled) != nil {
+		t.Fatal("Stalled must be absent on a healthy repository")
+	}
+	if updated.Status.LastSuccessfulSyncTime == nil || updated.Status.NextSyncTime == nil {
+		t.Fatal("sync timestamps must be recorded")
+	}
+}
+
+func TestReconcileSkipsFetchBeforeSchedule(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+	reconcileUntilStable(t, r, repo.Name)
+
+	before := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), before); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	// A watch-driven pass before nextSyncTime must not move the schedule.
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	after := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), after); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	if !after.Status.NextSyncTime.Time.Equal(before.Status.NextSyncTime.Time) {
+		t.Fatalf("nextSyncTime moved without a due schedule: %s -> %s",
+			before.Status.NextSyncTime.Time, after.Status.NextSyncTime.Time)
+	}
+}
+
+// TestReconcileMigratesCatalogNamesWithoutAFetch pins that the catalog rename does
+// not wait on the remote. A consumer resolves the current name from the moment this
+// controller starts, so a repository that is not due for a sync yet, or whose
+// registry is gone for good, must still get its objects moved — otherwise its
+// consumers never resolve their chart again.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func TestReconcileMigratesCatalogNamesWithoutAFetch(t *testing.T) {
+	repo := ociRepository()
+	legacy := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "e2e-repo-chart-podinfo",
+			Labels: map[string]string{
+				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+				helmv1alpha1.LabelRepositoryName:    repo.Name,
+				helmv1alpha1.LabelChartName:         "podinfo",
+			},
+		},
+		Status: helmv1alpha1.ChartCatalogStatus{
+			Versions: []helmv1alpha1.ChartVersion{{Version: "1.0.0", MediaType: "application/tar+gzip"}},
+		},
+	}
+
+	stub := &stubRepoClient{err: &repoclient.TerminalError{
+		Reason:  helmv1alpha1.ReasonAuthenticationFailed,
+		Message: "repository rejected the credentials (HTTP 401)",
+	}}
+
+	r, c := newReconciler(t, stub, repo, legacy)
+	reconcileUntilStable(t, r, repo.Name)
+
+	moved := &helmv1alpha1.HelmClusterAddonChart{}
+	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
+	if err := c.Get(context.Background(), key, moved); err != nil {
+		t.Fatalf("catalog object was not renamed while the fetch was failing: %v", err)
+	}
+	if len(moved.Status.Versions) != 1 || moved.Status.Versions[0].MediaType == "" {
+		t.Fatalf("versions = %+v, want the legacy status carried over", moved.Status.Versions)
+	}
+
+	err := c.Get(context.Background(), client.ObjectKey{Name: legacy.Name}, &helmv1alpha1.HelmClusterAddonChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want NotFound", err)
+	}
+}
+
+// TestReconcileReportsAFailedMigration pins that a rename the cluster refuses does
+// not silence the repository. Returning the failure out of Reconcile would skip the
+// status write entirely, leaving an object with no conditions at all while its
+// consumers cannot resolve their chart — the one state nobody can diagnose.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func TestReconcileReportsAFailedMigration(t *testing.T) {
+	repo := ociRepository()
+	legacy := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "e2e-repo-chart-podinfo",
+			Labels: map[string]string{
+				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+				helmv1alpha1.LabelRepositoryName:    repo.Name,
+				helmv1alpha1.LabelChartName:         "podinfo",
+			},
+		},
+	}
+
+	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
+		// Only the rename's own delete is refused; the ordinary pruning below must
+		// stay reachable, or the test would be about something else.
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if obj.GetName() == "e2e-repo-chart-podinfo" {
+				return errors.New("forbidden")
+			}
+
+			return cl.Delete(ctx, obj, opts...)
+		},
+	}, &stubRepoClient{}, repo, legacy)
+
+	// The refused object also survives into the pruning loop, so the pass may report
+	// either failure. What matters is that the status was written regardless.
+	for range 2 {
+		_, _ = r.Reconcile(context.Background(), reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: repo.Name},
+		})
+	}
+
+	updated := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), updated); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	if len(updated.Status.Conditions) == 0 {
+		t.Fatal("the repository carries no conditions at all: the failure never reached the status write")
+	}
+
+	synced := apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Status != metav1.ConditionFalse || synced.Reason != helmv1alpha1.ReasonCatalogUpdateFailed {
+		t.Fatalf("Synced = %v, want False with %s", synced, helmv1alpha1.ReasonCatalogUpdateFailed)
+	}
+	if updated.Status.ObservedGeneration != updated.Generation {
+		t.Fatalf("observedGeneration is %d, want %d", updated.Status.ObservedGeneration, updated.Generation)
+	}
+}
+
+// TestReconcileReportsAFailedMigrationWithoutAnAttempt pins the half of the rename
+// path the previous test cannot reach. The rename runs on every pass, including one
+// that is not due for a synchronization, and on such a pass the repository would
+// otherwise keep the Synced=True its last successful sync left behind — reporting
+// health while its consumers cannot resolve their chart.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func TestReconcileReportsAFailedMigrationWithoutAnAttempt(t *testing.T) {
+	repo := ociRepository()
+	refuse := false
+
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if refuse && obj.GetName() == "e2e-repo-chart-podinfo" {
+				return errors.New("forbidden")
+			}
+
+			return cl.Delete(ctx, obj, opts...)
+		},
+	}, stub, repo)
+
+	// A clean run first, so the repository ends up healthy with a schedule ahead of
+	// it: only then is the next pass one that attempts nothing.
+	reconcileUntilStable(t, r, repo.Name)
+
+	synced := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), synced); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if !apimeta.IsStatusConditionTrue(synced.Status.Conditions, helmv1alpha1.ConditionTypeSynced) {
+		t.Fatalf("the first run must leave Synced=True, conditions: %v", synced.Status.Conditions)
+	}
+	if synced.Status.NextSyncTime == nil || !synced.Status.NextSyncTime.After(time.Now()) {
+		t.Fatalf("nextSyncTime = %v, want a schedule in the future", synced.Status.NextSyncTime)
+	}
+
+	refuse = true
+	legacy := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "e2e-repo-chart-podinfo",
+			Labels: map[string]string{
+				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+				helmv1alpha1.LabelRepositoryName:    repo.Name,
+				helmv1alpha1.LabelChartName:         "podinfo",
+			},
+		},
+	}
+	if err := c.Create(context.Background(), legacy); err != nil {
+		t.Fatalf("creating the legacy object: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err == nil {
+		t.Fatal("the pass must report the refused rename, or the work queue waits for the next sync instead of retrying")
+	}
+
+	updated := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), updated); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	cond := apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != helmv1alpha1.ReasonCatalogUpdateFailed {
+		t.Fatalf("Synced = %v, want False with %s: the pass attempted no sync, so the stale True would stand", cond, helmv1alpha1.ReasonCatalogUpdateFailed)
+	}
+	if !strings.Contains(cond.Message, "forbidden") {
+		t.Fatalf("Synced message = %q, want the refusal in it", cond.Message)
+	}
+}
+
+func TestReconcileTerminalFetchFailureStalls(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{err: &repoclient.TerminalError{
+		Reason:  helmv1alpha1.ReasonAuthenticationFailed,
+		Message: "repository rejected the credentials (HTTP 401)",
+	}}
+
+	r, c := newReconciler(t, stub, repo)
+	reconcileUntilStable(t, r, repo.Name)
+
+	updated := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), updated); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	stalled := apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeStalled)
+	if stalled == nil || stalled.Reason != helmv1alpha1.ReasonAuthenticationFailed {
+		t.Fatalf("expected Stalled=AuthenticationFailed, got %v", stalled)
+	}
+	if !apimeta.IsStatusConditionFalse(updated.Status.Conditions, helmv1alpha1.ConditionTypeReady) {
+		t.Fatalf("Ready must be False while Stalled, conditions: %v", updated.Status.Conditions)
+	}
+	if apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeReconciling) != nil {
+		t.Fatal("Reconciling and Stalled must be mutually exclusive")
+	}
+	// The fake client bumps generation on the finalizer update, so compare with
+	// the live object rather than with the fixture.
+	if updated.Status.ObservedGeneration != updated.Generation {
+		t.Fatalf("observedGeneration is %d, want %d", updated.Status.ObservedGeneration, updated.Generation)
+	}
+}
+
+// TestReconcileRemovesStalledOnRecovery pins that an abnormal-true condition is
+// removed from the STORED object and not merely from the in-memory status.
+// Removal rides on the JSON merge patch client.MergeFrom produces, which
+// replaces the whole conditions array; were that ever to stop holding, a
+// repository would keep reporting Failed to kstatus forever after one stall.
+func TestReconcileRemovesStalledOnRecovery(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{err: &repoclient.TerminalError{
+		Reason:  helmv1alpha1.ReasonSourceNotFound,
+		Message: "repository not found (HTTP 404)",
+	}}
+
+	r, c := newReconciler(t, stub, repo)
+	reconcileUntilStable(t, r, repo.Name)
+
+	stalled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), stalled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if apimeta.FindStatusCondition(stalled.Status.Conditions, helmv1alpha1.ConditionTypeStalled) == nil {
+		t.Fatalf("the fixture must reach Stalled first, conditions: %v", stalled.Status.Conditions)
+	}
+
+	// The source recovers. The force annotation makes the next pass attempt
+	// regardless of the schedule the stall left behind.
+	stub.err = nil
+	stub.charts = []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}
+
+	stalled.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+	if err := c.Update(context.Background(), stalled); err != nil {
+		t.Fatalf("annotating repository: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	recovered := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), recovered); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	if cond := apimeta.FindStatusCondition(recovered.Status.Conditions, helmv1alpha1.ConditionTypeStalled); cond != nil {
+		t.Fatalf("Stalled must be gone from the stored object, got %+v", cond)
+	}
+	if !apimeta.IsStatusConditionTrue(recovered.Status.Conditions, helmv1alpha1.ConditionTypeReady) {
+		t.Fatalf("Ready must be True after recovery, conditions: %v", recovered.Status.Conditions)
+	}
+	if apimeta.FindStatusCondition(recovered.Status.Conditions, helmv1alpha1.ConditionTypeReconciling) != nil {
+		t.Fatal("Reconciling must be absent on a recovered repository")
+	}
+	if _, found := recovered.Annotations[helmv1alpha1.AnnotationForceReconcile]; found {
+		t.Fatal("the force annotation must be consumed by the pass it triggered")
+	}
+}
+
+// TestReconcileDeleteCleansUpWhenURLNoLongerParses covers a repository whose url
+// satisfies the CRD's validation regex but is rejected by url.Parse, so the
+// repository type cannot be determined. Its internal objects were created while
+// the url still parsed, so the deletion path must still remove them.
+func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
+	now := metav1.Now()
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "example",
+			Generation:        1,
+			Finalizers:        []string{helmv1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		// Passes the CRD rule ^(https?|oci)://.+$ and fails url.Parse.
+		Spec: helmv1alpha1.RepositorySpec{URL: "https://exa mple.invalid/charts"},
+	}
+
+	if _, err := utils.GetRepositoryType(repo.Spec.URL); err == nil {
+		t.Fatal("the fixture url must be unparsable, otherwise the test proves nothing")
+	}
+
+	internalRepo := &sourcev1.HelmRepository{ObjectMeta: metav1.ObjectMeta{
+		Name:      utils.GetInternalHelmRepositoryName(repo.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}}
+	authSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:      utils.GetInternalRepositoryAuthSecretName(repo.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}}
+	tlsSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:      utils.GetInternalRepositoryTLSSecretName(repo.Name),
+		Namespace: helmv1alpha1.TargetNamespace,
+	}}
+
+	r, c := newReconciler(t, &stubRepoClient{}, repo, internalRepo, authSecret, tlsSecret)
+
+	// The first pass deletes the internal objects and waits for the internal
+	// repository to disappear; the second removes the finalizer.
+	reconcileUntilStable(t, r, repo.Name)
+
+	for _, obj := range []client.Object{internalRepo, authSecret, tlsSecret} {
+		key := client.ObjectKeyFromObject(obj)
+		if err := c.Get(context.Background(), key, obj.DeepCopyObject().(client.Object)); !apierrors.IsNotFound(err) {
+			t.Fatalf("%s must be deleted, got %v", key, err)
+		}
+	}
+}
+
+// TestReconcileForcedOCIRepositoryForcesAddonSources covers a force request on an
+// oci:// repository. Unlike the helm:// path, where the internal HelmRepository
+// carries the request and the HelmCharts follow it, an OCI repository has no
+// internal source object of its own: the artifacts are pulled by the per-addon
+// OCIRepositories, so the request must be pushed onto those.
+func TestReconcileForcedOCIRepositoryForcesAddonSources(t *testing.T) {
+	repo := ociRepository()
+	addon := &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "consumer", Generation: 1},
+		Spec: helmv1alpha1.HelmClusterAddonSpec{
+			Namespace: "app",
+			Chart: helmv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonRepository: repo.Name,
+				HelmClusterAddonChartName:  "podinfo",
+				Version:                    "6.7.1",
+			},
+		},
+	}
+	source := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+			Namespace: helmv1alpha1.TargetNamespace,
+		},
+	}
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo, addon, source)
+	reconcileUntilStable(t, r, repo.Name)
+
+	stored := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), stored); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	stored.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatalf("annotating repository: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	forced := &sourcev1.OCIRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(source), forced); err != nil {
+		t.Fatalf("getting internal oci repository: %v", err)
+	}
+	if forced.Annotations[meta.ReconcileRequestAnnotation] == "" {
+		t.Errorf("%s must be pushed onto the addon source by a forced repository", meta.ReconcileRequestAnnotation)
+	}
+}
+
+// TestReconcileForcedHelmRepositoryForcesAddonSources: a helm repository can also
+// have per-addon OCIRepositories now — one for every version its index publishes in
+// a registry. A force request on the repository has to reach them, exactly as it does
+// for an oci:// repository; the internal HelmRepository carries the request only for
+// the versions served as archives.
+func TestReconcileForcedHelmRepositoryForcesAddonSources(t *testing.T) {
+	repo := helmRepository()
+	addon := &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "consumer", Generation: 1},
+		Spec: helmv1alpha1.HelmClusterAddonSpec{
+			Namespace: "app",
+			Chart: helmv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonRepository: repo.Name,
+				HelmClusterAddonChartName:  "podinfo",
+				Version:                    "6.7.1",
+			},
+		},
+	}
+	source := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+			Namespace: helmv1alpha1.TargetNamespace,
+		},
+	}
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name: "podinfo",
+		Versions: []repoclient.ChartVersion{{
+			Version: semver.MustParse("6.7.1"),
+			OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+		}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo, addon, source)
+	reconcileUntilStable(t, r, repo.Name)
+
+	stored := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), stored); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	stored.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatalf("annotating repository: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	forced := &sourcev1.OCIRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(source), forced); err != nil {
+		t.Fatalf("getting internal oci repository: %v", err)
+	}
+	if forced.Annotations[meta.ReconcileRequestAnnotation] == "" {
+		t.Errorf("%s must be pushed onto the addon source by a forced repository", meta.ReconcileRequestAnnotation)
+	}
+}
+
+// TestReconcileUnforcedOCIRepositoryLeavesAddonSources is the complement: a
+// scheduled synchronization must not stamp the addon sources, or every pass would
+// make the source controller re-pull every artifact of the repository.
+func TestReconcileUnforcedOCIRepositoryLeavesAddonSources(t *testing.T) {
+	repo := ociRepository()
+	addon := &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "consumer", Generation: 1},
+		Spec: helmv1alpha1.HelmClusterAddonSpec{
+			Namespace: "app",
+			Chart: helmv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonRepository: repo.Name,
+				HelmClusterAddonChartName:  "podinfo",
+				Version:                    "6.7.1",
+			},
+		},
+	}
+	source := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalOCIRepositoryName(addon.Name),
+			Namespace: helmv1alpha1.TargetNamespace,
+		},
+	}
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo, addon, source)
+	reconcileUntilStable(t, r, repo.Name)
+
+	untouched := &sourcev1.OCIRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(source), untouched); err != nil {
+		t.Fatalf("getting internal oci repository: %v", err)
+	}
+	if _, found := untouched.Annotations[meta.ReconcileRequestAnnotation]; found {
+		t.Errorf("%s must not be pushed onto the addon source by a scheduled synchronization", meta.ReconcileRequestAnnotation)
+	}
+}
+
+// forcedRepository drives a repository to a stable state and then puts a force
+// request on the stored object, so a test can run the single pass that consumes it.
+func forcedRepository(t *testing.T, r *Reconciler, c client.Client, repo *helmv1alpha1.HelmClusterAddonRepository) {
+	t.Helper()
+
+	reconcileUntilStable(t, r, repo.Name)
+
+	stored := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), stored); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	stored.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	if err := c.Update(context.Background(), stored); err != nil {
+		t.Fatalf("annotating repository: %v", err)
+	}
+}
+
+// TestReconcileForcedRepositoryReportsProgressBeforeReading pins that the
+// Reconciling condition is published *before* the repository is read. A forced
+// synchronization is the one case where the user is watching: they annotated the
+// object a moment ago and want to see it was picked up, so a condition written
+// only after the read — when the work is already done — would report nothing
+// useful.
+func TestReconcileForcedRepositoryReportsProgressBeforeReading(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+	forcedRepository(t, r, c, repo)
+
+	var inFlight *metav1.Condition
+	stub.onFetch = func() {
+		observed := &helmv1alpha1.HelmClusterAddonRepository{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), observed); err != nil {
+			t.Errorf("getting repository during the fetch: %v", err)
+
+			return
+		}
+
+		inFlight = apimeta.FindStatusCondition(observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if inFlight == nil {
+		t.Fatal("Reconciling must be published before the repository is read")
+	}
+	if inFlight.Status != metav1.ConditionTrue || inFlight.Reason != helmv1alpha1.ReasonForceReconcile {
+		t.Fatalf("Reconciling is %s/%s, want True/%s",
+			inFlight.Status, inFlight.Reason, helmv1alpha1.ReasonForceReconcile)
+	}
+}
+
+// TestReconcileForcedRepositoryRecordsCompletion covers the other end of the same
+// pass: the progress condition is gone and the stamp records when the request was
+// processed.
+func TestReconcileForcedRepositoryRecordsCompletion(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+	forcedRepository(t, r, c, repo)
+
+	// metav1.Time serialises at second precision, so the stored stamp can land
+	// just before an untruncated wall-clock reading of the same second.
+	before := time.Now().UTC().Truncate(time.Second)
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), settled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling must be gone once the forced pass finished, got %+v", cond)
+	}
+	if settled.Status.LastForceReconcileTime == nil {
+		t.Fatal("lastForceReconcileTime must be recorded by the forced pass")
+	}
+	if settled.Status.LastForceReconcileTime.Time.Before(before) {
+		t.Fatalf("lastForceReconcileTime is %v, want at or after %v",
+			settled.Status.LastForceReconcileTime.Time, before)
+	}
+	if _, found := settled.Annotations[helmv1alpha1.AnnotationForceReconcile]; found {
+		t.Fatal("the force annotation must be consumed by the pass it triggered")
+	}
+}
+
+// TestReconcileUnforcedRepositoryRecordsNoForceReconcile is the complement: a
+// scheduled synchronization neither claims progress on behalf of a force request
+// nor stamps one.
+func TestReconcileUnforcedRepositoryRecordsNoForceReconcile(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+
+	var inFlight *metav1.Condition
+	stub.onFetch = func() {
+		observed := &helmv1alpha1.HelmClusterAddonRepository{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), observed); err != nil {
+			return
+		}
+
+		inFlight = apimeta.FindStatusCondition(observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	}
+
+	reconcileUntilStable(t, r, repo.Name)
+
+	if inFlight != nil && inFlight.Reason == helmv1alpha1.ReasonForceReconcile {
+		t.Fatalf("a scheduled synchronization must not report %s", helmv1alpha1.ReasonForceReconcile)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), settled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if settled.Status.LastForceReconcileTime != nil {
+		t.Fatalf("lastForceReconcileTime is %v, want it unset without a force request",
+			settled.Status.LastForceReconcileTime)
+	}
+}
+
+// TestReconcileScheduledSynchronizationReportsProgressBeforeReading pins that an
+// ordinary, unrequested synchronization also publishes Reconciling before the
+// repository is read — with its own reason, so the condition says whether the
+// pass is running on the schedule or on a force request. Without it a scheduled
+// pass writes nothing until the read is over, and a slow repository looks idle
+// for the whole read.
+func TestReconcileScheduledSynchronizationReportsProgressBeforeReading(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+
+	var inFlight *metav1.Condition
+	stub.onFetch = func() {
+		observed := &helmv1alpha1.HelmClusterAddonRepository{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), observed); err != nil {
+			t.Errorf("getting repository during the fetch: %v", err)
+
+			return
+		}
+
+		inFlight = apimeta.FindStatusCondition(observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if inFlight == nil {
+		t.Fatal("Reconciling must be published before the repository is read")
+	}
+	if inFlight.Status != metav1.ConditionTrue || inFlight.Reason != helmv1alpha1.ReasonSynchronization {
+		t.Fatalf("Reconciling is %s/%s, want True/%s",
+			inFlight.Status, inFlight.Reason, helmv1alpha1.ReasonSynchronization)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), settled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling must be gone once the scheduled pass finished, got %+v", cond)
+	}
+}
+
+// TestReconcileSkippedSynchronizationReportsNoProgress is the complement: a pass
+// that is not due must not claim a synchronization is running. The progress
+// condition is tied to an actual attempt, not to every trip through Reconcile.
+func TestReconcileSkippedSynchronizationReportsNoProgress(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+	reconcileUntilStable(t, r, repo.Name)
+
+	// The schedule is now set in the future, so this pass performs no attempt.
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), settled); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("a pass without an attempt must not report Reconciling, got %+v", cond)
+	}
+}
+
+// TestReconcileNamespacedRepositoryDerivesNamespacedInternalObjects proves the
+// composition the per-package tests cannot: a namespaced repository read through
+// its adapter yields internal objects in the operator namespace under derived,
+// namespace-aware names with both source labels, a catalog object next to the
+// repository, and a status patched on the namespaced object.
+func TestReconcileNamespacedRepositoryDerivesNamespacedInternalObjects(t *testing.T) {
+	repo := &helmv1alpha1.HelmApplicationRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a", Generation: 1},
+		Spec: helmv1alpha1.RepositorySpec{
+			URL:  "https://charts.example.invalid/stable",
+			Auth: &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"},
+		},
+	}
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newApplicationReconciler(t, stub, repo)
+
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: "team-a", Name: "stable"},
+		}); err != nil {
+			t.Fatalf("Reconcile returned %v", err)
+		}
+	}
+
+	wantLabels := map[string]string{
+		helmv1alpha1.LabelManagedBy:                           helmv1alpha1.LabelManagedByValue,
+		helmv1alpha1.HelmApplicationRepositoryLabelSourceName: "stable",
+		helmv1alpha1.LabelSourceNamespace:                     "team-a",
+	}
+
+	helmRepo := &sourcev1.HelmRepository{}
+	if err := c.Get(context.Background(), client.ObjectKey{
+		Namespace: helmv1alpha1.TargetNamespace, Name: "hapr-team-a-stable-42df68033b1e",
+	}, helmRepo); err != nil {
+		t.Fatalf("internal helm repository with a derived name was not created in the operator namespace: %v", err)
+	}
+	if !reflect.DeepEqual(helmRepo.Labels, wantLabels) {
+		t.Fatalf("internal helm repository labels = %v, want %v", helmRepo.Labels, wantLabels)
+	}
+	if helmRepo.Spec.SecretRef == nil || helmRepo.Spec.SecretRef.Name != adapter.NewApplicationRepository(repo).InternalNames().AuthSecret {
+		t.Fatalf("internal helm repository must reference the derived auth secret, got %+v", helmRepo.Spec.SecretRef)
+	}
+
+	authSecret := &corev1.Secret{}
+	if err := c.Get(context.Background(), client.ObjectKey{
+		Namespace: helmv1alpha1.TargetNamespace, Name: helmRepo.Spec.SecretRef.Name,
+	}, authSecret); err != nil {
+		t.Fatalf("derived auth secret was not created in the operator namespace: %v", err)
+	}
+	if !reflect.DeepEqual(authSecret.Labels, wantLabels) {
+		t.Fatalf("auth secret labels = %v, want %v", authSecret.Labels, wantLabels)
+	}
+
+	var charts helmv1alpha1.HelmApplicationChartList
+	if err := c.List(context.Background(), &charts, client.InNamespace("team-a")); err != nil {
+		t.Fatalf("listing charts: %v", err)
+	}
+	if len(charts.Items) != 1 || charts.Items[0].Labels[helmv1alpha1.LabelChartName] != "podinfo" {
+		t.Fatalf("charts in team-a = %v, want exactly podinfo", charts.Items)
+	}
+
+	updated := &helmv1alpha1.HelmApplicationRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), updated); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(updated, helmv1alpha1.FinalizerName) {
+		t.Fatal("finalizer must be added to the namespaced repository")
+	}
+	if updated.Status.ObservedGeneration != 1 {
+		t.Fatalf("status was not patched on the namespaced object: %+v", updated.Status)
+	}
+}

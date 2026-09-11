@@ -72,3 +72,26 @@ func UpdateHelmClusterAddonRepository(name string, mutate func(*apiv1alpha1.Helm
 
 	return updated
 }
+
+// UpdateHelmApplication performs a read-modify-write cycle on a HelmApplication
+// with automatic retry on conflict.
+func UpdateHelmApplication(namespace, name string, mutate func(*apiv1alpha1.HelmApplication)) *apiv1alpha1.HelmApplication {
+	GinkgoHelper()
+
+	var updated *apiv1alpha1.HelmApplication
+	Eventually(func(g Gomega) {
+		current, err := framework.GetClients().OperatorClient().HelmV1alpha1().
+			HelmApplications(namespace).
+			Get(context.Background(), name, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+
+		mutate(current)
+
+		updated, err = framework.GetClients().OperatorClient().HelmV1alpha1().
+			HelmApplications(namespace).
+			Update(context.Background(), current, metav1.UpdateOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+	}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
+	return updated
+}

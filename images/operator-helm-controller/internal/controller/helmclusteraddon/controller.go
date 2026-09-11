@@ -26,9 +26,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
-	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddon"
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/release"
 	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -39,15 +41,18 @@ const (
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
-	r := reconcile.New(
-		mgr.GetClient(),
-		services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
-		services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
-		status.NewManager(client),
-	)
+	r := reconcile.New(client, reconcile.Deps{
+		NewRelease:   adapter.EmptyAddonRelease,
+		Repositories: adapter.NewAddonRepositoryResolver(client),
+		Chart:        services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		OCI:          services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
+		Release:      services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Maintenance:  services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Claim:        services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
+		Namespaces:   services.NewNamespaceService(client),
+		Access:       source.NoAccess{},
+		Status:       status.NewManager(client),
+	})
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
@@ -96,7 +101,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 					helmv1alpha1.HelmClusterAddonLabelSourceName,
 				),
 			),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
 		Watches(
 			&helmv1alpha1.HelmClusterAddonRepository{},
 			handler.EnqueueRequestsFromMapFunc(utils.MapRepositoryToAddons(client)),

@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -79,7 +80,7 @@ type BaseRepoService struct {
 // secret is touched.
 func (s *BaseRepoService) EnsureSecrets(
 	ctx context.Context,
-	repo *helmv1alpha1.HelmClusterAddonRepository,
+	repo source.Repository,
 	repoType utils.InternalRepositoryType,
 ) error {
 	var err error
@@ -105,9 +106,9 @@ func (s *BaseRepoService) EnsureSecrets(
 // reconcileBasicAuthSecret reconciles the internal auth secret as an Opaque secret
 // holding username/password keys, the shape HelmRepository expects for HTTP basic
 // auth.
-func (s *BaseRepoService) reconcileBasicAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+func (s *BaseRepoService) reconcileBasicAuthSecret(ctx context.Context, repo source.Repository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeOpaque,
-		func(auth *helmv1alpha1.HelmClusterAddonRepositoryAuth) (map[string]string, error) {
+		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
 			return map[string]string{
 				"username": auth.Username,
 				"password": auth.Password,
@@ -119,10 +120,10 @@ func (s *BaseRepoService) reconcileBasicAuthSecret(ctx context.Context, repo *he
 // reconcileDockerConfigAuthSecret reconciles the internal auth secret as a
 // kubernetes.io/dockerconfigjson secret, the only shape OCIRepository accepts in
 // its spec.secretRef.
-func (s *BaseRepoService) reconcileDockerConfigAuthSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
+func (s *BaseRepoService) reconcileDockerConfigAuthSecret(ctx context.Context, repo source.Repository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeDockerConfigJson,
-		func(auth *helmv1alpha1.HelmClusterAddonRepositoryAuth) (map[string]string, error) {
-			config, err := utils.BuildDockerConfigJSON(repo.Spec.URL, auth.Username, auth.Password)
+		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
+			config, err := utils.BuildDockerConfigJSON(repo.URL(), auth.Username, auth.Password)
 			if err != nil {
 				return nil, fmt.Errorf("building docker config: %w", err)
 			}
@@ -134,29 +135,26 @@ func (s *BaseRepoService) reconcileDockerConfigAuthSecret(ctx context.Context, r
 
 func (s *BaseRepoService) reconcileAuthSecret(
 	ctx context.Context,
-	repo *helmv1alpha1.HelmClusterAddonRepository,
+	repo source.Repository,
 	secretType corev1.SecretType,
-	buildData func(auth *helmv1alpha1.HelmClusterAddonRepositoryAuth) (map[string]string, error),
+	buildData func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error),
 ) error {
-	secretName := utils.GetInternalRepositoryAuthSecretName(repo.Name)
+	secretName := repo.InternalNames().AuthSecret
 	nn := types.NamespacedName{Name: secretName, Namespace: s.TargetNamespace}
 
-	if repo.Spec.Auth == nil {
+	if repo.Auth() == nil {
 		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {
 			return fmt.Errorf("deleting obsolete auth secret: %w", err)
 		}
 		return nil
 	}
 
-	stringData, err := buildData(repo.Spec.Auth)
+	stringData, err := buildData(repo.Auth())
 	if err != nil {
 		return fmt.Errorf("building auth secret data: %w", err)
 	}
 
-	labels := map[string]string{
-		helmv1alpha1.LabelManagedBy:                            helmv1alpha1.LabelManagedByValue,
-		helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repo.Name,
-	}
+	labels := repo.SourceLabels()
 
 	staleRemoved, err := s.removeAuthSecretOfOtherType(ctx, nn, secretType)
 	if err != nil {
@@ -232,10 +230,10 @@ func (s *BaseRepoService) removeAuthSecretOfOtherType(
 	return true, nil
 }
 
-func (s *BaseRepoService) reconcileTLSSecret(ctx context.Context, repo *helmv1alpha1.HelmClusterAddonRepository) error {
-	secretName := utils.GetInternalRepositoryTLSSecretName(repo.Name)
+func (s *BaseRepoService) reconcileTLSSecret(ctx context.Context, repo source.Repository) error {
+	secretName := repo.InternalNames().TLSSecret
 
-	if repo.Spec.CACertificate == "" {
+	if repo.CACertificate() == "" {
 		nn := types.NamespacedName{Name: secretName, Namespace: s.TargetNamespace}
 		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {
 			return fmt.Errorf("deleting obsolete tls secret: %w", err)
@@ -253,13 +251,10 @@ func (s *BaseRepoService) reconcileTLSSecret(ctx context.Context, repo *helmv1al
 	}
 
 	if _, err := controllerutil.CreateOrPatch(ctx, s.Client, tlsSecret, func() error {
-		tlsSecret.Labels = map[string]string{
-			helmv1alpha1.LabelManagedBy:                            helmv1alpha1.LabelManagedByValue,
-			helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repo.Name,
-		}
+		tlsSecret.Labels = repo.SourceLabels()
 
 		tlsSecret.StringData = map[string]string{
-			"ca.crt": repo.Spec.CACertificate,
+			"ca.crt": repo.CACertificate(),
 		}
 
 		return nil

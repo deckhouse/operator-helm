@@ -10,12 +10,17 @@ includes:
       gciPrefix: '{{.gciPrefix | default "github.com/deckhouse/"}}'
       golangciConfigPath: '{{.golangciConfigPath | default "./.golangci.yaml"}}'
       golangciLintBinDir: '{{.golangciLintBinDir | default "../bin"}}'
-      golangciLintVersion: '{{.golangciLintVersion | default "v2.8.0"}}'
+      golangciLintVersion: '{{.golangciLintVersion | default "v2.13.2"}}'
       golangciPaths: '{{.golangciPaths | default "./..."}}'
       paths: '{{.paths | default "."}}'
       prettierPattern: '../crds/*.yaml'
 
 tasks:
+  test:unit:
+    desc: "Run the unit tests of this module."
+    cmds:
+      - go test ./...
+
   generate:
     desc: "Regenerate all"
     cmds:

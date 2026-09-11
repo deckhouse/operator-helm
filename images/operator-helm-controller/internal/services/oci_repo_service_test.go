@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -109,16 +110,16 @@ func testAddon() *helmv1alpha1.HelmClusterAddon {
 func ociTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
-		Spec:       helmv1alpha1.HelmClusterAddonRepositorySpec{URL: "oci://example.invalid/podinfo"},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://example.invalid/podinfo"},
 	}
 }
 
 // ociSource resolves the source the way the reconciler does, so the tests exercise
 // the real mapping instead of a hand-built one.
-func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.HelmClusterAddonChartVersion) utils.ChartSource {
+func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.ChartVersion) utils.ChartSource {
 	t.Helper()
 
-	source, err := utils.ResolveChartSource(repo, version)
+	source, err := utils.ResolveChartSource(repo.Spec.URL, version)
 	if err != nil {
 		t.Fatalf("resolving chart source: %v", err)
 	}
@@ -131,9 +132,9 @@ func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, vers
 func hybridTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
-		Spec: helmv1alpha1.HelmClusterAddonRepositorySpec{
+		Spec: helmv1alpha1.RepositorySpec{
 			URL:                "https://charts.example.invalid/stable",
-			Auth:               &helmv1alpha1.HelmClusterAddonRepositoryAuth{Username: "u", Password: "p"},
+			Auth:               &helmv1alpha1.RepositoryAuth{Username: "u", Password: "p"},
 			CACertificate:      "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
 			InsecureSkipVerify: true,
 		},
@@ -144,12 +145,12 @@ func TestEnsureInternalOCIRepositoryUsesRecordedMediaType(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	service, c := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
+	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
@@ -169,13 +170,13 @@ func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	service, _ := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:           "6.7.1",
 		MediaType:         "application/tar+gzip",
 		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
 	}
 
-	result := service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
+	result := service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	if result.Status.Reason != helmv1alpha1.ReasonChartVersionRemoved {
 		t.Fatalf("reason is %q, want %q", result.Status.Reason, helmv1alpha1.ReasonChartVersionRemoved)
@@ -200,7 +201,7 @@ func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
 func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:           "6.7.1",
 		MediaType:         "application/tar+gzip",
 		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
@@ -241,7 +242,7 @@ func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *
 
 	service, _ := newOCIRepoService(t, addon, repo, internal)
 
-	result := service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
+	result := service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	if result.Status.Status != metav1.ConditionTrue {
 		t.Fatalf("expected the ready child's status to be mirrored as True, got %v", result.Status.Status)
@@ -266,12 +267,12 @@ func TestEnsureInternalOCIRepositoryForcesReconcileFromAddon(t *testing.T) {
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
 	service, c := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
+	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
@@ -294,12 +295,12 @@ func TestEnsureInternalOCIRepositoryDoesNotForceReconcileWithoutAnnotation(t *te
 	addon, repo := testAddon(), ociTestRepository()
 	service, c := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, version), version)
+	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
@@ -312,62 +313,6 @@ func TestEnsureInternalOCIRepositoryDoesNotForceReconcileWithoutAnnotation(t *te
 	}
 }
 
-// TestForceReconcileInternalRepositoriesStampsOnlyItsOwnAddons covers the force
-// reconcile annotation applied to an oci:// HelmClusterAddonRepository: unlike the
-// helm:// path, where the internal HelmRepository re-indexes and the HelmCharts
-// follow, an OCI repository has no intermediate source object, so the request must
-// be pushed onto the internal OCIRepository of each addon that references it - and
-// only of those addons.
-func TestForceReconcileInternalRepositoriesStampsOnlyItsOwnAddons(t *testing.T) {
-	addon := testAddon()
-	foreign := testAddon()
-	foreign.Name = "foreign"
-	foreign.Spec.Chart.HelmClusterAddonRepository = "another"
-
-	service, c := newOCIRepoService(t,
-		addon, foreign,
-		internalOCIRepository(addon.Name), internalOCIRepository(foreign.Name),
-	)
-
-	if err := service.ForceReconcileInternalRepositories(context.Background(), "example"); err != nil {
-		t.Fatalf("forcing internal repositories: %v", err)
-	}
-
-	ociRepo := &sourcev1.OCIRepository{}
-	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
-	if err := c.Get(context.Background(), key, ociRepo); err != nil {
-		t.Fatalf("getting oci repository: %v", err)
-	}
-	if ociRepo.Annotations[meta.ReconcileRequestAnnotation] == "" {
-		t.Errorf("%s must be stamped on the oci repository of the addon", meta.ReconcileRequestAnnotation)
-	}
-	if ociRepo.Annotations[meta.ForceRequestAnnotation] == "" {
-		t.Errorf("%s must be stamped on the oci repository of the addon", meta.ForceRequestAnnotation)
-	}
-
-	foreignRepo := &sourcev1.OCIRepository{}
-	key = client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(foreign.Name), Namespace: testNamespace}
-	if err := c.Get(context.Background(), key, foreignRepo); err != nil {
-		t.Fatalf("getting foreign oci repository: %v", err)
-	}
-	if _, found := foreignRepo.Annotations[meta.ReconcileRequestAnnotation]; found {
-		t.Errorf("%s must not be stamped on an addon of another repository", meta.ReconcileRequestAnnotation)
-	}
-}
-
-// TestForceReconcileInternalRepositoriesToleratesMissingSource covers the addon
-// that has no internal OCIRepository yet - it has just been created, or it never
-// reached the point of building one. A force on the repository must not fail
-// because of it, otherwise the request is retried forever.
-func TestForceReconcileInternalRepositoriesToleratesMissingSource(t *testing.T) {
-	addon := testAddon()
-	service, _ := newOCIRepoService(t, addon)
-
-	if err := service.ForceReconcileInternalRepositories(context.Background(), "example"); err != nil {
-		t.Fatalf("a missing internal oci repository must not fail the force request: %v", err)
-	}
-}
-
 // TestEnsureInternalOCIRepositoryAddressesTheIndexReference pins that the artifact
 // address comes from the version, not from the repository: for a hybrid version the
 // registry is a different host entirely.
@@ -376,13 +321,13 @@ func TestEnsureInternalOCIRepositoryAddressesTheIndexReference(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 
 	service.EnsureInternalOCIRepository(
-		context.Background(), addon, repo, ociSource(t, repo, version), version,
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
 	ociRepo := &sourcev1.OCIRepository{}
@@ -421,13 +366,13 @@ func TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://charts.example.invalid/charts/podinfo:6.7.1",
 	}
 
 	service.EnsureInternalOCIRepository(
-		context.Background(), addon, repo, ociSource(t, repo, version), version,
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
 	ociRepo := &sourcev1.OCIRepository{}
@@ -452,18 +397,18 @@ func TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost(t *testing.T) {
 // repository host, so its auth and CA still apply.
 func TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
-	repo.Spec.Auth = &helmv1alpha1.HelmClusterAddonRepositoryAuth{Username: "u", Password: "p"}
+	repo.Spec.Auth = &helmv1alpha1.RepositoryAuth{Username: "u", Password: "p"}
 	repo.Spec.CACertificate = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
 
 	service, c := newOCIRepoService(t, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
 
 	service.EnsureInternalOCIRepository(
-		context.Background(), addon, repo, ociSource(t, repo, version), version,
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
 	ociRepo := &sourcev1.OCIRepository{}
@@ -488,13 +433,13 @@ func TestEnsureInternalOCIRepositoryProbesHybridVersion(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 
 	service.EnsureInternalOCIRepository(
-		context.Background(), addon, repo, ociSource(t, repo, version), version,
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
 	if resolver.calls != 1 {
@@ -522,14 +467,14 @@ func TestEnsureInternalOCIRepositoryReusesTheInternalObjectAsCache(t *testing.T)
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 	source := ociSource(t, repo, version)
 
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, source, version)
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, source, version)
+	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
+	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
 
 	if resolver.calls != 1 {
 		t.Fatalf("resolver calls = %d, want 1: the internal object is the cache", resolver.calls)
@@ -544,17 +489,17 @@ func TestEnsureInternalOCIRepositoryReprobesChangedReference(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	first := &helmv1alpha1.HelmClusterAddonChartVersion{
+	first := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, first), first)
+	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, first), first)
 
-	second := &helmv1alpha1.HelmClusterAddonChartVersion{
+	second := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://mirror.example.com/charts/podinfo:6.7.1",
 	}
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, ociSource(t, repo, second), second)
+	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, second), second)
 
 	if resolver.calls != 2 {
 		t.Fatalf("resolver calls = %d, want 2: the reference changed", resolver.calls)
@@ -568,16 +513,16 @@ func TestEnsureInternalOCIRepositoryForceBypassesCache(t *testing.T) {
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 	source := ociSource(t, repo, version)
 
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, source, version)
+	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
 
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
-	service.EnsureInternalOCIRepository(context.Background(), addon, repo, source, version)
+	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
 
 	if resolver.calls != 2 {
 		t.Fatalf("resolver calls = %d, want 2: a force request re-examines the artifact", resolver.calls)
@@ -591,13 +536,13 @@ func TestEnsureInternalOCIRepositoryNeverProbesRecordedMediaType(t *testing.T) {
 	resolver := &countingResolver{mediaType: "should-not-be-used"}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
 		MediaType: "application/tar+gzip",
 	}
 
 	service.EnsureInternalOCIRepository(
-		context.Background(), addon, repo, ociSource(t, repo, version), version,
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
 	if resolver.calls != 0 {
@@ -613,13 +558,13 @@ func TestEnsureInternalOCIRepositoryReportsTerminalProbeFailure(t *testing.T) {
 	}}
 	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 
 	result := service.EnsureInternalOCIRepository(
-		context.Background(), addon, repo, ociSource(t, repo, version), version,
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
 	if result.Status.Reason != helmv1alpha1.ReasonUnsupportedChartArtifact {
@@ -644,13 +589,13 @@ func TestEnsureInternalOCIRepositoryRequeuesRetriableProbeFailure(t *testing.T) 
 	resolver := &countingResolver{err: errors.New("429 Too Many Requests")}
 	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
 
-	version := &helmv1alpha1.HelmClusterAddonChartVersion{
+	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 
 	result := service.EnsureInternalOCIRepository(
-		context.Background(), addon, repo, ociSource(t, repo, version), version,
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
 	if result.Status.Status != metav1.ConditionFalse {

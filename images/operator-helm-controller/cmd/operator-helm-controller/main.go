@@ -22,18 +22,25 @@ import (
 
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/controller/helmapplication"
+	"github.com/deckhouse/operator-helm/internal/controller/helmapplicationrepository"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddon"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonrepository"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusterapplicationrepository"
 	"github.com/deckhouse/operator-helm/internal/index"
+	helmapplicationwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmapplication"
 	helmclusteraddonwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmclusteraddon"
 )
 
@@ -71,6 +78,16 @@ func main() {
 		HealthProbeBindAddress: healthProbeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "operator-helm-controller.helm.deckhouse.io",
+		Client: client.Options{
+			// AccessService reads ServiceAccounts and RoleBindings only to reconcile
+			// the one object its own release names; nothing watches either kind. The
+			// ClusterRole nonetheless grants cluster-wide list/watch on both, and a
+			// cached typed Get starts an informer for its kind, so without this every
+			// ServiceAccount and RoleBinding in the cluster would be held in memory.
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{&corev1.ServiceAccount{}, &rbacv1.RoleBinding{}},
+			},
+		},
 	})
 	if err != nil {
 		logger.Error(err, "unable to create manager")
@@ -82,8 +99,33 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := index.SetupApplicationRepository(mgr); err != nil {
+		logger.Error(err, "unable to setup indexes", "index", index.ApplicationRepository)
+		os.Exit(1)
+	}
+
+	if err := index.SetupApplicationChart(mgr); err != nil {
+		logger.Error(err, "unable to setup indexes", "index", index.ApplicationChart)
+		os.Exit(1)
+	}
+
 	if err := helmclusteraddonrepository.SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to setup HelmClusterAddonRepository controller")
+		os.Exit(1)
+	}
+
+	if err := helmapplicationrepository.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmApplicationRepository controller")
+		os.Exit(1)
+	}
+
+	if err := helmclusterapplicationrepository.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmClusterApplicationRepository controller")
+		os.Exit(1)
+	}
+
+	if err := helmapplication.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmApplication controller")
 		os.Exit(1)
 	}
 
@@ -99,6 +141,11 @@ func main() {
 
 	if err = helmclusteraddonwebhook.SetupWebhookWithManager(mgr); err != nil {
 		logger.Error(err, "unable to create webhook", "webhook", "HelmClusterAddon")
+		os.Exit(1)
+	}
+
+	if err = helmapplicationwebhook.SetupWebhookWithManager(mgr); err != nil {
+		logger.Error(err, "unable to create webhook", "webhook", "HelmApplication")
 		os.Exit(1)
 	}
 

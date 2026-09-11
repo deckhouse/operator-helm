@@ -79,6 +79,45 @@ rules:
   - helmclusteraddoncharts/status
   - helmclusteraddonrepositories
   - helmclusteraddonrepositories/status
+  - helmapplicationrepositories
+  - helmapplicationrepositories/status
+  - helmclusterapplicationrepositories
+  - helmclusterapplicationrepositories/status
+  - helmapplicationcharts
+  - helmapplicationcharts/status
+  - helmclusterapplicationcharts
+  - helmclusterapplicationcharts/status
+  - helmapplicationrepositories/finalizers
+  - helmclusterapplicationrepositories/finalizers
+  - helmapplicationcharts/finalizers
+  - helmclusterapplicationcharts/finalizers
+  - helmapplications
+  - helmapplications/status
+  - helmapplications/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# The namespace role is seeded once and never read back, so create is the only
+# verb the controller uses on it. Both escalate and bind are verbs on the role
+# itself: escalate lets the controller write a role granting more than it holds,
+# bind lets it point a role binding at such a role.
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  verbs:
+  - create
+  - escalate
+  - bind
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
   verbs:
   - create
   - delete
@@ -172,6 +211,7 @@ rules:
   resources:
   - configmaps
   - secrets
+  - serviceaccounts
   verbs:
   - get
   - list
