@@ -68,10 +68,12 @@ const (
 	OutcomeValuesNotFound            Outcome = "values_not_found"
 )
 
-// Request identifies a chart by repository kind, repository name, chart name and
-// chart version.
+// Request identifies a chart by repository kind, repository namespace, repository
+// name, chart name and chart version. Namespace is empty for a cluster-scoped
+// repository kind.
 type Request struct {
 	Kind           RepositoryKind
+	Namespace      string
 	RepositoryName string
 	Chart          string
 	Version        string
@@ -217,7 +219,7 @@ func versionDetail(version *helmv1alpha1.ChartVersion) string {
 // a HelmClusterAddonRepository exists, inspects its status and returns the
 // chart's values.yaml once the artifact is ready.
 func (r *Resolver) resolveHelmClusterAddon(ctx context.Context, req Request) (Result, error) {
-	name := naming.AuxResourceName(string(req.Kind), req.RepositoryName, req.Chart, req.Version)
+	name := naming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version)
 
 	// Fast path: the cache (keyed by the auxiliary resource name) is kept fresh by
 	// the auxiliary-resource controller via a watch with a revision-change predicate,

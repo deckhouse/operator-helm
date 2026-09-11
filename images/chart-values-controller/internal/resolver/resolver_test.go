@@ -290,7 +290,7 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	name := cvnaming.AuxResourceName(string(req.Kind), req.RepositoryName, req.Chart, req.Version)
+	name := cvnaming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version)
 	key := client.ObjectKey{Name: name, Namespace: "d8-operator-helm"}
 
 	ociRepo := &sourcev1.OCIRepository{}
@@ -367,7 +367,7 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 		t.Fatalf("an archive version must not be reported as unreadable: %+v", result)
 	}
 
-	name := cvnaming.AuxResourceName(string(req.Kind), req.RepositoryName, req.Chart, req.Version)
+	name := cvnaming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version)
 	key := client.ObjectKey{Name: name, Namespace: "d8-operator-helm"}
 
 	helmChart := &sourcev1.HelmChart{}
