@@ -50,7 +50,7 @@ func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return &Resolver{client: c}
+	return &Resolver{client: c, cache: cache.New(t.TempDir())}
 }
 
 func chartWithVersions(repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
@@ -138,7 +138,7 @@ func TestChartVersion(t *testing.T) {
 			helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
 		))
 
-		version, done, err := resolver.chartVersion(context.Background(), req)
+		version, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -158,7 +158,7 @@ func TestChartVersion(t *testing.T) {
 			helmv1alpha1.ChartVersion{Version: "6.7.1"},
 		))
 
-		version, done, err := resolver.chartVersion(context.Background(), req)
+		version, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -179,7 +179,7 @@ func TestChartVersion(t *testing.T) {
 			},
 		))
 
-		_, done, err := resolver.chartVersion(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -191,7 +191,7 @@ func TestChartVersion(t *testing.T) {
 	t.Run("a missing chart is pending", func(t *testing.T) {
 		resolver := newTestResolver(t)
 
-		_, done, err := resolver.chartVersion(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -205,7 +205,7 @@ func TestChartVersion(t *testing.T) {
 			helmv1alpha1.ChartVersion{Version: "6.7.0", MediaType: "application/tar+gzip"},
 		))
 
-		_, done, err := resolver.chartVersion(context.Background(), req)
+		_, done, err := resolver.chartVersion(context.Background(), mustFamily(t, req.Kind), req)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -286,7 +286,7 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 
 	resolver, c := newHybridResolver(t, prober, repo, chart)
 
-	if _, err := resolver.resolveHelmClusterAddon(context.Background(), req); err != nil {
+	if _, err := resolver.resolveChart(context.Background(), mustFamily(t, req.Kind), req); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -359,7 +359,7 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 
 	resolver, c := newHybridResolver(t, nil, repo, chart, helmRepo)
 
-	result, err := resolver.resolveHelmClusterAddon(context.Background(), req)
+	result, err := resolver.resolveChart(context.Background(), mustFamily(t, req.Kind), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -377,4 +377,63 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 	if helmChart.Spec.Version != "0.2.0" {
 		t.Fatalf("chart version = %q, want 0.2.0", helmChart.Spec.Version)
 	}
+}
+
+// TestResolveDispatchesOnTheRequestShape covers what the HTTP layer cannot: an
+// unknown kind, a namespaced kind without a namespace and a cluster-scoped kind
+// with one are all request errors, distinguishable from "the repository is gone".
+func TestResolveDispatchesOnTheRequestShape(t *testing.T) {
+	r := newTestResolver(t)
+
+	cases := []struct {
+		name string
+		req  Request
+		want Outcome
+	}{
+		{
+			name: "unknown kind",
+			req:  Request{Kind: "somethingelse", RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeUnsupportedRepositoryKind,
+		},
+		{
+			name: "namespaced kind without a namespace",
+			req:  Request{Kind: RepositoryKindHelmApplication, RepositoryName: "stable", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeInvalidRequest,
+		},
+		{
+			name: "cluster-scoped kind with a namespace",
+			req:  Request{Kind: RepositoryKindHelmClusterAddon, Namespace: "team-a", RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeInvalidRequest,
+		},
+		{
+			name: "kind casing does not matter",
+			req:  Request{Kind: "HelmApplicationRepository", Namespace: "team-a", RepositoryName: "missing", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeRepositoryNotFound,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := r.Resolve(context.Background(), tc.req)
+			if err != nil {
+				t.Fatalf("Resolve returned %v", err)
+			}
+			if got.Outcome != tc.want {
+				t.Fatalf("outcome = %q, want %q (message %q)", got.Outcome, tc.want, got.Message)
+			}
+		})
+	}
+}
+
+// mustFamily resolves the family of a request's kind, failing the test if the kind
+// is unknown.
+func mustFamily(t *testing.T, kind RepositoryKind) repositoryFamily {
+	t.Helper()
+
+	family, ok := familyFor(kind)
+	if !ok {
+		t.Fatalf("no family for kind %q", kind)
+	}
+
+	return family
 }

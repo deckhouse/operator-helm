@@ -84,6 +84,57 @@ var families = map[RepositoryKind]repositoryFamily{
 			return map[string]string{helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repository}
 		},
 	},
+	RepositoryKindHelmApplication: {
+		Kind:       RepositoryKindHelmApplication,
+		Namespaced: true,
+		GetRepository: func(ctx context.Context, c client.Client, namespace, name string) (*repositorySpec, error) {
+			repo := &helmv1alpha1.HelmApplicationRepository{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, repo); err != nil {
+				return nil, err
+			}
+
+			return specOf(repo.Spec), nil
+		},
+		ChartVersions: func(ctx context.Context, c client.Client, namespace, repository, chart string) ([]helmv1alpha1.ChartVersion, error) {
+			obj := &helmv1alpha1.HelmApplicationChart{}
+			key := client.ObjectKey{Namespace: namespace, Name: apinaming.ApplicationChartName(repository, chart)}
+			if err := c.Get(ctx, key, obj); err != nil {
+				return nil, err
+			}
+
+			return obj.Status.Versions, nil
+		},
+		InternalLabels: func(namespace, repository string) map[string]string {
+			return map[string]string{
+				helmv1alpha1.HelmApplicationRepositoryLabelSourceName: repository,
+				helmv1alpha1.LabelSourceNamespace:                     namespace,
+			}
+		},
+	},
+	RepositoryKindHelmClusterApplication: {
+		Kind:       RepositoryKindHelmClusterApplication,
+		Namespaced: false,
+		GetRepository: func(ctx context.Context, c client.Client, _, name string) (*repositorySpec, error) {
+			repo := &helmv1alpha1.HelmClusterApplicationRepository{}
+			if err := c.Get(ctx, client.ObjectKey{Name: name}, repo); err != nil {
+				return nil, err
+			}
+
+			return specOf(repo.Spec), nil
+		},
+		ChartVersions: func(ctx context.Context, c client.Client, _, repository, chart string) ([]helmv1alpha1.ChartVersion, error) {
+			obj := &helmv1alpha1.HelmClusterApplicationChart{}
+			key := client.ObjectKey{Name: apinaming.ClusterApplicationChartName(repository, chart)}
+			if err := c.Get(ctx, key, obj); err != nil {
+				return nil, err
+			}
+
+			return obj.Status.Versions, nil
+		},
+		InternalLabels: func(_, repository string) map[string]string {
+			return map[string]string{helmv1alpha1.HelmClusterApplicationRepositoryLabelSourceName: repository}
+		},
+	},
 }
 
 // familyFor looks a kind up. The kind is already lower-cased by Resolve.
