@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	_ "github.com/deckhouse/operator-helm/tests/e2e/helmapplicationrepository"
 	_ "github.com/deckhouse/operator-helm/tests/e2e/helmclusteraddon"
 	_ "github.com/deckhouse/operator-helm/tests/e2e/helmclusteraddonrepository"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
