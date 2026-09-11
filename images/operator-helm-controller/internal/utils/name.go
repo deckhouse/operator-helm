@@ -45,7 +45,7 @@ func GetInternalRepositoryAuthSecretName(internalRepoName string) string {
 		result += internalRepoName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func GetInternalRepositoryTLSSecretName(internalRepoName string) string {
@@ -64,7 +64,7 @@ func GetInternalRepositoryTLSSecretName(internalRepoName string) string {
 		result += internalRepoName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func GetInternalHelmReleaseName(addonName string) string {
@@ -81,7 +81,7 @@ func GetInternalHelmReleaseName(addonName string) string {
 		result += addonName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func GetInternalHelmChartName(addonName string) string {
@@ -102,7 +102,7 @@ func GetInternalOCIRepositoryName(addonName string) string {
 		result += addonName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 // GetChartClaimLeaseName derives the name of the Lease that guards uniqueness of a
@@ -131,7 +131,7 @@ func GetInternalHelmRepositoryName(addonRepositoryName string) string {
 		result += addonRepositoryName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 // derivedPartLimit bounds the namespace and the name parts of a derived name. With
@@ -161,14 +161,16 @@ func DerivedName(prefix, kind, namespace, name string) string {
 	return strings.Join(parts, "-")
 }
 
-// truncatePart cuts a name part to derivedPartLimit and drops a dash the cut may
-// have left at the end, so the joined name never carries a double dash.
+// truncatePart cuts a name part to derivedPartLimit and drops a dash or a dot the
+// cut may have left at the end. A dash would double up when the parts are joined;
+// a dot would put the separator at the start of a DNS label, which the API server
+// rejects. Object names carry dots because a resource name is a DNS subdomain.
 func truncatePart(part string) string {
 	if len(part) > derivedPartLimit {
 		part = part[:derivedPartLimit]
 	}
 
-	return strings.TrimRight(part, "-")
+	return strings.TrimRight(part, "-.")
 }
 
 // helmReleaseNameLimit is the longest release name Helm accepts.
@@ -178,11 +180,12 @@ const helmReleaseNameLimit = 53
 // limit is used as is — that keeps every existing addon release untouched — and a
 // longer one is cut to 40 characters and suffixed with a 12-character hash of the
 // full name, so two long names that share a prefix stay distinct. The cut is
-// trimmed of a trailing dash so the joined name never carries a double dash.
+// trimmed of a trailing dash or dot: a dash would double up against the suffix,
+// and a dot would leave the suffix starting a DNS label, which is not a valid name.
 func HelmReleaseName(name string) string {
 	if len(name) <= helmReleaseNameLimit {
 		return name
 	}
 
-	return strings.TrimRight(name[:40], "-") + "-" + GetHash(name)
+	return strings.TrimRight(name[:40], "-.") + "-" + GetHash(name)
 }

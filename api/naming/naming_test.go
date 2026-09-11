@@ -43,6 +43,14 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 			chart: "",
 			want:  "repo-chart",
 		},
+		{
+			// A repository name is a DNS subdomain and a chart name comes from
+			// the index, so either may carry a dot at the truncation boundary.
+			name:  "a truncation that ends in a dot drops it",
+			repo:  "abcdefghijklmnopqrs.x",
+			chart: "podinfo",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-da22920998cb",
+		},
 	}
 
 	for _, tc := range cases {
@@ -78,6 +86,14 @@ func TestApplicationChartName(t *testing.T) {
 			repo:  "repo",
 			chart: "",
 			want:  "repo-chart",
+		},
+		{
+			// A repository name is a DNS subdomain and a chart name comes from
+			// the index, so either may carry a dot at the truncation boundary.
+			name:  "a truncation that ends in a dot drops it",
+			repo:  "abcdefghijklmnopqrs.x",
+			chart: "podinfo",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-da22920998cb",
 		},
 	}
 

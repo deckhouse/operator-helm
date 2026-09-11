@@ -19,6 +19,8 @@ package utils
 import (
 	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // TestAddonInternalNamesAreFrozen pins the exact output of every addon naming
@@ -119,6 +121,17 @@ func TestDerivedName(t *testing.T) {
 			object:    "stable",
 			want:      "hapr-abcdefghijklmnopq-stable-1846a7b21e01",
 		},
+		{
+			// A resource name is a DNS subdomain, so it may carry dots. Keeping
+			// one at the cut would put the joining dash at the start of a label
+			// and the API server would reject every object named this way.
+			name:      "a truncation that ends in a dot drops it",
+			prefix:    "hap",
+			kind:      "HelmApplication",
+			namespace: "team-a",
+			object:    "abcdefghijklmnopq.x",
+			want:      "hap-team-a-abcdefghijklmnopq-da2ee07a8439",
+		},
 	}
 
 	for _, tc := range cases {
@@ -129,6 +142,9 @@ func TestDerivedName(t *testing.T) {
 			}
 			if len(got) > 63 {
 				t.Fatalf("%q is %d characters, the limit is 63", got, len(got))
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid object name: %v", got, errs)
 			}
 		})
 	}
@@ -169,6 +185,13 @@ func TestHelmReleaseName(t *testing.T) {
 			"hap-very-long-application-name-that-is-definitely-over-fifty-three-characters-long",
 			"hap-very-long-application-name-that-is-d-3080981cd4e1",
 		},
+		{
+			// A resource name may carry dots, and a cut landing on one would
+			// leave the hash suffix starting a DNS label.
+			"a cut that lands on a dot drops it",
+			strings.Repeat("a", 39) + "." + strings.Repeat("b", 20),
+			strings.Repeat("a", 39) + "-b46d196cb11f",
+		},
 	}
 
 	for _, tc := range cases {
@@ -179,6 +202,9 @@ func TestHelmReleaseName(t *testing.T) {
 			}
 			if len(got) > 53 {
 				t.Fatalf("%q is %d characters, Helm accepts at most 53", got, len(got))
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid release name: %v", got, errs)
 			}
 		})
 	}

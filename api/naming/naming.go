@@ -53,7 +53,10 @@ func chartObjectName(repoName, chartName string) string {
 	var result, postfix string
 
 	if len(repoName) > 20 {
-		result += repoName[:20] + "-chart-"
+		// The truncated part is followed by a separator, so a dash or a dot the
+		// cut left behind has to go here: the final trim only reaches the end of
+		// the whole name.
+		result += strings.TrimRight(repoName[:20], "-.") + "-chart-"
 		postfix = "-" + hash
 	} else {
 		result += repoName + "-chart-"
@@ -66,7 +69,7 @@ func chartObjectName(repoName, chartName string) string {
 		result += chartName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func hash(s string) string {

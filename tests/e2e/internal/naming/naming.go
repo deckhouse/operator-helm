@@ -51,15 +51,14 @@ func ApplicationServiceAccountName(namespace, name string) string {
 	}, "-")
 }
 
-// truncateNamePart cuts a name part to applicationDerivedPartLimit and drops a
-// dash the cut may have left at the end, so the joined name never carries a double
-// dash.
+// truncateNamePart cuts a name part to applicationDerivedPartLimit and drops a dash
+// or a dot the cut may have left at the end, mirroring utils.truncatePart.
 func truncateNamePart(part string) string {
 	if len(part) > applicationDerivedPartLimit {
 		part = part[:applicationDerivedPartLimit]
 	}
 
-	return strings.TrimRight(part, "-")
+	return strings.TrimRight(part, "-.")
 }
 
 // helmReleaseNameLimit is the longest release name Helm accepts. It must match
@@ -87,7 +86,7 @@ func ApplicationReleaseName(name string) string {
 
 	sum := sha256.Sum256([]byte(full))
 
-	return strings.TrimRight(full[:40], "-") + "-" + fmt.Sprintf("%x", sum[:])[:12]
+	return strings.TrimRight(full[:40], "-.") + "-" + fmt.Sprintf("%x", sum[:])[:12]
 }
 
 // ApplicationRepositoryInternalName reproduces the name operator-helm-controller

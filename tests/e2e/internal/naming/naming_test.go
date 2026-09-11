@@ -51,6 +51,15 @@ func TestApplicationServiceAccountName(t *testing.T) {
 			object:    "stable",
 			want:      "hap-abcdefghijklmnopq-stable-2b3b33a25854",
 		},
+		{
+			// Twin of the "a truncation that ends in a dot drops it" case in
+			// TestDerivedName
+			// (images/operator-helm-controller/internal/utils/name_test.go).
+			name:      "a truncation that ends in a dot drops it",
+			namespace: "team-a",
+			object:    "abcdefghijklmnopq.x",
+			want:      "hap-team-a-abcdefghijklmnopq-da2ee07a8439",
+		},
 	}
 
 	for _, tc := range cases {
