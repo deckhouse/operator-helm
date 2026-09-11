@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -384,6 +385,82 @@ func TestReconcileReportsAFailedMigration(t *testing.T) {
 	}
 	if updated.Status.ObservedGeneration != updated.Generation {
 		t.Fatalf("observedGeneration is %d, want %d", updated.Status.ObservedGeneration, updated.Generation)
+	}
+}
+
+// TestReconcileReportsAFailedMigrationWithoutAnAttempt pins the half of the rename
+// path the previous test cannot reach. The rename runs on every pass, including one
+// that is not due for a synchronization, and on such a pass the repository would
+// otherwise keep the Synced=True its last successful sync left behind — reporting
+// health while its consumers cannot resolve their chart.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func TestReconcileReportsAFailedMigrationWithoutAnAttempt(t *testing.T) {
+	repo := ociRepository()
+	refuse := false
+
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if refuse && obj.GetName() == "e2e-repo-chart-podinfo" {
+				return errors.New("forbidden")
+			}
+
+			return cl.Delete(ctx, obj, opts...)
+		},
+	}, stub, repo)
+
+	// A clean run first, so the repository ends up healthy with a schedule ahead of
+	// it: only then is the next pass one that attempts nothing.
+	reconcileUntilStable(t, r, repo.Name)
+
+	synced := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), synced); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	if !apimeta.IsStatusConditionTrue(synced.Status.Conditions, helmv1alpha1.ConditionTypeSynced) {
+		t.Fatalf("the first run must leave Synced=True, conditions: %v", synced.Status.Conditions)
+	}
+	if synced.Status.NextSyncTime == nil || !synced.Status.NextSyncTime.After(time.Now()) {
+		t.Fatalf("nextSyncTime = %v, want a schedule in the future", synced.Status.NextSyncTime)
+	}
+
+	refuse = true
+	legacy := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "e2e-repo-chart-podinfo",
+			Labels: map[string]string{
+				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+				helmv1alpha1.LabelRepositoryName:    repo.Name,
+				helmv1alpha1.LabelChartName:         "podinfo",
+			},
+		},
+	}
+	if err := c.Create(context.Background(), legacy); err != nil {
+		t.Fatalf("creating the legacy object: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err == nil {
+		t.Fatal("the pass must report the refused rename, or the work queue waits for the next sync instead of retrying")
+	}
+
+	updated := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), updated); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	cond := apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != helmv1alpha1.ReasonCatalogUpdateFailed {
+		t.Fatalf("Synced = %v, want False with %s: the pass attempted no sync, so the stale True would stand", cond, helmv1alpha1.ReasonCatalogUpdateFailed)
+	}
+	if !strings.Contains(cond.Message, "forbidden") {
+		t.Fatalf("Synced message = %q, want the refusal in it", cond.Message)
 	}
 }
 

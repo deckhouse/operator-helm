@@ -110,7 +110,10 @@ func Evaluate(in Inputs) Decision {
 
 	setCondition(&status, in, helmv1alpha1.ConditionTypeReady, ready.Status, ready.Reason, ready.Message)
 
-	if in.Attempted {
+	// A rename failure is reported even on a pass that attempted no synchronization:
+	// the rename runs on every pass by design, so gating its verdict on an attempt
+	// would leave the previous Synced=True standing while consumers cannot resolve.
+	if in.Attempted || in.MigrateErr != nil {
 		syncedStatus, syncedReason, syncedMessage := evaluateSynced(in, fetchFailed, catalogFailed)
 		setCondition(&status, in, helmv1alpha1.ConditionTypeSynced, syncedStatus, syncedReason, syncedMessage)
 	}
@@ -147,7 +150,7 @@ func Evaluate(in Inputs) Decision {
 	return Decision{
 		Status:       status,
 		RequeueAfter: requeueAfter,
-		Err:          firstErr(in.SecretsErr, in.InternalRepositoryErr, catalogErr(in)),
+		Err:          firstErr(in.SecretsErr, in.InternalRepositoryErr, in.MigrateErr, catalogErr(in)),
 	}
 }
 
