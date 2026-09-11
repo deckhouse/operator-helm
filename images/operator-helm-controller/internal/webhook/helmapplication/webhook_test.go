@@ -72,6 +72,63 @@ func namespaceFixture(name string, terminating bool) *corev1.Namespace {
 	return ns
 }
 
+// systemNamespaceCases pins validateNotSystemNamespace's boundary: a deckhouse
+// namespace and kube-system are refused, an ordinary namespace is allowed.
+func systemNamespaceCases() []struct {
+	name      string
+	namespace string
+	wantErr   bool
+} {
+	return []struct {
+		name      string
+		namespace string
+		wantErr   bool
+	}{
+		{name: "deckhouse namespace", namespace: "d8-monitoring", wantErr: true},
+		{name: "kube-system", namespace: "kube-system", wantErr: true},
+		{name: "ordinary namespace", namespace: "team-a", wantErr: false},
+	}
+}
+
+// TestValidateCreateRejectsASystemNamespace pins the fast-reject CREATE performs
+// on the obvious duplicate/misplacement case; the reconciler enforces the same
+// rule as a backstop (internal/reconcile/release/reconciler.go).
+func TestValidateCreateRejectsASystemNamespace(t *testing.T) {
+	for _, tt := range systemNamespaceCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &helmv1alpha1.HelmApplication{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: tt.namespace}}
+			v := newValidator(t, interceptor.Funcs{})
+
+			_, err := v.ValidateCreate(context.Background(), app)
+			if tt.wantErr && err == nil {
+				t.Fatalf("namespace %q must be rejected", tt.namespace)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("namespace %q must be allowed, got %v", tt.namespace, err)
+			}
+		})
+	}
+}
+
+// TestValidateUpdateRejectsASystemNamespace mirrors TestValidateCreateRejectsASystemNamespace
+// for UPDATE, which validates the new object's namespace.
+func TestValidateUpdateRejectsASystemNamespace(t *testing.T) {
+	for _, tt := range systemNamespaceCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &helmv1alpha1.HelmApplication{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: tt.namespace}}
+			v := newValidator(t, interceptor.Funcs{})
+
+			_, err := v.ValidateUpdate(context.Background(), app, app)
+			if tt.wantErr && err == nil {
+				t.Fatalf("namespace %q must be rejected", tt.namespace)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("namespace %q must be allowed, got %v", tt.namespace, err)
+			}
+		})
+	}
+}
+
 // TestValidateDeleteRefusesAMaintainedApplication is the rule itself: maintenance
 // mode is what keeps an application from being deleted by mistake.
 func TestValidateDeleteRefusesAMaintainedApplication(t *testing.T) {
