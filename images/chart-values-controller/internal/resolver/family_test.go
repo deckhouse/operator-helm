@@ -51,7 +51,7 @@ func TestAddonFamilyReadsTheClusterScopedRepositoryAndCatalog(t *testing.T) {
 	// under test calls: otherwise a wrong naming scheme in the family could never be
 	// caught, since the fixture would always agree with whatever the family did.
 	chart := &helmv1alpha1.HelmClusterAddonChart{
-		ObjectMeta: metav1.ObjectMeta{Name: "example-chart-podinfo"},
+		ObjectMeta: metav1.ObjectMeta{Name: "example-chart-podinfo-aa661c3516b2"},
 		Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "6.7.1"}}},
 	}
 

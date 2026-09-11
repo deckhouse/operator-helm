@@ -26,10 +26,10 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "short names are joined verbatim",
+			name:  "short names are joined and hashed",
 			repo:  "example",
 			chart: "podinfo",
-			want:  "example-chart-podinfo",
+			want:  "example-chart-podinfo-aa661c3516b2",
 		},
 		{
 			name:  "long names are truncated and suffixed with a hash",
@@ -38,10 +38,10 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-a3ee4a8a584e",
 		},
 		{
-			name:  "an empty chart name leaves no trailing dash",
+			name:  "an empty chart name leaves no trailing dash before the hash",
 			repo:  "repo",
 			chart: "",
-			want:  "repo-chart",
+			want:  "repo-chart-4e5d8120682c",
 		},
 		{
 			// A repository name is a DNS subdomain and a chart name comes from
@@ -155,5 +155,20 @@ func TestChartNameSchemeIsShared(t *testing.T) {
 
 	if got := ClusterApplicationChartName(repo, chart); got != addon {
 		t.Fatalf("ClusterApplicationChartName = %q, want the shared scheme result %q", got, addon)
+	}
+}
+
+// TestHelmClusterAddonChartNameNoLongerCollidesOnATrailingDot pins that the addon
+// family closed its collision gap too. Under its old scheme (a hash only past the
+// truncation threshold), the two names below both trimmed to "foo-chart-bar" and
+// collided: the trailing dot only vanishes from the untrimmed pair after it is
+// already inside the joined string. The hash is computed from that untrimmed pair,
+// so making it unconditional is what tells the two names apart now.
+func TestHelmClusterAddonChartNameNoLongerCollidesOnATrailingDot(t *testing.T) {
+	withDot := HelmClusterAddonChartName("foo", "bar.")
+	withoutDot := HelmClusterAddonChartName("foo", "bar")
+
+	if withDot == withoutDot {
+		t.Fatalf("HelmClusterAddonChartName(%q, %q) = %q, collides with (%q, %q)", "foo", "bar.", withDot, "foo", "bar")
 	}
 }
