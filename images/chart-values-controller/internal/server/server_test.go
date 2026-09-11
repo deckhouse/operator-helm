@@ -46,6 +46,30 @@ func (f fakeReviewer) Review(_ context.Context, _ string, _ auth.Access) (auth.R
 	return f.result, f.err
 }
 
+type recordingReviewer struct {
+	result auth.Result
+	err    error
+	access auth.Access
+}
+
+func (f *recordingReviewer) Review(_ context.Context, _ string, access auth.Access) (auth.Result, error) {
+	f.access = access
+
+	return f.result, f.err
+}
+
+type recordingResolver struct {
+	result resolver.Result
+	err    error
+	req    resolver.Request
+}
+
+func (f *recordingResolver) Resolve(_ context.Context, req resolver.Request) (resolver.Result, error) {
+	f.req = req
+
+	return f.result, f.err
+}
+
 // authorized is the default reviewer for tests unconcerned with authorization.
 var authorized = fakeReviewer{result: auth.Result{Authenticated: true, Authorized: true}}
 
@@ -193,4 +217,85 @@ func assertCode(t *testing.T, body []byte, field, want string) {
 	if resp[field] != want {
 		t.Fatalf("%s = %v, want %q", field, resp[field], want)
 	}
+}
+
+// TestHandleRejectsANamespacedKindWithoutANamespace covers the request-shape guard
+// at the HTTP boundary: the resolver would refuse it too, but the client deserves a
+// 400 naming the missing field rather than a generic outcome.
+func TestHandleRejectsANamespacedKindWithoutANamespace(t *testing.T) {
+	rec := do(t, fakeResolver{}, `{"repositoryKind":"HelmApplicationRepository","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
+}
+
+// TestHandleAuthorizesPerFamily pins which permission each repository kind demands:
+// the addon family a cluster-scoped create of HelmClusterAddon, both application
+// kinds a create of HelmApplication in the request's namespace — that is the
+// resource whose values are exposed by the answer.
+func TestHandleAuthorizesPerFamily(t *testing.T) {
+	cases := []struct {
+		name          string
+		body          string
+		wantResource  string
+		wantNamespace string
+	}{
+		{
+			name:         "addon",
+			body:         validBody,
+			wantResource: "helmclusteraddons",
+		},
+		{
+			name:          "namespaced application repository",
+			body:          `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
+			wantResource:  "helmapplications",
+			wantNamespace: "team-a",
+		},
+		{
+			name:          "cluster application repository",
+			body:          `{"repositoryKind":"HelmClusterApplicationRepository","namespace":"team-a","repositoryName":"shared","chart":"podinfo","version":"6.7.1"}`,
+			wantResource:  "helmapplications",
+			wantNamespace: "team-a",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rev := &recordingReviewer{result: auth.Result{Authenticated: true, Authorized: true}}
+			rec := doAuth(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}}, rev, tc.body)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			if rev.access.Resource != tc.wantResource || rev.access.Namespace != tc.wantNamespace || rev.access.Verb != "create" {
+				t.Fatalf("access = %+v, want create on %s in %q", rev.access, tc.wantResource, tc.wantNamespace)
+			}
+		})
+	}
+}
+
+// TestHandlePassesTheNamespaceToTheResolver makes sure the namespace is not merely
+// validated and dropped.
+func TestHandlePassesTheNamespaceToTheResolver(t *testing.T) {
+	res := &recordingResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}}
+	rec := doAuth(t, res, authorized, `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if res.req.Namespace != "team-a" || res.req.Kind != resolver.RepositoryKindHelmApplication {
+		t.Fatalf("request = %+v, want the namespace and the lower-cased kind", res.req)
+	}
+}
+
+// TestHandleInvalidRequestOutcome maps the resolver's request-shape refusal.
+func TestHandleInvalidRequestOutcome(t *testing.T) {
+	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeInvalidRequest, Message: "detail"}}, validBody)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
 }
