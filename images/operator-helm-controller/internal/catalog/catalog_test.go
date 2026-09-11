@@ -67,6 +67,12 @@ func applicationRepo(namespace, name string) source.Repository {
 func newAddonClient(t *testing.T, objects ...client.Object) client.WithWatch {
 	t.Helper()
 
+	return newAddonClientWithInterceptor(t, interceptor.Funcs{}, objects...)
+}
+
+func newAddonClientWithInterceptor(t *testing.T, funcs interceptor.Funcs, objects ...client.Object) client.WithWatch {
+	t.Helper()
+
 	scheme := runtime.NewScheme()
 	if err := helmv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("registering helm scheme: %v", err)
@@ -74,6 +80,7 @@ func newAddonClient(t *testing.T, objects ...client.Object) client.WithWatch {
 
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
+		WithInterceptorFuncs(funcs).
 		WithStatusSubresource(&helmv1alpha1.HelmClusterAddonChart{}).
 		WithObjects(objects...).
 		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonChart, func(obj client.Object) []string {
@@ -509,5 +516,95 @@ func TestMigrationLeavesUnrelatedChartsToExistingPruning(t *testing.T) {
 	err = c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "pruned")}, &helmv1alpha1.HelmClusterAddonChart{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("the unreferenced unrelated chart must be pruned, got %v", err)
+	}
+}
+
+// TestMigratesAChartTheRepositoryNoLongerOffers pins the case the pruning loop
+// cannot handle: the repository dropped the chart entirely and only a consumer keeps
+// it alive. Its object is not part of any fetch, so a migration driven by the fetched
+// charts would leave it under the legacy name, while the consumer already resolves
+// the new one and its release would never reconcile again.
+func TestMigratesAChartTheRepositoryNoLongerOffers(t *testing.T) {
+	const legacyName = "example-chart-gone"
+
+	c := newAddonClient(t,
+		legacyAddonChart(legacyName, "example", "gone",
+			helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+		),
+		addonConsumer("consumer", "example", "gone", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c)
+
+	if err := cat.Reconcile(context.Background(), addonRepo(), []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "gone")}, got); err != nil {
+		t.Fatalf("the chart a consumer still holds was not moved to its new name: %v", err)
+	}
+	if len(got.Status.Versions) != 1 || got.Status.Versions[0].Version != "1.0.0" {
+		t.Fatalf("versions = %+v, want the legacy status carried over", got.Status.Versions)
+	}
+	if got.Status.Versions[0].MediaType == "" {
+		t.Fatal("the media type was lost, so the consumer's internal source cannot be built")
+	}
+
+	err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want NotFound", err)
+	}
+}
+
+// TestMigrationSurvivesAFailedStatusWrite pins that the legacy object outlives a
+// failure: it is the only copy of a retained version, so deleting it before its
+// status has landed would lose that version for good.
+func TestMigrationSurvivesAFailedStatusWrite(t *testing.T) {
+	const legacyName = "example-chart-podinfo"
+
+	failed := false
+	c := newAddonClientWithInterceptor(t, interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			if !failed {
+				failed = true
+
+				return errors.New("transient status patch failure")
+			}
+
+			return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	},
+		legacyAddonChart(legacyName, "example", "podinfo",
+			helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+		),
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c)
+
+	if err := cat.Reconcile(context.Background(), addonRepo(), []repoclient.Chart{chart("podinfo", "2.0.0")}); err == nil {
+		t.Fatal("Reconcile must report the failed status write")
+	}
+
+	if err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{}); err != nil {
+		t.Fatalf("legacy object err = %v, want it kept until its status has been carried over", err)
+	}
+
+	if err := cat.Reconcile(context.Background(), addonRepo(), []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+		t.Fatalf("second Reconcile returned %v", err)
+	}
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "podinfo")}, got); err != nil {
+		t.Fatalf("new-scheme object was not created: %v", err)
+	}
+
+	var retained bool
+	for _, version := range got.Status.Versions {
+		if version.Version == "1.0.0" && version.MediaType != "" {
+			retained = true
+		}
+	}
+	if !retained {
+		t.Fatalf("versions = %+v, want 1.0.0 and its media type carried over on the retry", got.Status.Versions)
 	}
 }
