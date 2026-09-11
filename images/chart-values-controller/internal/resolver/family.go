@@ -154,14 +154,14 @@ func specOf(spec helmv1alpha1.RepositorySpec) *repositorySpec {
 }
 
 // requireNamespace reports the request-shape error of a family: a namespaced kind
-// needs a namespace and a cluster-scoped one must not be given one.
+// needs a namespace to identify its repository. A cluster-scoped kind accepts any
+// namespace, including a non-empty one: for such a kind the namespace is not part of
+// the chart's identity but the caller's authorization context (e.g. the namespace it
+// intends to create a HelmApplication in), which this resolver does not use.
 func (f repositoryFamily) requireNamespace(namespace string) error {
-	switch {
-	case f.Namespaced && namespace == "":
+	if f.Namespaced && namespace == "" {
 		return fmt.Errorf("repository kind %q is namespaced: namespace is required", f.Kind)
-	case !f.Namespaced && namespace != "":
-		return fmt.Errorf("repository kind %q is cluster-scoped: namespace must be empty", f.Kind)
-	default:
-		return nil
 	}
+
+	return nil
 }

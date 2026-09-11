@@ -81,8 +81,9 @@ const (
 )
 
 // Request identifies a chart by repository kind, repository namespace, repository
-// name, chart name and chart version. Namespace is empty for a cluster-scoped
-// repository kind.
+// name, chart name and chart version. Namespace identifies the repository only for a
+// namespaced repository kind; for a cluster-scoped one it may still be set (it is the
+// caller's authorization context) but Resolve does not use it to find the chart.
 type Request struct {
 	Kind           RepositoryKind
 	Namespace      string
@@ -140,6 +141,14 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 
 	if err := family.requireNamespace(req.Namespace); err != nil {
 		return Result{Outcome: OutcomeInvalidRequest, Message: err.Error()}, nil
+	}
+
+	if !family.Namespaced {
+		// The namespace is part of a chart's identity only for a namespaced family: for
+		// a cluster-scoped one it is just the caller's authorization context and must not
+		// reach the resource name, the cache key or the family's lookups, or the same
+		// chart would resolve to a different auxiliary object per namespace.
+		req.Namespace = ""
 	}
 
 	return r.resolveChart(ctx, family, req)

@@ -186,8 +186,8 @@ func TestRequireNamespaceRejectsTheWrongRequestShape(t *testing.T) {
 	}
 
 	addon, _ := familyFor(RepositoryKindHelmClusterAddon)
-	if err := addon.requireNamespace("team-a"); err == nil {
-		t.Fatal("a cluster-scoped kind with a namespace must be rejected")
+	if err := addon.requireNamespace("team-a"); err != nil {
+		t.Fatalf("a cluster-scoped kind with a namespace must be accepted: the namespace is not part of its identity, got %v", err)
 	}
 	if err := addon.requireNamespace(""); err != nil {
 		t.Fatalf("a cluster-scoped kind without a namespace must be accepted, got %v", err)

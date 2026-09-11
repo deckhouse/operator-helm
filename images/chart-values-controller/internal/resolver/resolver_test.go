@@ -380,8 +380,10 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 }
 
 // TestResolveDispatchesOnTheRequestShape covers what the HTTP layer cannot: an
-// unknown kind, a namespaced kind without a namespace and a cluster-scoped kind
-// with one are all request errors, distinguishable from "the repository is gone".
+// unknown kind and a namespaced kind without a namespace are request errors,
+// distinguishable from "the repository is gone". A namespace on a cluster-scoped
+// kind is not a request error — see TestClusterScopedRequestsIgnoreAStrayNamespace
+// for what happens to it instead.
 func TestResolveDispatchesOnTheRequestShape(t *testing.T) {
 	r := newTestResolver(t)
 
@@ -401,9 +403,17 @@ func TestResolveDispatchesOnTheRequestShape(t *testing.T) {
 			want: OutcomeInvalidRequest,
 		},
 		{
-			name: "cluster-scoped kind with a namespace",
+			name: "cluster addon kind with a namespace is not rejected",
 			req:  Request{Kind: RepositoryKindHelmClusterAddon, Namespace: "team-a", RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"},
-			want: OutcomeInvalidRequest,
+			want: OutcomeRepositoryNotFound,
+		},
+		{
+			// The spec requires a namespace here for authorization, even though it is a
+			// cluster-scoped repository kind: it must not be rejected, and it does not
+			// identify the repository, so "example" is still looked up cluster-wide.
+			name: "cluster application kind with a namespace is not rejected",
+			req:  Request{Kind: RepositoryKindHelmClusterApplication, Namespace: "team-a", RepositoryName: "shared", Chart: "podinfo", Version: "6.7.1"},
+			want: OutcomeRepositoryNotFound,
 		},
 		{
 			name: "kind casing does not matter",
@@ -420,6 +430,39 @@ func TestResolveDispatchesOnTheRequestShape(t *testing.T) {
 			}
 			if got.Outcome != tc.want {
 				t.Fatalf("outcome = %q, want %q (message %q)", got.Outcome, tc.want, got.Message)
+			}
+		})
+	}
+}
+
+// TestClusterScopedRequestsIgnoreAStrayNamespace pins the rule the spec draws for
+// the request namespace: it is part of a chart's identity only for a namespaced
+// family. For a cluster-scoped kind — the addon family, whose contract must not
+// move, and the cluster application family, which the caller must authorize through
+// a namespace it does not otherwise use — a namespace on the request must resolve to
+// the exact same auxiliary resource name and cache entry as a request without one.
+// Otherwise the same chart would get a second, per-namespace copy of its internal
+// objects for every namespace a caller happens to send.
+func TestClusterScopedRequestsIgnoreAStrayNamespace(t *testing.T) {
+	for _, kind := range []RepositoryKind{RepositoryKindHelmClusterAddon, RepositoryKindHelmClusterApplication} {
+		t.Run(string(kind), func(t *testing.T) {
+			r := newTestResolver(t)
+
+			req := Request{Kind: kind, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
+			name := cvnaming.AuxResourceName(string(kind), "", req.RepositoryName, req.Chart, req.Version)
+			if err := r.cache.Put(name, []byte("replicaCount: 1\n")); err != nil {
+				t.Fatalf("seeding cache: %v", err)
+			}
+
+			withNamespace := req
+			withNamespace.Namespace = "team-a"
+
+			got, err := r.Resolve(context.Background(), withNamespace)
+			if err != nil {
+				t.Fatalf("Resolve returned %v", err)
+			}
+			if got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
+				t.Fatalf("got %+v, want the entry cached without a namespace: a stray namespace must not miss it or create a second identity", got)
 			}
 		})
 	}
