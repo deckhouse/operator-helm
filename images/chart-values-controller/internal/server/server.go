@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/deckhouse/chart-values-controller/internal/auth"
@@ -144,9 +145,16 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("unsupported repository kind %q", req.RepositoryKind))
 		return
 	}
-	if namespaced && req.Namespace == "" {
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "namespace is required for this repository kind")
-		return
+	if namespaced {
+		// A name no namespace could carry would otherwise travel as far as the
+		// access review and come back as a 403, which tells the caller nothing
+		// about the field they got wrong.
+		if errs := validation.IsDNS1123Label(req.Namespace); len(errs) > 0 {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+				"namespace is required for this repository kind and must be a valid namespace name")
+
+			return
+		}
 	}
 	if !s.authorize(w, r, access, displayKind) {
 		return

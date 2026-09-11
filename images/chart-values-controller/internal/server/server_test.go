@@ -223,12 +223,32 @@ func assertCode(t *testing.T, body []byte, field, want string) {
 // at the HTTP boundary: the resolver would refuse it too, but the client deserves a
 // 400 naming the missing field rather than a generic outcome.
 func TestHandleRejectsANamespacedKindWithoutANamespace(t *testing.T) {
-	rec := do(t, fakeResolver{}, `{"repositoryKind":"HelmApplicationRepository","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "the field is absent",
+			body: `{"repositoryKind":"HelmApplicationRepository","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			// Without this, a namespace no cluster can have reaches the access
+			// review and comes back as a 403 the caller cannot act on.
+			name: "the field holds a name no namespace can have",
+			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"  ","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
+		},
 	}
-	assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, fakeResolver{}, tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+			assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
+		})
+	}
 }
 
 // TestHandleAuthorizesPerFamily pins which permission each repository kind demands:
