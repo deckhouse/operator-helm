@@ -157,6 +157,15 @@ func TestHelmReleaseName(t *testing.T) {
 		{"short name is used as is", "podinfo", "podinfo"},
 		{"a name of exactly 53 characters is used as is", strings.Repeat("a", 53), strings.Repeat("a", 53)},
 		{"a longer name is cut to 40 characters and hashed", long, "abcdefghijklmnopqrstuvwxyz-abcdefghijklm-ddc3f43e8c75"},
+		{
+			// Twin of the "a long name is cut to 40 characters and hashed" case in
+			// TestApplicationReleaseName
+			// (tests/e2e/internal/naming/naming_test.go): a change on either side
+			// that is not mirrored on the other breaks one of the two tests.
+			"hap-prefixed name over the limit is cut and hashed",
+			"hap-very-long-application-name-that-is-definitely-over-fifty-three-characters-long",
+			"hap-very-long-application-name-that-is-d-3080981cd4e1",
+		},
 	}
 
 	for _, tc := range cases {

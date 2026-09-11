@@ -27,7 +27,7 @@ import (
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 )
 
-var _ = Describe("HelmApplication system namespace restriction", func() {
+var _ = Describe("HelmApplication system namespace restriction", Ordered, func() {
 	f := framework.NewFramework("")
 
 	newApplication := func(namespace string) *apiv1alpha1.HelmApplication {
@@ -43,12 +43,20 @@ var _ = Describe("HelmApplication system namespace restriction", func() {
 		}
 	}
 
+	BeforeAll(func() {
+		DeferCleanup(f.After)
+		f.Before()
+	})
+
 	DescribeTable(
 		"should reject an application in a system namespace",
 		func(namespace string) {
-			_, err := f.OperatorClient().HelmV1alpha1().
+			created, err := f.OperatorClient().HelmV1alpha1().
 				HelmApplications(namespace).
 				Create(context.Background(), newApplication(namespace), metav1.CreateOptions{})
+			if err == nil {
+				f.DeferDelete(created)
+			}
 
 			Expect(err).To(HaveOccurred(), "an application in %q must be rejected", namespace)
 			Expect(err.Error()).To(ContainSubstring("system namespace"))

@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
@@ -37,6 +38,37 @@ import (
 // checking anything. See internal/naming for the derivation itself.
 func ApplicationServiceAccountName(namespace, name string) string {
 	return naming.ApplicationServiceAccountName(namespace, name)
+}
+
+// ApplicationReleaseName reproduces the Helm release name operator-helm-controller
+// installs an application's chart under. See internal/naming for the derivation
+// itself.
+func ApplicationReleaseName(name string) string {
+	return naming.ApplicationReleaseName(name)
+}
+
+// HelmApplicationInternalReleaseSpec returns the serviceAccountName and
+// storageNamespace recorded on an application's internal HelmRelease, identified
+// by its derived internal name (see ApplicationServiceAccountName) in the module
+// namespace.
+func HelmApplicationInternalReleaseSpec(internalName string) (serviceAccountName, storageNamespace string, err error) {
+	release, err := framework.GetClients().DynamicClient().Resource(operatorHelmInternalHelmReleaseGVR).
+		Namespace(moduleNamespace).Get(context.Background(), internalName, metav1.GetOptions{})
+	if err != nil {
+		return "", "", err
+	}
+
+	serviceAccountName, _, err = unstructured.NestedString(release.Object, "spec", "serviceAccountName")
+	if err != nil {
+		return "", "", err
+	}
+
+	storageNamespace, _, err = unstructured.NestedString(release.Object, "spec", "storageNamespace")
+	if err != nil {
+		return "", "", err
+	}
+
+	return serviceAccountName, storageNamespace, nil
 }
 
 // DeleteHelmApplication removes the application and waits until its internal helm

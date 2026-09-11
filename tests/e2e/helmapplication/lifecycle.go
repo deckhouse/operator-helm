@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -47,7 +48,12 @@ func DefineLifecycleTests(repoType, repoURL string) {
 		repoName := "e2e-app-repo-" + suffix
 		appName := "e2e-test-app-" + suffix
 
-		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s", chartName)
+		// The podinfo chart names its pods after the Helm release, not the chart:
+		// app.kubernetes.io/name is "<release>-podinfo", and the release name is
+		// util.ApplicationReleaseName(appName) (see
+		// images/operator-helm-controller/internal/adapter/application_release.go
+		// ApplicationRelease.ReleaseName).
+		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", util.ApplicationReleaseName(appName), chartName)
 
 		BeforeAll(func() {
 			DeferCleanup(f.After)
@@ -149,11 +155,11 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			Eventually(func(g Gomega) {
 				_, err := f.KubeClient().CoreV1().ServiceAccounts(moduleNS).
 					Get(context.Background(), saName, metav1.GetOptions{})
-				g.Expect(err).To(HaveOccurred(), "the application's service account must be deleted")
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the application's service account must be deleted")
 
 				_, err = f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 					Get(context.Background(), saName, metav1.GetOptions{})
-				g.Expect(err).To(HaveOccurred(), "the application's role binding must be deleted")
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the application's role binding must be deleted")
 			}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
 			By("The namespace role must survive the application")

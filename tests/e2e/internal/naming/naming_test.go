@@ -62,3 +62,39 @@ func TestApplicationServiceAccountName(t *testing.T) {
 		})
 	}
 }
+
+// TestApplicationReleaseName pins ApplicationReleaseName's output, including
+// against the value operator-helm-controller's HelmReleaseName produces for the
+// same "hap-"-prefixed input.
+func TestApplicationReleaseName(t *testing.T) {
+	cases := []struct {
+		name   string
+		object string
+		want   string
+	}{
+		{
+			name:   "a short name is used as is",
+			object: "e2e-test-app-helm",
+			want:   "hap-e2e-test-app-helm",
+		},
+		{
+			// Twin of the "hap-prefixed name over the limit is cut and hashed" case
+			// in TestHelmReleaseName
+			// (images/operator-helm-controller/internal/utils/name_test.go): a
+			// change on either side that is not mirrored on the other breaks one of
+			// the two tests.
+			name:   "a long name is cut to 40 characters and hashed",
+			object: "very-long-application-name-that-is-definitely-over-fifty-three-characters-long",
+			want:   "hap-very-long-application-name-that-is-d-3080981cd4e1",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ApplicationReleaseName(tc.object)
+			if got != tc.want {
+				t.Fatalf("ApplicationReleaseName(%q) = %q, want %q", tc.object, got, tc.want)
+			}
+		})
+	}
+}
