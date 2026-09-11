@@ -186,6 +186,19 @@ func TestHelmReleaseName(t *testing.T) {
 			"hap-very-long-application-name-that-is-d-3080981cd4e1",
 		},
 		{
+			// The hash is over the whole name, so two names that survive the cut
+			// identically still get different releases. Without it the second
+			// application would take over the first one's release.
+			"a long name is distinguished by the hash, not by the cut",
+			strings.Repeat("c", 50) + "-one",
+			strings.Repeat("c", 40) + "-0511f1bf7dbf",
+		},
+		{
+			"a name sharing the first 40 characters gets a different release",
+			strings.Repeat("c", 50) + "-two",
+			strings.Repeat("c", 40) + "-bbd09a562ff3",
+		},
+		{
 			// A resource name may carry dots, and a cut landing on one would
 			// leave the hash suffix starting a DNS label.
 			"a cut that lands on a dot drops it",
