@@ -20,6 +20,14 @@ vars:
   KIND_CLUSTER_NAME: '{{.KIND_CLUSTER_NAME | default "d8-operator-helm"}}'
 
 tasks:
+  # Only the packages that need no cluster. Importing internal/framework pulls in
+  # a package-level init that reads the cluster config and panics without it, so
+  # ./... cannot be used here.
+  test:
+    desc: "Run the unit tests of this module."
+    cmds:
+      - go test ./internal/naming/...
+
   kind:ci:setup:
     desc: Setup kind in CI
     cmds:

@@ -55,6 +55,15 @@ tasks:
     cmds:
       - task: api:ci:generate
 
+  test:unit:
+    desc: "Run the unit tests of every module."
+    cmds:
+      - task: api:test
+      - task: hooks:test
+      - task: artifact:test
+      - task: chart-values-artifact:test
+      - task: e2e:test
+
   test:e2e:setup:
     desc: "Setup environment for e2e tests."
     cmds:

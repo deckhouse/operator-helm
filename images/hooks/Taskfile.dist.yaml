@@ -13,3 +13,9 @@ includes:
       golangciLintVersion: '{{.golangciLintVersion | default "v2.8.0"}}'
       golangciPaths: '{{.golangciPaths | default "./..."}}'
       paths: '{{.paths | default "."}}'
+
+tasks:
+  test:
+    desc: "Run the unit tests of this module."
+    cmds:
+      - go test ./...
