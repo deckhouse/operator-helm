@@ -122,17 +122,45 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 	logger := log.FromContext(ctx)
 
 	desired := make(map[string]struct{}, len(charts))
+	desiredNameByChart := make(map[string]string, len(charts))
 
 	for _, chart := range charts {
 		name := t.cfg.ObjectName(repo.Name(), chart.Name)
+		desired[name] = struct{}{}
+		desiredNameByChart[chart.Name] = name
+	}
+
+	// The pruning loop below needs this same listing, so it is fetched once, before
+	// any object is created or patched: that is also what lets the loop find a chart
+	// object still sitting under an earlier naming scheme, for the migration below.
+	existingCharts, err := t.list(ctx, repo)
+	if err != nil {
+		return fmt.Errorf("listing charts for pruning: %w", err)
+	}
+
+	// TRANSITIONAL: chartObjectName became injective for every catalog kind, moving
+	// every object to a new name. legacyByChart maps a chart being reconciled to one
+	// object still sitting under its old name, found by the chart label rather than
+	// by recomputing the old scheme, so this also covers any earlier scheme. Remove
+	// this map and its two uses below, and the "an earlier naming scheme" branch in
+	// the pruning loop, once every cluster has synchronized under the new scheme at
+	// least once.
+	legacyByChart := make(map[string]C, len(existingCharts))
+	for _, existing := range existingCharts {
+		chartName := existing.GetLabels()[helmv1alpha1.LabelChartName]
+		if wantName, reconciling := desiredNameByChart[chartName]; reconciling && existing.GetName() != wantName {
+			legacyByChart[chartName] = existing
+		}
+	}
+
+	for _, chart := range charts {
+		name := desiredNameByChart[chart.Name]
 		// A chart with no usable version is still created: it carries the reason each of
 		// its versions is unusable, and skipping it here would let the pruning loop below
 		// delete a chart whose tags merely failed to resolve.
 		existing := t.cfg.NewObject()
 		existing.SetName(name)
 		existing.SetNamespace(repo.Namespace())
-
-		desired[name] = struct{}{}
 
 		op, err := controllerutil.CreateOrPatch(ctx, t.client, existing, func() error {
 			existing.SetOwnerReferences([]metav1.OwnerReference{
@@ -160,21 +188,29 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 		}
 
 		base := existing.DeepCopyObject().(C)
-
 		status := t.cfg.Status(existing)
+
+		// TRANSITIONAL: a freshly created object starts with an empty status, which
+		// would otherwise make mergeChartVersions forget a version a consumer still
+		// references. Seeding only the "current" input mergeChartVersions reads
+		// (base above must still mirror the object's real, empty server state, or
+		// the status patch below would not carry the seeded fields at all) replays
+		// that protection once, from whatever the object carried under its old name.
+		currentVersions := status.Versions
+		if op == controllerutil.OperationResultCreated {
+			if legacy, ok := legacyByChart[chart.Name]; ok {
+				currentVersions = t.cfg.Status(legacy).Versions
+			}
+		}
+
 		if len(chart.Versions) > 0 {
 			status.IconURL = chart.Versions[0].IconURL
 		}
-		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse)
+		status.Versions = mergeChartVersions(chart.Versions, currentVersions, inUse)
 
 		if err := t.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
 			return fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
 		}
-	}
-
-	existingCharts, err := t.list(ctx, repo)
-	if err != nil {
-		return fmt.Errorf("listing charts for pruning: %w", err)
 	}
 
 	for _, chart := range existingCharts {
@@ -183,6 +219,22 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 		}
 
 		chartName := chart.GetLabels()[helmv1alpha1.LabelChartName]
+
+		if _, reconciling := desiredNameByChart[chartName]; reconciling {
+			// TRANSITIONAL: this object's chart now lives under the name reconciled
+			// above, so it is a leftover of an earlier naming scheme rather than a
+			// chart the repository stopped offering. The in-use check below exists to
+			// protect a chart a consumer still needs, but the consumer now resolves
+			// to the new name, so this leftover is deleted unconditionally.
+			logger.Info("Deleting a chart object left over from an earlier naming scheme", "kind", t.cfg.Kind, "name", chart.GetName(), "chart", chartName)
+
+			if err := client.IgnoreNotFound(t.client.Delete(ctx, chart)); err != nil {
+				return fmt.Errorf("deleting a chart object from an earlier naming scheme: %w", err)
+			}
+
+			continue
+		}
+
 		if chartName == "" {
 			// The chart label is the only way back from the object name (a
 			// truncated hash) to the chart name a consumer references, so

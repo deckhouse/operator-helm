@@ -62,6 +62,71 @@ func applicationRepo(namespace, name string) source.Repository {
 	})
 }
 
+// newAddonClient builds a client for the addon family's own tests, indexed the way
+// the addon consumer lookup (chartConsumers over ListAddonReleases) requires.
+func newAddonClient(t *testing.T, objects ...client.Object) client.WithWatch {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	if err := helmv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering helm scheme: %v", err)
+	}
+
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&helmv1alpha1.HelmClusterAddonChart{}).
+		WithObjects(objects...).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonChart, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{index.AddonChartValue(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName)}
+		}).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonRepository, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{addon.Spec.Chart.HelmClusterAddonRepository}
+		}).
+		Build()
+}
+
+func addonRepo() source.Repository {
+	return adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "example"}})
+}
+
+// addonConsumer builds a HelmClusterAddon referencing one repository/chart/version,
+// so InUseVersions reports that version as in use.
+func addonConsumer(name, repoName, chartName, version string) *helmv1alpha1.HelmClusterAddon {
+	return &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: helmv1alpha1.HelmClusterAddonSpec{
+			Namespace: "app",
+			Chart: helmv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonRepository: repoName,
+				HelmClusterAddonChartName:  chartName,
+				Version:                    version,
+			},
+		},
+	}
+}
+
+// legacyAddonChart builds a HelmClusterAddonChart under a name that predates the
+// current scheme, labelled the way every catalog object is labelled. The name is a
+// plain literal, not a recomputation of any past scheme: the migration finds this
+// object by its chart label alone.
+func legacyAddonChart(name, repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
+	return &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+				helmv1alpha1.LabelRepositoryName:    repoName,
+				helmv1alpha1.LabelChartName:         chartName,
+			},
+		},
+		Status: helmv1alpha1.ChartCatalogStatus{Versions: versions},
+	}
+}
+
 func chart(name, version string) repoclient.Chart {
 	return repoclient.Chart{
 		Name:     name,
@@ -256,5 +321,193 @@ func TestListErrorNamesAClusterScopedRepositoryWithoutALeadingSlash(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "repository shared:") {
 		t.Fatalf("error = %q, want it to name the repository as \"shared\"", err)
+	}
+}
+
+// TestMigratesALegacyNamedObjectStillInUse pins the migration for a chart a
+// consumer still references: the legacy object is deleted regardless of that
+// reference, and the version it protected survives on the new object marked
+// RemovedFromRepository, media type included, exactly as an ordinary in-use prune
+// would have kept it had the name never changed.
+func TestMigratesALegacyNamedObjectStillInUse(t *testing.T) {
+	const legacyName = "example-chart-podinfo"
+
+	c := newAddonClient(t,
+		legacyAddonChart(legacyName, "example", "podinfo",
+			helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+		),
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c)
+	repo := addonRepo()
+
+	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	newName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: newName}, got); err != nil {
+		t.Fatalf("new-scheme object was not created: %v", err)
+	}
+
+	var retained *helmv1alpha1.ChartVersion
+	for i := range got.Status.Versions {
+		if got.Status.Versions[i].Version == "1.0.0" {
+			retained = &got.Status.Versions[i]
+		}
+	}
+	if retained == nil {
+		t.Fatalf("versions = %+v, want 1.0.0 retained from the legacy object", got.Status.Versions)
+	}
+	if retained.UnavailableReason != helmv1alpha1.UnavailableReasonRemovedFromRepository {
+		t.Fatalf("1.0.0 unavailable reason = %q, want %q", retained.UnavailableReason, helmv1alpha1.UnavailableReasonRemovedFromRepository)
+	}
+	if retained.MediaType != "application/vnd.cncf.helm.chart.content.v1.tar+gzip" {
+		t.Fatalf("1.0.0 media type = %q, want it carried from the legacy object", retained.MediaType)
+	}
+
+	err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want NotFound: it must be deleted even though a consumer still uses one of its versions", err)
+	}
+}
+
+// TestMigratesALegacyNamedObjectNotInUse pins the same migration for a chart
+// nothing references: the legacy object is still replaced by a new-scheme one, not
+// merely left behind the way an ordinary rename would have left it.
+func TestMigratesALegacyNamedObjectNotInUse(t *testing.T) {
+	const legacyName = "example-chart-podinfo"
+
+	c := newAddonClient(t,
+		legacyAddonChart(legacyName, "example", "podinfo",
+			helmv1alpha1.ChartVersion{Version: "1.0.0"},
+		),
+	)
+	cat := adapter.NewAddonCatalog(c)
+	repo := addonRepo()
+
+	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	newName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: newName}, got); err != nil {
+		t.Fatalf("new-scheme object was not created: %v", err)
+	}
+	if len(got.Status.Versions) != 1 || got.Status.Versions[0].Version != "2.0.0" {
+		t.Fatalf("versions = %+v, want only the fetched 2.0.0: nothing protects the unreferenced legacy version", got.Status.Versions)
+	}
+
+	err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want NotFound: it must not be left behind", err)
+	}
+}
+
+// TestMigrationIsANoOpOnASecondReconcile pins that the seed-and-delete migration
+// runs exactly once: the second reconcile finds no legacy object left to seed from
+// or delete, so the new object's own status stands and nothing is deleted.
+func TestMigrationIsANoOpOnASecondReconcile(t *testing.T) {
+	const legacyName = "example-chart-podinfo"
+
+	c := newAddonClient(t,
+		legacyAddonChart(legacyName, "example", "podinfo",
+			helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+		),
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c)
+	repo := addonRepo()
+
+	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+		t.Fatalf("first Reconcile returned %v", err)
+	}
+
+	newName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	before := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: newName}, before); err != nil {
+		t.Fatalf("getting the migrated object: %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want NotFound after the first reconcile already migrated it", err)
+	}
+
+	deletes := 0
+	c = interceptedClient(t, c, func() { deletes++ })
+
+	cat = adapter.NewAddonCatalog(c)
+	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+		t.Fatalf("second Reconcile returned %v", err)
+	}
+
+	if deletes != 0 {
+		t.Fatalf("second Reconcile issued %d delete(s), want none: nothing is left over to migrate", deletes)
+	}
+
+	after := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: newName}, after); err != nil {
+		t.Fatalf("getting the object after the second reconcile: %v", err)
+	}
+	if len(after.Status.Versions) != len(before.Status.Versions) || after.Status.Versions[0] != before.Status.Versions[0] {
+		t.Fatalf("status changed on a no-op reconcile: before %+v, after %+v", before.Status.Versions, after.Status.Versions)
+	}
+}
+
+// interceptedClient wraps c so onDelete is called for every delete it forwards,
+// while every other call still reaches c unchanged.
+func interceptedClient(t *testing.T, c client.WithWatch, onDelete func()) client.WithWatch {
+	t.Helper()
+
+	return interceptor.NewClient(c, interceptor.Funcs{
+		Delete: func(ctx context.Context, wc client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			onDelete()
+
+			return wc.Delete(ctx, obj, opts...)
+		},
+	})
+}
+
+// TestMigrationLeavesUnrelatedChartsToExistingPruning pins that the migration only
+// touches charts being reconciled: an unrelated chart's object is still governed by
+// the ordinary in-use rule, kept while referenced and pruned once it is not.
+func TestMigrationLeavesUnrelatedChartsToExistingPruning(t *testing.T) {
+	c := newAddonClient(t,
+		&helmv1alpha1.HelmClusterAddonChart{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   naming.HelmClusterAddonChartName("example", "kept"),
+				Labels: map[string]string{helmv1alpha1.LabelRepositoryName: "example", helmv1alpha1.LabelChartName: "kept"},
+			},
+		},
+		&helmv1alpha1.HelmClusterAddonChart{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   naming.HelmClusterAddonChartName("example", "pruned"),
+				Labels: map[string]string{helmv1alpha1.LabelRepositoryName: "example", helmv1alpha1.LabelChartName: "pruned"},
+			},
+		},
+		addonConsumer("consumer", "example", "kept", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c)
+	repo := addonRepo()
+
+	// podinfo is the only chart being reconciled; "kept" and "pruned" are not part
+	// of this call, exactly like an ordinary reconcile of a repository whose index
+	// dropped them.
+	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0")}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "kept")}, &helmv1alpha1.HelmClusterAddonChart{})
+	if err != nil {
+		t.Fatalf("the referenced unrelated chart must be kept, got %v", err)
+	}
+
+	err = c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "pruned")}, &helmv1alpha1.HelmClusterAddonChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("the unreferenced unrelated chart must be pruned, got %v", err)
 	}
 }
