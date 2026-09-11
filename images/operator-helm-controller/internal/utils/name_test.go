@@ -74,6 +74,17 @@ func TestDerivedName(t *testing.T) {
 			want:      "hapr-team-a-stable-42df68033b1e",
 		},
 		{
+			// Twin of TestApplicationServiceAccountName's first case in
+			// tests/e2e/internal/naming/naming_test.go: a change on either side
+			// that is not mirrored on the other breaks one of the two tests.
+			name:      "twin of the e2e ApplicationServiceAccountName fixture",
+			prefix:    "hap",
+			kind:      "HelmApplication",
+			namespace: "e2e-app-ns",
+			object:    "e2e-test-app",
+			want:      "hap-e2e-app-ns-e2e-test-app-26155b312741",
+		},
+		{
 			name:      "same name in another namespace is a different object",
 			prefix:    "hapr",
 			kind:      "HelmApplicationRepository",

@@ -18,9 +18,6 @@ package util
 
 import (
 	"context"
-	"crypto/sha256"
-	"fmt"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -30,33 +27,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
+	"github.com/deckhouse/operator-helm/tests/e2e/internal/naming"
 )
 
 // ApplicationServiceAccountName reproduces the name operator-helm-controller
 // derives for an application's internal objects — the ServiceAccount it is applied
-// as, its RoleBinding, its HelmRelease. The scheme is
-// "hap-<namespace|18>-<name|18>-<hash12>" over (kind, namespace, name); the tests
-// derive it rather than hard-coding one so a rename of an application under test
-// does not silently stop checking anything.
+// as, its RoleBinding, its HelmRelease. The tests derive it rather than
+// hard-coding one so a rename of an application under test does not silently stop
+// checking anything. See internal/naming for the derivation itself.
 func ApplicationServiceAccountName(namespace, name string) string {
-	sum := sha256.Sum256([]byte("HelmApplication/" + namespace + "/" + name))
-
-	return strings.Join([]string{
-		"hap",
-		truncateNamePart(namespace),
-		truncateNamePart(name),
-		fmt.Sprintf("%x", sum[:])[:12],
-	}, "-")
-}
-
-func truncateNamePart(part string) string {
-	const limit = 18
-
-	if len(part) > limit {
-		part = part[:limit]
-	}
-
-	return strings.TrimRight(part, "-")
+	return naming.ApplicationServiceAccountName(namespace, name)
 }
 
 // DeleteHelmApplication removes the application and waits until its internal helm
