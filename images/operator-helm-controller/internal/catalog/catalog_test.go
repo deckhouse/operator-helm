@@ -18,6 +18,8 @@ package catalog_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -27,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -221,5 +224,37 @@ func TestLookupReturnsTheCatalogObjectAndItsStatus(t *testing.T) {
 	_, _, err = cat.Lookup(context.Background(), repo, "missing")
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("Lookup of an unknown chart must be a NotFound error, got %v", err)
+	}
+}
+
+// TestListErrorNamesAClusterScopedRepositoryWithoutALeadingSlash pins the message a
+// failed catalog read puts into the repository's Synced condition: an object key
+// renders a cluster-scoped name as "/name", which reaches the user verbatim.
+func TestListErrorNamesAClusterScopedRepositoryWithoutALeadingSlash(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering helm scheme: %v", err)
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+				return errors.New("boom")
+			},
+		}).
+		Build()
+
+	err := adapter.NewClusterApplicationCatalog(c).
+		Reconcile(context.Background(), adapter.NewClusterApplicationRepository(
+			&helmv1alpha1.HelmClusterApplicationRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "shared", UID: types.UID("shared")},
+			},
+		), nil)
+	if err == nil {
+		t.Fatal("Reconcile must report the list failure")
+	}
+	if !strings.Contains(err.Error(), "repository shared:") {
+		t.Fatalf("error = %q, want it to name the repository as \"shared\"", err)
 	}
 }

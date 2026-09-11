@@ -70,8 +70,8 @@ func (t *typed[C, CL]) list(ctx context.Context, repo source.Repository) ([]C, e
 		client.InNamespace(repo.Namespace()),
 		client.MatchingLabels{helmv1alpha1.LabelRepositoryName: repo.Name()},
 	); err != nil {
-		repoKey := client.ObjectKey{Namespace: repo.Namespace(), Name: repo.Name()}
-		return nil, fmt.Errorf("listing %s objects of repository %s: %w", t.cfg.Kind, repoKey, err)
+		return nil, fmt.Errorf("listing %s objects of repository %s: %w",
+			t.cfg.Kind, describeKey(client.ObjectKey{Namespace: repo.Namespace(), Name: repo.Name()}), err)
 	}
 
 	return t.cfg.Items(list), nil
@@ -147,7 +147,7 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 			return nil
 		})
 		if err != nil {
-			return fmt.Errorf("creating or updating chart %s: %w", client.ObjectKeyFromObject(existing), err)
+			return fmt.Errorf("creating or updating chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
 		}
 
 		if op != controllerutil.OperationResultNone {
@@ -168,7 +168,7 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse)
 
 		if err := t.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
-			return fmt.Errorf("updating versions of chart %s: %w", client.ObjectKeyFromObject(existing), err)
+			return fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
 		}
 	}
 
@@ -230,4 +230,14 @@ func (t *typed[C, CL]) Lookup(ctx context.Context, repo source.Repository, chart
 	}
 
 	return obj, t.cfg.Status(obj), nil
+}
+
+// describeKey names an object in a message. A cluster-scoped object has no
+// namespace, and the key's own rendering would give it a leading slash.
+func describeKey(key client.ObjectKey) string {
+	if key.Namespace == "" {
+		return key.Name
+	}
+
+	return key.String()
 }
