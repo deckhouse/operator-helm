@@ -18,6 +18,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -34,6 +35,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -69,6 +71,17 @@ func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.
 func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object) (*Reconciler, client.Client) {
 	t.Helper()
 
+	return newReconcilerWithInterceptor(t, interceptor.Funcs{}, stub, objects...)
+}
+
+func newReconcilerWithInterceptor(
+	t *testing.T,
+	funcs interceptor.Funcs,
+	stub *stubRepoClient,
+	objects ...client.Object,
+) (*Reconciler, client.Client) {
+	t.Helper()
+
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
 		clientgoscheme.AddToScheme,
@@ -82,6 +95,7 @@ func newReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object)
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
+		WithInterceptorFuncs(funcs).
 		WithObjects(objects...).
 		WithStatusSubresource(
 			&helmv1alpha1.HelmClusterAddonRepository{},
@@ -313,6 +327,63 @@ func TestReconcileMigratesCatalogNamesWithoutAFetch(t *testing.T) {
 	err := c.Get(context.Background(), client.ObjectKey{Name: legacy.Name}, &helmv1alpha1.HelmClusterAddonChart{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("legacy object err = %v, want NotFound", err)
+	}
+}
+
+// TestReconcileReportsAFailedMigration pins that a rename the cluster refuses does
+// not silence the repository. Returning the failure out of Reconcile would skip the
+// status write entirely, leaving an object with no conditions at all while its
+// consumers cannot resolve their chart — the one state nobody can diagnose.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func TestReconcileReportsAFailedMigration(t *testing.T) {
+	repo := ociRepository()
+	legacy := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "e2e-repo-chart-podinfo",
+			Labels: map[string]string{
+				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+				helmv1alpha1.LabelRepositoryName:    repo.Name,
+				helmv1alpha1.LabelChartName:         "podinfo",
+			},
+		},
+	}
+
+	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
+		// Only the rename's own delete is refused; the ordinary pruning below must
+		// stay reachable, or the test would be about something else.
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if obj.GetName() == "e2e-repo-chart-podinfo" {
+				return errors.New("forbidden")
+			}
+
+			return cl.Delete(ctx, obj, opts...)
+		},
+	}, &stubRepoClient{}, repo, legacy)
+
+	// The refused object also survives into the pruning loop, so the pass may report
+	// either failure. What matters is that the status was written regardless.
+	for range 2 {
+		_, _ = r.Reconcile(context.Background(), reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: repo.Name},
+		})
+	}
+
+	updated := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), updated); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+
+	if len(updated.Status.Conditions) == 0 {
+		t.Fatal("the repository carries no conditions at all: the failure never reached the status write")
+	}
+
+	synced := apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Status != metav1.ConditionFalse || synced.Reason != helmv1alpha1.ReasonCatalogUpdateFailed {
+		t.Fatalf("Synced = %v, want False with %s", synced, helmv1alpha1.ReasonCatalogUpdateFailed)
+	}
+	if updated.Status.ObservedGeneration != updated.Generation {
+		t.Fatalf("observedGeneration is %d, want %d", updated.Status.ObservedGeneration, updated.Generation)
 	}
 }
 

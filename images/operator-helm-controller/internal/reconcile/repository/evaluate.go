@@ -42,6 +42,13 @@ type Inputs struct {
 	InternalRepository    services.InternalRepositoryState
 	ConfigErr             *services.ConfigOutcome
 
+	// MigrateErr reports a failure to move the catalog objects to their current
+	// names. It is not tied to a synchronization attempt: the rename runs on every
+	// pass, whether or not the remote was read.
+	//
+	// TRANSITIONAL: remove together with the catalog's own migration.
+	MigrateErr error
+
 	// Forced reports whether this pass was requested through the force reconcile
 	// annotation.
 	Forced bool
@@ -88,7 +95,7 @@ func Evaluate(in Inputs) Decision {
 
 	fetchFailed := in.Attempted && in.Fetch != nil && in.Fetch.Err != nil
 	fetchSucceeded := in.Attempted && in.Fetch != nil && in.Fetch.Err == nil
-	catalogFailed := in.Attempted && in.Catalog != nil && in.Catalog.Err != nil
+	catalogFailed := in.MigrateErr != nil || (in.Attempted && in.Catalog != nil && in.Catalog.Err != nil)
 
 	failures := in.Current.ConsecutiveFetchFailures
 	if in.Generation != in.Current.ObservedGeneration {
@@ -187,8 +194,13 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 	case fetchFailed:
 		return metav1.ConditionFalse, helmv1alpha1.ReasonSyncFailed, in.Fetch.Message
 	case catalogFailed:
+		err := in.MigrateErr
+		if err == nil {
+			err = in.Catalog.Err
+		}
+
 		return metav1.ConditionFalse, helmv1alpha1.ReasonCatalogUpdateFailed,
-			"Failed to update the chart catalog: " + in.Catalog.Err.Error()
+			"Failed to update the chart catalog: " + err.Error()
 	case in.Fetch != nil && in.Fetch.Pending > 0 && in.Current.LastSuccessfulSyncTime == nil:
 		// On the very first pass there is no other signal that the read was incomplete:
 		// lastSuccessfulSyncTime is empty either way, so a user who just created the
