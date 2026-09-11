@@ -102,10 +102,19 @@ rules:
   - patch
   - update
   - watch
+# The namespace role is seeded once and never read back, so create is the only
+# verb the controller uses on it; escalate is what lets it grant more than it
+# holds itself.
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - roles
+  verbs:
+  - create
+  - escalate
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - rolebindings
   verbs:
   - create
@@ -115,7 +124,6 @@ rules:
   - patch
   - update
   - watch
-  - escalate
   - bind
 - apiGroups:
   - helm.internal.operator-helm.deckhouse.io

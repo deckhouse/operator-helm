@@ -45,6 +45,11 @@ spec:
           - "helmapplicationcharts/status"
           - "helmclusterapplicationcharts"
           - "helmclusterapplicationcharts/status"
+          # Same reasoning for the namespaced kinds an application's account can
+          # reach: their spec stays open, only the status the controller owns is
+          # closed.
+          - "helmapplications/status"
+          - "helmapplicationrepositories/status"
   validations:
     - expression: |
         request.userInfo.username.startsWith("system:serviceaccount:kube-system:") ||
