@@ -22,10 +22,13 @@ import (
 
 	helmv2 "github.com/werf/3p-helm-controller/api/v2"
 	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -75,6 +78,16 @@ func main() {
 		HealthProbeBindAddress: healthProbeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "operator-helm-controller.helm.deckhouse.io",
+		Client: client.Options{
+			// AccessService reads ServiceAccounts and RoleBindings only to reconcile
+			// the one object its own release names; nothing watches either kind. The
+			// ClusterRole nonetheless grants cluster-wide list/watch on both, and a
+			// cached typed Get starts an informer for its kind, so without this every
+			// ServiceAccount and RoleBinding in the cluster would be held in memory.
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{&corev1.ServiceAccount{}, &rbacv1.RoleBinding{}},
+			},
+		},
 	})
 	if err != nil {
 		logger.Error(err, "unable to create manager")

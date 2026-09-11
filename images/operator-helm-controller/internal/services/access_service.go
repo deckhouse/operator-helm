@@ -49,9 +49,11 @@ var _ source.AccessManager = (*AccessService)(nil)
 // content. It is also the one object a namespace owner may edit to cut the rights
 // down — which is why it is created once and never reconciled afterwards.
 //
-// Neither the account nor the binding is watched, so an out-of-band deletion of
-// either is not noticed immediately; it is repaired on the release's next
-// reconcile.
+// Neither the account nor the binding triggers a reconcile on its own: nothing
+// watches either kind, so an out-of-band deletion of either is not noticed
+// immediately and is repaired on the release's next reconcile. Both are also
+// excluded from the manager's client cache (see cmd/operator-helm-controller),
+// so reading them here never starts a cluster-wide informer for the kind.
 type AccessService struct {
 	BaseService
 
