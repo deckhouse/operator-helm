@@ -101,7 +101,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 					helmv1alpha1.HelmClusterAddonLabelSourceName,
 				),
 			),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
 		Watches(
 			&helmv1alpha1.HelmClusterAddonRepository{},
 			handler.EnqueueRequestsFromMapFunc(utils.MapRepositoryToAddons(client)),

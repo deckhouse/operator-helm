@@ -52,7 +52,8 @@ func EmptyClusterApplicationRepository() source.Repository {
 func (r *ClusterApplicationRepository) Object() status.ObjectWithConditions { return r.obj }
 func (r *ClusterApplicationRepository) Name() string                        { return r.obj.Name }
 func (r *ClusterApplicationRepository) Namespace() string                   { return r.obj.Namespace }
-func (r *ClusterApplicationRepository) Generation() int64                   { return r.obj.Generation }
+
+func (r *ClusterApplicationRepository) Generation() int64 { return r.obj.Generation }
 
 func (r *ClusterApplicationRepository) OwnerGVK() schema.GroupVersionKind {
 	return helmv1alpha1.HelmClusterApplicationRepositoryGVK
@@ -60,7 +61,9 @@ func (r *ClusterApplicationRepository) OwnerGVK() schema.GroupVersionKind {
 
 func (r *ClusterApplicationRepository) URL() string                        { return r.obj.Spec.URL }
 func (r *ClusterApplicationRepository) Auth() *helmv1alpha1.RepositoryAuth { return r.obj.Spec.Auth }
-func (r *ClusterApplicationRepository) CACertificate() string              { return r.obj.Spec.CACertificate }
+
+func (r *ClusterApplicationRepository) CACertificate() string { return r.obj.Spec.CACertificate }
+
 func (r *ClusterApplicationRepository) InsecureSkipVerify() bool {
 	return r.obj.Spec.InsecureSkipVerify
 }

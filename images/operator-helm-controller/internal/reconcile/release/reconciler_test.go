@@ -916,7 +916,8 @@ func TestReconcileForcedAddonReportsProgressBeforeWorking(t *testing.T) {
 		observed := &helmv1alpha1.HelmClusterAddon{}
 		if err := c.Get(ctx, types.NamespacedName{Name: addon.Name}, observed); err == nil {
 			inFlight = apimeta.FindStatusCondition(
-				observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+				observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling,
+			)
 		}
 	}
 

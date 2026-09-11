@@ -71,7 +71,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
-					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName),
+					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName,
+				),
 			),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
@@ -83,7 +84,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
-					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName),
+					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName,
+				),
 			),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).

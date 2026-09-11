@@ -53,9 +53,10 @@ func (r *AddonRepository) OwnerGVK() schema.GroupVersionKind {
 	return helmv1alpha1.HelmClusterAddonRepositoryGVK
 }
 
-func (r *AddonRepository) URL() string                            { return r.obj.Spec.URL }
-func (r *AddonRepository) Auth() *helmv1alpha1.RepositoryAuth     { return r.obj.Spec.Auth }
-func (r *AddonRepository) CACertificate() string                  { return r.obj.Spec.CACertificate }
+func (r *AddonRepository) URL() string                        { return r.obj.Spec.URL }
+func (r *AddonRepository) Auth() *helmv1alpha1.RepositoryAuth { return r.obj.Spec.Auth }
+func (r *AddonRepository) CACertificate() string              { return r.obj.Spec.CACertificate }
+
 func (r *AddonRepository) InsecureSkipVerify() bool               { return r.obj.Spec.InsecureSkipVerify }
 func (r *AddonRepository) Status() *helmv1alpha1.RepositoryStatus { return &r.obj.Status }
 func (r *AddonRepository) ForceReconcileRequired() bool           { return r.obj.ForceReconcileRequired() }

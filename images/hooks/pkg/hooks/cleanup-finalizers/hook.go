@@ -19,14 +19,16 @@ package cleanup_finalizers
 import (
 	"context"
 	"fmt"
-	"hooks/pkg/kube"
-	"hooks/pkg/settings"
+
+	"github.com/pkg/errors"
 
 	"github.com/deckhouse/module-sdk/pkg"
 	objectpatch "github.com/deckhouse/module-sdk/pkg/object-patch"
 	"github.com/deckhouse/module-sdk/pkg/registry"
 	"github.com/deckhouse/module-sdk/pkg/utils/ptr"
-	"github.com/pkg/errors"
+
+	"hooks/pkg/kube"
+	"hooks/pkg/settings"
 )
 
 const (

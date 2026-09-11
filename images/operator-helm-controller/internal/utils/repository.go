@@ -23,8 +23,9 @@ import (
 	"net/url"
 	"strings"
 
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/google/go-containerregistry/pkg/name"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 type InternalRepositoryType string

@@ -83,8 +83,11 @@ func (r *ApplicationRelease) ChartRef() source.ChartRef {
 func (r *ApplicationRelease) TargetNamespace() string       { return r.obj.Namespace }
 func (r *ApplicationRelease) Values() *apiextensionsv1.JSON { return r.obj.Spec.Values }
 func (r *ApplicationRelease) MaintenanceActivated() bool    { return r.obj.MaintenanceModeActivated() }
-func (r *ApplicationRelease) MaintenanceEnabled() bool      { return r.obj.MaintenanceModeEnabled() }
-func (r *ApplicationRelease) ForceReconcileRequired() bool  { return r.obj.ForceReconcileRequired() }
+
+func (r *ApplicationRelease) MaintenanceEnabled() bool { return r.obj.MaintenanceModeEnabled() }
+
+func (r *ApplicationRelease) ForceReconcileRequired() bool { return r.obj.ForceReconcileRequired() }
+
 func (r *ApplicationRelease) IsChartStatusInfoOutdated() bool {
 	return r.obj.IsChartStatusInfoOutdated()
 }

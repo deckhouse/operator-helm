@@ -19,11 +19,12 @@ package delete_namespace
 import (
 	"context"
 	"fmt"
-	"hooks/pkg/kube"
-	"hooks/pkg/settings"
 
 	"github.com/deckhouse/module-sdk/pkg"
 	"github.com/deckhouse/module-sdk/pkg/registry"
+
+	"hooks/pkg/kube"
+	"hooks/pkg/settings"
 )
 
 var _ = registry.RegisterFunc(&pkg.HookConfig{

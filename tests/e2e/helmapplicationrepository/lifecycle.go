@@ -178,7 +178,8 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			if strings.EqualFold(repoType, "helm") {
 				By("The original's internal HelmRepository must survive the twin's deletion")
 				_, err = util.GetHelmApplicationRepositoryInternalHelmRepository(
-					util.HelmApplicationRepositoryInternalName(f.NamespaceName(), repoName))
+					util.HelmApplicationRepositoryInternalName(f.NamespaceName(), repoName),
+				)
 				Expect(err).NotTo(HaveOccurred())
 			}
 		})

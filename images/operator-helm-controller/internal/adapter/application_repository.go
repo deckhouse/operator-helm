@@ -60,9 +60,10 @@ func (r *ApplicationRepository) OwnerGVK() schema.GroupVersionKind {
 	return helmv1alpha1.HelmApplicationRepositoryGVK
 }
 
-func (r *ApplicationRepository) URL() string                            { return r.obj.Spec.URL }
-func (r *ApplicationRepository) Auth() *helmv1alpha1.RepositoryAuth     { return r.obj.Spec.Auth }
-func (r *ApplicationRepository) CACertificate() string                  { return r.obj.Spec.CACertificate }
+func (r *ApplicationRepository) URL() string                        { return r.obj.Spec.URL }
+func (r *ApplicationRepository) Auth() *helmv1alpha1.RepositoryAuth { return r.obj.Spec.Auth }
+func (r *ApplicationRepository) CACertificate() string              { return r.obj.Spec.CACertificate }
+
 func (r *ApplicationRepository) InsecureSkipVerify() bool               { return r.obj.Spec.InsecureSkipVerify }
 func (r *ApplicationRepository) Status() *helmv1alpha1.RepositoryStatus { return &r.obj.Status }
 func (r *ApplicationRepository) ForceReconcileRequired() bool           { return r.obj.ForceReconcileRequired() }
