@@ -45,25 +45,28 @@ jobs:
       # prettier pass over the CRDs runs in a container, so the runner needs Docker.
       - name: Verify the generated files are committed
         run: task --yes ci:generate:api
-# waiting for golangci-lint for go 1.26
-  # lint:
-  #   runs-on: [self-hosted, large]
-  #   name: Lint
-  #   steps:
-  #     - name: Set up Go ${{ vars.GO_VERSION }}
-  #       uses: actions/setup-go@v6
-  #       with:
-  #         go-version: "${{ vars.GO_VERSION }}"
 
-  #     - uses: actions/checkout@v6
+  lint:
+    runs-on: [self-hosted, large]
+    name: Lint
+    steps:
+      - uses: actions/checkout@v6
 
-  #     - name: Install Task
-  #       uses: arduino/setup-task@v2
-  #       with:
-  #         repo-token: ${{ secrets.GITHUB_TOKEN }}
-      
-  #     - name: Install golangci-lint
-  #       run: task --yes deps:install:golangci-lint
+      # The modules do not all declare the same Go version; the controllers ask
+      # for the newest one, and a toolchain that satisfies them satisfies the rest.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          cache: true
+          go-version-file: images/operator-helm-controller/go.mod
 
-  #     - name: Run linters
-  #       run: task --yes lint
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The linter is built from source by the lint task itself, so there is no
+      # separate install step: the shared one could not fetch a release new enough
+      # to read a module targeting this repository's Go version.
+      - name: Run linters
+        run: task --yes lint
