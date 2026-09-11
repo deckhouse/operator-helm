@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -99,7 +100,7 @@ func (s *AccessService) CleanupAccess(ctx context.Context, rel source.Release) e
 	}
 
 	binding := types.NamespacedName{Namespace: rel.TargetNamespace(), Name: name}
-	if err := s.ensureResourceDeleted(ctx, binding, &rbacv1.RoleBinding{}); err != nil {
+	if err := s.ensureOwnedRoleBindingDeleted(ctx, binding); err != nil {
 		return fmt.Errorf("deleting role binding: %w", err)
 	}
 
@@ -120,7 +121,13 @@ func (s *AccessService) ensureServiceAccount(ctx context.Context, rel source.Rel
 	}
 
 	_, err := controllerutil.CreateOrPatch(ctx, s.Client, account, func() error {
-		account.Labels = rel.SourceLabels()
+		// Merge rather than replace: the account may carry labels put there by
+		// someone else (a policy engine, a cost allocator), and dropping them on
+		// every pass would fight whoever set them.
+		if account.Labels == nil {
+			account.Labels = map[string]string{}
+		}
+		maps.Copy(account.Labels, rel.SourceLabels())
 		account.AutomountServiceAccountToken = ptr.To(false)
 
 		return nil
@@ -151,6 +158,15 @@ func (s *AccessService) seedRole(ctx context.Context, namespace string) error {
 	return client.IgnoreAlreadyExists(s.Client.Create(ctx, role))
 }
 
+// applicationRoleRef is the roleRef every role binding we own carries.
+func applicationRoleRef() rbacv1.RoleRef {
+	return rbacv1.RoleRef{
+		APIGroup: rbacv1.GroupName,
+		Kind:     "Role",
+		Name:     ApplicationRoleName,
+	}
+}
+
 // ensureRoleBinding binds the account to the namespace Role. roleRef is immutable
 // in Kubernetes, so it is only ever written on create or written back unchanged;
 // the subjects and labels are reconciled on every pass.
@@ -160,17 +176,16 @@ func (s *AccessService) seedRole(ctx context.Context, namespace string) error {
 // whatever the foreign role grants. Such a binding is reported and left exactly as
 // it is — never patched, never deleted — so its owner decides what happens to it.
 func (s *AccessService) ensureRoleBinding(ctx context.Context, rel source.Release, namespace, name string) error {
-	desiredRef := rbacv1.RoleRef{
-		APIGroup: rbacv1.GroupName,
-		Kind:     "Role",
-		Name:     ApplicationRoleName,
-	}
+	desiredRef := applicationRoleRef()
 
 	binding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 	}
 
 	_, err := controllerutil.CreateOrPatch(ctx, s.Client, binding, func() error {
+		// roleRef.Name is required by API validation, so it is empty only here: a
+		// fresh object about to be created. Anything already stored carries it, so a
+		// mismatch here can only mean an existing binding that points elsewhere.
 		if binding.RoleRef.Name != "" && binding.RoleRef != desiredRef {
 			return fmt.Errorf(
 				"role binding %s/%s already binds %s/%s; refusing to adopt it",
@@ -178,7 +193,13 @@ func (s *AccessService) ensureRoleBinding(ctx context.Context, rel source.Releas
 			)
 		}
 
-		binding.Labels = rel.SourceLabels()
+		// Merge rather than replace: the binding lives in the user's namespace, where
+		// a cluster's own policy or cost labelling is most likely to land, and
+		// dropping such labels on every pass would fight whoever set them.
+		if binding.Labels == nil {
+			binding.Labels = map[string]string{}
+		}
+		maps.Copy(binding.Labels, rel.SourceLabels())
 		binding.RoleRef = desiredRef
 
 		binding.Subjects = []rbacv1.Subject{{
@@ -191,4 +212,26 @@ func (s *AccessService) ensureRoleBinding(ctx context.Context, rel source.Releas
 	})
 
 	return err
+}
+
+// ensureOwnedRoleBindingDeleted deletes the role binding at nn only when it is
+// ours to delete: it carries our roleRef and our managed-by label. The derived
+// name is fully computable by anyone, so a binding found under it may belong to
+// someone else — the same reason ensureRoleBinding refuses to adopt a foreign
+// binding on create. A binding that is not ours is left alone; that is not an
+// error and must not block the rest of the cleanup.
+func (s *AccessService) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.NamespacedName) error {
+	binding := &rbacv1.RoleBinding{}
+	if err := s.Client.Get(ctx, nn, binding); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	if binding.RoleRef != applicationRoleRef() {
+		return nil
+	}
+	if binding.Labels[helmv1alpha1.LabelManagedBy] != helmv1alpha1.LabelManagedByValue {
+		return nil
+	}
+
+	return client.IgnoreNotFound(s.Client.Delete(ctx, binding))
 }

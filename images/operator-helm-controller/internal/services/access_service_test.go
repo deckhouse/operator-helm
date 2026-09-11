@@ -179,6 +179,56 @@ func TestEnsureAccessRecreatesADeletedRole(t *testing.T) {
 	}
 }
 
+// TestEnsureAccessKeepsForeignLabelsOnTheServiceAccountAndBinding pins that a label
+// put there by someone else (a policy engine, a cost allocator) survives a
+// reconcile: only the keys we own are kept authoritative, mirroring how
+// applyHelmReleaseSpec and applyHelmChartSpec merge their labels.
+func TestEnsureAccessKeepsForeignLabelsOnTheServiceAccountAndBinding(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+	names := rel.InternalNames()
+	service, c := newAccessService(t)
+
+	if err := service.EnsureAccess(context.Background(), rel); err != nil {
+		t.Fatalf("first EnsureAccess returned %v", err)
+	}
+
+	sa := &corev1.ServiceAccount{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: names.ServiceAccount}, sa); err != nil {
+		t.Fatalf("getting service account: %v", err)
+	}
+	sa.Labels["cost-center"] = "platform"
+	if err := c.Update(context.Background(), sa); err != nil {
+		t.Fatalf("labelling service account: %v", err)
+	}
+
+	binding := &rbacv1.RoleBinding{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: names.ServiceAccount}, binding); err != nil {
+		t.Fatalf("getting role binding: %v", err)
+	}
+	binding.Labels["cost-center"] = "platform"
+	if err := c.Update(context.Background(), binding); err != nil {
+		t.Fatalf("labelling role binding: %v", err)
+	}
+
+	if err := service.EnsureAccess(context.Background(), rel); err != nil {
+		t.Fatalf("second EnsureAccess returned %v", err)
+	}
+
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: names.ServiceAccount}, sa); err != nil {
+		t.Fatalf("getting service account: %v", err)
+	}
+	if sa.Labels["cost-center"] != "platform" {
+		t.Fatalf("service account labels = %v, want the foreign label kept", sa.Labels)
+	}
+
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: names.ServiceAccount}, binding); err != nil {
+		t.Fatalf("getting role binding: %v", err)
+	}
+	if binding.Labels["cost-center"] != "platform" {
+		t.Fatalf("role binding labels = %v, want the foreign label kept", binding.Labels)
+	}
+}
+
 func TestEnsureAccessIsANoopForAFamilyWithoutAServiceAccount(t *testing.T) {
 	service, c := newAccessService(t)
 
@@ -226,4 +276,31 @@ func TestCleanupAccessRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T) {
 	}
 
 	var _ source.AccessManager = service
+}
+
+// TestCleanupAccessLeavesAForeignRoleBindingAlone pins the delete-side mirror of
+// TestEnsureAccessRefusesToAdoptAForeignRoleBinding: the derived name is fully
+// computable by anyone, so a binding found under it may belong to someone else.
+// Such a binding is left alone, and that must not block the rest of the cleanup.
+func TestCleanupAccessLeavesAForeignRoleBindingAlone(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+	names := rel.InternalNames()
+	foreign := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: names.ServiceAccount, Namespace: "team-a"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "someone-elses-role"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "someone-else"}},
+	}
+	service, c := newAccessService(t, foreign)
+
+	if err := service.CleanupAccess(context.Background(), rel); err != nil {
+		t.Fatalf("CleanupAccess returned %v", err)
+	}
+
+	stored := &rbacv1.RoleBinding{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), stored); err != nil {
+		t.Fatalf("a foreign role binding must survive cleanup: %v", err)
+	}
+	if stored.RoleRef != foreign.RoleRef {
+		t.Fatalf("roleRef = %+v, want it untouched", stored.RoleRef)
+	}
 }
