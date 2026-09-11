@@ -24,7 +24,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	apinaming "github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
@@ -48,7 +47,13 @@ func TestAddonFamilyReadsTheClusterScopedRepositoryAndCatalog(t *testing.T) {
 			InsecureSkipVerify: true,
 		},
 	}
-	chart := chartWithVersions("example", "podinfo", helmv1alpha1.ChartVersion{Version: "6.7.1"})
+	// The name is a literal, not built through the same apinaming helper the family
+	// under test calls: otherwise a wrong naming scheme in the family could never be
+	// caught, since the fixture would always agree with whatever the family did.
+	chart := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-chart-podinfo"},
+		Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "6.7.1"}}},
+	}
 
 	family, ok := familyFor(RepositoryKindHelmClusterAddon)
 	if !ok {
@@ -116,8 +121,10 @@ func TestApplicationFamiliesReadTheirOwnObjects(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a"},
 		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
+	// Both catalog objects are named with a literal, not apinaming.*ChartName, for the
+	// same reason as the addon fixture above.
 	namespacedChart := &helmv1alpha1.HelmApplicationChart{
-		ObjectMeta: metav1.ObjectMeta{Name: apinaming.ApplicationChartName("stable", "podinfo"), Namespace: "team-a"},
+		ObjectMeta: metav1.ObjectMeta{Name: "stable-chart-podinfo", Namespace: "team-a"},
 		Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "6.7.1"}}},
 	}
 	cluster := &helmv1alpha1.HelmClusterApplicationRepository{
@@ -125,7 +132,7 @@ func TestApplicationFamiliesReadTheirOwnObjects(t *testing.T) {
 		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://ghcr.io/example/charts"},
 	}
 	clusterChart := &helmv1alpha1.HelmClusterApplicationChart{
-		ObjectMeta: metav1.ObjectMeta{Name: apinaming.ClusterApplicationChartName("shared", "podinfo")},
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-chart-podinfo"},
 		Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "1.2.3"}}},
 	}
 

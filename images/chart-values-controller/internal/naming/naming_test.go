@@ -25,10 +25,12 @@ import (
 var dns1123 = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
 
 const (
-	testKind = "HelmClusterAddonRepository"
+	// testKind is lower case because Resolve lower-cases the kind before it ever
+	// reaches AuxResourceName, so that is the only casing production hashes.
+	testKind = "helmclusteraddonrepository"
 	// nsKind is a namespaced repository kind; its names must additionally depend
 	// on the namespace.
-	nsKind = "HelmApplicationRepository"
+	nsKind = "helmapplicationrepository"
 )
 
 func TestAuxResourceNameReadableHints(t *testing.T) {
@@ -90,8 +92,8 @@ func TestAuxResourceNameClusterScopedNamesAreFrozen(t *testing.T) {
 		version    string
 		want       string
 	}{
-		{"github", "podinfo", "6.7.1", "tmp-github-podinfo-b03cfc6abbfd3f57"},
-		{"GitHub", "Pod.Info", "6.7.1", "tmp-github-pod-info-630ac6ecf79eb66f"},
+		{"github", "podinfo", "6.7.1", "tmp-github-podinfo-1379a792462c3a85"},
+		{"GitHub", "Pod.Info", "6.7.1", "tmp-github-pod-info-4aaba5a5ae371dec"},
 	}
 
 	for _, tc := range cases {
