@@ -106,6 +106,11 @@ func (s *AccessService) CleanupAccess(ctx context.Context, rel source.Release) e
 		return fmt.Errorf("deleting role binding: %w", err)
 	}
 
+	// Deleted by name alone, unlike the binding above: the account lives in
+	// s.TargetNamespace (the operator's own namespace), where a namespace owner
+	// has no access to pre-create anything under our name. There is no foreign
+	// object to protect here, so the ownership check the binding needs does not
+	// apply.
 	account := types.NamespacedName{Namespace: s.TargetNamespace, Name: name}
 	if err := s.ensureResourceDeleted(ctx, account, &corev1.ServiceAccount{}); err != nil {
 		return fmt.Errorf("deleting service account: %w", err)
