@@ -88,6 +88,7 @@ func (r *ApplicationRelease) ForceReconcileRequired() bool  { return r.obj.Force
 func (r *ApplicationRelease) IsChartStatusInfoOutdated() bool {
 	return r.obj.IsChartStatusInfoOutdated()
 }
+
 func (r *ApplicationRelease) LastAppliedValues() *apiextensionsv1.JSON {
 	return r.obj.Status.LastAppliedValues
 }

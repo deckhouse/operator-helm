@@ -36,7 +36,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/source"
 )
 
-func newClient(t *testing.T, objects ...client.Object) client.Client {
+func newClient(t *testing.T) client.Client {
 	t.Helper()
 
 	scheme := runtime.NewScheme()
@@ -46,7 +46,6 @@ func newClient(t *testing.T, objects ...client.Object) client.Client {
 
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(objects...).
 		WithStatusSubresource(&helmv1alpha1.HelmApplicationChart{}, &helmv1alpha1.HelmClusterApplicationChart{}).
 		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationRepository, index.ApplicationRepositoryIndexer).
 		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationChart, index.ApplicationChartIndexer).

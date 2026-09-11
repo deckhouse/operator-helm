@@ -64,9 +64,11 @@ func (r *ClusterApplicationRepository) CACertificate() string              { ret
 func (r *ClusterApplicationRepository) InsecureSkipVerify() bool {
 	return r.obj.Spec.InsecureSkipVerify
 }
+
 func (r *ClusterApplicationRepository) Status() *helmv1alpha1.RepositoryStatus {
 	return &r.obj.Status
 }
+
 func (r *ClusterApplicationRepository) ForceReconcileRequired() bool {
 	return r.obj.ForceReconcileRequired()
 }
