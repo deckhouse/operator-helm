@@ -18,10 +18,10 @@ includes:
   hooks:
     taskfile: ./images/hooks/Taskfile.dist.yaml
     dir: ./images/hooks
-  artifact:
+  operator-helm-controller:
     taskfile: ./images/operator-helm-controller/Taskfile.dist.yaml
     dir: ./images/operator-helm-controller
-  chart-values-artifact:
+  chart-values-controller:
     taskfile: ./images/chart-values-controller/Taskfile.dist.yaml
     dir: ./images/chart-values-controller
 
@@ -58,11 +58,11 @@ tasks:
   test:unit:
     desc: "Run the unit tests of every module."
     cmds:
-      - task: api:test
-      - task: hooks:test
-      - task: artifact:test
-      - task: chart-values-artifact:test
-      - task: e2e:test
+      - task: api:test:unit
+      - task: hooks:test:unit
+      - task: operator-helm-controller:test:unit
+      - task: chart-values-controller:test:unit
+      - task: e2e:test:unit
 
   test:e2e:setup:
     desc: "Setup environment for e2e tests."
@@ -125,16 +125,16 @@ tasks:
     cmds:
       - task: api:format
       - task: hooks:format
-      - task: artifact:format
-      - task: chart-values-artifact:format
+      - task: operator-helm-controller:format
+      - task: chart-values-controller:format
       - task: e2e:format
 
   lint:
     cmds:
       - task: api:lint
       - task: hooks:lint
-      - task: artifact:lint
-      - task: chart-values-artifact:lint
+      - task: operator-helm-controller:lint
+      - task: chart-values-controller:lint
       - task: e2e:lint
       - task: lint:doc-ru
 

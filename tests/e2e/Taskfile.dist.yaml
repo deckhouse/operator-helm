@@ -23,7 +23,7 @@ tasks:
   # Only the packages that need no cluster. Importing internal/framework pulls in
   # a package-level init that reads the cluster config and panics without it, so
   # ./... cannot be used here.
-  test:
+  test:unit:
     desc: "Run the unit tests of this module."
     cmds:
       - go test ./internal/naming/...

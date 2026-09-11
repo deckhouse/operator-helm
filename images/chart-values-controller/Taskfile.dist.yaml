@@ -15,7 +15,7 @@ includes:
       paths: '{{.paths | default "."}}'
 
 tasks:
-  test:
+  test:unit:
     desc: "Run the unit tests of this module."
     cmds:
       - go test ./...

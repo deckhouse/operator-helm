@@ -16,7 +16,7 @@ includes:
       prettierPattern: '../crds/*.yaml'
 
 tasks:
-  test:
+  test:unit:
     desc: "Run the unit tests of this module."
     cmds:
       - go test ./...
