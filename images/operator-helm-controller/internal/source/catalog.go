@@ -33,6 +33,13 @@ type Catalog interface {
 	// Known returns the verdicts recorded for the repository by previous passes,
 	// so the repository client can skip tags it already examined.
 	Known(ctx context.Context, repo Repository) (repoclient.KnownCharts, error)
+	// MigrateNames moves the repository's catalog objects to the names the current
+	// scheme derives. It reads nothing from the repository, so it must run on every
+	// reconcile, not only when a fetch is attempted or succeeds.
+	//
+	// TRANSITIONAL: remove once every cluster has reconciled each repository once
+	// under the current scheme.
+	MigrateNames(ctx context.Context, repo Repository) error
 	// Reconcile writes the fetched charts into the catalog and prunes objects the
 	// repository no longer lists, keeping any version a consumer still references.
 	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart) error

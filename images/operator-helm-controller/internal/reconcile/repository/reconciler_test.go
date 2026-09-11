@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
@@ -266,6 +267,52 @@ func TestReconcileSkipsFetchBeforeSchedule(t *testing.T) {
 	if !after.Status.NextSyncTime.Time.Equal(before.Status.NextSyncTime.Time) {
 		t.Fatalf("nextSyncTime moved without a due schedule: %s -> %s",
 			before.Status.NextSyncTime.Time, after.Status.NextSyncTime.Time)
+	}
+}
+
+// TestReconcileMigratesCatalogNamesWithoutAFetch pins that the catalog rename does
+// not wait on the remote. A consumer resolves the current name from the moment this
+// controller starts, so a repository that is not due for a sync yet, or whose
+// registry is gone for good, must still get its objects moved — otherwise its
+// consumers never resolve their chart again.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func TestReconcileMigratesCatalogNamesWithoutAFetch(t *testing.T) {
+	repo := ociRepository()
+	legacy := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "e2e-repo-chart-podinfo",
+			Labels: map[string]string{
+				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+				helmv1alpha1.LabelRepositoryName:    repo.Name,
+				helmv1alpha1.LabelChartName:         "podinfo",
+			},
+		},
+		Status: helmv1alpha1.ChartCatalogStatus{
+			Versions: []helmv1alpha1.ChartVersion{{Version: "1.0.0", MediaType: "application/tar+gzip"}},
+		},
+	}
+
+	stub := &stubRepoClient{err: &repoclient.TerminalError{
+		Reason:  helmv1alpha1.ReasonAuthenticationFailed,
+		Message: "repository rejected the credentials (HTTP 401)",
+	}}
+
+	r, c := newReconciler(t, stub, repo, legacy)
+	reconcileUntilStable(t, r, repo.Name)
+
+	moved := &helmv1alpha1.HelmClusterAddonChart{}
+	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
+	if err := c.Get(context.Background(), key, moved); err != nil {
+		t.Fatalf("catalog object was not renamed while the fetch was failing: %v", err)
+	}
+	if len(moved.Status.Versions) != 1 || moved.Status.Versions[0].MediaType == "" {
+		t.Fatalf("versions = %+v, want the legacy status carried over", moved.Status.Versions)
+	}
+
+	err := c.Get(context.Background(), client.ObjectKey{Name: legacy.Name}, &helmv1alpha1.HelmClusterAddonChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want NotFound", err)
 	}
 }
 

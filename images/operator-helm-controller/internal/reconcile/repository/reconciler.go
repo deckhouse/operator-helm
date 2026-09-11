@@ -109,6 +109,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// would not trigger a follow-up reconcile.
 	}
 
+	// TRANSITIONAL: the catalog object names moved, and a consumer resolves the new
+	// name from the moment this controller starts. Renaming here rather than inside
+	// the synchronization keeps it independent of the fetch: a repository that is not
+	// due for a sync yet, or whose remote is gone for good, still gets its objects
+	// moved.
+	if err := r.chartSyncService.MigrateNames(ctx, repo); err != nil {
+		return reconcile.Result{}, fmt.Errorf("migrating chart catalog names: %w", err)
+	}
+
 	in := Inputs{
 		Generation: repo.Generation(),
 		Now:        time.Now().UTC(),

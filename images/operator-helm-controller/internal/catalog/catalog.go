@@ -121,10 +121,6 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo source.Repository) (repoc
 func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, charts []repoclient.Chart) error {
 	logger := log.FromContext(ctx)
 
-	if err := t.migrateNames(ctx, repo); err != nil {
-		return err
-	}
-
 	desired := make(map[string]struct{}, len(charts))
 
 	for _, chart := range charts {
@@ -217,7 +213,7 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 	return nil
 }
 
-// migrateNames moves a repository's catalog objects to the names the current scheme
+// MigrateNames moves a repository's catalog objects to the names the current scheme
 // derives, whatever scheme they were written under. An object is recognised by its
 // chart label rather than by recomputing an older name, so this covers every scheme
 // the repository has ever been reconciled with, including a chart the repository no
@@ -229,9 +225,9 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 // deleted only once the copy has landed, so a failure anywhere leaves the old object
 // in place to be migrated again on the next pass.
 //
-// TRANSITIONAL: remove this method and its call once every cluster has reconciled
-// each repository at least once under the current scheme.
-func (t *typed[C, CL]) migrateNames(ctx context.Context, repo source.Repository) error {
+// TRANSITIONAL: remove this method, its interface entry and its call once every
+// cluster has reconciled each repository at least once under the current scheme.
+func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo source.Repository) error {
 	logger := log.FromContext(ctx)
 
 	existingCharts, err := t.list(ctx, repo)

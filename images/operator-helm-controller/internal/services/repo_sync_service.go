@@ -59,6 +59,17 @@ func NewRepoSyncService(client client.Client, scheme *runtime.Scheme, factory Re
 // Sync reads the repository catalog and reconciles the chart catalog objects that
 // mirror it. The two phases are reported separately: a fetch failure is about the
 // remote, a catalog failure is about this cluster.
+// MigrateNames moves the repository's catalog objects to the names the current
+// scheme derives. It is separate from Sync because it must run whether or not the
+// remote can be reached: a consumer resolves a chart by the current name as soon as
+// the new controller starts, while the first fetch may be minutes away or never
+// succeed again.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func (s *RepoSyncService) MigrateNames(ctx context.Context, repo source.Repository) error {
+	return s.catalog.MigrateNames(ctx, repo)
+}
+
 func (s *RepoSyncService) Sync(
 	ctx context.Context,
 	repo source.Repository,

@@ -134,6 +134,16 @@ func legacyAddonChart(name, repoName, chartName string, versions ...helmv1alpha1
 	}
 }
 
+// syncCatalog runs the two steps the repository reconciler runs, in its order: the
+// rename first, independent of any fetch, then the catalog write.
+func syncCatalog(cat source.Catalog, repo source.Repository, charts ...repoclient.Chart) error {
+	if err := cat.MigrateNames(context.Background(), repo); err != nil {
+		return err
+	}
+
+	return cat.Reconcile(context.Background(), repo, charts)
+}
+
 func chart(name, version string) repoclient.Chart {
 	return repoclient.Chart{
 		Name:     name,
@@ -252,7 +262,7 @@ func TestUnreferencedVersionsArePruned(t *testing.T) {
 	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0"), chart("nginx", "1.0.0")}); err != nil {
 		t.Fatalf("first Reconcile returned %v", err)
 	}
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0")}); err != nil {
+	if err := syncCatalog(cat, repo, chart("podinfo", "1.0.0")); err != nil {
 		t.Fatalf("second Reconcile returned %v", err)
 	}
 
@@ -348,7 +358,7 @@ func TestMigratesALegacyNamedObjectStillInUse(t *testing.T) {
 	cat := adapter.NewAddonCatalog(c)
 	repo := addonRepo()
 
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+	if err := syncCatalog(cat, repo, chart("podinfo", "2.0.0")); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -395,7 +405,7 @@ func TestMigratesALegacyNamedObjectNotInUse(t *testing.T) {
 	cat := adapter.NewAddonCatalog(c)
 	repo := addonRepo()
 
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+	if err := syncCatalog(cat, repo, chart("podinfo", "2.0.0")); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -430,7 +440,7 @@ func TestMigrationIsANoOpOnASecondReconcile(t *testing.T) {
 	cat := adapter.NewAddonCatalog(c)
 	repo := addonRepo()
 
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+	if err := syncCatalog(cat, repo, chart("podinfo", "2.0.0")); err != nil {
 		t.Fatalf("first Reconcile returned %v", err)
 	}
 
@@ -448,7 +458,7 @@ func TestMigrationIsANoOpOnASecondReconcile(t *testing.T) {
 	c = interceptedClient(t, c, func() { deletes++ })
 
 	cat = adapter.NewAddonCatalog(c)
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+	if err := syncCatalog(cat, repo, chart("podinfo", "2.0.0")); err != nil {
 		t.Fatalf("second Reconcile returned %v", err)
 	}
 
@@ -504,7 +514,7 @@ func TestMigrationLeavesUnrelatedChartsToExistingPruning(t *testing.T) {
 	// podinfo is the only chart being reconciled; "kept" and "pruned" are not part
 	// of this call, exactly like an ordinary reconcile of a repository whose index
 	// dropped them.
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0")}); err != nil {
+	if err := syncCatalog(cat, repo, chart("podinfo", "1.0.0")); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -535,7 +545,7 @@ func TestMigratesAChartTheRepositoryNoLongerOffers(t *testing.T) {
 	)
 	cat := adapter.NewAddonCatalog(c)
 
-	if err := cat.Reconcile(context.Background(), addonRepo(), []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+	if err := syncCatalog(cat, addonRepo(), chart("podinfo", "2.0.0")); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -581,7 +591,7 @@ func TestMigrationSurvivesAFailedStatusWrite(t *testing.T) {
 	)
 	cat := adapter.NewAddonCatalog(c)
 
-	if err := cat.Reconcile(context.Background(), addonRepo(), []repoclient.Chart{chart("podinfo", "2.0.0")}); err == nil {
+	if err := syncCatalog(cat, addonRepo(), chart("podinfo", "2.0.0")); err == nil {
 		t.Fatal("Reconcile must report the failed status write")
 	}
 
@@ -589,7 +599,7 @@ func TestMigrationSurvivesAFailedStatusWrite(t *testing.T) {
 		t.Fatalf("legacy object err = %v, want it kept until its status has been carried over", err)
 	}
 
-	if err := cat.Reconcile(context.Background(), addonRepo(), []repoclient.Chart{chart("podinfo", "2.0.0")}); err != nil {
+	if err := syncCatalog(cat, addonRepo(), chart("podinfo", "2.0.0")); err != nil {
 		t.Fatalf("second Reconcile returned %v", err)
 	}
 
