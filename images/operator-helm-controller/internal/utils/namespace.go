@@ -29,9 +29,5 @@ func IsSystemNamespace(namespace string) bool {
 		}
 	}
 
-	if strings.HasPrefix(namespace, "d8-") {
-		return true
-	}
-
-	return false
+	return strings.HasPrefix(namespace, "d8-")
 }

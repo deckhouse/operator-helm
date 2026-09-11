@@ -100,7 +100,7 @@ func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt ht
 
 	manifest, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
 	if err != nil {
-		return "", fmt.Errorf("%w: cannot parse the manifest of %s: %s", ErrNotAChart, ref, err)
+		return "", fmt.Errorf("%w: cannot parse the manifest of %s: %w", ErrNotAChart, ref, err)
 	}
 
 	if !helmv1alpha1.IsChartConfigMediaType(string(manifest.Config.MediaType)) {
