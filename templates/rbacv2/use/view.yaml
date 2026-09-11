@@ -1,0 +1,18 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "use" "rbac.deckhouse.io/aggregate-to-kubernetes-as" "viewer")) | nindent 2 }}
+  name: d8:use:capability:module:{{ .Chart.Name }}:view
+rules:
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmapplications
+  - helmapplicationrepositories
+  - helmapplicationcharts
+  - helmclusterapplicationrepositories
+  - helmclusterapplicationcharts
+  verbs:
+  - get
+  - list
+  - watch
