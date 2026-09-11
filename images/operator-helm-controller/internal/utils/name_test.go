@@ -66,6 +66,9 @@ func TestDerivedName(t *testing.T) {
 		want      string
 	}{
 		{
+			// Twin of TestApplicationRepositoryInternalName in
+			// tests/e2e/internal/naming/naming_test.go: a change on either side
+			// that is not mirrored on the other breaks one of the two tests.
 			name:      "namespaced source carries namespace, name and a hash",
 			prefix:    "hapr",
 			kind:      "HelmApplicationRepository",

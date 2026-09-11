@@ -98,3 +98,36 @@ func TestApplicationReleaseName(t *testing.T) {
 		})
 	}
 }
+
+// TestApplicationRepositoryInternalName pins ApplicationRepositoryInternalName's
+// output, including against the value operator-helm-controller's DerivedName
+// produces for the same inputs.
+func TestApplicationRepositoryInternalName(t *testing.T) {
+	cases := []struct {
+		name      string
+		namespace string
+		object    string
+		want      string
+	}{
+		{
+			// Twin of TestDerivedName's "namespaced source carries namespace, name
+			// and a hash" case in
+			// images/operator-helm-controller/internal/utils/name_test.go: a
+			// change on either side that is not mirrored on the other breaks one
+			// of the two tests.
+			name:      "twin of DerivedName(hapr, HelmApplicationRepository, team-a, stable)",
+			namespace: "team-a",
+			object:    "stable",
+			want:      "hapr-team-a-stable-42df68033b1e",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ApplicationRepositoryInternalName(tc.namespace, tc.object)
+			if got != tc.want {
+				t.Fatalf("ApplicationRepositoryInternalName(%q, %q) = %q, want %q", tc.namespace, tc.object, got, tc.want)
+			}
+		})
+	}
+}

@@ -108,18 +108,22 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
 			By("No catalog object of this repository may appear cluster-wide")
-			clusterCharts, err := f.OperatorClient().HelmV1alpha1().
-				HelmClusterApplicationCharts().
-				List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(clusterCharts.Items).To(BeEmpty(),
-				"a namespaced repository must not publish into the cluster-wide catalog")
+			Consistently(func(g Gomega) {
+				clusterCharts, err := f.OperatorClient().HelmV1alpha1().
+					HelmClusterApplicationCharts().
+					List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(clusterCharts.Items).To(BeEmpty(),
+					"a namespaced repository must not publish into the cluster-wide catalog")
+			}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 		})
 
 		It("should keep a same-named repository in another namespace apart", func() {
 			other := util.EnsureNamespace(f.NamespaceName()+"-other", map[string]string{framework.E2ELabel: "true"})
 			DeferCleanup(func() {
-				util.DeleteNamespace(other.Name, true, framework.LongTimeout)
+				if framework.IsCleanUpNeeded() {
+					util.DeleteNamespace(other.Name, true, framework.LongTimeout)
+				}
 			})
 
 			twin := &apiv1alpha1.HelmApplicationRepository{
@@ -138,6 +142,16 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			By("Both repositories must reach Ready independently")
 			util.UntilConditionTrue(apiv1alpha1.ConditionTypeReady, framework.LongTimeout, createdTwin)
 
+			labelSelector := fmt.Sprintf("repository=%s", repoName)
+			By("The twin must publish its own catalog into its own namespace")
+			Eventually(func(g Gomega) {
+				charts, err := f.OperatorClient().HelmV1alpha1().
+					HelmApplicationCharts(other.Name).
+					List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(charts.Items).NotTo(BeEmpty(), "the twin must publish its own catalog")
+			}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
 			By("Deleting the twin must leave the original healthy")
 			util.DeleteHelmApplicationRepository(f, other.Name, repoName, framework.LongTimeout)
 
@@ -150,7 +164,23 @@ func DefineLifecycleTests(repoType, repoURL string) {
 					HaveField("Type", apiv1alpha1.ConditionTypeReady),
 					HaveField("Status", metav1.ConditionTrue),
 				)))
+
+				charts, err := f.OperatorClient().HelmV1alpha1().
+					HelmApplicationCharts(f.NamespaceName()).
+					List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(charts.Items).NotTo(BeEmpty(), "the original's catalog must survive the twin's deletion")
 			}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
+			// Only a helm repository owns an internal HelmRepository; an oci:// one
+			// has none of its own, its artifacts come from the consumers' own
+			// OCIRepository objects.
+			if strings.EqualFold(repoType, "helm") {
+				By("The original's internal HelmRepository must survive the twin's deletion")
+				_, err = util.GetHelmApplicationRepositoryInternalHelmRepository(
+					util.HelmApplicationRepositoryInternalName(f.NamespaceName(), repoName))
+				Expect(err).NotTo(HaveOccurred())
+			}
 		})
 	})
 }

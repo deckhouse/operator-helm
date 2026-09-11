@@ -89,3 +89,22 @@ func ApplicationReleaseName(name string) string {
 
 	return strings.TrimRight(full[:40], "-") + "-" + fmt.Sprintf("%x", sum[:])[:12]
 }
+
+// ApplicationRepositoryInternalName reproduces the name operator-helm-controller
+// derives for a HelmApplicationRepository's internal HelmRepository. The scheme is
+// "hapr-<namespace|18>-<name|18>-<hash12>" over (kind, namespace, name).
+//
+// This is the twin of DerivedName("hapr", "HelmApplicationRepository", ...) in
+// TestDerivedName (images/operator-helm-controller/internal/utils/name_test.go): a
+// change on either side that is not mirrored on the other breaks that test or
+// TestApplicationRepositoryInternalName in this package.
+func ApplicationRepositoryInternalName(namespace, name string) string {
+	sum := sha256.Sum256([]byte("HelmApplicationRepository/" + namespace + "/" + name))
+
+	return strings.Join([]string{
+		"hapr",
+		truncateNamePart(namespace),
+		truncateNamePart(name),
+		fmt.Sprintf("%x", sum[:])[:12],
+	}, "-")
+}

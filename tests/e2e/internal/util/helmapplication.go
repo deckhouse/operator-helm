@@ -108,3 +108,18 @@ func DeleteHelmApplicationRepository(f *framework.Framework, namespace, name str
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "HelmApplicationRepository %s/%s still exists", namespace, name)
 	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
+
+// HelmApplicationRepositoryInternalName reproduces the name operator-helm-controller
+// derives for a HelmApplicationRepository's internal HelmRepository. See
+// internal/naming for the derivation itself.
+func HelmApplicationRepositoryInternalName(namespace, name string) string {
+	return naming.ApplicationRepositoryInternalName(namespace, name)
+}
+
+// GetHelmApplicationRepositoryInternalHelmRepository fetches an application
+// repository's internal HelmRepository, identified by its derived internal name
+// (see HelmApplicationRepositoryInternalName), in the module namespace.
+func GetHelmApplicationRepositoryInternalHelmRepository(internalName string) (*unstructured.Unstructured, error) {
+	return framework.GetClients().DynamicClient().Resource(operatorHelmInternalHelmRepositoryGVR).
+		Namespace(moduleNamespace).Get(context.Background(), internalName, metav1.GetOptions{})
+}
