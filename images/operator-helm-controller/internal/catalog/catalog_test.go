@@ -55,7 +55,7 @@ func newClient(t *testing.T) client.Client {
 		Build()
 }
 
-func applicationRepo(namespace, name string) source.Repository {
+func applicationRepo(namespace, name string) source.Repository { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
 	return adapter.NewApplicationRepository(&helmv1alpha1.HelmApplicationRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(namespace + "/" + name)},
 		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/" + name},
@@ -102,7 +102,7 @@ func addonRepo() source.Repository {
 
 // addonConsumer builds a HelmClusterAddon referencing one repository/chart/version,
 // so InUseVersions reports that version as in use.
-func addonConsumer(name, repoName, chartName, version string) *helmv1alpha1.HelmClusterAddon {
+func addonConsumer(name, repoName, chartName, version string) *helmv1alpha1.HelmClusterAddon { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
 	return &helmv1alpha1.HelmClusterAddon{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: helmv1alpha1.HelmClusterAddonSpec{
@@ -120,7 +120,7 @@ func addonConsumer(name, repoName, chartName, version string) *helmv1alpha1.Helm
 // current scheme, labelled the way every catalog object is labelled. The name is a
 // plain literal, not a recomputation of any past scheme: the migration finds this
 // object by its chart label alone.
-func legacyAddonChart(name, repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
+func legacyAddonChart(name, repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
 	return &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,

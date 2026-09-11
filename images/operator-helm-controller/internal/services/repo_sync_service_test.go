@@ -80,11 +80,11 @@ func newRepoSyncService(t *testing.T, stub stubRepoClient, objects ...client.Obj
 	return NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)), c
 }
 
-func ociVersion(version, mediaType string) repoclient.ChartVersion {
+func ociVersion(version, mediaType string) repoclient.ChartVersion { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
 	return repoclient.ChartVersion{Version: semver.MustParse(version), MediaType: mediaType}
 }
 
-func existingChart(repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
+func existingChart(repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
 	return &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   naming.HelmClusterAddonChartName(repoName, chartName),
@@ -108,7 +108,7 @@ func addonUsing(repoName, chartName, version string) *helmv1alpha1.HelmClusterAd
 	}
 }
 
-func chartStatus(t *testing.T, c client.Client, repoName, chartName string) helmv1alpha1.ChartCatalogStatus {
+func chartStatus(t *testing.T, c client.Client, repoName, chartName string) helmv1alpha1.ChartCatalogStatus { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
 	t.Helper()
 
 	chart := &helmv1alpha1.HelmClusterAddonChart{}
