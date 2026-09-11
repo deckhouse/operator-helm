@@ -25,29 +25,33 @@ import (
 // HelmClusterAddonChartName derives the name of the HelmClusterAddonChart object
 // that mirrors one chart of a repository.
 func HelmClusterAddonChartName(repoName, chartName string) string {
-	return chartObjectName(repoName, chartName)
+	return chartObjectName(repoName, chartName, false)
 }
 
 // ApplicationChartName derives the name of the HelmApplicationChart object that
 // mirrors one chart of a HelmApplicationRepository. The object is namespaced, so
 // the name only has to be unique inside the repository's namespace.
 func ApplicationChartName(repoName, chartName string) string {
-	return chartObjectName(repoName, chartName)
+	return chartObjectName(repoName, chartName, true)
 }
 
 // ClusterApplicationChartName derives the name of the HelmClusterApplicationChart
 // object that mirrors one chart of a HelmClusterApplicationRepository.
 func ClusterApplicationChartName(repoName, chartName string) string {
-	return chartObjectName(repoName, chartName)
+	return chartObjectName(repoName, chartName, true)
 }
 
-// chartObjectName is the single naming scheme behind every chart catalog kind. It
-// lives in the api module because operator-helm-controller writes those objects
-// while chart-values-controller reads them: the name is a truncated hash, so both
-// must derive it identically. Names coincide across families on purpose — the
-// objects differ in kind, and the namespaced and cluster variants live in
-// different scopes, so a shared name cannot collide.
-func chartObjectName(repoName, chartName string) string {
+// chartObjectName is the naming scheme behind every chart catalog kind. It lives in
+// the api module because operator-helm-controller writes those objects while
+// chart-values-controller reads them, so both must derive the name identically.
+//
+// Joining the two parts with a separator that may itself appear inside them is not
+// injective: "abc" + "def-chart-ghi" and "abc-chart-def" + "ghi" produce the same
+// string, and the two repositories then fight over one catalog object. The hash of
+// the pair is what separates them, so the application families always carry it.
+// The addon family keeps the hash only past the truncation threshold: its objects
+// are live, and moving them is a migration of its own.
+func chartObjectName(repoName, chartName string, alwaysHash bool) string {
 	hash := hash(fmt.Sprintf("%s-chart-%s", repoName, chartName))
 
 	var result, postfix string
@@ -67,6 +71,10 @@ func chartObjectName(repoName, chartName string) string {
 		postfix = "-" + hash
 	} else {
 		result += chartName
+	}
+
+	if alwaysHash {
+		postfix = "-" + hash
 	}
 
 	return strings.TrimRight(result, "-.") + postfix

@@ -70,10 +70,10 @@ func TestApplicationChartName(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "short names are joined verbatim",
+			name:  "short names are joined and hashed",
 			repo:  "example",
 			chart: "podinfo",
-			want:  "example-chart-podinfo",
+			want:  "example-chart-podinfo-aa661c3516b2",
 		},
 		{
 			name:  "long names are truncated and suffixed with a hash",
@@ -82,10 +82,10 @@ func TestApplicationChartName(t *testing.T) {
 			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-a3ee4a8a584e",
 		},
 		{
-			name:  "an empty chart name leaves no trailing dash",
+			name:  "an empty chart name leaves no trailing dash before the hash",
 			repo:  "repo",
 			chart: "",
-			want:  "repo-chart",
+			want:  "repo-chart-4e5d8120682c",
 		},
 		{
 			// A repository name is a DNS subdomain and a chart name comes from
@@ -114,10 +114,10 @@ func TestClusterApplicationChartName(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "short names are joined verbatim",
+			name:  "short names are joined and hashed",
 			repo:  "shared",
 			chart: "nginx",
-			want:  "shared-chart-nginx",
+			want:  "shared-chart-nginx-7f9acafe347b",
 		},
 		{
 			name:  "long names are truncated and suffixed with a hash",
