@@ -103,17 +103,19 @@ rules:
   - update
   - watch
 # The namespace role is seeded once and never read back, so create is the only
-# verb the controller uses on it. create cannot be scoped by resourceNames: the
-# object does not exist yet when the request is authorized. escalate and bind are
-# checked against the referenced role instead: escalate lets the controller write
-# a role granting more than it holds, bind lets it point a role binding at such a
-# role. Both are scoped to the single role name this module ever seeds.
+# verb the controller uses on it. Neither create nor escalate can be scoped by
+# resourceNames: both are authorized against the name in the request path, which
+# a create does not carry (RoleEscalationAuthorized passes requestInfo.Name, empty
+# here — see k8s.io/kubernetes/pkg/registry/rbac/escalation_check.go). bind is the
+# exception: it is authorized against the name in the binding's roleRef, so it is
+# scoped to the single role this module ever seeds.
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - roles
   verbs:
   - create
+  - escalate
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -121,7 +123,6 @@ rules:
   resourceNames:
   - operator-helm-application
   verbs:
-  - escalate
   - bind
 - apiGroups:
   - rbac.authorization.k8s.io
