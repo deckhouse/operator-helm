@@ -196,12 +196,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// the account named on the HelmRelease exists before it impersonates it, so a
 	// HelmRelease created ahead of its ServiceAccount would fail its first pass.
 	if err := r.deps.Access.EnsureAccess(ctx, rel); err != nil {
-		return reconcile.Result{}, r.deps.Status.Update(ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
+		// The status write is best-effort: what must not be lost is err itself.
+		// Nothing watches the ServiceAccount/RoleBinding this step manages, so the
+		// work queue's rate limiter retrying on the returned error is the only thing
+		// that brings a transient failure back for another pass.
+		_ = r.deps.Status.Update(ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
 			rel.Object(),
 			helmv1alpha1.ReasonAccessSetupFailed,
 			fmt.Sprintf("Failed to set up the release identity: %s", err.Error()),
 			err,
 		)})
+		return reconcile.Result{}, err
 	}
 
 	// From here on every path reaches the status update at the end of the pass,

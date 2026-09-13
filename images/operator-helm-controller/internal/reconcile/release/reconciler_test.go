@@ -589,16 +589,20 @@ func (failingAccess) CleanupAccess(context.Context, source.Release) error { retu
 // TestReconcileApplicationReportsAccessSetupFailure pins that the pass stops at the
 // identity. A release applied without one would run as helm-controller itself,
 // which is exactly the privilege the namespaced family exists to avoid, so the
-// failure has to be reported instead of worked around.
+// failure has to be reported instead of worked around. It must also be returned
+// as an error: nothing watches the ServiceAccount/RoleBinding this step manages,
+// so the work queue's rate limiter is the only thing that will retry it.
 func TestReconcileApplicationReportsAccessSetupFailure(t *testing.T) {
 	app := testApplication()
 
 	r, c := newApplicationFullReconciler(t, failingAccess{}, append(applicationFixtures(), app)...)
 
-	reconcileApplication(t, r, app)
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err == nil {
+		t.Fatal("a failed identity setup must be returned as an error so the work queue retries it")
+	}
 
 	settled := &helmv1alpha1.HelmApplication{}
-	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
 	if err := c.Get(context.Background(), key, settled); err != nil {
 		t.Fatalf("getting application: %v", err)
 	}
@@ -615,6 +619,72 @@ func TestReconcileApplicationReportsAccessSetupFailure(t *testing.T) {
 	releaseKey := client.ObjectKey{Name: names.HelmRelease, Namespace: helmv1alpha1.TargetNamespace}
 	if err := c.Get(context.Background(), releaseKey, &helmv2.HelmRelease{}); err == nil {
 		t.Fatal("no release must be created for an application whose identity could not be set up")
+	}
+}
+
+// intermittentAccess fails the first call to EnsureAccess and delegates to a real
+// AccessManager afterwards, standing in for a transient failure (an API hiccup, a
+// momentary admission rejection) that clears on its own by the next pass. real is
+// set after construction, once the reconciler's own client exists.
+type intermittentAccess struct {
+	real  source.AccessManager
+	calls int
+}
+
+func (a *intermittentAccess) EnsureAccess(ctx context.Context, rel source.Release) error {
+	a.calls++
+	if a.calls == 1 {
+		return errors.New("service account is forbidden")
+	}
+	return a.real.EnsureAccess(ctx, rel)
+}
+
+func (a *intermittentAccess) CleanupAccess(ctx context.Context, rel source.Release) error {
+	return a.real.CleanupAccess(ctx, rel)
+}
+
+// TestReconcileApplicationRecoversAfterTransientAccessSetupFailure pins the fix for
+// the gap in TestReconcileApplicationReportsAccessSetupFailure: a failed
+// EnsureAccess must not just be reported, it must get the application requeued, so
+// a transient failure recovers on its own once the cause is gone.
+func TestReconcileApplicationRecoversAfterTransientAccessSetupFailure(t *testing.T) {
+	app := testApplication()
+
+	access := &intermittentAccess{}
+	r, c := newApplicationFullReconciler(t, access, append(applicationFixtures(), app)...)
+	access.real = services.NewAccessService(c, helmv1alpha1.TargetNamespace)
+
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err == nil {
+		t.Fatal("the first pass must report the transient failure as an error")
+	}
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(context.Background(), key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonAccessSetupFailed {
+		t.Fatalf("Ready = %+v, want False/%s after the first pass", ready, helmv1alpha1.ReasonAccessSetupFailed)
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("the retried pass must succeed once the identity can be set up: %v", err)
+	}
+
+	names := adapter.NewApplicationRelease(app).InternalNames()
+	account := &corev1.ServiceAccount{}
+	accountKey := client.ObjectKey{Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), accountKey, account); err != nil {
+		t.Fatalf("the identity must be created once EnsureAccess stops failing: %v", err)
+	}
+
+	if err := c.Get(context.Background(), key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+	if reason := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady).Reason; reason == helmv1alpha1.ReasonAccessSetupFailed {
+		t.Fatal("Ready must move on from AccessSetupFailed once the retried pass sets up the identity")
 	}
 }
 
