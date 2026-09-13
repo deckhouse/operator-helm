@@ -103,15 +103,24 @@ rules:
   - update
   - watch
 # The namespace role is seeded once and never read back, so create is the only
-# verb the controller uses on it. Both escalate and bind are verbs on the role
-# itself: escalate lets the controller write a role granting more than it holds,
-# bind lets it point a role binding at such a role.
+# verb the controller uses on it. create cannot be scoped by resourceNames: the
+# object does not exist yet when the request is authorized. escalate and bind are
+# checked against the referenced role instead: escalate lets the controller write
+# a role granting more than it holds, bind lets it point a role binding at such a
+# role. Both are scoped to the single role name this module ever seeds.
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - roles
   verbs:
   - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  resourceNames:
+  - operator-helm-application
+  verbs:
   - escalate
   - bind
 - apiGroups:
@@ -122,10 +131,8 @@ rules:
   - create
   - delete
   - get
-  - list
   - patch
   - update
-  - watch
 - apiGroups:
   - helm.internal.operator-helm.deckhouse.io
   resources:
