@@ -52,6 +52,21 @@ var ErrNotAChart = errors.New("artifact is not a packaged helm chart")
 // Also a verdict rather than a transient failure.
 var ErrTagNotFound = errors.New("registry has no such tag")
 
+// probeTimeout bounds one probe end to end: the TLS handshake, the couple of
+// retries remote.WithRetryBackoff attempts internally, and reading the manifest
+// body. It applies even when the caller's context carries no deadline of its own,
+// so a slow or unresponsive registry cannot hold the probe open indefinitely. The
+// probe reads only a small manifest, so this is well under the timeout used to
+// download a full chart artifact.
+const probeTimeout = 20 * time.Second
+
+// probeContext bounds ctx by probeTimeout. context.WithTimeout keeps whichever
+// deadline is sooner, so a caller's own shorter deadline still wins; only a
+// caller with none at all falls back to probeTimeout.
+func probeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, probeTimeout)
+}
+
 // Prober finds the chart layer of one OCI artifact.
 type Prober interface {
 	ChartLayerMediaType(ctx context.Context, ref string, transport http.RoundTripper) (string, error)
@@ -70,6 +85,15 @@ type registryProber struct{}
 // authenticated would report a chart the pull could not fetch. rt carries transport
 // settings only and may be nil.
 func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt http.RoundTripper) (string, error) {
+	ctx, cancel := probeContext(ctx)
+	defer cancel()
+
+	// A transport built by Transport is single-use: fresh per probe and never
+	// shared, so its pool must be drained here rather than outliving this call.
+	if closer, ok := rt.(interface{ CloseIdleConnections() }); ok {
+		defer closer.CloseIdleConnections()
+	}
+
 	tag, err := name.NewTag(strings.TrimPrefix(ref, "oci://"))
 	if err != nil {
 		return "", fmt.Errorf("chart reference %q cannot be parsed: %w", ref, err)
@@ -121,6 +145,15 @@ func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt ht
 // Transport builds the transport settings for reaching a registry the repository
 // itself names. It returns nil when the repository has nothing to say about the
 // transport, which leaves the caller on the default one.
+//
+// The result is a clone of http.DefaultTransport rather than a bare struct, so it
+// keeps the default's dial and idle-connection timeouts instead of inheriting
+// none of them. It is built fresh for each probe and is not cached across calls:
+// a repository's TLS settings are read (and can change, e.g. a rotated CA) on
+// every hybrid probe, and the probe is rare enough — only while a version's
+// media type is still unresolved — that caching would add a keyed cache and its
+// invalidation for no measurable benefit. Because it is single-use, the caller
+// closes its idle connections once the probe finishes.
 func Transport(caCertificate string, insecure bool) http.RoundTripper {
 	if caCertificate == "" && !insecure {
 		return nil
@@ -134,5 +167,8 @@ func Transport(caCertificate string, insecure bool) http.RoundTripper {
 		tlsConfig.RootCAs = pool
 	}
 
-	return &http.Transport{TLSClientConfig: tlsConfig}
+	rt := http.DefaultTransport.(*http.Transport).Clone()
+	rt.TLSClientConfig = tlsConfig
+
+	return rt
 }
