@@ -464,6 +464,102 @@ func TestReconcileReportsAFailedMigrationWithoutAnAttempt(t *testing.T) {
 	}
 }
 
+// TestUnfinishedRenameDoesNotOverwriteTheCatalog pins the sequencing that makes the
+// rename safe. A version the repository no longer offers survives only in the status
+// of the object under the old name; writing the fetched versions into the new,
+// still-empty object would make the next pass consider the carry-over done and
+// delete that last copy. So a pass whose rename did not finish must not synchronize.
+//
+// This goes through Reconcile rather than the catalog directly: the defect lived in
+// the reconciler's gate, and a test double that stops at the first error cannot see
+// it.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func TestUnfinishedRenameDoesNotOverwriteTheCatalog(t *testing.T) {
+	repo := ociRepository()
+	legacy := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example-chart-podinfo",
+			Labels: map[string]string{
+				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+				helmv1alpha1.LabelRepositoryName:    repo.Name,
+				helmv1alpha1.LabelChartName:         "podinfo",
+			},
+		},
+		Status: helmv1alpha1.ChartCatalogStatus{
+			Versions: []helmv1alpha1.ChartVersion{{
+				Version:   "1.0.0",
+				MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+			}},
+		},
+	}
+	consumer := &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "consumer"},
+		Spec: helmv1alpha1.HelmClusterAddonSpec{
+			Namespace: "app",
+			Chart: helmv1alpha1.HelmClusterAddonChartRef{
+				HelmClusterAddonRepository: repo.Name,
+				HelmClusterAddonChartName:  "podinfo",
+				Version:                    "1.0.0",
+			},
+		},
+	}
+
+	// The repository dropped 1.0.0: only the legacy object still knows about it.
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("2.0.0")}},
+	}}}
+
+	failed := false
+	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
+		SubResourcePatch: func(
+			ctx context.Context,
+			cl client.Client,
+			sub string,
+			obj client.Object,
+			patch client.Patch,
+			opts ...client.SubResourcePatchOption,
+		) error {
+			if _, ok := obj.(*helmv1alpha1.HelmClusterAddonChart); ok && !failed {
+				failed = true
+
+				return errors.New("transient status patch failure")
+			}
+
+			return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	}, stub, repo, legacy, consumer)
+
+	for range 4 {
+		_, _ = r.Reconcile(context.Background(), reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: repo.Name},
+		})
+	}
+
+	moved := &helmv1alpha1.HelmClusterAddonChart{}
+	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
+	if err := c.Get(context.Background(), key, moved); err != nil {
+		t.Fatalf("the chart was never moved to its current name: %v", err)
+	}
+
+	var retained *helmv1alpha1.ChartVersion
+	for i := range moved.Status.Versions {
+		if moved.Status.Versions[i].Version == "1.0.0" {
+			retained = &moved.Status.Versions[i]
+		}
+	}
+	if retained == nil {
+		t.Fatalf("versions = %+v, want 1.0.0 carried over: a consumer still holds it and the repository no longer offers it", moved.Status.Versions)
+	}
+	if retained.MediaType == "" {
+		t.Fatal("1.0.0 lost its media type, so the consumer's internal source cannot be built")
+	}
+	if retained.UnavailableReason != helmv1alpha1.UnavailableReasonRemovedFromRepository {
+		t.Fatalf("1.0.0 reason = %q, want %q", retained.UnavailableReason, helmv1alpha1.UnavailableReasonRemovedFromRepository)
+	}
+}
+
 func TestReconcileTerminalFetchFailureStalls(t *testing.T) {
 	repo := ociRepository()
 	stub := &stubRepoClient{err: &repoclient.TerminalError{

@@ -134,8 +134,12 @@ func legacyAddonChart(name, repoName, chartName string, versions ...helmv1alpha1
 	}
 }
 
-// syncCatalog runs the two steps the repository reconciler runs, in its order: the
-// rename first, independent of any fetch, then the catalog write.
+// syncCatalog runs the two steps the repository reconciler runs, in its order and
+// with its gate: the rename first, independent of any fetch, and the catalog write
+// only if the rename finished. The gate is what keeps an unfinished rename from
+// being written over; it lives in the reconciler, so the test that owns it is
+// TestUnfinishedRenameDoesNotOverwriteTheCatalog in internal/reconcile/repository,
+// not here.
 func syncCatalog(cat source.Catalog, repo source.Repository, charts ...repoclient.Chart) error {
 	if err := cat.MigrateNames(context.Background(), repo); err != nil {
 		return err

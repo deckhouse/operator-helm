@@ -151,7 +151,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	in.Forced = repo.ForceReconcileRequired()
 
-	if in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
+	// A rename left unfinished must stop the synchronization: the object under the
+	// new name still has an empty status, and writing the fetched versions into it
+	// would make the next pass skip the status carry-over and delete the old object,
+	// taking with it the only copy of a version a consumer still holds.
+	if in.MigrateErr == nil && in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
 		ShouldAttempt(in.Current, in.Generation, in.Now, in.Forced) {
 		if err := r.markSyncInProgress(ctx, repo, in.Forced); err != nil {
 			return reconcile.Result{}, err
