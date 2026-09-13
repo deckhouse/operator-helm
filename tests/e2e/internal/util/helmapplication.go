@@ -83,14 +83,24 @@ func DeleteHelmApplication(f *framework.Framework, namespace, name string, timeo
 	UntilHelmApplicationDeleted(namespace, name, timeout)
 }
 
-// UntilHelmApplicationDeleted waits until the application object is gone.
+// UntilHelmApplicationDeleted waits until both the application and the internal helm
+// release it owns are gone. The application alone would be a weaker signal than the
+// addon family's own helper gives: that one waits for the internal release, and the
+// uninstall is what the release's disappearance reports.
 func UntilHelmApplicationDeleted(namespace, name string, timeout time.Duration) {
 	GinkgoHelper()
+
+	internalName := ApplicationServiceAccountName(namespace, name)
 
 	Eventually(func(g Gomega) {
 		_, err := framework.GetClients().OperatorClient().HelmV1alpha1().HelmApplications(namespace).
 			Get(context.Background(), name, metav1.GetOptions{})
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "HelmApplication %s/%s still exists", namespace, name)
+
+		_, err = framework.GetClients().DynamicClient().
+			Resource(operatorHelmInternalHelmReleaseGVR).Namespace(moduleNamespace).
+			Get(context.Background(), internalName, metav1.GetOptions{})
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "internal helm release %s still exists", internalName)
 	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 

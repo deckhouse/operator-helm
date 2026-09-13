@@ -77,6 +77,11 @@ func (f *Framework) Before() {
 	Expect(err).NotTo(HaveOccurred())
 	By(fmt.Sprintf("Namespace %q has been created", ns.Name))
 	f.namespace = ns
+
+	// Registered last so the reversal in After deletes it after everything created
+	// inside it. Without this a run against a live cluster leaves the namespace and
+	// whatever the module seeded in it behind; in CI the kind cluster hides that.
+	f.objectsToDelete = append(f.objectsToDelete, ns)
 }
 
 // After handles cleanup and dump on failure.
