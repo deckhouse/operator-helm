@@ -116,8 +116,11 @@ func TestApplicationReleaseNamesAndLabels(t *testing.T) {
 	if rel.Kind() != helmv1alpha1.HelmApplicationKind {
 		t.Fatalf("Kind = %q", rel.Kind())
 	}
-	if rel.ReleaseName() != "hap-my-app" {
-		t.Fatalf("ReleaseName = %q, want hap-<name>", rel.ReleaseName())
+	// The hash is what keeps two application names from meeting in one release, so
+	// it is present even on a name far below the limit. The literal is pinned rather
+	// than recomputed: calling the same helper the adapter calls would assert nothing.
+	if rel.ReleaseName() != "hap-my-app-7d0dcc45388e" {
+		t.Fatalf("ReleaseName = %q, want the prefixed name with its hash", rel.ReleaseName())
 	}
 
 	wantLabels := map[string]string{

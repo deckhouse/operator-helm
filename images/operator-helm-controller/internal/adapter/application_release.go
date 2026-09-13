@@ -98,9 +98,11 @@ func (r *ApplicationRelease) LastAppliedValues() *apiextensionsv1.JSON {
 
 // ReleaseName is prefixed so an application cannot take over a release someone
 // installed by hand under the same name in the same namespace; without the prefix
-// helm-controller would upgrade that release instead of failing.
+// helm-controller would upgrade that release instead of failing. The hash is
+// unconditional for the same reason: two applications whose names met in one release
+// name would share its storage and overwrite each other's history.
 func (r *ApplicationRelease) ReleaseName() string {
-	return utils.HelmReleaseName(applicationPrefix + "-" + r.obj.Name)
+	return utils.HashedReleaseName(applicationPrefix + "-" + r.obj.Name)
 }
 
 func (r *ApplicationRelease) SourceLabels() map[string]string {

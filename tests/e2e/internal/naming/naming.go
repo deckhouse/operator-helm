@@ -68,25 +68,27 @@ const helmReleaseNameLimit = 53
 
 // ApplicationReleaseName reproduces the Helm release name operator-helm-controller
 // installs a HelmApplication's chart under: the twin of
-// utils.HelmReleaseName("hap-"+name) in
+// utils.HashedReleaseName("hap-"+name) in
 // images/operator-helm-controller/internal/adapter/application_release.go
-// (ApplicationRelease.ReleaseName). A name within the limit is used as is; a
-// longer one is cut to 40 characters and suffixed with a 12-character hash of the
-// full name, mirroring HelmReleaseName's own truncation branch.
+// (ApplicationRelease.ReleaseName). The readable part is cut to what the hash
+// leaves it, and the hash of the full name is always appended: without it a short
+// name could be spelled exactly like the cut form of a long one, and the two
+// applications would share one release storage.
 //
-// This is the twin of the "hap-prefixed name over the limit is cut and hashed"
-// case in TestHelmReleaseName
+// This is the twin of TestHashedReleaseNameSeparatesTwoValidNames
 // (images/operator-helm-controller/internal/utils/name_test.go): a change on
 // either side that is not mirrored on the other breaks one of the two tests.
 func ApplicationReleaseName(name string) string {
 	full := "hap-" + name
-	if len(full) <= helmReleaseNameLimit {
-		return full
+
+	readable := full
+	if len(readable) > helmReleaseNameLimit-13 {
+		readable = readable[:helmReleaseNameLimit-13]
 	}
 
 	sum := sha256.Sum256([]byte(full))
 
-	return strings.TrimRight(full[:40], "-.") + "-" + fmt.Sprintf("%x", sum[:])[:12]
+	return strings.TrimRight(readable, "-.") + "-" + fmt.Sprintf("%x", sum[:])[:12]
 }
 
 // ApplicationRepositoryInternalName reproduces the name operator-helm-controller

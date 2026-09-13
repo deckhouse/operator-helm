@@ -82,9 +82,9 @@ func TestApplicationReleaseName(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "a short name is used as is",
+			name:   "a short name still carries the hash",
 			object: "e2e-test-app-helm",
-			want:   "hap-e2e-test-app-helm",
+			want:   "hap-e2e-test-app-helm-eaa08759b576",
 		},
 		{
 			// Twin of the "hap-prefixed name over the limit is cut and hashed" case

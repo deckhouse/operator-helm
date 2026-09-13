@@ -161,6 +161,43 @@ func TestDerivedNameStaysWithinTheLabelLimitForTheLongestPrefix(t *testing.T) {
 	}
 }
 
+// TestHashedReleaseNameSeparatesTwoValidNames pins the reason the application family
+// does not share HelmReleaseName. That function hashes only what exceeds the limit,
+// so a short name can be spelled exactly like the cut and hashed form of a long one;
+// two releases under one name in one namespace then share one storage and overwrite
+// each other's history. Carrying the hash unconditionally removes the second branch
+// the two names met in.
+func TestHashedReleaseNameSeparatesTwoValidNames(t *testing.T) {
+	const (
+		long  = "hap-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefg"
+		short = "hap-abcdefghijklmnopqrstuvwxyz-abcdefghi-dbe791f54fec"
+	)
+
+	if HelmReleaseName(long) != HelmReleaseName(short) {
+		t.Fatal("the fixture no longer demonstrates the collision it was chosen for")
+	}
+
+	if got, other := HashedReleaseName(long), HashedReleaseName(short); got == other {
+		t.Fatalf("both names produce %q", got)
+	}
+
+	for _, name := range []string{long, short, "hap-a"} {
+		got := HashedReleaseName(name)
+		if len(got) > helmReleaseNameLimit {
+			t.Fatalf("%q is %d characters, Helm accepts at most %d", got, len(got), helmReleaseNameLimit)
+		}
+		if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+			t.Fatalf("%q is not a valid release name: %v", got, errs)
+		}
+	}
+
+	// Twin of TestApplicationReleaseName in tests/e2e/internal/naming: a change on
+	// either side that is not mirrored on the other breaks one of the two tests.
+	if got := HashedReleaseName("hap-e2e-test-app-helm"); got != "hap-e2e-test-app-helm-eaa08759b576" {
+		t.Fatalf("HashedReleaseName = %q", got)
+	}
+}
+
 // TestHelmReleaseName pins the release-name rule: Helm rejects names longer than 53
 // characters. A name within the limit passes through untouched — every addon that
 // exists today keeps its release — and a longer one is cut and suffixed with a hash

@@ -22,11 +22,14 @@ import (
 	"strings"
 )
 
+// hashLength is how much of the digest every derived name carries.
+const hashLength = 12
+
 func GetHash(s string) string {
 	h := sha256.New()
 	h.Write([]byte(s))
 
-	return fmt.Sprintf("%x", h.Sum(nil))[:12]
+	return fmt.Sprintf("%x", h.Sum(nil))[:hashLength]
 }
 
 func GetInternalRepositoryAuthSecretName(internalRepoName string) string {
@@ -176,16 +179,43 @@ func truncatePart(part string) string {
 // helmReleaseNameLimit is the longest release name Helm accepts.
 const helmReleaseNameLimit = 53
 
+// releaseReadableLimit is what is left for the readable part once the hash and its
+// separator are taken out of helmReleaseNameLimit.
+const releaseReadableLimit = helmReleaseNameLimit - len("-") - hashLength
+
 // HelmReleaseName bounds a release name to what Helm accepts. A name within the
 // limit is used as is — that keeps every existing addon release untouched — and a
-// longer one is cut to 40 characters and suffixed with a 12-character hash of the
-// full name, so two long names that share a prefix stay distinct. The cut is
-// trimmed of a trailing dash or dot: a dash would double up against the suffix,
-// and a dot would leave the suffix starting a DNS label, which is not a valid name.
+// longer one is cut and suffixed with a hash of the full name, so two long names
+// that share a prefix stay distinct.
+//
+// The two branches are not injective between themselves: a short name spelled
+// exactly like the cut and hashed form of a long one produces the same release, and
+// two releases sharing a name in one namespace share one storage. Nothing can be
+// done about that here without moving every addon release that exists, so the addon
+// family carries it; a family whose releases are not yet installed anywhere should
+// use HashedReleaseName instead.
 func HelmReleaseName(name string) string {
 	if len(name) <= helmReleaseNameLimit {
 		return name
 	}
 
-	return strings.TrimRight(name[:40], "-.") + "-" + GetHash(name)
+	return cutForHash(name) + "-" + GetHash(name)
+}
+
+// HashedReleaseName bounds a release name the same way but always carries the hash,
+// which is what makes it injective: every name goes through the one branch, so no
+// two names can meet. See HelmReleaseName for what happens when they can.
+func HashedReleaseName(name string) string {
+	return cutForHash(name) + "-" + GetHash(name)
+}
+
+// cutForHash trims the readable part to the room the hash leaves it. A trailing dash
+// would double up against the suffix, and a trailing dot would leave the suffix
+// starting a DNS label, which is not a valid name.
+func cutForHash(name string) string {
+	if len(name) > releaseReadableLimit {
+		name = name[:releaseReadableLimit]
+	}
+
+	return strings.TrimRight(name, "-.")
 }
