@@ -65,5 +65,6 @@ var _ = Describe("HelmApplication system namespace restriction", Ordered, func()
 		Entry("kube-public", "kube-public"),
 		Entry("kube-node-lease", "kube-node-lease"),
 		Entry("the module's own namespace", moduleNS),
+		Entry("default", "default"),
 	)
 })
