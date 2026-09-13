@@ -45,11 +45,15 @@ spec:
           - "helmapplicationcharts/status"
           - "helmclusterapplicationcharts"
           - "helmclusterapplicationcharts/status"
-          # Same reasoning for the namespaced kinds an application's account can
-          # reach: their spec stays open, only the status the controller owns is
-          # closed.
+          # Same reasoning for the kinds whose spec belongs to a user: it stays
+          # open, only the status the controller owns is closed. The cluster-scoped
+          # repositories are listed for symmetry — no role this module seeds reaches
+          # them, so nothing today depends on it, and an entry missing from a list
+          # like this reads as an oversight rather than a decision.
           - "helmapplications/status"
           - "helmapplicationrepositories/status"
+          - "helmclusterapplicationrepositories/status"
+          - "helmclusteraddonrepositories/status"
   validations:
     - expression: |
         request.userInfo.username.startsWith("system:serviceaccount:kube-system:") ||
