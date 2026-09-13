@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -685,6 +686,58 @@ func TestReconcileApplicationRecoversAfterTransientAccessSetupFailure(t *testing
 	}
 	if reason := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady).Reason; reason == helmv1alpha1.ReasonAccessSetupFailed {
 		t.Fatal("Ready must move on from AccessSetupFailed once the retried pass sets up the identity")
+	}
+}
+
+// accessCleanupFails is an AccessManager whose teardown never succeeds, standing in
+// for an API failure while removing the release's ServiceAccount or RoleBinding.
+type accessCleanupFails struct{}
+
+func (accessCleanupFails) EnsureAccess(context.Context, source.Release) error { return nil }
+
+func (accessCleanupFails) CleanupAccess(context.Context, source.Release) error {
+	return errors.New("role binding deletion forbidden")
+}
+
+// TestReconcileDeleteReportsAccessCleanupFailure pins that a failed CleanupAccess
+// leaves the status saying so. By the time this step runs the internal release and
+// sources are already gone, so nothing else on the object would otherwise explain
+// why the finalizer is still there.
+func TestReconcileDeleteReportsAccessCleanupFailure(t *testing.T) {
+	now := metav1.Now()
+	app := &helmv1alpha1.HelmApplication{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app",
+			Namespace:         "team-a",
+			Generation:        1,
+			Finalizers:        []string{helmv1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: testApplication().Spec,
+	}
+
+	r, c := newApplicationFullReconciler(t, accessCleanupFails{}, app)
+
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err == nil {
+		t.Fatal("a failed identity cleanup must be returned as an error so the finalizer's retry fires")
+	}
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(context.Background(), key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+
+	if !controllerutil.ContainsFinalizer(settled, helmv1alpha1.FinalizerName) {
+		t.Fatal("the finalizer must stay until the identity is actually cleaned up")
+	}
+
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil {
+		t.Fatalf("Ready must be reported, conditions: %v", settled.Status.Conditions)
+	}
+	if ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonFailed {
+		t.Fatalf("Ready is %s/%s, want False/%s", ready.Status, ready.Reason, helmv1alpha1.ReasonFailed)
 	}
 }
 

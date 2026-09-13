@@ -380,6 +380,11 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (r
 	// The identity goes last: helm-controller uninstalls as that account, so it
 	// has to outlive the HelmRelease.
 	if err := r.deps.Access.CleanupAccess(ctx, rel); err != nil {
+		// By this point the internal release and sources are already gone, so
+		// nothing else on the object would explain why the finalizer is still
+		// there. The write is best-effort, same as the internal-resource waits
+		// above: the returned error is what gets this retried.
+		_ = r.deps.Status.MarkDeletionFailed(ctx, rel.Object(), "release identity", err)
 		return reconcile.Result{}, fmt.Errorf("cleaning up release identity: %w", err)
 	}
 
