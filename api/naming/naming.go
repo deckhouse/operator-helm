@@ -50,31 +50,59 @@ func ClusterApplicationChartName(repoName, chartName string) string {
 // readable part, and the two repositories then fight over one catalog object. The
 // hash is what separates them, so every family always carries it — and it is taken
 // over the two parts joined by a byte no object name can hold, because hashing the
-// readable join would reproduce the very ambiguity it is there to resolve.
+// readable join would reproduce the very ambiguity it is there to resolve. The hash
+// is taken over the raw inputs, not the sanitized readable parts below, so it stays
+// injective even when sanitizing two different inputs happens to yield the same
+// readable part.
 func chartObjectName(repoName, chartName string) string {
 	hash := hash(repoName + "\x00" + chartName)
 
+	repoPart := sanitize(repoName)
+	chartPart := sanitize(chartName)
+
 	var result string
 
-	if len(repoName) > 20 {
+	if len(repoPart) > 20 {
 		// The truncated part is followed by a separator, so a dash or a dot the
 		// cut left behind has to go here: the final trim only reaches the end of
 		// the whole name.
-		result += strings.TrimRight(repoName[:20], "-.") + "-chart-"
+		result += strings.TrimRight(repoPart[:20], "-.") + "-chart-"
 	} else {
-		// Same reasoning as the truncated branch above: repoName is followed by
+		// Same reasoning as the truncated branch above: repoPart is followed by
 		// a separator here too, so a trailing dash or dot has to be trimmed
 		// before it, not left for the final trim to reach.
-		result += strings.TrimRight(repoName, "-.") + "-chart-"
+		result += strings.TrimRight(repoPart, "-.") + "-chart-"
 	}
 
-	if len(chartName) > 20 {
-		result += chartName[:20]
+	if len(chartPart) > 20 {
+		result += chartPart[:20]
 	} else {
-		result += chartName
+		result += chartPart
 	}
 
-	return strings.TrimRight(result, "-.") + "-" + hash
+	// A repoPart that sanitizes to empty (or to only separators) leaves the fixed
+	// "-chart-" literal leading the name, so the trim has to reach the front too.
+	return strings.Trim(result, "-.") + "-" + hash
+}
+
+// sanitize lower-cases s and replaces every character that cannot appear in a
+// DNS-1123 subdomain (anything outside [a-z0-9.-]) with a dash, so a chart or
+// repository name coming from an index or an OCI tag — "MyChart", "ch art" — always
+// contributes a valid object name segment. It does not trim or truncate: that is
+// left to the caller, which needs to do both around the fixed "-chart-" separator.
+func sanitize(s string) string {
+	s = strings.ToLower(s)
+
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+
+	return b.String()
 }
 
 func hash(s string) string {

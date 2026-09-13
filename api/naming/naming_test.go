@@ -16,7 +16,11 @@ limitations under the License.
 
 package naming
 
-import "testing"
+import (
+	"testing"
+
+	"k8s.io/apimachinery/pkg/util/validation"
+)
 
 func TestHelmClusterAddonChartName(t *testing.T) {
 	cases := []struct {
@@ -60,12 +64,36 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 			chart: "podinfo",
 			want:  "abcdefghijklmnopqrs-chart-podinfo-b5579464eede",
 		},
+		{
+			// Chart and repository names can carry upper case, e.g. from an OCI
+			// tag or a repository index entry.
+			name:  "upper case is lowered",
+			repo:  "REPO",
+			chart: "CHART",
+			want:  "repo-chart-chart-e5db4c98cda1",
+		},
+		{
+			name:  "a space is replaced, not dropped, so the parts stay separated",
+			repo:  "repo",
+			chart: "ch art",
+			want:  "repo-chart-ch-art-2e144a9bd47b",
+		},
+		{
+			name:  "two empty parts still start with a letter, not a dash",
+			repo:  "",
+			chart: "",
+			want:  "chart-6e340b9cffb3",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := HelmClusterAddonChartName(tc.repo, tc.chart); got != tc.want {
+			got := HelmClusterAddonChartName(tc.repo, tc.chart)
+			if got != tc.want {
 				t.Fatalf("HelmClusterAddonChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", got, errs)
 			}
 		})
 	}
@@ -113,12 +141,34 @@ func TestApplicationChartName(t *testing.T) {
 			chart: "podinfo",
 			want:  "abcdefghijklmnopqrs-chart-podinfo-b5579464eede",
 		},
+		{
+			name:  "upper case is lowered",
+			repo:  "REPO",
+			chart: "CHART",
+			want:  "repo-chart-chart-e5db4c98cda1",
+		},
+		{
+			name:  "a space is replaced, not dropped, so the parts stay separated",
+			repo:  "repo",
+			chart: "ch art",
+			want:  "repo-chart-ch-art-2e144a9bd47b",
+		},
+		{
+			name:  "two empty parts still start with a letter, not a dash",
+			repo:  "",
+			chart: "",
+			want:  "chart-6e340b9cffb3",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ApplicationChartName(tc.repo, tc.chart); got != tc.want {
+			got := ApplicationChartName(tc.repo, tc.chart)
+			if got != tc.want {
 				t.Fatalf("ApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", got, errs)
 			}
 		})
 	}
@@ -143,12 +193,34 @@ func TestClusterApplicationChartName(t *testing.T) {
 			chart: "cert-manager-webhook-yandex",
 			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-cb0f7a51035d",
 		},
+		{
+			name:  "upper case is lowered",
+			repo:  "REPO",
+			chart: "CHART",
+			want:  "repo-chart-chart-e5db4c98cda1",
+		},
+		{
+			name:  "a space is replaced, not dropped, so the parts stay separated",
+			repo:  "repo",
+			chart: "ch art",
+			want:  "repo-chart-ch-art-2e144a9bd47b",
+		},
+		{
+			name:  "two empty parts still start with a letter, not a dash",
+			repo:  "",
+			chart: "",
+			want:  "chart-6e340b9cffb3",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ClusterApplicationChartName(tc.repo, tc.chart); got != tc.want {
+			got := ClusterApplicationChartName(tc.repo, tc.chart)
+			if got != tc.want {
 				t.Fatalf("ClusterApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", got, errs)
 			}
 		})
 	}
