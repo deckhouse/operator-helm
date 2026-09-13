@@ -28,6 +28,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -86,6 +87,18 @@ func main() {
 			// ServiceAccount and RoleBinding in the cluster would be held in memory.
 			Cache: &client.CacheOptions{
 				DisableFor: []client.Object{&corev1.ServiceAccount{}, &rbacv1.RoleBinding{}},
+			},
+		},
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				// The repository controllers watch Secrets, and every Secret they read
+				// or write lives in the module namespace, so the informer is scoped
+				// there instead of holding every Secret in the cluster in memory.
+				&corev1.Secret{}: {
+					Namespaces: map[string]cache.Config{
+						helmv1alpha1.TargetNamespace: {},
+					},
+				},
 			},
 		},
 	})
