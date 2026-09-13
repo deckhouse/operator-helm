@@ -368,3 +368,161 @@ func TestHandleForbiddenMessageNamesTheResourceKind(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleRequestTooLarge covers the bound placed on the whole body: a
+// legitimate request is five short string fields, so a client sending far more
+// gets rejected with 413 instead of being decoded in full.
+func TestHandleRequestTooLarge(t *testing.T) {
+	oversized := `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"` +
+		strings.Repeat("a", maxRequestBodyBytes) + `","version":"6.7.1"}`
+
+	rec := do(t, fakeResolver{}, oversized)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "REQUEST_TOO_LARGE")
+}
+
+// TestHandleMissingTokenRejectsBeforeReadingAnOversizedBody pins the ordering fix:
+// the cheap bearer-token check runs before the body is even read, so an
+// unauthenticated caller sending an oversized body gets 401, not 413 — the body
+// limit is never consulted for a request that never gets past authentication.
+func TestHandleMissingTokenRejectsBeforeReadingAnOversizedBody(t *testing.T) {
+	oversized := `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"` +
+		strings.Repeat("a", maxRequestBodyBytes) + `","version":"6.7.1"}`
+
+	srv := New("", fakeResolver{}, authorized, NewOptions{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chart-values", strings.NewReader(oversized))
+	srv.handleChartValues(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "UNAUTHENTICATED")
+}
+
+// TestNewHTTPServerSetsEveryTimeout pins the fix for the entry point that
+// previously set only ReadHeaderTimeout: an unauthenticated client could hold the
+// handler open on the rest of the request, or on an unfinished response.
+func TestNewHTTPServerSetsEveryTimeout(t *testing.T) {
+	srv := newHTTPServer("", http.NewServeMux())
+
+	if srv.ReadHeaderTimeout <= 0 {
+		t.Fatal("ReadHeaderTimeout is not set")
+	}
+	if srv.ReadTimeout <= 0 {
+		t.Fatal("ReadTimeout is not set")
+	}
+	if srv.WriteTimeout <= 0 {
+		t.Fatal("WriteTimeout is not set")
+	}
+}
+
+// TestHandleValidatesRepositoryName pins the fields the resolver received only an
+// emptiness check for: an invalid name would otherwise reach the resolver and read
+// back as repository_not_found, telling the caller nothing about the field they
+// got wrong.
+func TestHandleValidatesRepositoryName(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "not a valid object name",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"Not Valid!","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			// HelmApplicationRepository's CRD enforces a 3-63 character name.
+			name: "shorter than the application repository CRD allows",
+			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			name: "longer than the application repository CRD allows",
+			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"` +
+				strings.Repeat("a", 64) + `","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			name: "longer than the cluster application repository CRD allows",
+			body: `{"repositoryKind":"HelmClusterApplicationRepository","namespace":"team-a","repositoryName":"` +
+				strings.Repeat("a", 64) + `","chart":"podinfo","version":"6.7.1"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, fakeResolver{}, tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
+		})
+	}
+}
+
+// TestHandleAcceptsARepositoryNameAtTheAddonCRDsUnboundedLength pins the other
+// side of the per-kind bound: HelmClusterAddonRepository's CRD imposes no length
+// rule of its own, so a name under 3 characters (which the application repository
+// CRDs would reject) must still be accepted for this kind.
+func TestHandleAcceptsARepositoryNameAtTheAddonCRDsUnboundedLength(t *testing.T) {
+	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}},
+		`{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleValidatesChartAndVersion pins the whitespace-only and length bounds
+// placed on chart and version. Neither field is checked against a naming grammar:
+// chart names may contain a space (an index entry can legally be "my chart"), and
+// an OCI tag is not semver, so imposing either grammar would reject legal input.
+func TestHandleValidatesChartAndVersion(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "a whitespace-only version never matches a catalog entry and would poll pending forever",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"podinfo","version":" "}`,
+		},
+		{
+			name: "a whitespace-only chart",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"   ","version":"6.7.1"}`,
+		},
+		{
+			name: "a chart longer than the bound",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"` +
+				strings.Repeat("a", maxChartLen+1) + `","version":"6.7.1"}`,
+		},
+		{
+			name: "a version longer than the OCI tag bound",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"podinfo","version":"` +
+				strings.Repeat("1", maxVersionLen+1) + `"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, fakeResolver{}, tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
+		})
+	}
+}
+
+// TestHandleAcceptsAChartNameWithASpace pins that chart carries no character
+// grammar: only a whitespace-only value and the length bound are rejected.
+func TestHandleAcceptsAChartNameWithASpace(t *testing.T) {
+	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}},
+		`{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"my chart","version":"6.7.1"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}

@@ -38,6 +38,33 @@ import (
 // prepared, so polling clients back off consistently.
 const retryAfterSeconds = 3
 
+const (
+	// maxRequestBodyBytes bounds the request body before it is decoded. A
+	// legitimate request is five short string fields (repositoryKind, namespace,
+	// repositoryName, chart, version); 4 KiB is generous headroom over that and
+	// still small enough that an unauthenticated caller cannot use the body to
+	// hold the handler on an oversized read.
+	maxRequestBodyBytes = 4 << 10 // 4 KiB
+
+	// readTimeout and writeTimeout bound how long a connection may take to send
+	// its request body or receive its response, closing the gap
+	// ReadHeaderTimeout alone leaves open: an unauthenticated client could
+	// otherwise hold either half of the exchange open indefinitely.
+	readTimeout  = 10 * time.Second
+	writeTimeout = 10 * time.Second
+
+	// maxChartLen bounds the chart field. Chart names are not restricted to a
+	// naming grammar — an index entry may legally contain a space — so only a
+	// generous length ceiling is enforced.
+	maxChartLen = 253
+
+	// maxVersionLen bounds the version field at the OCI Distribution Spec's own
+	// tag length limit (128 characters): a version may travel on as an OCI tag,
+	// and a Helm repository index version is always far shorter. It is not
+	// validated as semver, because an OCI tag is not one.
+	maxVersionLen = 128
+)
+
 type chartValuesResolver interface {
 	Resolve(ctx context.Context, req resolver.Request) (resolver.Result, error)
 }
@@ -84,11 +111,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chart-values", s.handleChartValues)
 
-	srv := &http.Server{
-		Addr:              s.addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	srv := newHTTPServer(s.addr, mux)
 
 	go func() {
 		<-ctx.Done()
@@ -113,6 +136,20 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// newHTTPServer builds the http.Server the API is served through, with every
+// timeout that keeps an unauthenticated client from holding a connection open
+// indefinitely: ReadHeaderTimeout for the request line and headers,
+// ReadTimeout for the body, and WriteTimeout for the response.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+	}
+}
+
 type chartValuesRequest struct {
 	RepositoryKind string `json:"repositoryKind"`
 	Namespace      string `json:"namespace"`
@@ -124,8 +161,24 @@ type chartValuesRequest struct {
 func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 	logger := log.FromContext(r.Context())
 
+	// The bearer token is read from the header alone, so this check can run
+	// before the body is even looked at: an unauthenticated caller is rejected
+	// without the cost of reading or decoding whatever it sent.
+	token, ok := bearerToken(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or malformed Authorization header")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+
 	var req chartValuesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "request body exceeds the size limit")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "request body is not valid JSON")
 		return
 	}
@@ -156,7 +209,14 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !s.authorize(w, r, access, displayKind) {
+	if err := validateChartValuesFields(req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	// The access review itself needs the resource derived above, so it cannot run
+	// any earlier than this.
+	if !s.authorize(w, r, token, access, displayKind) {
 		return
 	}
 
@@ -229,18 +289,62 @@ func accessFor(kind, namespace string) (access auth.Access, displayKind string, 
 	}
 }
 
-// authorize reviews the request's bearer token against access and reports whether
-// it may proceed. On any negative outcome it writes the response itself and returns
+// repositoryNameBounds returns the length bounds kind's own repository CRD
+// enforces on metadata.name, so a repositoryName that could never have been
+// created is rejected here instead of reaching the resolver and reading back as
+// repository_not_found. A zero bound means the CRD imposes none beyond a valid
+// object name: HelmClusterAddonRepository carries no name-length rule, while
+// HelmApplicationRepository and HelmClusterApplicationRepository both require
+// between 3 and 63 characters.
+func repositoryNameBounds(kind string) (minLen, maxLen int) {
+	switch strings.ToLower(kind) {
+	case string(resolver.RepositoryKindHelmApplication), string(resolver.RepositoryKindHelmClusterApplication):
+		return 3, 63
+	default:
+		return 0, 0
+	}
+}
+
+// validateChartValuesFields checks repositoryName, chart and version beyond the
+// mere non-emptiness already checked by the caller.
+func validateChartValuesFields(req chartValuesRequest) error {
+	if errs := validation.IsDNS1123Subdomain(req.RepositoryName); len(errs) > 0 {
+		return fmt.Errorf("repositoryName must be a valid object name: %s", strings.Join(errs, "; "))
+	}
+	minLen, maxLen := repositoryNameBounds(req.RepositoryKind)
+	if minLen > 0 && len(req.RepositoryName) < minLen {
+		return fmt.Errorf("repositoryName must be at least %d characters long", minLen)
+	}
+	if maxLen > 0 && len(req.RepositoryName) > maxLen {
+		return fmt.Errorf("repositoryName must be at most %d characters long", maxLen)
+	}
+
+	// chart and version carry no naming grammar of their own — a repository index
+	// entry may legally contain a space, and an OCI tag is not semver — so only a
+	// whitespace-only value and a generous length bound are rejected.
+	if strings.TrimSpace(req.Chart) == "" {
+		return errors.New("chart must not be blank")
+	}
+	if len(req.Chart) > maxChartLen {
+		return fmt.Errorf("chart must be at most %d characters long", maxChartLen)
+	}
+
+	if strings.TrimSpace(req.Version) == "" {
+		return errors.New("version must not be blank")
+	}
+	if len(req.Version) > maxVersionLen {
+		return fmt.Errorf("version must be at most %d characters long", maxVersionLen)
+	}
+
+	return nil
+}
+
+// authorize reviews token against access and reports whether the request may
+// proceed. On any negative outcome it writes the response itself and returns
 // false. displayKind names the Kubernetes kind access.Resource stands for, for the
 // FORBIDDEN message.
-func (s *Server) authorize(w http.ResponseWriter, r *http.Request, access auth.Access, displayKind string) bool {
+func (s *Server) authorize(w http.ResponseWriter, r *http.Request, token string, access auth.Access, displayKind string) bool {
 	logger := log.FromContext(r.Context())
-
-	token, ok := bearerToken(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or malformed Authorization header")
-		return false
-	}
 
 	result, err := s.reviewer.Review(r.Context(), token, access)
 	if err != nil {
