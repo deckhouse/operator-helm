@@ -77,7 +77,7 @@ func (r *HelmClusterAddon) MaintenanceModeEnabled() bool {
 }
 
 func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
-	conditionTypes := []string{"Ready"}
+	conditionTypes := []string{ConditionTypeReady}
 
 	if r.Status.LastAppliedChart == nil || !apimeta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue) {
 		return append(conditionTypes, ConditionTypeInstalled)
@@ -104,7 +104,7 @@ func (r *HelmClusterAddon) ConfigurationApplyInProgress() bool {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Reason == "Reconciling"
+	return cond.Status == metav1.ConditionUnknown && cond.Reason == ReasonReconciling
 }
 
 func (r *HelmClusterAddon) UpdateInstallInProgress() bool {
@@ -113,7 +113,7 @@ func (r *HelmClusterAddon) UpdateInstallInProgress() bool {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Reason == "Reconciling"
+	return cond.Status == metav1.ConditionUnknown && cond.Reason == ReasonReconciling
 }
 
 func (r *HelmClusterAddon) IsChartStatusInfoOutdated() bool {
