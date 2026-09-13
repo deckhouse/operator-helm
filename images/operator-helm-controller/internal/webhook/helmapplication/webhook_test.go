@@ -56,7 +56,7 @@ func newValidator(t *testing.T, interceptors interceptor.Funcs, objects ...clien
 		WithInterceptorFuncs(interceptors).
 		Build()
 
-	return &HelmApplicationWebhookValidator{Client: c}
+	return &HelmApplicationWebhookValidator{Reader: c}
 }
 
 func namespaceFixture(name string, terminating bool) *corev1.Namespace {

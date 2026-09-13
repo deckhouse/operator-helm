@@ -346,7 +346,7 @@ func newFullReconciler(
 		Release:      services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
 		Maintenance:  services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
 		Claim:        services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
-		Namespaces:   services.NewNamespaceService(c),
+		Namespaces:   services.NewNamespaceService(c, c),
 		Access:       source.NoAccess{},
 		Status:       status.NewManager(c),
 	}), c

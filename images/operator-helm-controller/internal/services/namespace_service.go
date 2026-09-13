@@ -36,17 +36,21 @@ var _ source.TargetNamespaceEnsurer = (*NamespaceService)(nil)
 // controller wires it in; other families deploy into a namespace that must already
 // exist (their own).
 type NamespaceService struct {
+	// reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
+	// controller cache: nothing watches Namespaces, so a cached typed Get would start
+	// an informer the ClusterRole has no watch permission for.
+	reader client.Reader
 	client client.Client
 }
 
-func NewNamespaceService(c client.Client) *NamespaceService {
-	return &NamespaceService{client: c}
+func NewNamespaceService(c client.Client, reader client.Reader) *NamespaceService {
+	return &NamespaceService{client: c, reader: reader}
 }
 
 func (s *NamespaceService) EnsureTargetNamespace(ctx context.Context, rel source.Release) error {
 	ns := &corev1.Namespace{}
 
-	err := s.client.Get(ctx, client.ObjectKey{Name: rel.TargetNamespace()}, ns)
+	err := s.reader.Get(ctx, client.ObjectKey{Name: rel.TargetNamespace()}, ns)
 	if err == nil {
 		return nil
 	}

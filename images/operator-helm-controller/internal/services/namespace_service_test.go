@@ -33,7 +33,7 @@ import (
 func TestEnsureTargetNamespaceCreatesItOnceAndLeavesItAlone(t *testing.T) {
 	addon := testAddon()
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
-	service := NewNamespaceService(c)
+	service := NewNamespaceService(c, c)
 
 	if err := service.EnsureTargetNamespace(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
 		t.Fatalf("EnsureTargetNamespace returned %v", err)

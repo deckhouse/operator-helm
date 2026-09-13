@@ -38,14 +38,18 @@ import (
 
 func SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &helmv1alpha1.HelmApplication{}).
-		WithValidator(&HelmApplicationWebhookValidator{Client: mgr.GetClient()}).
+		WithValidator(&HelmApplicationWebhookValidator{Reader: mgr.GetAPIReader()}).
 		Complete()
 }
 
 var _ admission.Validator[*helmv1alpha1.HelmApplication] = (*HelmApplicationWebhookValidator)(nil)
 
 type HelmApplicationWebhookValidator struct {
-	Client client.Client
+	// Reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
+	// controller cache: nothing watches Namespaces, so a cached typed Get would start
+	// an informer the ClusterRole has no watch permission for, and this decision — is
+	// the namespace terminating — must not be made against stale data anyway.
+	Reader client.Reader
 }
 
 func (v *HelmApplicationWebhookValidator) ValidateCreate(_ context.Context, app *helmv1alpha1.HelmApplication) (admission.Warnings, error) {
@@ -80,7 +84,7 @@ func (v *HelmApplicationWebhookValidator) ValidateDelete(ctx context.Context, ap
 // must not turn into a way past it.
 func (v *HelmApplicationWebhookValidator) namespaceTerminating(ctx context.Context, name string) bool {
 	namespace := &corev1.Namespace{}
-	if err := v.Client.Get(ctx, client.ObjectKey{Name: name}, namespace); err != nil {
+	if err := v.Reader.Get(ctx, client.ObjectKey{Name: name}, namespace); err != nil {
 		return apierrors.IsNotFound(err)
 	}
 
