@@ -93,7 +93,7 @@ func (v *HelmApplicationWebhookValidator) namespaceTerminating(ctx context.Conte
 
 func validateNotSystemNamespace(app *helmv1alpha1.HelmApplication) error {
 	if utils.IsSystemNamespace(app.Namespace) {
-		return fmt.Errorf("helmapplication/%s cannot be created in system namespace %s", app.Name, app.Namespace)
+		return fmt.Errorf("helmapplication/%s may not live in system namespace %s", app.Name, app.Namespace)
 	}
 
 	return nil
