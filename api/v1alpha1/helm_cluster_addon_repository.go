@@ -32,7 +32,12 @@ const (
 // column prints how long ago its value was, and kubectl renders any instant more
 // than a second in the future as <invalid>. nextSyncTime is always in the future.
 //
-// This note is deliberately outside the doc comment below — controller-gen folds
+// The name length is guarded by a CEL rule rather than by the schema because
+// metadata.name has no schema of its own. The upper bound is not decorative: the
+// repository name is stored as the value of the "repository" label on the objects
+// of its chart catalog, and a label value cannot exceed 63 characters.
+//
+// These notes are deliberately outside the doc comment below — controller-gen folds
 // every non-marker line of that block into the resource's API description.
 
 // HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
@@ -41,6 +46,7 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:singular=helmclusteraddonrepository,scope=Cluster
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() >= 3 && self.metadata.name.size() <= 63",message="repository name must be between 3 and 63 characters long"
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the repository"
 // +kubebuilder:printcolumn:name="Synced",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status",description="Repository synchronization status"
 // +kubebuilder:printcolumn:name="Last Sync",type="date",JSONPath=".status.lastSuccessfulSyncTime",description="Time of the last successful catalog synchronization"
