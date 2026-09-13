@@ -1,0 +1,17 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "use" "rbac.deckhouse.io/aggregate-to-kubernetes-as" "user")) | nindent 2 }}
+  name: d8:use:capability:module:{{ .Chart.Name }}:user
+rules:
+# Repository credentials are stored in plaintext, so this is where reading a repository
+# starts: the level at which Deckhouse permits reading secrets, not at viewer.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmapplicationrepositories
+  - helmclusterapplicationrepositories
+  verbs:
+  - get
+  - list
+  - watch
