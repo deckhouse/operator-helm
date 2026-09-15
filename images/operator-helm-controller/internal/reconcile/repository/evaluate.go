@@ -23,6 +23,7 @@ import (
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/services"
@@ -129,6 +130,13 @@ func Evaluate(in Inputs) Decision {
 			// annotation. The stamp records that the request was acted on, not that it
 			// succeeded — the outcome is carried by Ready and Synced.
 			status.LastForceReconcileTime = &metav1.Time{Time: in.Now}
+		}
+
+		if fetchSucceeded {
+			// Written on every successful read, not only on a complete pass: it
+			// describes what the repository offers, and a pass left incomplete by a
+			// pending tag still read the full list of charts.
+			status.ChartCount = ptr.To(int32(in.Fetch.Charts))
 		}
 
 		if fetchSucceeded && !catalogFailed && in.Fetch.Pending == 0 {

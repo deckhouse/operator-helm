@@ -103,6 +103,13 @@ spec:
             type: object
           status:
             properties:
+              chartCount:
+                description: |-
+                  ChartCount is the number of charts the repository offered when it was last read
+                  successfully. It is absent until the first successful read, so a repository that
+                  has never been read is distinguishable from one that offers no charts.
+                format: int32
+                type: integer
               conditions:
                 description: |-
                   Conditions represent the latest available observations of the repository state.

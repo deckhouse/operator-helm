@@ -623,6 +623,47 @@ func TestEvaluateFullSyncAdvancesLastSuccessfulSyncTime(t *testing.T) {
 	}
 }
 
+// TestEvaluateChartCount pins what the field means: how many charts the repository
+// offered when it was last read successfully. A pointer, so that a repository never
+// read apart from one offering nothing is not reported as offering nothing, and a
+// failed read leaves the last known answer rather than replacing it with zero.
+func TestEvaluateChartCount(t *testing.T) {
+	never := Evaluate(Inputs{Generation: 1, Now: testNow})
+	if never.Status.ChartCount != nil {
+		t.Fatalf("chartCount is %v before any read, want nil", *never.Status.ChartCount)
+	}
+
+	read := Evaluate(Inputs{
+		Generation: 1, Now: testNow,
+		Attempted: true,
+		Fetch:     &services.FetchOutcome{Charts: 3},
+		Catalog:   &services.CatalogOutcome{},
+	})
+	if read.Status.ChartCount == nil || *read.Status.ChartCount != 3 {
+		t.Fatalf("chartCount is %v, want 3", read.Status.ChartCount)
+	}
+
+	empty := Evaluate(Inputs{
+		Generation: 1, Now: testNow,
+		Attempted: true,
+		Fetch:     &services.FetchOutcome{},
+		Catalog:   &services.CatalogOutcome{},
+	})
+	if empty.Status.ChartCount == nil || *empty.Status.ChartCount != 0 {
+		t.Fatalf("chartCount is %v for a repository offering nothing, want 0", empty.Status.ChartCount)
+	}
+
+	failed := Evaluate(Inputs{
+		Generation: 1, Now: testNow,
+		Current:   read.Status,
+		Attempted: true,
+		Fetch:     &services.FetchOutcome{Err: errors.New("connection refused"), Reason: helmv1alpha1.ReasonSyncFailed},
+	})
+	if failed.Status.ChartCount == nil || *failed.Status.ChartCount != 3 {
+		t.Fatalf("chartCount is %v after a failed read, want the last successful 3", failed.Status.ChartCount)
+	}
+}
+
 func assertAbnormal(t *testing.T, status helmv1alpha1.RepositoryStatus, conditionType, wantReason string) {
 	t.Helper()
 

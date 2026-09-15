@@ -797,6 +797,11 @@ func (in *RepositoryStatus) DeepCopyInto(out *RepositoryStatus) {
 		in, out := &in.LastForceReconcileTime, &out.LastForceReconcileTime
 		*out = (*in).DeepCopy()
 	}
+	if in.ChartCount != nil {
+		in, out := &in.ChartCount, &out.ChartCount
+		*out = new(int32)
+		**out = **in
+	}
 	return
 }
 

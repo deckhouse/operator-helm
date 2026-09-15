@@ -37,6 +37,10 @@ type FetchOutcome struct {
 	Reason   string
 	Message  string
 	Pending  int
+	// Charts is how many charts the repository listed. It is meaningful only when the
+	// read succeeded; a failed one leaves it zero, which is why the status field it
+	// feeds is only written on success.
+	Charts int
 }
 
 // CatalogOutcome is the result of writing the chart catalog into the cluster.

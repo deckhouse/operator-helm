@@ -116,7 +116,7 @@ func (s *RepoSyncService) fetchCharts(
 
 	charts, err := repoClient.FetchCharts(ctx, repo.URL(), buildRepoConfig(repo), opts)
 	if err == nil {
-		return charts, FetchOutcome{Pending: countPending(charts)}
+		return charts, FetchOutcome{Pending: countPending(charts), Charts: len(charts)}
 	}
 
 	if terminal, ok := repoclient.AsTerminal(err); ok {
