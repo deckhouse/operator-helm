@@ -31,7 +31,7 @@ func TestIsSystemNamespace(t *testing.T) {
 		{"kube-node-lease", true},
 		{"kube-public", true},
 		{"kube-anything", true},
-		{"default", true},
+		{"default", false},
 		{"d8-operator-helm", true},
 		{"d8-system", true},
 		{"team-a", false},
