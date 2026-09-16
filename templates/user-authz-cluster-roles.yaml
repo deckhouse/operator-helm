@@ -21,14 +21,17 @@ rules:
   - patch
   - update
   - watch
-# The chart catalog is written by the controller alone, so nobody gets more than a
-# read of it. Repository credentials (spec.auth.username and spec.auth.password) live
-# in the repository object itself, so the read granted above is also a read of every
-# repository password in reach of this level.
+# Both catalogs an application can pick a chart from, including the cluster-wide one
+# whose repository only ClusterAdmin may manage. A catalog is written by the
+# controller alone, so nobody gets more than a read of it. Repository credentials
+# (spec.auth.username and spec.auth.password) live in the repository object itself, so
+# the read granted above is also a read of every repository password in reach of this
+# level.
 - apiGroups:
   - helm.deckhouse.io
   resources:
   - helmapplicationcharts
+  - helmclusterapplicationcharts
   verbs:
   - get
   - list
@@ -58,13 +61,12 @@ rules:
   - patch
   - update
   - watch
-# Both chart catalogs are written by the controller alone, so nobody gets more
-# than a read of them.
+# The application catalogs are already readable from the level above; only the
+# addon one is left to add here.
 - apiGroups:
   - helm.deckhouse.io
   resources:
   - helmclusteraddoncharts
-  - helmclusterapplicationcharts
   verbs:
   - get
   - list
