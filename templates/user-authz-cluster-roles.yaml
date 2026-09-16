@@ -3,41 +3,30 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   annotations:
-    user-authz.deckhouse.io/access-level: User
-  name: d8:user-authz:{{ .Chart.Name }}:user
+    user-authz.deckhouse.io/access-level: Editor
+  name: d8:user-authz:{{ .Chart.Name }}:editor
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 rules:
 - apiGroups:
   - helm.deckhouse.io
   resources:
   - helmapplications
-  - helmapplicationcharts
-  - helmclusterapplicationcharts
   verbs:
+  - create
+  - delete
+  - deletecollection
   - get
   - list
+  - patch
+  - update
   - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  annotations:
-    user-authz.deckhouse.io/access-level: PrivilegedUser
-  name: d8:user-authz:{{ .Chart.Name }}:privileged-user
-  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
-rules:
-# Repository credentials (spec.auth.username/password) are stored in plaintext, so read
-# access to a repository is read access to its password; that is why it starts here,
-# at the level where Deckhouse permits reading secrets, rather than at User.
 - apiGroups:
   - helm.deckhouse.io
   resources:
   - helmapplicationrepositories
-  - helmclusterapplicationrepositories
+  - helmapplicationcharts
   verbs:
-  - get
   - list
-  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -47,35 +36,23 @@ metadata:
   name: d8:user-authz:{{ .Chart.Name }}:admin
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 rules:
-# Creating a HelmApplication or HelmApplicationRepository is namespace-admin equivalent
-# (see the controller's seeded Role), so write access starts at Admin, not Editor.
+# Levels accumulate upwards, so Admin already carries everything the Editor role
+# above grants. Only the difference belongs here.
 - apiGroups:
   - helm.deckhouse.io
   resources:
-  - helmapplications
   - helmapplicationrepositories
   verbs:
   - create
   - delete
   - deletecollection
+  - get
   - patch
   - update
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  annotations:
-    user-authz.deckhouse.io/access-level: ClusterEditor
-  name: d8:user-authz:{{ .Chart.Name }}:cluster-editor
-  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
-rules:
+  - watch
 - apiGroups:
   - helm.deckhouse.io
   resources:
-  - helmclusterapplicationrepositories
+  - helmapplicationcharts
   verbs:
-  - create
-  - delete
-  - deletecollection
-  - patch
-  - update
+  - get
