@@ -3,8 +3,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   annotations:
-    user-authz.deckhouse.io/access-level: Editor
-  name: d8:user-authz:{{ .Chart.Name }}:editor
+    user-authz.deckhouse.io/access-level: PrivilegedUser
+  name: d8:user-authz:{{ .Chart.Name }}:privileged-user
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 rules:
 - apiGroups:
@@ -20,12 +20,16 @@ rules:
   - patch
   - update
   - watch
+# Repository credentials (spec.auth.username and spec.auth.password) live in the
+# object itself, so reading a repository is reading its password. That is why this
+# starts at PrivilegedUser, the level from which Deckhouse permits reading Secrets.
 - apiGroups:
   - helm.deckhouse.io
   resources:
   - helmapplicationrepositories
   - helmapplicationcharts
   verbs:
+  - get
   - list
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -36,8 +40,8 @@ metadata:
   name: d8:user-authz:{{ .Chart.Name }}:admin
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 rules:
-# Levels accumulate upwards, so Admin already carries everything the Editor role
-# above grants. Only the difference belongs here.
+# Levels accumulate upwards, so Admin already carries everything the role above
+# grants, including reading both kinds. Only the difference belongs here.
 - apiGroups:
   - helm.deckhouse.io
   resources:
@@ -46,13 +50,6 @@ rules:
   - create
   - delete
   - deletecollection
-  - get
   - patch
   - update
   - watch
-- apiGroups:
-  - helm.deckhouse.io
-  resources:
-  - helmapplicationcharts
-  verbs:
-  - get
