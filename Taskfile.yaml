@@ -8,10 +8,10 @@ vars:
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
   golangciLintVersion: "v2.13.2"
 
-# Only the modules this repository authors are listed. images/kube-api-rewriter is a
-# separate upstream module vendored in for the build, and images/helm-controller and
-# images/source-controller carry nothing but their werf files, so none of them is
-# ours to lint, format or test here.
+# Only the modules this repository authors are listed, including tools/internalcrds.
+# images/kube-api-rewriter is a separate upstream module vendored in for the build, and
+# images/helm-controller and images/source-controller carry nothing but their werf
+# files, so none of them is ours to lint, format or test here.
 includes:
   api:
     taskfile: ./api/Taskfile.dist.yaml
@@ -28,6 +28,9 @@ includes:
   chart-values-controller:
     taskfile: ./images/chart-values-controller/Taskfile.dist.yaml
     dir: ./images/chart-values-controller
+  internalcrds:
+    taskfile: ./tools/internalcrds/Taskfile.dist.yaml
+    dir: ./tools/internalcrds
 
   deps:
     taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
@@ -128,7 +131,7 @@ tasks:
       - task: operator-helm-controller:test:unit
       - task: chart-values-controller:test:unit
       - task: e2e:test:unit
-      - cd tools/internalcrds && go test ./...
+      - task: internalcrds:test:unit
 
   test:e2e:setup:
     desc: "Setup environment for e2e tests."
@@ -194,6 +197,7 @@ tasks:
       - task: operator-helm-controller:format
       - task: chart-values-controller:format
       - task: e2e:format
+      - task: internalcrds:format
 
   lint:
     deps:
@@ -204,6 +208,7 @@ tasks:
       - task: operator-helm-controller:lint
       - task: chart-values-controller:lint
       - task: e2e:lint
+      - task: internalcrds:lint
       - task: lint:doc-ru
 
   lint:doc-ru:
