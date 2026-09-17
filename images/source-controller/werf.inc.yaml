@@ -1,4 +1,4 @@
-{{- $nelmSourceControllerTag := "v0.1.5" }}
+{{- $sourceControllerTag := "v1.9.5" }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
@@ -8,8 +8,8 @@ secrets:
   value: {{ .SOURCE_REPO }}
 shell:
   install:
-    - git clone --branch {{ $nelmSourceControllerTag }} --single-branch $(cat /run/secrets/SOURCE_REPO)/werf/nelm-source-controller.git /src/nelm-source-controller
-    - rm -rf /src/nelm-source-controller/.git
+    - git clone --branch {{ $sourceControllerTag }} --single-branch $(cat /run/secrets/SOURCE_REPO)/fluxcd/source-controller.git /src/source-controller
+    - rm -rf /src/source-controller/.git
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
 final: false
@@ -26,7 +26,7 @@ import:
   before: install
 shell:
   install:
-    - cd /src/nelm-source-controller
+    - cd /src/source-controller
     - |
       export GOOS=linux
       export GOARCH=amd64
@@ -38,7 +38,7 @@ image: {{ .ModuleNamePrefix }}{{ .ImageName }}
 fromImage: base/distroless
 import:
 - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
-  add: /src/nelm-source-controller/source-controller
+  add: /src/source-controller/source-controller
   to: /usr/bin/source-controller
   before: install
 imageSpec:
