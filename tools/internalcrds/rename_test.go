@@ -125,6 +125,33 @@ func TestRenameRewritesNestedReferences(t *testing.T) {
 	}
 }
 
+func TestRenameFailsOnMissingOrInvalidKind(t *testing.T) {
+	cases := map[string]map[string]any{
+		"missing":    {"plural": "helmreleases", "singular": "helmrelease"},
+		"non-string": {"kind": 1, "plural": "helmreleases", "singular": "helmrelease"},
+	}
+
+	for name, names := range cases {
+		doc := map[string]any{
+			"spec": map[string]any{
+				"group": "helm.toolkit.fluxcd.io",
+				"names": names,
+			},
+			"metadata": map[string]any{"name": "helmreleases.helm.toolkit.fluxcd.io"},
+		}
+
+		err := Rename(doc)
+		if err == nil {
+			t.Fatalf("%s: expected an error, got nil", name)
+		}
+
+		const want = "the document has no spec.names.kind"
+		if err.Error() != want {
+			t.Fatalf("%s: error = %q, want %q", name, err.Error(), want)
+		}
+	}
+}
+
 func TestRenameLeavesUnrelatedStringsAlone(t *testing.T) {
 	doc := map[string]any{
 		"spec": map[string]any{

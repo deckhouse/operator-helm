@@ -89,8 +89,7 @@ func TestMetadataRenamesKeepTheStoredSide(t *testing.T) {
 	wantAnnotations := map[string]string{
 		"reconcile.fluxcd.io/requestedAt": "reconcile." + internal + "/requestedAt",
 		"reconcile.fluxcd.io/forceAt":     "reconcile." + internal + "/forceAt",
-		// Unlike its siblings, this module never writes resetAt, so there is no
-		// stored value to preserve; it moves into the internal namespace too.
+		// resetAt moves into the internal namespace too; see the rule's comment for why.
 		"reconcile.fluxcd.io/resetAt": "reconcile." + internal + "/resetAt",
 	}
 	got := map[string]string{}

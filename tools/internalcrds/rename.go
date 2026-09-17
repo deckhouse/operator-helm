@@ -84,7 +84,10 @@ func Rename(doc map[string]any) error {
 		return errors.New("the document has no spec.names")
 	}
 
-	kind, _ := names["kind"].(string)
+	kind, ok := names["kind"].(string)
+	if !ok {
+		return errors.New("the document has no spec.names.kind")
+	}
 	names["kind"] = kindPrefix + kind
 	if listKind, ok := names["listKind"].(string); ok {
 		names["listKind"] = kindPrefix + listKind
@@ -117,10 +120,12 @@ func Rename(doc map[string]any) error {
 	return nil
 }
 
-// renameKindReferences walks the schemas and renames every value that names an
-// upstream kind. Those live in sourceRef and chartRef at several depths, as a
-// default, as an enum entry, or as an example, so the walk is over the whole
-// tree rather than a fixed list of paths.
+// renameKindReferences walks the schemas and renames upstream kind references
+// it finds: under a "kind" key in a map, and, with no key to scope the match,
+// any plain string list element equal to an upstream kind. Today the only
+// lists it reaches are the sourceRef and chartRef kind enums, so matching by
+// value alone is safe; a future field whose string entries happened to equal
+// an upstream kind's name would be renamed too.
 func renameKindReferences(node any) {
 	switch typed := node.(type) {
 	case map[string]any:

@@ -41,9 +41,10 @@ import (
 // noticing.
 const forbiddenGroup = "toolkit.fluxcd.io"
 
-// allowedAnnotation is the sole legitimate survivor of forbiddenGroup: a
-// kustomize substitution annotation key upstream declares as an example, not
-// an identity this module renames.
+// allowedAnnotation is the sole legitimate survivor of forbiddenGroup: a real
+// annotation upstream carries on every one of these definitions, instructing a
+// real flux kustomize-controller to leave the definition alone. It addresses
+// that controller, not this module, so it is deliberately left unrenamed.
 const allowedAnnotation = "kustomize.toolkit.fluxcd.io/substitute"
 
 func main() {
