@@ -18,6 +18,7 @@ package operatornelm
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	"sigs.k8s.io/yaml"
@@ -30,4 +31,50 @@ func TestOperatorNelmRulesToYAML(t *testing.T) {
 	}
 
 	fmt.Printf("%s\n", string(b))
+}
+
+func TestRulesMapUpstreamGroups(t *testing.T) {
+	source, ok := OperatorNelmAPIGroupsRules["source.toolkit.fluxcd.io"]
+	if !ok {
+		t.Fatal("the upstream source group has no rule")
+	}
+	if source.GroupRule.Renamed != "source.internal.operator-helm.deckhouse.io" {
+		t.Fatalf("source group renamed to %q", source.GroupRule.Renamed)
+	}
+
+	helm, ok := OperatorNelmAPIGroupsRules["helm.toolkit.fluxcd.io"]
+	if !ok {
+		t.Fatal("the upstream helm group has no rule")
+	}
+	if helm.GroupRule.Renamed != "helm.internal.operator-helm.deckhouse.io" {
+		t.Fatalf("helm group renamed to %q", helm.GroupRule.Renamed)
+	}
+
+	if _, ok := OperatorNelmAPIGroupsRules["source.werf.io"]; ok {
+		t.Fatal("the fork group is still mapped")
+	}
+	if _, ok := OperatorNelmAPIGroupsRules["helm.werf.io"]; ok {
+		t.Fatal("the fork group is still mapped")
+	}
+}
+
+// TestRulesServeOneVersionPerKind pins what upstream actually serves at the
+// pinned tags: the beta versions are gone, and declaring one the api server does
+// not know makes discovery answer for a version nothing can serve.
+func TestRulesServeOneVersionPerKind(t *testing.T) {
+	source := OperatorNelmAPIGroupsRules["source.toolkit.fluxcd.io"]
+	if !reflect.DeepEqual(source.GroupRule.Versions, []string{"v1"}) {
+		t.Fatalf("source versions = %v, want [v1]", source.GroupRule.Versions)
+	}
+
+	for name, rule := range source.ResourceRules {
+		if !reflect.DeepEqual(rule.Versions, []string{"v1"}) {
+			t.Fatalf("%s versions = %v, want [v1]", name, rule.Versions)
+		}
+	}
+
+	helm := OperatorNelmAPIGroupsRules["helm.toolkit.fluxcd.io"]
+	if !reflect.DeepEqual(helm.GroupRule.Versions, []string{"v2"}) {
+		t.Fatalf("helm versions = %v, want [v2]", helm.GroupRule.Versions)
+	}
 }

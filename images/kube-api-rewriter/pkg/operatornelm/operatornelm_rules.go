@@ -68,10 +68,10 @@ var OperatorNelmRewriteRules = &RewriteRules{
 }
 
 var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
-	"source.werf.io": {
+	"source.toolkit.fluxcd.io": {
 		GroupRule: GroupRule{
-			Group:            "source.werf.io",
-			Versions:         []string{"v1beta1", "v1beta2", "v1"},
+			Group:            "source.toolkit.fluxcd.io",
+			Versions:         []string{"v1"},
 			PreferredVersion: "v1",
 			Renamed:          "source." + internalPrefix,
 		},
@@ -81,7 +81,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "BucketList",
 				Plural:           "buckets",
 				Singular:         "bucket",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
 				ShortNames:       []string{},
@@ -101,7 +101,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "GitRepositoryList",
 				Plural:           "gitrepositories",
 				Singular:         "gitrepository",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
 				ShortNames:       []string{"gitrepo"},
@@ -111,7 +111,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "HelmChartList",
 				Plural:           "helmcharts",
 				Singular:         "helmchart",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
 				ShortNames:       []string{"hc"},
@@ -121,7 +121,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "HelmRepositoryList",
 				Plural:           "helmrepositories",
 				Singular:         "helmrepository",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
 				ShortNames:       []string{"helmrepo"},
@@ -131,17 +131,17 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "OCIRepositoryList",
 				Plural:           "ocirepositories",
 				Singular:         "ocirepository",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
 				ShortNames:       []string{"ocirepo"},
 			},
 		},
 	},
-	"helm.werf.io": {
+	"helm.toolkit.fluxcd.io": {
 		GroupRule: GroupRule{
-			Group:            "helm.werf.io",
-			Versions:         []string{"v2beta1", "v2beta2", "v2"},
+			Group:            "helm.toolkit.fluxcd.io",
+			Versions:         []string{"v2"},
 			PreferredVersion: "v2",
 			Renamed:          "helm." + internalPrefix,
 		},
@@ -151,7 +151,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "HelmReleaseList",
 				Plural:           "helmreleases",
 				Singular:         "helmrelease",
-				Versions:         []string{"v2beta1", "v2beta2", "v2"},
+				Versions:         []string{"v2"},
 				PreferredVersion: "v2",
 				Categories:       []string{},
 				ShortNames:       []string{"hr"},
