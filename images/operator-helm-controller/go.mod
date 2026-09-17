@@ -16,7 +16,6 @@ require (
 	github.com/samber/lo v1.53.0
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/sync v0.21.0
-	helm.sh/helm/v3 v3.20.2
 	helm.sh/helm/v4 v4.2.2
 	k8s.io/api v0.36.4
 	k8s.io/apimachinery v0.36.4
