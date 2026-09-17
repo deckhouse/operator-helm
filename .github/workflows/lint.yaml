@@ -46,6 +46,9 @@ jobs:
       - name: Verify the generated files are committed
         run: task --yes ci:generate:api
 
+      - name: Verify the internal definitions are committed
+        run: task --yes ci:generate:internal-crds
+
   lint:
     runs-on: [self-hosted, large]
     name: Lint

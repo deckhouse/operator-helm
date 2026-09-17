@@ -59,6 +59,33 @@ tasks:
     cmds:
       - task: api:ci:generate
 
+  generate:internal-crds:
+    desc: "Regenerate the internal CustomResourceDefinitions from upstream flux."
+    vars:
+      helmControllerTag: v1.6.4
+      sourceControllerTag: v1.9.5
+    cmds:
+      - |
+        set -eu
+        work=$(mktemp -d)
+        trap 'rm -rf "$work"' EXIT
+        git clone --quiet --depth 1 --branch {{.helmControllerTag}} \
+          https://github.com/fluxcd/helm-controller "$work/helm-controller"
+        git clone --quiet --depth 1 --branch {{.sourceControllerTag}} \
+          https://github.com/fluxcd/source-controller "$work/source-controller"
+        cd tools/internalcrds
+        go run . -out ../../crds/embedded/helm-controller.yaml \
+          "$work/helm-controller/config/crd/bases"
+        go run . -out ../../crds/embedded/source-controller.yaml \
+          "$work/source-controller/config/crd/bases"
+
+  ci:generate:internal-crds:
+    desc: "Regenerate the internal CustomResourceDefinitions and verify they are committed."
+    cmds:
+      - task: generate:internal-crds
+      - |
+        git diff --exit-code crds/embedded || (echo "Please run task generate:internal-crds and commit changes" && exit 1)
+
   # The shared deps task installs golangci-lint through the upstream install.sh,
   # whose checksum lookup is an unanchored grep: releases now ship an SBOM entry
   # next to the archive, both lines match, and the verification fails for every
