@@ -89,9 +89,9 @@ func TestMetadataRenamesKeepTheStoredSide(t *testing.T) {
 	wantAnnotations := map[string]string{
 		"reconcile.fluxcd.io/requestedAt": "reconcile." + internal + "/requestedAt",
 		"reconcile.fluxcd.io/forceAt":     "reconcile." + internal + "/forceAt",
-		// The fork never had a rule renaming resetAt, so it already reaches
-		// clusters under the fork's own domain: keep that stored form.
-		"reconcile.fluxcd.io/resetAt": "reconcile.werf.io/resetAt",
+		// Unlike its siblings, this module never writes resetAt, so there is no
+		// stored value to preserve; it moves into the internal namespace too.
+		"reconcile.fluxcd.io/resetAt": "reconcile." + internal + "/resetAt",
 	}
 	got := map[string]string{}
 	for _, rule := range OperatorNelmRewriteRules.Annotations.Names {

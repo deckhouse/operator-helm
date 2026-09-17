@@ -43,10 +43,11 @@ var OperatorNelmRewriteRules = &RewriteRules{
 		Names: []MetadataReplaceRule{
 			{Original: "reconcile.fluxcd.io/requestedAt", Renamed: "reconcile." + internalPrefix + "/requestedAt"},
 			{Original: "reconcile.fluxcd.io/forceAt", Renamed: "reconcile." + internalPrefix + "/forceAt"},
-			// The fork never had a rule renaming resetAt, so it already reaches
-			// clusters unrewritten, under the fork's own domain: keep that
-			// stored form rather than moving it to the internal one now.
-			{Original: "reconcile.fluxcd.io/resetAt", Renamed: "reconcile.werf.io/resetAt"},
+			// Unlike its siblings, resetAt is never written by this module: no
+			// live object carries it, so there is nothing stored to preserve.
+			// It joins them in the internal namespace instead of freezing on
+			// the fork's domain.
+			{Original: "reconcile.fluxcd.io/resetAt", Renamed: "reconcile." + internalPrefix + "/resetAt"},
 		},
 		Prefixes: []MetadataReplaceRule{
 			{Original: "source.toolkit.fluxcd.io", Renamed: "source." + internalPrefix},
