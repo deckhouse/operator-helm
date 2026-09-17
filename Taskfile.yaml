@@ -10,7 +10,7 @@ vars:
 
 # Only the modules this repository authors are listed. images/kube-api-rewriter is a
 # separate upstream module vendored in for the build, and images/helm-controller and
-# images/nelm-source-controller carry nothing but their werf files, so none of them is
+# images/source-controller carry nothing but their werf files, so none of them is
 # ours to lint, format or test here.
 includes:
   api:

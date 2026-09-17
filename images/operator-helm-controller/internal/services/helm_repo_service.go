@@ -123,7 +123,7 @@ func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, names source
 // CleanupHelmRepository removes the auth/TLS secrets (which have no finalizers
 // and disappear immediately) and issues a delete for the internal HelmRepository,
 // returning it while it is still present so the caller can inspect its conditions
-// and wait for nelm-source-controller to finish removing it. It returns nil once
+// and wait for source-controller to finish removing it. It returns nil once
 // the HelmRepository is gone.
 func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, names source.InternalNames) (*sourcev1.HelmRepository, error) {
 	for _, name := range []string{names.AuthSecret, names.TLSSecret} {

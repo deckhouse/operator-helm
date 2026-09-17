@@ -30,11 +30,11 @@ controllers:
     logFilters:
       exclude: []
       excludeRegexp: []
-  - name: "nelm-source-controller"
+  - name: "source-controller"
     namespace: "d8-operator-helm"
-    labelSelector: "app=nelm-source-controller"
+    labelSelector: "app=source-controller"
     containers:
-      - "nelm-source-controller"
+      - "source-controller"
     logFilters:
       exclude: []
       excludeRegexp:

@@ -2,9 +2,9 @@
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ .Chart.Name }}-nelm-source-controller
+  name: {{ .Chart.Name }}-source-controller
   namespace: d8-monitoring
-  {{- include "helm_lib_module_labels" (list . (dict "app" "nelm-source-controller" "prometheus" "main")) | nindent 2 }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "source-controller" "prometheus" "main")) | nindent 2 }}
 spec:
   endpoints:
   - bearerTokenSecret:
@@ -20,4 +20,4 @@ spec:
     - d8-{{ .Chart.Name }}
   selector:
     matchLabels:
-      app: "nelm-source-controller"
+      app: "source-controller"

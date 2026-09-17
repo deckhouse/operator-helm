@@ -448,7 +448,7 @@ func reconcileApplication(t *testing.T, r *Reconciler, app *helmv1alpha1.HelmApp
 	}
 }
 
-// markInternalChartReady stands in for nelm-source-controller: the internal
+// markInternalChartReady stands in for source-controller: the internal
 // HelmChart only reports an artifact once that controller has pulled it, and the
 // release stage is reached only when it has.
 func markInternalChartReady(t *testing.T, c client.Client, name string) {

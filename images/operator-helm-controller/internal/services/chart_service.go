@@ -123,7 +123,7 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, 
 
 // CleanupHelmChart issues a delete for the internal HelmChart and returns it
 // while it is still present, so the caller can inspect its conditions and wait
-// for nelm-source-controller to finish removing it. It returns nil once the
+// for source-controller to finish removing it. It returns nil once the
 // HelmChart is gone.
 func (s *ChartService) CleanupHelmChart(ctx context.Context, names source.ReleaseNames) (*sourcev1.HelmChart, error) {
 	nn := types.NamespacedName{Name: names.HelmChart, Namespace: s.TargetNamespace}
