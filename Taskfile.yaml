@@ -61,17 +61,16 @@ tasks:
 
   generate:internal-crds:
     desc: "Regenerate the internal CustomResourceDefinitions from upstream flux."
-    vars:
-      helmControllerTag: v1.6.4
-      sourceControllerTag: v1.9.5
     cmds:
       - |
         set -eu
+        helmControllerTag=$(sed -n 's/^ *helm-controller: *//p' build/components/versions.yml)
+        sourceControllerTag=$(sed -n 's/^ *source-controller: *//p' build/components/versions.yml)
         work=$(mktemp -d)
         trap 'rm -rf "$work"' EXIT
-        git clone --quiet --depth 1 --branch {{.helmControllerTag}} \
+        git clone --quiet --depth 1 --branch "$helmControllerTag" \
           https://github.com/fluxcd/helm-controller "$work/helm-controller"
-        git clone --quiet --depth 1 --branch {{.sourceControllerTag}} \
+        git clone --quiet --depth 1 --branch "$sourceControllerTag" \
           https://github.com/fluxcd/source-controller "$work/source-controller"
         cd tools/internalcrds
         go run . -out ../../crds/embedded/helm-controller.yaml \
@@ -79,9 +78,29 @@ tasks:
         go run . -out ../../crds/embedded/source-controller.yaml \
           "$work/source-controller/config/crd/bases"
 
+  check-flux-tags:
+    desc: "Verify the upstream flux tags pinned in werf.inc.yaml match build/components/versions.yml."
+    cmds:
+      - |
+        set -eu
+        helmControllerTag=$(sed -n 's/^ *helm-controller: *//p' build/components/versions.yml)
+        sourceControllerTag=$(sed -n 's/^ *source-controller: *//p' build/components/versions.yml)
+        helmWerfTag=$(sed -n 's/.*\$helmControllerTag := "\(.*\)".*/\1/p' images/helm-controller/werf.inc.yaml)
+        sourceWerfTag=$(sed -n 's/.*\$sourceControllerTag := "\(.*\)".*/\1/p' images/source-controller/werf.inc.yaml)
+        if [ "$helmControllerTag" != "$helmWerfTag" ]; then
+          echo "images/helm-controller/werf.inc.yaml pins helm-controller $helmWerfTag but build/components/versions.yml pins $helmControllerTag" >&2
+          exit 1
+        fi
+        if [ "$sourceControllerTag" != "$sourceWerfTag" ]; then
+          echo "images/source-controller/werf.inc.yaml pins source-controller $sourceWerfTag but build/components/versions.yml pins $sourceControllerTag" >&2
+          exit 1
+        fi
+    silent: true
+
   ci:generate:internal-crds:
     desc: "Regenerate the internal CustomResourceDefinitions and verify they are committed."
     cmds:
+      - task: check-flux-tags
       - task: generate:internal-crds
       - |
         git diff --exit-code crds/embedded || (echo "Please run task generate:internal-crds and commit changes" && exit 1)
