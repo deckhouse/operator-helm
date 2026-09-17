@@ -20,8 +20,8 @@ import (
 	"flag"
 	"os"
 
-	helmv2 "github.com/werf/3p-helm-controller/api/v2"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/runtime"

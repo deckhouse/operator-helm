@@ -22,9 +22,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fluxcd/pkg/chartutil"
 	"github.com/opencontainers/go-digest"
-	"github.com/werf/3p-fluxcd-pkg/chartutil"
 	helmchartutil "helm.sh/helm/v3/pkg/chartutil"
+	helmcommon "helm.sh/helm/v4/pkg/chart/common"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -664,7 +665,9 @@ func setStatusAttrs(
 			}
 
 			values, _ := helmchartutil.ReadValues(rawValues)
-			if latestRelease.Status == "deployed" && latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, values).String() {
+			// helm v3's chartutil.Values and helm v4's chart/common.Values are both
+			// map[string]any under the hood, so the conversion is safe.
+			if latestRelease.Status == "deployed" && latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, helmcommon.Values(values)).String() {
 				if rel.Values() == nil {
 					rel.SetLastAppliedValues(nil)
 				} else {
