@@ -27,37 +27,35 @@ const (
 var OperatorNelmRewriteRules = &RewriteRules{
 	KindPrefix:         "InternalNelmOperator",
 	ResourceTypePrefix: "internalnelmoperator",
-	ShortNamePrefix:    "intnelm",
-	Categories:         []string{"intnelm"},
 	Rules:              OperatorNelmAPIGroupsRules,
 	Webhooks:           OperatorNelmWebhooks,
 	Labels: MetadataReplace{
 		Names: []MetadataReplaceRule{
-			{Original: "source.werf.io", Renamed: "source." + internalPrefix},
-			{Original: "helm.werf.io", Renamed: "helm." + internalPrefix},
+			{Original: "source.toolkit.fluxcd.io", Renamed: "source." + internalPrefix},
+			{Original: "helm.toolkit.fluxcd.io", Renamed: "helm." + internalPrefix},
 		},
 		Prefixes: []MetadataReplaceRule{
-			{Original: "source.werf.io", Renamed: "source." + internalPrefix},
-			{Original: "helm.werf.io", Renamed: "helm." + internalPrefix},
+			{Original: "source.toolkit.fluxcd.io", Renamed: "source." + internalPrefix},
+			{Original: "helm.toolkit.fluxcd.io", Renamed: "helm." + internalPrefix},
 		},
 	},
-	//reconcile.internal.operator-helm.deckhouse.io/forceAt
 	Annotations: MetadataReplace{
 		Names: []MetadataReplaceRule{
-			{Original: "reconcile.werf.io/forceAt", Renamed: "reconcile." + internalPrefix + "/forceAt"},
-			{Original: "reconcile.werf.io/requestedAt", Renamed: "reconcile." + internalPrefix + "/requestedAt"},
+			{Original: "reconcile.fluxcd.io/requestedAt", Renamed: "reconcile." + internalPrefix + "/requestedAt"},
+			{Original: "reconcile.fluxcd.io/forceAt", Renamed: "reconcile." + internalPrefix + "/forceAt"},
+			// The fork never had a rule renaming resetAt, so it already reaches
+			// clusters unrewritten, under the fork's own domain: keep that
+			// stored form rather than moving it to the internal one now.
+			{Original: "reconcile.fluxcd.io/resetAt", Renamed: "reconcile.werf.io/resetAt"},
 		},
 		Prefixes: []MetadataReplaceRule{
-			{Original: "source.werf.io", Renamed: "source." + internalPrefix},
-			{Original: "helm.werf.io", Renamed: "helm." + internalPrefix},
+			{Original: "source.toolkit.fluxcd.io", Renamed: "source." + internalPrefix},
+			{Original: "helm.toolkit.fluxcd.io", Renamed: "helm." + internalPrefix},
 		},
 	},
 	Finalizers: MetadataReplace{
 		Names: []MetadataReplaceRule{
-			{Original: "finalizers.werf.io", Renamed: "finalizers." + internalPrefix},
-		},
-		Prefixes: []MetadataReplaceRule{
-			{Original: "werf.io", Renamed: "werf." + internalPrefix},
+			{Original: "finalizers.fluxcd.io", Renamed: "finalizers." + internalPrefix},
 		},
 	},
 	Excludes: []ExcludeRule{},
@@ -104,7 +102,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
-				ShortNames:       []string{"gitrepo"},
+				ShortNames:       []string{},
 			},
 			"helmcharts": {
 				Kind:             "HelmChart",
@@ -114,7 +112,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
-				ShortNames:       []string{"hc"},
+				ShortNames:       []string{},
 			},
 			"helmrepositories": {
 				Kind:             "HelmRepository",
@@ -124,7 +122,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
-				ShortNames:       []string{"helmrepo"},
+				ShortNames:       []string{},
 			},
 			"ocirepositories": {
 				Kind:             "OCIRepository",
@@ -134,7 +132,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
-				ShortNames:       []string{"ocirepo"},
+				ShortNames:       []string{},
 			},
 		},
 	},
@@ -154,7 +152,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				Versions:         []string{"v2"},
 				PreferredVersion: "v2",
 				Categories:       []string{},
-				ShortNames:       []string{"hr"},
+				ShortNames:       []string{},
 			},
 		},
 	},
