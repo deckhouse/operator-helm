@@ -90,6 +90,12 @@ tasks:
         sourceControllerTag=$(sed -n 's/^ *source-controller: *//p' build/components/versions.yml)
         helmWerfTag=$(sed -n 's/.*\$helmControllerTag := "\(.*\)".*/\1/p' images/helm-controller/werf.inc.yaml)
         sourceWerfTag=$(sed -n 's/.*\$sourceControllerTag := "\(.*\)".*/\1/p' images/source-controller/werf.inc.yaml)
+        for pin in "$helmControllerTag" "$sourceControllerTag" "$helmWerfTag" "$sourceWerfTag"; do
+          if [ -z "$pin" ]; then
+            echo "a version pin came out empty: build/components/versions.yml has '$helmControllerTag' and '$sourceControllerTag', the werf files have '$helmWerfTag' and '$sourceWerfTag'" >&2
+            exit 1
+          fi
+        done
         if [ "$helmControllerTag" != "$helmWerfTag" ]; then
           echo "images/helm-controller/werf.inc.yaml pins helm-controller $helmWerfTag but build/components/versions.yml pins $helmControllerTag" >&2
           exit 1

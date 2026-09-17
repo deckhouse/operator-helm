@@ -125,17 +125,21 @@ func TestRenameRewritesNestedReferences(t *testing.T) {
 	}
 }
 
-func TestRenameFailsOnMissingOrInvalidKind(t *testing.T) {
-	cases := map[string]map[string]any{
-		"missing":    {"plural": "helmreleases", "singular": "helmrelease"},
-		"non-string": {"kind": 1, "plural": "helmreleases", "singular": "helmrelease"},
+func TestRenameFailsOnMissingNames(t *testing.T) {
+	cases := map[string]struct {
+		names map[string]any
+		want  string
+	}{
+		"kind missing":      {map[string]any{"plural": "helmreleases", "singular": "helmrelease"}, "the document has no spec.names.kind"},
+		"kind not a string": {map[string]any{"kind": 1, "plural": "helmreleases", "singular": "helmrelease"}, "the document has no spec.names.kind"},
+		"plural missing":    {map[string]any{"kind": "HelmRelease", "singular": "helmrelease"}, "the document has no spec.names.plural"},
 	}
 
-	for name, names := range cases {
+	for name, tc := range cases {
 		doc := map[string]any{
 			"spec": map[string]any{
 				"group": "helm.toolkit.fluxcd.io",
-				"names": names,
+				"names": tc.names,
 			},
 			"metadata": map[string]any{"name": "helmreleases.helm.toolkit.fluxcd.io"},
 		}
@@ -145,9 +149,8 @@ func TestRenameFailsOnMissingOrInvalidKind(t *testing.T) {
 			t.Fatalf("%s: expected an error, got nil", name)
 		}
 
-		const want = "the document has no spec.names.kind"
-		if err.Error() != want {
-			t.Fatalf("%s: error = %q, want %q", name, err.Error(), want)
+		if err.Error() != tc.want {
+			t.Fatalf("%s: error = %q, want %q", name, err.Error(), tc.want)
 		}
 	}
 }

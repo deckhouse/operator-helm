@@ -93,7 +93,10 @@ func Rename(doc map[string]any) error {
 		names["listKind"] = kindPrefix + listKind
 	}
 
-	plural, _ := names["plural"].(string)
+	plural, ok := names["plural"].(string)
+	if !ok {
+		return errors.New("the document has no spec.names.plural")
+	}
 	names["plural"] = strings.ToLower(kindPrefix) + plural
 	if singular, ok := names["singular"].(string); ok {
 		names["singular"] = strings.ToLower(kindPrefix) + singular
