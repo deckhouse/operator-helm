@@ -16,7 +16,40 @@ limitations under the License.
 
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestRunFailsOnUnknownKind(t *testing.T) {
+	dir := t.TempDir()
+	doc := `
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: artifactgenerators.source.toolkit.fluxcd.io
+spec:
+  group: source.toolkit.fluxcd.io
+  names:
+    kind: ArtifactGenerator
+    listKind: ArtifactGeneratorList
+    plural: artifactgenerators
+    singular: artifactgenerator
+`
+	if err := os.WriteFile(filepath.Join(dir, "artifactgenerators.yaml"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "out.yaml")
+	if err := run(out, []string{dir}); err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatal("run must not write the output file when a document declares an unknown kind")
+	}
+}
 
 func TestCheckNoLeftoverUpstreamFailsOnLeftoverGroup(t *testing.T) {
 	rendered := "spec:\n  group: source.toolkit.fluxcd.io\n"

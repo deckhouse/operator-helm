@@ -109,6 +109,7 @@ tasks:
       - task: operator-helm-controller:test:unit
       - task: chart-values-controller:test:unit
       - task: e2e:test:unit
+      - cd tools/internalcrds && go test ./...
 
   test:e2e:setup:
     desc: "Setup environment for e2e tests."
