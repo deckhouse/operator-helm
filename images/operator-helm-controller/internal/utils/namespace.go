@@ -20,18 +20,10 @@ import (
 	"strings"
 )
 
+// IsSystemNamespace reports whether a namespace belongs to the cluster or to
+// Deckhouse rather than to a user: every kube- namespace and every d8- one. The
+// default namespace is not among them — it is where a user without a namespace of
+// their own works, which is exactly who this family is for.
 func IsSystemNamespace(namespace string) bool {
-	systemNamespaces := []string{"kube-system", "kube-node-lease", "kube-public"}
-
-	for _, s := range systemNamespaces {
-		if namespace == s {
-			return true
-		}
-	}
-
-	if strings.HasPrefix(namespace, "d8-") {
-		return true
-	}
-
-	return false
+	return strings.HasPrefix(namespace, "kube-") || strings.HasPrefix(namespace, "d8-")
 }

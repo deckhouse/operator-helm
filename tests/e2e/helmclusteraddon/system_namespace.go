@@ -89,7 +89,7 @@ var _ = Describe("HelmClusterAddon system namespace restriction", Ordered, func(
 			ObjectMeta: metav1.ObjectMeta{
 				Name: repoName,
 			},
-			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+			Spec: apiv1alpha1.RepositorySpec{
 				URL:                repoURL,
 				InsecureSkipVerify: false,
 			},

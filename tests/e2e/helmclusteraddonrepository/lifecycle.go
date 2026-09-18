@@ -52,7 +52,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: repoName,
 				},
-				Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+				Spec: apiv1alpha1.RepositorySpec{
 					URL:                repoURL,
 					InsecureSkipVerify: false,
 				},
@@ -151,7 +151,7 @@ var _ = Describe("Create HelmClusterAddonRepository with invalid url", Ordered, 
 			ObjectMeta: metav1.ObjectMeta{
 				Name: repoName,
 			},
-			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+			Spec: apiv1alpha1.RepositorySpec{
 				URL: "invalid-url",
 			},
 		}
@@ -183,7 +183,7 @@ var _ = Describe("HelmClusterAddonRepository with an unreachable source", Ordere
 	It("should stall on a missing source and recover after the url is fixed", func() {
 		repo := &apiv1alpha1.HelmClusterAddonRepository{
 			ObjectMeta: metav1.ObjectMeta{Name: repoName},
-			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+			Spec: apiv1alpha1.RepositorySpec{
 				URL: "https://stefanprodan.github.io/podinfo-does-not-exist",
 			},
 		}

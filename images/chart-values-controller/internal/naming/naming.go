@@ -25,33 +25,57 @@ import (
 const (
 	resourcePrefix = "tmp"
 
-	// maxPartLen bounds each human-readable name part so the whole name stays
-	// within the 63-character DNS-1123 label limit:
+	// maxPartLen bounds each human-readable name part of a cluster-scoped name so
+	// the whole name stays within the 63-character DNS-1123 label limit:
 	// "tmp-" (4) + repo (<=20) + "-" + chart (<=20) + "-" + hash (16) = 62.
 	maxPartLen = 20
+
+	// maxNamespacedPartLen is the same bound for a namespaced name, which carries
+	// one part more: "tmp-" (4) + namespace (<=12) + "-" + repo (<=12) + "-" +
+	// chart (<=12) + "-" + hash (16) = 59, within the 63-character limit.
+	maxNamespacedPartLen = 12
 )
 
 // AuxResourceName returns a deterministic DNS-1123 name (<=63 chars) for the
-// auxiliary source resource backing a (kind, repository, chart, version) tuple:
-// "tmp-<repo>-<chart>-<hash>". The same tuple always maps to the same name,
-// which makes polling requests idempotent and lets concurrent requests converge
-// on one resource. The repo/chart parts are only human-readable hints; the hash
-// over the full tuple (including kind) guarantees uniqueness even if those parts
-// collide across repository kinds.
-func AuxResourceName(kind, repository, chart, version string) string {
-	sum := sha256.Sum256([]byte(kind + "\x00" + repository + "/" + chart + "@" + version))
+// auxiliary source resource backing a (kind, namespace, repository, chart, version)
+// tuple. The same tuple always maps to the same name, which makes polling requests
+// idempotent and lets concurrent requests converge on one resource.
+//
+// namespace is empty for a cluster-scoped repository kind and is then absent from
+// both the hash input and the readable part, so the names the addon family already
+// uses do not move. For a namespaced kind it is what keeps two same-named
+// repositories in different namespaces apart: the auxiliary objects of every kind
+// share one namespace, so the tuple without it is not unique. A namespaced name
+// carries one readable part more, so each of its parts is bounded more tightly.
+//
+// The readable parts are only hints; the hash over the full tuple guarantees
+// uniqueness even if they collide.
+func AuxResourceName(kind, namespace, repository, chart, version string) string {
+	if namespace == "" {
+		sum := sha256.Sum256([]byte(kind + "\x00" + repository + "/" + chart + "@" + version))
 
-	return fmt.Sprintf("%s-%s-%s-%x", resourcePrefix, sanitizePart(repository), sanitizePart(chart), sum[:8])
+		return fmt.Sprintf("%s-%s-%s-%x", resourcePrefix, sanitize(repository, maxPartLen), sanitize(chart, maxPartLen), sum[:8])
+	}
+
+	sum := sha256.Sum256([]byte(kind + "\x00" + namespace + "/" + repository + "/" + chart + "@" + version))
+
+	return fmt.Sprintf("%s-%s-%s-%s-%x",
+		resourcePrefix,
+		sanitize(namespace, maxNamespacedPartLen),
+		sanitize(repository, maxNamespacedPartLen),
+		sanitize(chart, maxNamespacedPartLen),
+		sum[:8],
+	)
 }
 
-// sanitizePart lowercases s, replaces characters invalid in a DNS-1123 label
-// with '-', truncates to maxPartLen, and trims leading/trailing '-'.
-func sanitizePart(s string) string {
+// sanitize lowercases s, replaces characters invalid in a DNS-1123 label
+// with '-', truncates to limit, and trims leading/trailing '-'.
+func sanitize(s string, limit int) string {
 	s = strings.ToLower(s)
 
 	var b strings.Builder
 	for _, r := range s {
-		if b.Len() >= maxPartLen {
+		if b.Len() >= limit {
 			break
 		}
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {

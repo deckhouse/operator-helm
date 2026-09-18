@@ -18,13 +18,17 @@ package utils
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -128,5 +132,154 @@ func TestMapChartToAddonsMissingLabels(t *testing.T) {
 
 	if requests := MapChartToAddons(c)(context.Background(), chart); len(requests) != 0 {
 		t.Fatalf("requests = %+v, want none for a chart with no labels", requests)
+	}
+}
+
+func TestMapNamespacedInternalResources(t *testing.T) {
+	const target = "d8-operator-helm"
+
+	mapper := MapNamespacedInternalResources(
+		"test-controller", target,
+		helmv1alpha1.LabelManagedBy, helmv1alpha1.LabelManagedByValue,
+		helmv1alpha1.HelmApplicationRepositoryLabelSourceName, helmv1alpha1.LabelSourceNamespace,
+	)
+
+	secret := func(namespace string, labels map[string]string) *corev1.Secret {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "internal", Namespace: namespace, Labels: labels}}
+	}
+
+	full := map[string]string{
+		helmv1alpha1.LabelManagedBy:                           helmv1alpha1.LabelManagedByValue,
+		helmv1alpha1.HelmApplicationRepositoryLabelSourceName: "stable",
+		helmv1alpha1.LabelSourceNamespace:                     "team-a",
+	}
+	withoutNamespace := map[string]string{
+		helmv1alpha1.LabelManagedBy:                           helmv1alpha1.LabelManagedByValue,
+		helmv1alpha1.HelmApplicationRepositoryLabelSourceName: "stable",
+	}
+	withoutName := map[string]string{
+		helmv1alpha1.LabelManagedBy:       helmv1alpha1.LabelManagedByValue,
+		helmv1alpha1.LabelSourceNamespace: "team-a",
+	}
+	foreign := map[string]string{
+		helmv1alpha1.LabelManagedBy:                           "someone-else",
+		helmv1alpha1.HelmApplicationRepositoryLabelSourceName: "stable",
+		helmv1alpha1.LabelSourceNamespace:                     "team-a",
+	}
+
+	cases := []struct {
+		name string
+		obj  client.Object
+		want []reconcile.Request
+	}{
+		{
+			name: "maps to the namespaced source",
+			obj:  secret(target, full),
+			want: []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: "team-a", Name: "stable"}}},
+		},
+		{name: "ignores objects outside the target namespace", obj: secret("team-a", full)},
+		{name: "ignores objects managed by someone else", obj: secret(target, foreign)},
+		{name: "skips an object without the source name", obj: secret(target, withoutName)},
+		{name: "skips an object without the source namespace", obj: secret(target, withoutNamespace)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mapper(context.Background(), tc.obj)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("requests = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func applicationMapperClient(t *testing.T, objects ...client.Object) client.Client {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	if err := helmv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering helm scheme: %v", err)
+	}
+
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationRepository, index.ApplicationRepositoryIndexer).
+		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationChart, index.ApplicationChartIndexer).
+		Build()
+}
+
+func application(namespace, name, repository, clusterRepository string) *helmv1alpha1.HelmApplication {
+	return &helmv1alpha1.HelmApplication{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: helmv1alpha1.HelmApplicationSpec{
+			Chart: helmv1alpha1.HelmApplicationChartRef{
+				Name: "podinfo", Repository: repository, ClusterRepository: clusterRepository, Version: "6.7.1",
+			},
+		},
+	}
+}
+
+func requestSet(reqs []reconcile.Request) map[types.NamespacedName]bool {
+	out := make(map[types.NamespacedName]bool, len(reqs))
+	for _, r := range reqs {
+		out[r.NamespacedName] = true
+	}
+
+	return out
+}
+
+// TestMapRepositoryToApplications pins that a namespaced repository enqueues only the
+// applications of its own namespace referencing it, and a cluster repository the
+// applications of every namespace referencing it by its field.
+func TestMapRepositoryToApplications(t *testing.T) {
+	c := applicationMapperClient(t,
+		application("team-a", "a1", "stable", ""),
+		application("team-b", "b1", "stable", ""),
+		application("team-b", "b2", "", "stable"),
+	)
+
+	namespaced := MapRepositoryToApplications(c, helmv1alpha1.HelmApplicationRepositoryKind)
+	got := namespaced(context.Background(), &helmv1alpha1.HelmApplicationRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a"},
+	})
+	want := map[types.NamespacedName]bool{{Namespace: "team-a", Name: "a1"}: true}
+	if !reflect.DeepEqual(requestSet(got), want) {
+		t.Fatalf("namespaced mapping = %v, want %v", got, want)
+	}
+
+	cluster := MapRepositoryToApplications(c, helmv1alpha1.HelmClusterApplicationRepositoryKind)
+	got = cluster(context.Background(), &helmv1alpha1.HelmClusterApplicationRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable"},
+	})
+	want = map[types.NamespacedName]bool{{Namespace: "team-b", Name: "b2"}: true}
+	if !reflect.DeepEqual(requestSet(got), want) {
+		t.Fatalf("cluster mapping = %v, want %v", got, want)
+	}
+}
+
+func TestMapChartToApplications(t *testing.T) {
+	c := applicationMapperClient(t,
+		application("team-a", "a1", "stable", ""),
+		application("team-a", "other", "stable", ""),
+		application("team-b", "b1", "stable", ""),
+	)
+	mapper := MapChartToApplications(c, helmv1alpha1.HelmApplicationRepositoryKind)
+
+	got := mapper(context.Background(), &helmv1alpha1.HelmApplicationChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "stable-chart-podinfo", Namespace: "team-a",
+			Labels: map[string]string{helmv1alpha1.LabelRepositoryName: "stable", helmv1alpha1.LabelChartName: "podinfo"},
+		},
+	})
+	want := map[types.NamespacedName]bool{{Namespace: "team-a", Name: "a1"}: true, {Namespace: "team-a", Name: "other"}: true}
+	if !reflect.DeepEqual(requestSet(got), want) {
+		t.Fatalf("chart mapping = %v, want %v", got, want)
+	}
+
+	if got := mapper(context.Background(), &helmv1alpha1.HelmApplicationChart{
+		ObjectMeta: metav1.ObjectMeta{Name: "unlabelled", Namespace: "team-a"},
+	}); got != nil {
+		t.Fatalf("a chart object without labels cannot be mapped, got %v", got)
 	}
 }

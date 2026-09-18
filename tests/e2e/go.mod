@@ -1,6 +1,6 @@
 module github.com/deckhouse/operator-helm/tests/e2e
 
-go 1.25.0
+go 1.26.3
 
 tool github.com/onsi/ginkgo/v2/ginkgo
 

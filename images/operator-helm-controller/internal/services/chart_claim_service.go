@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -37,6 +38,11 @@ import (
 // server's only atomic cross-object primitive — the uniqueness of an object name.
 // Each repository/chart pair maps to a single Lease name; whoever creates that
 // Lease first owns the pair, and every other addon reconciles into a conflict.
+//
+// It is addon-only in substance, not just by convention: the Lease name carries
+// neither the release kind nor a namespace, and the holder recorded on it is read
+// back as a HelmClusterAddon. Another family needing uniqueness would have to
+// bring its own implementation of source.ChartClaim rather than reuse this one.
 type ClaimService struct {
 	// reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
 	// controller cache: an acquisition decision must never be made against stale data.
@@ -44,6 +50,8 @@ type ClaimService struct {
 	client    client.Client
 	namespace string
 }
+
+var _ source.ChartClaim = (*ClaimService)(nil)
 
 func NewClaimService(c client.Client, reader client.Reader, namespace string) *ClaimService {
 	return &ClaimService{
@@ -56,19 +64,19 @@ func NewClaimService(c client.Client, reader client.Reader, namespace string) *C
 // Acquire ensures the addon owns the claim for its repository/chart pair. It
 // reports whether the claim is held by this addon; when it is not, holder names
 // the addon that currently owns it so the caller can surface a conflict.
-func (s *ClaimService) Acquire(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (acquired bool, holder string, err error) {
-	nn := s.leaseKey(addon)
+func (s *ClaimService) Acquire(ctx context.Context, rel source.Release) (acquired bool, holder string, err error) {
+	nn := s.leaseKey(rel)
 
 	lease := &coordinationv1.Lease{}
 	getErr := s.reader.Get(ctx, nn, lease)
 	switch {
 	case apierrors.IsNotFound(getErr):
-		created, createErr := s.create(ctx, nn, addon)
+		created, createErr := s.create(ctx, nn, rel)
 		if createErr != nil {
 			return false, "", createErr
 		}
 		if created {
-			return true, addon.Name, nil
+			return true, rel.Name(), nil
 		}
 		// Lost the create race against a concurrent reconcile; re-read the winning
 		// Lease authoritatively and fall through to the ownership check.
@@ -80,7 +88,7 @@ func (s *ClaimService) Acquire(ctx context.Context, addon *helmv1alpha1.HelmClus
 	}
 
 	holder = leaseHolder(lease)
-	if holder == addon.Name {
+	if holder == rel.Name() {
 		return true, holder, nil
 	}
 
@@ -95,22 +103,22 @@ func (s *ClaimService) Acquire(ctx context.Context, addon *helmv1alpha1.HelmClus
 	// The recorded holder is gone or no longer uses this chart; take the Lease over.
 	// The update is optimistic: if another addon takes it over first, our write is
 	// rejected with a conflict and we report the pair as claimed and requeue.
-	if err := s.takeOver(ctx, lease, addon); err != nil {
+	if err := s.takeOver(ctx, lease, rel); err != nil {
 		if apierrors.IsConflict(err) {
 			return false, holder, nil
 		}
 		return false, "", err
 	}
 
-	return true, addon.Name, nil
+	return true, rel.Name(), nil
 }
 
 // OwnedBy reports whether the addon currently holds the claim Lease for its
 // repository/chart pair. It reads through the direct reader for the same reason
 // Acquire does: an ownership decision must not be made against stale cache data.
-func (s *ClaimService) OwnedBy(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (bool, error) {
+func (s *ClaimService) OwnedBy(ctx context.Context, rel source.Release) (bool, error) {
 	lease := &coordinationv1.Lease{}
-	err := s.reader.Get(ctx, s.leaseKey(addon), lease)
+	err := s.reader.Get(ctx, s.leaseKey(rel), lease)
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
@@ -118,20 +126,20 @@ func (s *ClaimService) OwnedBy(ctx context.Context, addon *helmv1alpha1.HelmClus
 		return false, fmt.Errorf("getting chart claim lease: %w", err)
 	}
 
-	return leaseHolder(lease) == addon.Name, nil
+	return leaseHolder(lease) == rel.Name(), nil
 }
 
 // Release deletes the claim Lease, but only if this addon still owns it, so a
 // duplicate addon that never acquired the pair cannot free the real owner's claim.
-func (s *ClaimService) Release(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
-	nn := s.leaseKey(addon)
+func (s *ClaimService) Release(ctx context.Context, rel source.Release) error {
+	nn := s.leaseKey(rel)
 
 	lease := &coordinationv1.Lease{}
 	if err := s.reader.Get(ctx, nn, lease); err != nil {
 		return client.IgnoreNotFound(err)
 	}
 
-	if leaseHolder(lease) != addon.Name {
+	if leaseHolder(lease) != rel.Name() {
 		return nil
 	}
 
@@ -155,25 +163,22 @@ func (s *ClaimService) Release(ctx context.Context, addon *helmv1alpha1.HelmClus
 // orphans are found instead by the source-name label every claim already carries.
 // Only the addon's own claims (by HolderIdentity) other than the current one are
 // removed, so a pair taken over by another addon is left intact.
-func (s *ClaimService) ReleaseStale(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
-	current := s.leaseKey(addon).Name
+func (s *ClaimService) ReleaseStale(ctx context.Context, rel source.Release) error {
+	current := s.leaseKey(rel).Name
 
 	// Direct reader, not the cached client: claim Leases are not watched, so the
 	// informer cache has no data for them (same reason Acquire/Release use reader).
 	leases := &coordinationv1.LeaseList{}
 	if err := s.reader.List(ctx, leases,
 		client.InNamespace(s.namespace),
-		client.MatchingLabels{
-			helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
-			helmv1alpha1.HelmClusterAddonLabelSourceName: addon.Name,
-		},
+		client.MatchingLabels(rel.SourceLabels()),
 	); err != nil {
 		return fmt.Errorf("listing chart claim leases: %w", err)
 	}
 
 	for i := range leases.Items {
 		lease := &leases.Items[i]
-		if lease.Name == current || leaseHolder(lease) != addon.Name {
+		if lease.Name == current || leaseHolder(lease) != rel.Name() {
 			continue
 		}
 
@@ -191,13 +196,13 @@ func (s *ClaimService) ReleaseStale(ctx context.Context, addon *helmv1alpha1.Hel
 	return nil
 }
 
-func (s *ClaimService) create(ctx context.Context, nn types.NamespacedName, addon *helmv1alpha1.HelmClusterAddon) (created bool, err error) {
-	holder := addon.Name
+func (s *ClaimService) create(ctx context.Context, nn types.NamespacedName, rel source.Release) (created bool, err error) {
+	holder := rel.Name()
 	lease := &coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      nn.Name,
 			Namespace: nn.Namespace,
-			Labels:    claimLabels(addon),
+			Labels:    rel.SourceLabels(),
 		},
 		Spec: coordinationv1.LeaseSpec{
 			HolderIdentity: &holder,
@@ -215,14 +220,14 @@ func (s *ClaimService) create(ctx context.Context, nn types.NamespacedName, addo
 	return true, nil
 }
 
-func (s *ClaimService) takeOver(ctx context.Context, lease *coordinationv1.Lease, addon *helmv1alpha1.HelmClusterAddon) error {
-	holder := addon.Name
+func (s *ClaimService) takeOver(ctx context.Context, lease *coordinationv1.Lease, rel source.Release) error {
+	holder := rel.Name()
 	lease.Spec.HolderIdentity = &holder
 
 	if lease.Labels == nil {
 		lease.Labels = map[string]string{}
 	}
-	for k, v := range claimLabels(addon) {
+	for k, v := range rel.SourceLabels() {
 		lease.Labels[k] = v
 	}
 
@@ -253,9 +258,10 @@ func (s *ClaimService) isHolderStale(ctx context.Context, holder, leaseName stri
 	return holderLease != leaseName, nil
 }
 
-func (s *ClaimService) leaseKey(addon *helmv1alpha1.HelmClusterAddon) types.NamespacedName {
+func (s *ClaimService) leaseKey(rel source.Release) types.NamespacedName {
+	ref := rel.ChartRef()
 	return types.NamespacedName{
-		Name:      utils.GetChartClaimLeaseName(addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName),
+		Name:      utils.GetChartClaimLeaseName(ref.Repository.Name, ref.Chart),
 		Namespace: s.namespace,
 	}
 }
@@ -266,11 +272,4 @@ func leaseHolder(lease *coordinationv1.Lease) string {
 	}
 
 	return *lease.Spec.HolderIdentity
-}
-
-func claimLabels(addon *helmv1alpha1.HelmClusterAddon) map[string]string {
-	return map[string]string{
-		helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
-		helmv1alpha1.HelmClusterAddonLabelSourceName: addon.Name,
-	}
 }

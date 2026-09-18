@@ -1,4 +1,4 @@
-{{- $helmControllerTag := "v0.1.5" }}
+{{- $helmControllerTag := "v1.6.4" }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
@@ -8,8 +8,8 @@ secrets:
   value: {{ .SOURCE_REPO }}
 shell:
   install:
-    - git clone --branch {{ $helmControllerTag }} --single-branch $(cat /run/secrets/SOURCE_REPO)/werf/3p-helm-controller.git /src/3p-helm-controller
-    - rm -rf /src/3p-helm-controller/.git
+    - git clone --branch {{ $helmControllerTag }} --single-branch $(cat /run/secrets/SOURCE_REPO)/fluxcd/helm-controller.git /src/helm-controller
+    - rm -rf /src/helm-controller/.git
 ---
 
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
@@ -27,7 +27,7 @@ import:
   before: install
 shell:
   install:
-    - cd /src/3p-helm-controller
+    - cd /src/helm-controller
     - |
       export GOOS=linux
       export GOARCH=amd64
@@ -39,7 +39,7 @@ image: {{ .ModuleNamePrefix }}{{ .ImageName }}
 fromImage: base/distroless
 import:
 - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
-  add: /src/3p-helm-controller/helm-controller
+  add: /src/helm-controller/helm-controller
   to: /usr/bin/helm-controller
   before: install
 imageSpec:

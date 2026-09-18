@@ -30,9 +30,14 @@ const (
 var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: Version}
 
 var (
-	HelmClusterAddonGVK           = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
-	HelmClusterAddonRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonRepositoryKind}
-	HelmClusterAddonChartGVK      = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonChartKind}
+	HelmClusterAddonGVK                 = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonKind}
+	HelmClusterAddonRepositoryGVK       = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonRepositoryKind}
+	HelmClusterAddonChartGVK            = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonChartKind}
+	HelmApplicationRepositoryGVK        = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmApplicationRepositoryKind}
+	HelmClusterApplicationRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterApplicationRepositoryKind}
+	HelmApplicationChartGVK             = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmApplicationChartKind}
+	HelmClusterApplicationChartGVK      = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterApplicationChartKind}
+	HelmApplicationGVK                  = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmApplicationKind}
 )
 
 func Kind(kind string) schema.GroupKind {
@@ -60,6 +65,16 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&HelmClusterAddonRepositoryList{},
 		&HelmClusterAddonChart{},
 		&HelmClusterAddonChartList{},
+		&HelmApplicationRepository{},
+		&HelmApplicationRepositoryList{},
+		&HelmClusterApplicationRepository{},
+		&HelmClusterApplicationRepositoryList{},
+		&HelmApplicationChart{},
+		&HelmApplicationChartList{},
+		&HelmClusterApplicationChart{},
+		&HelmClusterApplicationChartList{},
+		&HelmApplication{},
+		&HelmApplicationList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

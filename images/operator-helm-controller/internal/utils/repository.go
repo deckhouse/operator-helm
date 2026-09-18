@@ -23,8 +23,9 @@ import (
 	"net/url"
 	"strings"
 
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/google/go-containerregistry/pkg/name"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 type InternalRepositoryType string
@@ -51,9 +52,11 @@ type ChartSource struct {
 
 // ResolveChartSource decides where one chart version comes from. A recorded OCI
 // reference wins over the repository scheme: that is the hybrid case this exists for.
+// It takes the repository url rather than the repository object so that every
+// repository kind can use it.
 func ResolveChartSource(
-	repo *helmv1alpha1.HelmClusterAddonRepository,
-	version *helmv1alpha1.HelmClusterAddonChartVersion,
+	repoURL string,
+	version *helmv1alpha1.ChartVersion,
 ) (ChartSource, error) {
 	if version.OCIRef != "" {
 		// The recorded reference always carries a tag, so there is no fallback to
@@ -67,13 +70,13 @@ func ResolveChartSource(
 		return ChartSource{Kind: InternalOCIRepository, URL: url, Tag: tag}, nil
 	}
 
-	repoType, err := GetRepositoryType(repo.Spec.URL)
+	repoType, err := GetRepositoryType(repoURL)
 	if err != nil {
 		return ChartSource{}, fmt.Errorf("resolving the source of version %q: %w", version.Version, err)
 	}
 
 	if repoType == InternalOCIRepository {
-		return ChartSource{Kind: InternalOCIRepository, URL: repo.Spec.URL, Tag: version.Version}, nil
+		return ChartSource{Kind: InternalOCIRepository, URL: repoURL, Tag: version.Version}, nil
 	}
 
 	return ChartSource{Kind: InternalHelmRepository}, nil

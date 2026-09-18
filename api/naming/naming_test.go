@@ -16,7 +16,11 @@ limitations under the License.
 
 package naming
 
-import "testing"
+import (
+	"testing"
+
+	"k8s.io/apimachinery/pkg/util/validation"
+)
 
 func TestHelmClusterAddonChartName(t *testing.T) {
 	cases := []struct {
@@ -26,30 +30,245 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "short names are joined verbatim",
+			name:  "short names are joined and hashed",
 			repo:  "example",
 			chart: "podinfo",
-			want:  "example-chart-podinfo",
+			want:  "example-chart-podinfo-015bdf9886f6",
 		},
 		{
 			name:  "long names are truncated and suffixed with a hash",
 			repo:  "yandex-cloud-marketplace-mirror",
 			chart: "cert-manager-webhook-yandex",
-			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-a3ee4a8a584e",
+			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-cb0f7a51035d",
 		},
 		{
-			name:  "an empty chart name leaves no trailing dash",
+			name:  "an empty chart name leaves no trailing dash before the hash",
 			repo:  "repo",
 			chart: "",
-			want:  "repo-chart",
+			want:  "repo-chart-8549288388a9",
+		},
+		{
+			// A repository name is a DNS subdomain and a chart name comes from
+			// the index, so either may carry a dot at the truncation boundary.
+			name:  "a truncation that ends in a dot drops it",
+			repo:  "abcdefghijklmnopqrs.x",
+			chart: "podinfo",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-0fe4a214e986",
+		},
+		{
+			// A repository name at or under the length limit is not truncated,
+			// but a trailing dot still has to be dropped before the separator:
+			// the final trim only reaches the end of the whole name.
+			name:  "an untruncated name ending in a dot still drops it",
+			repo:  "abcdefghijklmnopqrs.",
+			chart: "podinfo",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-b5579464eede",
+		},
+		{
+			// Chart and repository names can carry upper case, e.g. from an OCI
+			// tag or a repository index entry.
+			name:  "upper case is lowered",
+			repo:  "REPO",
+			chart: "CHART",
+			want:  "repo-chart-chart-e5db4c98cda1",
+		},
+		{
+			name:  "a space is replaced, not dropped, so the parts stay separated",
+			repo:  "repo",
+			chart: "ch art",
+			want:  "repo-chart-ch-art-2e144a9bd47b",
+		},
+		{
+			name:  "two empty parts still start with a letter, not a dash",
+			repo:  "",
+			chart: "",
+			want:  "chart-6e340b9cffb3",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := HelmClusterAddonChartName(tc.repo, tc.chart); got != tc.want {
+			got := HelmClusterAddonChartName(tc.repo, tc.chart)
+			if got != tc.want {
 				t.Fatalf("HelmClusterAddonChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
 			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", got, errs)
+			}
 		})
+	}
+}
+
+func TestApplicationChartName(t *testing.T) {
+	cases := []struct {
+		name  string
+		repo  string
+		chart string
+		want  string
+	}{
+		{
+			name:  "short names are joined and hashed",
+			repo:  "example",
+			chart: "podinfo",
+			want:  "example-chart-podinfo-015bdf9886f6",
+		},
+		{
+			name:  "long names are truncated and suffixed with a hash",
+			repo:  "yandex-cloud-marketplace-mirror",
+			chart: "cert-manager-webhook-yandex",
+			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-cb0f7a51035d",
+		},
+		{
+			name:  "an empty chart name leaves no trailing dash before the hash",
+			repo:  "repo",
+			chart: "",
+			want:  "repo-chart-8549288388a9",
+		},
+		{
+			// A repository name is a DNS subdomain and a chart name comes from
+			// the index, so either may carry a dot at the truncation boundary.
+			name:  "a truncation that ends in a dot drops it",
+			repo:  "abcdefghijklmnopqrs.x",
+			chart: "podinfo",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-0fe4a214e986",
+		},
+		{
+			// A repository name at or under the length limit is not truncated,
+			// but a trailing dot still has to be dropped before the separator:
+			// the final trim only reaches the end of the whole name.
+			name:  "an untruncated name ending in a dot still drops it",
+			repo:  "abcdefghijklmnopqrs.",
+			chart: "podinfo",
+			want:  "abcdefghijklmnopqrs-chart-podinfo-b5579464eede",
+		},
+		{
+			name:  "upper case is lowered",
+			repo:  "REPO",
+			chart: "CHART",
+			want:  "repo-chart-chart-e5db4c98cda1",
+		},
+		{
+			name:  "a space is replaced, not dropped, so the parts stay separated",
+			repo:  "repo",
+			chart: "ch art",
+			want:  "repo-chart-ch-art-2e144a9bd47b",
+		},
+		{
+			name:  "two empty parts still start with a letter, not a dash",
+			repo:  "",
+			chart: "",
+			want:  "chart-6e340b9cffb3",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ApplicationChartName(tc.repo, tc.chart)
+			if got != tc.want {
+				t.Fatalf("ApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", got, errs)
+			}
+		})
+	}
+}
+
+func TestClusterApplicationChartName(t *testing.T) {
+	cases := []struct {
+		name  string
+		repo  string
+		chart string
+		want  string
+	}{
+		{
+			name:  "short names are joined and hashed",
+			repo:  "shared",
+			chart: "nginx",
+			want:  "shared-chart-nginx-a2f6f72110ff",
+		},
+		{
+			name:  "long names are truncated and suffixed with a hash",
+			repo:  "yandex-cloud-marketplace-mirror",
+			chart: "cert-manager-webhook-yandex",
+			want:  "yandex-cloud-marketp-chart-cert-manager-webhook-cb0f7a51035d",
+		},
+		{
+			name:  "upper case is lowered",
+			repo:  "REPO",
+			chart: "CHART",
+			want:  "repo-chart-chart-e5db4c98cda1",
+		},
+		{
+			name:  "a space is replaced, not dropped, so the parts stay separated",
+			repo:  "repo",
+			chart: "ch art",
+			want:  "repo-chart-ch-art-2e144a9bd47b",
+		},
+		{
+			name:  "two empty parts still start with a letter, not a dash",
+			repo:  "",
+			chart: "",
+			want:  "chart-6e340b9cffb3",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ClusterApplicationChartName(tc.repo, tc.chart)
+			if got != tc.want {
+				t.Fatalf("ClusterApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", got, errs)
+			}
+		})
+	}
+}
+
+// TestChartNameSchemeIsShared pins the decision that every chart catalog kind is
+// named by one scheme. The objects differ in kind, and the namespaced and cluster
+// variants live in different scopes, so identical names cannot collide — while a
+// scheme that silently diverged per family would break the round trip from an
+// object name back to the repository/chart pair.
+func TestChartNameSchemeIsShared(t *testing.T) {
+	const (
+		repo  = "yandex-cloud-marketplace-mirror"
+		chart = "cert-manager-webhook-yandex"
+	)
+
+	addon := HelmClusterAddonChartName(repo, chart)
+
+	if got := ApplicationChartName(repo, chart); got != addon {
+		t.Fatalf("ApplicationChartName = %q, want the shared scheme result %q", got, addon)
+	}
+
+	if got := ClusterApplicationChartName(repo, chart); got != addon {
+		t.Fatalf("ClusterApplicationChartName = %q, want the shared scheme result %q", got, addon)
+	}
+}
+
+// TestChartNameSeparatesAnAmbiguousPair pins the reason the hash is taken over the
+// two parts joined by a NUL rather than over the readable name: the readable join
+// is ambiguous, so hashing it would reproduce exactly the collision the hash exists
+// to resolve. Both pairs below build the same readable part.
+func TestChartNameSeparatesAnAmbiguousPair(t *testing.T) {
+	left := HelmClusterAddonChartName("abc", "def-chart-ghi")
+	right := HelmClusterAddonChartName("abc-chart-def", "ghi")
+
+	if left == right {
+		t.Fatalf("(%q, %q) and (%q, %q) both produce %q", "abc", "def-chart-ghi", "abc-chart-def", "ghi", left)
+	}
+}
+
+// TestChartNameSeparatesATrailingDot pins a second ambiguity the join alone cannot
+// carry: a part ending in a dot is trimmed inside the readable name, so two charts
+// that differ only by it would otherwise share an object.
+func TestChartNameSeparatesATrailingDot(t *testing.T) {
+	withDot := HelmClusterAddonChartName("foo", "bar.")
+	withoutDot := HelmClusterAddonChartName("foo", "bar")
+
+	if withDot == withoutDot {
+		t.Fatalf("(%q, %q) and (%q, %q) both produce %q", "foo", "bar.", "foo", "bar", withDot)
 	}
 }

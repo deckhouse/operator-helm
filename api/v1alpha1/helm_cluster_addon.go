@@ -20,7 +20,6 @@ import (
 	"reflect"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -78,20 +77,20 @@ func (r *HelmClusterAddon) MaintenanceModeEnabled() bool {
 }
 
 func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
-	conditionTypes := []string{"Ready"}
+	conditionTypes := []string{ConditionTypeReady}
 
-	if r.Status.LastAppliedChart == nil || !meta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue) {
+	if r.Status.LastAppliedChart == nil || !apimeta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue) {
 		return append(conditionTypes, ConditionTypeInstalled)
 	}
 
 	if r.IsChartStatusInfoOutdated() ||
-		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeUpdateInstalled) ||
+		apimeta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeUpdateInstalled) ||
 		r.UpdateInstallInProgress() {
 		conditionTypes = append(conditionTypes, ConditionTypeUpdateInstalled)
 	}
 
 	if !reflect.DeepEqual(r.Spec.Values, r.Status.LastAppliedValues) ||
-		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeConfigurationApplied) ||
+		apimeta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeConfigurationApplied) ||
 		r.ConfigurationApplyInProgress() {
 		conditionTypes = append(conditionTypes, ConditionTypeConfigurationApplied)
 	}
@@ -100,21 +99,21 @@ func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
 }
 
 func (r *HelmClusterAddon) ConfigurationApplyInProgress() bool {
-	cond := meta.FindStatusCondition(r.Status.Conditions, ConditionTypeConfigurationApplied)
+	cond := apimeta.FindStatusCondition(r.Status.Conditions, ConditionTypeConfigurationApplied)
 	if cond == nil {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Reason == "Reconciling"
+	return cond.Status == metav1.ConditionUnknown && cond.Reason == ReasonReconciling
 }
 
 func (r *HelmClusterAddon) UpdateInstallInProgress() bool {
-	cond := meta.FindStatusCondition(r.Status.Conditions, ConditionTypeUpdateInstalled)
+	cond := apimeta.FindStatusCondition(r.Status.Conditions, ConditionTypeUpdateInstalled)
 	if cond == nil {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Reason == "Reconciling"
+	return cond.Status == metav1.ConditionUnknown && cond.Reason == ReasonReconciling
 }
 
 func (r *HelmClusterAddon) IsChartStatusInfoOutdated() bool {

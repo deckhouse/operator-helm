@@ -1,0 +1,74 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    user-authz.deckhouse.io/access-level: Admin
+  name: d8:user-authz:{{ .Chart.Name }}:admin
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+rules:
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmapplications
+  - helmapplicationrepositories
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# Both catalogs an application can pick a chart from, including the cluster-wide one
+# whose repository only ClusterAdmin may manage. A catalog is written by the
+# controller alone, so nobody gets more than a read of it. Repository credentials
+# (spec.auth.username and spec.auth.password) live in the repository object itself, so
+# the read granted above is also a read of every repository password in reach of this
+# level.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmapplicationcharts
+  - helmclusterapplicationcharts
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    user-authz.deckhouse.io/access-level: ClusterAdmin
+  name: d8:user-authz:{{ .Chart.Name }}:cluster-admin
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+rules:
+# The cluster-scoped kinds reach no level below this one, so these rules stand on
+# their own rather than extending anything above.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddons
+  - helmclusteraddonrepositories
+  - helmclusterapplicationrepositories
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# The application catalogs are already readable from the level above; only the
+# addon one is left to add here.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddoncharts
+  verbs:
+  - get
+  - list
+  - watch

@@ -39,6 +39,9 @@ const (
 	ReasonFailed                  = "Failed"
 	ReasonUninstallFailed         = "UninstallFailed"
 	ReasonChartClaimConflict      = "ChartClaimConflict"
+	// ReasonAccessSetupFailed marks a release whose identity — the ServiceAccount,
+	// Role and RoleBinding the chart is applied with — could not be reconciled.
+	ReasonAccessSetupFailed = "AccessSetupFailed"
 	// ReasonForceReconcile marks the Reconciling condition raised for a pass that
 	// was requested through the force reconcile annotation.
 	ReasonForceReconcile = "ForceReconcile"

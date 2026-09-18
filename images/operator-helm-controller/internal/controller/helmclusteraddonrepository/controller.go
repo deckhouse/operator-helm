@@ -17,7 +17,7 @@ limitations under the License.
 package helmclusteraddonrepository
 
 import (
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -26,9 +26,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/manager/status"
-	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddonrepository"
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/repository"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -40,11 +41,15 @@ const (
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
+	ociRepositoryService := services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil)
+
 	r := reconcile.New(
 		client,
+		adapter.EmptyAddonRepository,
 		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
-		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient),
+		ociRepositoryService,
+		services.NewForceService(client, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(client)),
+		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewAddonCatalog(client)),
 		status.NewManager(client),
 	)
 
@@ -66,7 +71,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
-					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName),
+					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName,
+				),
 			),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
@@ -78,7 +84,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 					helmv1alpha1.TargetNamespace,
 					helmv1alpha1.LabelManagedBy,
 					helmv1alpha1.LabelManagedByValue,
-					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName),
+					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName,
+				),
 			),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).

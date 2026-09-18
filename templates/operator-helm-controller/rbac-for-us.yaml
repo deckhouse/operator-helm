@@ -79,6 +79,21 @@ rules:
   - helmclusteraddoncharts/status
   - helmclusteraddonrepositories
   - helmclusteraddonrepositories/status
+  - helmapplicationrepositories
+  - helmapplicationrepositories/status
+  - helmclusterapplicationrepositories
+  - helmclusterapplicationrepositories/status
+  - helmapplicationcharts
+  - helmapplicationcharts/status
+  - helmclusterapplicationcharts
+  - helmclusterapplicationcharts/status
+  - helmapplicationrepositories/finalizers
+  - helmclusterapplicationrepositories/finalizers
+  - helmapplicationcharts/finalizers
+  - helmclusterapplicationcharts/finalizers
+  - helmapplications
+  - helmapplications/status
+  - helmapplications/finalizers
   verbs:
   - create
   - delete
@@ -87,6 +102,38 @@ rules:
   - patch
   - update
   - watch
+# The namespace role is seeded once and never read back, so create is the only
+# verb the controller uses on it. Neither create nor escalate can be scoped by
+# resourceNames: both are authorized against the name in the request path, which
+# a create does not carry (RoleEscalationAuthorized passes requestInfo.Name, empty
+# here — see k8s.io/kubernetes/pkg/registry/rbac/escalation_check.go). bind is the
+# exception: it is authorized against the name in the binding's roleRef, so it is
+# scoped to the single role this module ever seeds.
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  verbs:
+  - create
+  - escalate
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  resourceNames:
+  - operator-helm-application
+  verbs:
+  - bind
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+  - update
 - apiGroups:
   - helm.internal.operator-helm.deckhouse.io
   resources:
@@ -172,6 +219,7 @@ rules:
   resources:
   - configmaps
   - secrets
+  - serviceaccounts
   verbs:
   - get
   - list

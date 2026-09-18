@@ -1,0 +1,36 @@
+name: Unit tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+  push:
+    branches:
+      - main
+      - release-*
+
+env:
+  TASK_X_REMOTE_TASKFILES: 1
+
+jobs:
+  unit_tests:
+    runs-on: [self-hosted, large]
+    name: Unit tests
+    steps:
+      # The modules do not all declare the same Go version; the controllers ask
+      # for the newest one, and a toolchain that satisfies them satisfies the rest.
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          cache: true
+          go-version-file: images/operator-helm-controller/go.mod
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run unit tests
+        run: task --yes test:unit
