@@ -8,10 +8,12 @@ vars:
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
   golangciLintVersion: "v2.13.2"
 
-# Only the modules this repository authors are listed. images/kube-api-rewriter is a
-# separate upstream module vendored in for the build, and images/helm-controller and
-# images/nelm-source-controller carry nothing but their werf files, so none of them is
-# ours to lint, format or test here.
+# Only the modules this repository authors are listed, including tools/internalcrds.
+# images/kube-api-rewriter is a separate upstream module vendored in for the build, and
+# images/helm-controller and images/source-controller carry nothing but their werf
+# files, so none of them is ours to lint, format or test here. The one exception is
+# the rewriter's operatornelm package, which is this module's own rule table: its
+# tests run from test:rewrite-rules below.
 includes:
   api:
     taskfile: ./api/Taskfile.dist.yaml
@@ -28,6 +30,9 @@ includes:
   chart-values-controller:
     taskfile: ./images/chart-values-controller/Taskfile.dist.yaml
     dir: ./images/chart-values-controller
+  internalcrds:
+    taskfile: ./tools/internalcrds/Taskfile.dist.yaml
+    dir: ./tools/internalcrds
 
   deps:
     taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
@@ -59,6 +64,58 @@ tasks:
     cmds:
       - task: api:ci:generate
 
+  generate:internal-crds:
+    desc: "Regenerate the internal CustomResourceDefinitions from upstream flux."
+    cmds:
+      - |
+        set -eu
+        helmControllerTag=$(sed -n 's/^ *helm-controller: *//p' build/components/versions.yml)
+        sourceControllerTag=$(sed -n 's/^ *source-controller: *//p' build/components/versions.yml)
+        work=$(mktemp -d)
+        trap 'rm -rf "$work"' EXIT
+        git clone --quiet --depth 1 --branch "$helmControllerTag" \
+          https://github.com/fluxcd/helm-controller "$work/helm-controller"
+        git clone --quiet --depth 1 --branch "$sourceControllerTag" \
+          https://github.com/fluxcd/source-controller "$work/source-controller"
+        cd tools/internalcrds
+        go run . -out ../../crds/embedded/helm-controller.yaml \
+          "$work/helm-controller/config/crd/bases"
+        go run . -out ../../crds/embedded/source-controller.yaml \
+          "$work/source-controller/config/crd/bases"
+
+  check-flux-tags:
+    desc: "Verify the upstream flux tags pinned in werf.inc.yaml match build/components/versions.yml."
+    cmds:
+      - |
+        set -eu
+        helmControllerTag=$(sed -n 's/^ *helm-controller: *//p' build/components/versions.yml)
+        sourceControllerTag=$(sed -n 's/^ *source-controller: *//p' build/components/versions.yml)
+        helmWerfTag=$(sed -n 's/.*\$helmControllerTag := "\(.*\)".*/\1/p' images/helm-controller/werf.inc.yaml)
+        sourceWerfTag=$(sed -n 's/.*\$sourceControllerTag := "\(.*\)".*/\1/p' images/source-controller/werf.inc.yaml)
+        for pin in "$helmControllerTag" "$sourceControllerTag" "$helmWerfTag" "$sourceWerfTag"; do
+          if [ -z "$pin" ]; then
+            echo "a version pin came out empty: build/components/versions.yml has '$helmControllerTag' and '$sourceControllerTag', the werf files have '$helmWerfTag' and '$sourceWerfTag'" >&2
+            exit 1
+          fi
+        done
+        if [ "$helmControllerTag" != "$helmWerfTag" ]; then
+          echo "images/helm-controller/werf.inc.yaml pins helm-controller $helmWerfTag but build/components/versions.yml pins $helmControllerTag" >&2
+          exit 1
+        fi
+        if [ "$sourceControllerTag" != "$sourceWerfTag" ]; then
+          echo "images/source-controller/werf.inc.yaml pins source-controller $sourceWerfTag but build/components/versions.yml pins $sourceControllerTag" >&2
+          exit 1
+        fi
+    silent: true
+
+  ci:generate:internal-crds:
+    desc: "Regenerate the internal CustomResourceDefinitions and verify they are committed."
+    cmds:
+      - task: check-flux-tags
+      - task: generate:internal-crds
+      - |
+        git diff --exit-code crds/embedded || (echo "Please run task generate:internal-crds and commit changes" && exit 1)
+
   # The shared deps task installs golangci-lint through the upstream install.sh,
   # whose checksum lookup is an unanchored grep: releases now ship an SBOM entry
   # next to the archive, both lines match, and the verification fails for every
@@ -82,6 +139,18 @@ tasks:
       - task: operator-helm-controller:test:unit
       - task: chart-values-controller:test:unit
       - task: e2e:test:unit
+      - task: internalcrds:test:unit
+      - task: test:rewrite-rules
+
+  # The rule table and the generated definitions are two halves of one
+  # agreement, and only a live cluster reports a disagreement: a request the
+  # proxy renames to a group, kind or resource type no definition declares is
+  # answered "not found". The test compares the two, and reads the definitions
+  # from outside its own module, which the test cache does not track.
+  test:rewrite-rules:
+    desc: "Check the proxy rewrite rules against the generated definitions."
+    cmds:
+      - cd images/kube-api-rewriter && go test -count=1 ./pkg/operatornelm/...
 
   test:e2e:setup:
     desc: "Setup environment for e2e tests."
@@ -147,6 +216,7 @@ tasks:
       - task: operator-helm-controller:format
       - task: chart-values-controller:format
       - task: e2e:format
+      - task: internalcrds:format
 
   lint:
     deps:
@@ -157,6 +227,7 @@ tasks:
       - task: operator-helm-controller:lint
       - task: chart-values-controller:lint
       - task: e2e:lint
+      - task: internalcrds:lint
       - task: lint:doc-ru
 
   lint:doc-ru:

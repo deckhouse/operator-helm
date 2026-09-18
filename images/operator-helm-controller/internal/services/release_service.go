@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
-	helmv2 "github.com/werf/3p-helm-controller/api/v2"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"

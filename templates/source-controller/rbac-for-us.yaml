@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: nelm-source-controller
+  name: source-controller
   namespace: d8-{{ .Chart.Name }}
-  {{- include "helm_lib_module_labels" (list . (dict "app" "nelm-source-controller")) | nindent 2 }}
+  {{- include "helm_lib_module_labels" (list . (dict "app" "source-controller")) | nindent 2 }}
 imagePullSecrets:
 - name: operator-helm-module-registry
 ---
@@ -12,21 +12,21 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
-  name: d8:{{ .Chart.Name }}:nelm-source-controller
+  name: d8:{{ .Chart.Name }}:source-controller
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: d8:{{ .Chart.Name }}:nelm-source-controller
+  name: d8:{{ .Chart.Name }}:source-controller
 subjects:
 - kind: ServiceAccount
-  name: nelm-source-controller
+  name: source-controller
   namespace: d8-{{ .Chart.Name }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
-  name: d8:{{ .Chart.Name }}:nelm-source-controller
+  name: d8:{{ .Chart.Name }}:source-controller
 rules:
 - apiGroups:
   - authentication.k8s.io
@@ -109,7 +109,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
-  name: nelm-source-controller
+  name: source-controller
   namespace: d8-{{ .Chart.Name }}
 rules:
 - apiGroups:
@@ -155,12 +155,12 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
-  name: nelm-source-controller
+  name: source-controller
   namespace: d8-{{ .Chart.Name }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: nelm-source-controller
+  name: source-controller
 subjects:
 - kind: ServiceAccount
-  name: nelm-source-controller
+  name: source-controller

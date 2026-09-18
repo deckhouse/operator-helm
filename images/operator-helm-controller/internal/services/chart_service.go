@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/werf/3p-fluxcd-pkg/apis/meta"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	"github.com/fluxcd/pkg/apis/meta"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -123,7 +123,7 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, 
 
 // CleanupHelmChart issues a delete for the internal HelmChart and returns it
 // while it is still present, so the caller can inspect its conditions and wait
-// for nelm-source-controller to finish removing it. It returns nil once the
+// for source-controller to finish removing it. It returns nil once the
 // HelmChart is gone.
 func (s *ChartService) CleanupHelmChart(ctx context.Context, names source.ReleaseNames) (*sourcev1.HelmChart, error) {
 	nn := types.NamespacedName{Name: names.HelmChart, Namespace: s.TargetNamespace}

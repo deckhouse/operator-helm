@@ -1,4 +1,4 @@
-{{- define "nelm-source-controller.envs" -}}
+{{- define "source-controller.envs" -}}
 - name: RUNTIME_NAMESPACE
   valueFrom:
     fieldRef:

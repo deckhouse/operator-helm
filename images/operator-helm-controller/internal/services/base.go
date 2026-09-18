@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/werf/3p-fluxcd-pkg/apis/meta"
+	"github.com/fluxcd/pkg/apis/meta"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,7 +47,7 @@ func (s *BaseService) ensureResourceDeleted(ctx context.Context, nn types.Namesp
 
 // deleteAndCheck issues a delete for the object if it is still present and reports
 // whether it still exists. A deletion may stay pending because a downstream
-// controller (helm-controller, nelm-source-controller) holds a finalizer and has
+// controller (helm-controller, source-controller) holds a finalizer and has
 // not finished tearing the resource down yet, so callers that must not proceed
 // until the resource is actually gone should keep requeuing while exists is true.
 func (s *BaseService) deleteAndCheck(ctx context.Context, nn types.NamespacedName, obj client.Object) (exists bool, err error) {

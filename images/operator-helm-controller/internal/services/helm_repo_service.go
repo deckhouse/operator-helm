@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/werf/3p-fluxcd-pkg/apis/meta"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	"github.com/fluxcd/pkg/apis/meta"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -123,7 +123,7 @@ func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, names source
 // CleanupHelmRepository removes the auth/TLS secrets (which have no finalizers
 // and disappear immediately) and issues a delete for the internal HelmRepository,
 // returning it while it is still present so the caller can inspect its conditions
-// and wait for nelm-source-controller to finish removing it. It returns nil once
+// and wait for source-controller to finish removing it. It returns nil once
 // the HelmRepository is gone.
 func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, names source.InternalNames) (*sourcev1.HelmRepository, error) {
 	for _, name := range []string{names.AuthSecret, names.TLSSecret} {

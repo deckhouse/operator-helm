@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 
-	helmv2 "github.com/werf/3p-helm-controller/api/v2"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

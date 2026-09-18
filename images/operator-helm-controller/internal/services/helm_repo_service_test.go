@@ -21,7 +21,7 @@ import (
 	"errors"
 	"testing"
 
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"

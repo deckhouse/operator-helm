@@ -22,8 +22,8 @@ limitations under the License.
 package helmapplication
 
 import (
-	helmv2 "github.com/werf/3p-helm-controller/api/v2"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/controller"

@@ -20,8 +20,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/werf/3p-fluxcd-pkg/apis/meta"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	"github.com/fluxcd/pkg/apis/meta"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/deckhouse/operator-helm/internal/adapter"
