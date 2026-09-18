@@ -11,7 +11,9 @@ vars:
 # Only the modules this repository authors are listed, including tools/internalcrds.
 # images/kube-api-rewriter is a separate upstream module vendored in for the build, and
 # images/helm-controller and images/source-controller carry nothing but their werf
-# files, so none of them is ours to lint, format or test here.
+# files, so none of them is ours to lint, format or test here. The one exception is
+# the rewriter's operatornelm package, which is this module's own rule table: its
+# tests run from test:rewrite-rules below.
 includes:
   api:
     taskfile: ./api/Taskfile.dist.yaml
@@ -138,6 +140,17 @@ tasks:
       - task: chart-values-controller:test:unit
       - task: e2e:test:unit
       - task: internalcrds:test:unit
+      - task: test:rewrite-rules
+
+  # The rule table and the generated definitions are two halves of one
+  # agreement, and only a live cluster reports a disagreement: a request the
+  # proxy renames to a group, kind or resource type no definition declares is
+  # answered "not found". The test compares the two, and reads the definitions
+  # from outside its own module, which the test cache does not track.
+  test:rewrite-rules:
+    desc: "Check the proxy rewrite rules against the generated definitions."
+    cmds:
+      - cd images/kube-api-rewriter && go test -count=1 ./pkg/operatornelm/...
 
   test:e2e:setup:
     desc: "Setup environment for e2e tests."
