@@ -161,14 +161,15 @@ func checkKnownKind(entryName string, doc map[string]any) error {
 	return nil
 }
 
-// checkNoLeftoverUpstream fails if the rendered output still names an
-// upstream flux group: Rename addresses the group by path, so a group nested
-// somewhere the walk does not visit would otherwise slip through and ship
-// silently unrenamed. It says nothing about kinds; checkKnownKind covers those.
+// checkNoLeftoverUpstream fails if the rendered output still names an upstream
+// flux group or kind: Rename addresses both by path, so one nested somewhere
+// the walk does not visit would otherwise slip through and ship silently
+// unrenamed. A kind that survives in a validation expression is not merely
+// untidy — the rule can no longer hold against the renamed enum beside it.
 func checkNoLeftoverUpstream(path string, rendered []byte) error {
 	for i, line := range strings.Split(string(rendered), "\n") {
 		stripped := strings.ReplaceAll(line, allowedAnnotation, "")
-		if !strings.Contains(stripped, forbiddenGroup) {
+		if !strings.Contains(stripped, forbiddenGroup) && !kindWord.MatchString(stripped) {
 			continue
 		}
 

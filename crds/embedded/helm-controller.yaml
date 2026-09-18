@@ -32,7 +32,7 @@ spec:
       name: v2
       schema:
         openAPIV3Schema:
-          description: HelmRelease is the Schema for the helmreleases API
+          description: InternalNelmOperatorHelmRelease is the Schema for the helmreleases API
           properties:
             apiVersion:
               description: |-
@@ -56,8 +56,8 @@ spec:
               properties:
                 chart:
                   description: |-
-                    Chart defines the template of the v1.HelmChart that should be created
-                    for this HelmRelease.
+                    Chart defines the template of the v1.InternalNelmOperatorHelmChart that should be created
+                    for this InternalNelmOperatorHelmRelease.
                   properties:
                     metadata:
                       description: ObjectMeta holds the template for metadata like labels and annotations.
@@ -81,7 +81,7 @@ spec:
                           type: object
                       type: object
                     spec:
-                      description: Spec holds the template for the v1.HelmChartSpec for this HelmRelease.
+                      description: Spec holds the template for the v1.HelmChartSpec for this InternalNelmOperatorHelmRelease.
                       properties:
                         chart:
                           description: The name or path the Helm chart is available at in the SourceRef.
@@ -177,8 +177,8 @@ spec:
                         version:
                           default: '*'
                           description: |-
-                            Version semver expression, ignored for charts from v1.GitRepository and
-                            v1beta2.Bucket sources. Defaults to latest when omitted.
+                            Version semver expression, ignored for charts from v1.InternalNelmOperatorGitRepository and
+                            v1beta2.InternalNelmOperatorBucket sources. Defaults to latest when omitted.
                           type: string
                       required:
                         - chart
@@ -238,7 +238,7 @@ spec:
                 dependsOn:
                   description: |-
                     DependsOn may contain a DependencyReference slice with
-                    references to HelmRelease resources that must be ready before this HelmRelease
+                    references to InternalNelmOperatorHelmRelease resources that must be ready before this InternalNelmOperatorHelmRelease
                     can be reconciled.
                   items:
                     description: |-
@@ -384,7 +384,7 @@ spec:
                     type: object
                   type: array
                 install:
-                  description: Install holds the configuration for Helm install actions for this HelmRelease.
+                  description: Install holds the configuration for Helm install actions for this InternalNelmOperatorHelmRelease.
                   properties:
                     crds:
                       description: |-
@@ -446,7 +446,7 @@ spec:
                     remediation:
                       description: |-
                         Remediation holds the remediation configuration for when the Helm install
-                        action for the HelmRelease fails. The default is to not perform any action.
+                        action for the InternalNelmOperatorHelmRelease fails. The default is to not perform any action.
                       properties:
                         ignoreTestFailures:
                           description: |-
@@ -485,7 +485,7 @@ spec:
                       type: boolean
                     strategy:
                       description: |-
-                        Strategy defines the install strategy to use for this HelmRelease.
+                        Strategy defines the install strategy to use for this InternalNelmOperatorHelmRelease.
                         Defaults to 'RemediateOnFailure', or 'RetryOnFailure' when the
                         DefaultToRetryOnFailure feature gate is enabled.
                       properties:
@@ -522,7 +522,7 @@ spec:
                   type: string
                 kubeConfig:
                   description: |-
-                    KubeConfig for reconciling the HelmRelease on a remote cluster.
+                    KubeConfig for reconciling the InternalNelmOperatorHelmRelease on a remote cluster.
                     When used in combination with HelmReleaseSpec.ServiceAccountName,
                     forces the controller to act on behalf of that Service Account at the
                     target cluster.
@@ -596,7 +596,7 @@ spec:
                       rule: '!has(self.configMapRef) || !has(self.secretRef)'
                 maxHistory:
                   description: |-
-                    MaxHistory is the number of revisions saved by Helm for this HelmRelease.
+                    MaxHistory is the number of revisions saved by Helm for this InternalNelmOperatorHelmRelease.
                     Use '0' for an unlimited number of revisions; defaults to '5'.
                   type: integer
                 persistentClient:
@@ -731,7 +731,7 @@ spec:
                   minLength: 1
                   type: string
                 rollback:
-                  description: Rollback holds the configuration for Helm rollback actions for this HelmRelease.
+                  description: Rollback holds the configuration for Helm rollback actions for this InternalNelmOperatorHelmRelease.
                   properties:
                     cleanupOnFail:
                       description: |-
@@ -792,35 +792,35 @@ spec:
                 serviceAccountName:
                   description: |-
                     The name of the Kubernetes service account to impersonate
-                    when reconciling this HelmRelease.
+                    when reconciling this InternalNelmOperatorHelmRelease.
                   maxLength: 253
                   minLength: 1
                   type: string
                 storageNamespace:
                   description: |-
                     StorageNamespace used for the Helm storage.
-                    Defaults to the namespace of the HelmRelease.
+                    Defaults to the namespace of the InternalNelmOperatorHelmRelease.
                   maxLength: 63
                   minLength: 1
                   type: string
                 suspend:
                   description: |-
-                    Suspend tells the controller to suspend reconciliation for this HelmRelease,
+                    Suspend tells the controller to suspend reconciliation for this InternalNelmOperatorHelmRelease,
                     it does not apply to already started reconciliations. Defaults to false.
                   type: boolean
                 targetNamespace:
                   description: |-
-                    TargetNamespace to target when performing operations for the HelmRelease.
-                    Defaults to the namespace of the HelmRelease.
+                    TargetNamespace to target when performing operations for the InternalNelmOperatorHelmRelease.
+                    Defaults to the namespace of the InternalNelmOperatorHelmRelease.
                   maxLength: 63
                   minLength: 1
                   type: string
                 test:
-                  description: Test holds the configuration for Helm test actions for this HelmRelease.
+                  description: Test holds the configuration for Helm test actions for this InternalNelmOperatorHelmRelease.
                   properties:
                     enable:
                       description: |-
-                        Enable enables Helm test actions for this HelmRelease after an Helm install
+                        Enable enables Helm test actions for this InternalNelmOperatorHelmRelease after an Helm install
                         or upgrade action has been performed.
                       type: boolean
                     filters:
@@ -860,7 +860,7 @@ spec:
                   pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
                   type: string
                 uninstall:
-                  description: Uninstall holds the configuration for Helm uninstall actions for this HelmRelease.
+                  description: Uninstall holds the configuration for Helm uninstall actions for this InternalNelmOperatorHelmRelease.
                   properties:
                     deletionPropagation:
                       default: background
@@ -894,7 +894,7 @@ spec:
                       type: string
                   type: object
                 upgrade:
-                  description: Upgrade holds the configuration for Helm upgrade actions for this HelmRelease.
+                  description: Upgrade holds the configuration for Helm upgrade actions for this InternalNelmOperatorHelmRelease.
                   properties:
                     chartNameChangeStrategy:
                       description: |-
@@ -973,13 +973,13 @@ spec:
                     preserveValues:
                       description: |-
                         PreserveValues will make Helm reuse the last release's values and merge in
-                        overrides from 'Values'. Setting this flag makes the HelmRelease
+                        overrides from 'Values'. Setting this flag makes the InternalNelmOperatorHelmRelease
                         non-declarative.
                       type: boolean
                     remediation:
                       description: |-
                         Remediation holds the remediation configuration for when the Helm upgrade
-                        action for the HelmRelease fails. The default is to not perform any action.
+                        action for the InternalNelmOperatorHelmRelease fails. The default is to not perform any action.
                       properties:
                         ignoreTestFailures:
                           description: |-
@@ -1018,7 +1018,7 @@ spec:
                       type: string
                     strategy:
                       description: |-
-                        Strategy defines the upgrade strategy to use for this HelmRelease.
+                        Strategy defines the upgrade strategy to use for this InternalNelmOperatorHelmRelease.
                         Defaults to 'RemediateOnFailure', or 'RetryOnFailure' when the
                         DefaultToRetryOnFailure feature gate is enabled.
                       properties:
@@ -1054,7 +1054,7 @@ spec:
                   x-kubernetes-preserve-unknown-fields: true
                 valuesFrom:
                   description: |-
-                    ValuesFrom holds references to resources containing Helm values for this HelmRelease,
+                    ValuesFrom holds references to resources containing Helm values for this InternalNelmOperatorHelmRelease,
                     and information about how they should be merged.
                   items:
                     description: |-
@@ -1140,10 +1140,10 @@ spec:
             status:
               default:
                 observedGeneration: -1
-              description: HelmReleaseStatus defines the observed state of a HelmRelease.
+              description: HelmReleaseStatus defines the observed state of a InternalNelmOperatorHelmRelease.
               properties:
                 conditions:
-                  description: Conditions holds the conditions for the HelmRelease.
+                  description: Conditions holds the conditions for the InternalNelmOperatorHelmRelease.
                   items:
                     description: Condition contains details for one aspect of the current state of this API Resource.
                     properties:
@@ -1206,12 +1206,12 @@ spec:
                   type: integer
                 helmChart:
                   description: |-
-                    HelmChart is the namespaced name of the HelmChart resource created by
-                    the controller for the HelmRelease.
+                    InternalNelmOperatorHelmChart is the namespaced name of the InternalNelmOperatorHelmChart resource created by
+                    the controller for the InternalNelmOperatorHelmRelease.
                   type: string
                 history:
                   description: |-
-                    History holds the history of Helm releases performed for this HelmRelease
+                    History holds the history of Helm releases performed for this InternalNelmOperatorHelmRelease
                     up to the last successfully completed release.
                   items:
                     description: |-
@@ -1357,7 +1357,7 @@ spec:
                 lastAttemptedReleaseAction:
                   description: |-
                     LastAttemptedReleaseAction is the last release action performed for this
-                    HelmRelease. It is used to determine the active retry or remediation
+                    InternalNelmOperatorHelmRelease. It is used to determine the active retry or remediation
                     strategy.
                   enum:
                     - install
@@ -1366,18 +1366,18 @@ spec:
                 lastAttemptedReleaseActionDuration:
                   description: |-
                     LastAttemptedReleaseActionDuration is the duration of the last
-                    release action performed for this HelmRelease.
+                    release action performed for this InternalNelmOperatorHelmRelease.
                   type: string
                 lastAttemptedRevision:
                   description: |-
                     LastAttemptedRevision is the Source revision of the last reconciliation
-                    attempt. For OCIRepository  sources, the 12 first characters of the digest are
+                    attempt. For InternalNelmOperatorOCIRepository  sources, the 12 first characters of the digest are
                     appended to the chart version e.g. "1.2.3+1234567890ab".
                   type: string
                 lastAttemptedRevisionDigest:
                   description: |-
                     LastAttemptedRevisionDigest is the digest of the last reconciliation attempt.
-                    This is only set for OCIRepository sources.
+                    This is only set for InternalNelmOperatorOCIRepository sources.
                   type: string
                 lastAttemptedValuesChecksum:
                   description: |-

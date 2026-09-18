@@ -155,7 +155,7 @@ func TestRenameFailsOnMissingNames(t *testing.T) {
 	}
 }
 
-func TestRenameLeavesUnrelatedStringsAlone(t *testing.T) {
+func TestRenameRewritesKindNamesInProse(t *testing.T) {
 	doc := map[string]any{
 		"spec": map[string]any{
 			"group": "source.toolkit.fluxcd.io",
@@ -163,6 +163,20 @@ func TestRenameLeavesUnrelatedStringsAlone(t *testing.T) {
 			"versions": []any{map[string]any{
 				"schema": map[string]any{"openAPIV3Schema": map[string]any{
 					"description": "HelmChart is the Schema for the helmcharts API.",
+					"properties": map[string]any{"spec": map[string]any{
+						"properties": map[string]any{"sourceRef": map[string]any{
+							"properties": map[string]any{"kind": map[string]any{
+								"description": "Kind of the referent, valid values are ('HelmRepository', 'GitRepository', 'Bucket').",
+							}},
+						}},
+						"x-kubernetes-validations": []any{map[string]any{
+							"message": "spec.verify is only supported when spec.sourceRef.kind is 'HelmRepository'",
+							"rule":    "!has(self.verify) || self.sourceRef.kind == 'HelmRepository'",
+						}},
+					}},
+					"status": map[string]any{
+						"description": "HelmChartStatus records the observed state of the HelmChart.",
+					},
 				}},
 			}},
 		},
@@ -173,8 +187,41 @@ func TestRenameLeavesUnrelatedStringsAlone(t *testing.T) {
 		t.Fatalf("Rename returned %v", err)
 	}
 
-	got := doc["spec"].(map[string]any)["versions"].([]any)[0].(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)["description"]
-	if got != "HelmChart is the Schema for the helmcharts API." {
-		t.Fatalf("description was rewritten: %v", got)
+	schema := doc["spec"].(map[string]any)["versions"].([]any)[0].(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)
+	specSchema := schema["properties"].(map[string]any)["spec"].(map[string]any)
+	validation := specSchema["x-kubernetes-validations"].([]any)[0].(map[string]any)
+
+	cases := map[string]struct {
+		got  any
+		want string
+	}{
+		"schema description": {
+			schema["description"],
+			"InternalNelmOperatorHelmChart is the Schema for the helmcharts API.",
+		},
+		"referent description": {
+			specSchema["properties"].(map[string]any)["sourceRef"].(map[string]any)["properties"].(map[string]any)["kind"].(map[string]any)["description"],
+			"Kind of the referent, valid values are ('InternalNelmOperatorHelmRepository', 'InternalNelmOperatorGitRepository', 'InternalNelmOperatorBucket').",
+		},
+		"validation message": {
+			validation["message"],
+			"spec.verify is only supported when spec.sourceRef.kind is 'InternalNelmOperatorHelmRepository'",
+		},
+		"validation rule": {
+			validation["rule"],
+			"!has(self.verify) || self.sourceRef.kind == 'InternalNelmOperatorHelmRepository'",
+		},
+		// A composite upstream type name is not a kind and stays as upstream
+		// wrote it; only the kind it is named after moves.
+		"composite type name": {
+			schema["status"].(map[string]any)["description"],
+			"HelmChartStatus records the observed state of the InternalNelmOperatorHelmChart.",
+		},
+	}
+
+	for name, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %q", name, tc.got, tc.want)
+		}
 	}
 }

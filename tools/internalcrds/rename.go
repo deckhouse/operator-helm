@@ -19,6 +19,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -62,10 +63,17 @@ var upstreamKinds = []string{
 // running the module, and moving them would be a migration of its own.
 const kindPrefix = "InternalNelmOperator"
 
+// kindWord matches an upstream kind standing on its own as a word, which is
+// how the schemas refer to one in prose and in validation expressions. The
+// word boundaries keep it off the type names built from a kind — a
+// HelmChartStatus is upstream's own type and is not served under any name
+// here — and off a renamed kind, whose prefix leaves no boundary in front.
+var kindWord = regexp.MustCompile(`\b(` + strings.Join(upstreamKinds, "|") + `)\b`)
+
 // Rename turns one upstream CustomResourceDefinition into the internal one this
-// module serves. Everything it touches is addressed by path: the group, the
-// names block, the object name, and the kind references inside the schemas.
-// Descriptions and any other free text are left exactly as upstream wrote them.
+// module serves: the group, the names block, the object name, and every
+// reference to a kind inside the schemas, whether it is a value the API server
+// reads or text a reader does.
 func Rename(doc map[string]any) error {
 	spec, ok := doc["spec"].(map[string]any)
 	if !ok {
@@ -123,23 +131,34 @@ func Rename(doc map[string]any) error {
 	return nil
 }
 
-// renameKindReferences walks the schemas and renames upstream kind references
-// it finds: under a "kind" key in a map, and, with no key to scope the match,
-// any plain string list element equal to an upstream kind. Today the only
-// lists it reaches are the sourceRef and chartRef kind enums, so matching by
-// value alone is safe; a future field whose string entries happened to equal
-// an upstream kind's name would be renamed too.
+// renameKindReferences walks the schemas and renames every upstream kind it
+// finds: under a "kind" key in a map; with no key to scope the match, any
+// plain string list element equal to a kind; and inside the three free-text
+// fields that name kinds — the documentation a reader gets from kubectl
+// explain, and the message and expression of a validation rule. Today the
+// only lists it reaches are the sourceRef and chartRef kind enums, so
+// matching a list element by value alone is safe; a future field whose string
+// entries happened to equal an upstream kind's name would be renamed too.
+//
+// Renaming the expression of a rule is not cosmetic: a rule comparing against
+// an upstream kind can never hold once the enum beside it is renamed.
 func renameKindReferences(node any) {
 	switch typed := node.(type) {
 	case map[string]any:
 		for key, value := range typed {
-			if str, ok := value.(string); ok && key == "kind" && slices.Contains(upstreamKinds, str) {
-				typed[key] = kindPrefix + str
+			str, ok := value.(string)
+			if !ok {
+				renameKindReferences(value)
 
 				continue
 			}
 
-			renameKindReferences(value)
+			switch {
+			case key == "kind" && slices.Contains(upstreamKinds, str):
+				typed[key] = kindPrefix + str
+			case key == "description", key == "message", key == "rule":
+				typed[key] = kindWord.ReplaceAllString(str, kindPrefix+"${1}")
+			}
 		}
 	case []any:
 		for i, value := range typed {
