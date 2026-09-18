@@ -225,3 +225,53 @@ func TestRenameRewritesKindNamesInProse(t *testing.T) {
 		}
 	}
 }
+
+func TestRenameDropsTheSubstituteAnnotation(t *testing.T) {
+	doc := map[string]any{
+		"spec": map[string]any{
+			"group": "helm.toolkit.fluxcd.io",
+			"names": map[string]any{"kind": "HelmRelease", "plural": "helmreleases", "singular": "helmrelease"},
+		},
+		"metadata": map[string]any{
+			"name": "helmreleases.helm.toolkit.fluxcd.io",
+			"annotations": map[string]any{
+				"controller-gen.kubebuilder.io/version":  "v0.21.0",
+				"kustomize.toolkit.fluxcd.io/substitute": "disabled",
+			},
+		},
+	}
+
+	if err := Rename(doc); err != nil {
+		t.Fatalf("Rename returned %v", err)
+	}
+
+	annotations := doc["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if _, ok := annotations["kustomize.toolkit.fluxcd.io/substitute"]; ok {
+		t.Error("the substitute annotation survived")
+	}
+
+	if annotations["controller-gen.kubebuilder.io/version"] != "v0.21.0" {
+		t.Errorf("unrelated annotations = %v", annotations)
+	}
+}
+
+func TestRenameDropsAnEmptiedAnnotationsBlock(t *testing.T) {
+	doc := map[string]any{
+		"spec": map[string]any{
+			"group": "helm.toolkit.fluxcd.io",
+			"names": map[string]any{"kind": "HelmRelease", "plural": "helmreleases", "singular": "helmrelease"},
+		},
+		"metadata": map[string]any{
+			"name":        "helmreleases.helm.toolkit.fluxcd.io",
+			"annotations": map[string]any{"kustomize.toolkit.fluxcd.io/substitute": "disabled"},
+		},
+	}
+
+	if err := Rename(doc); err != nil {
+		t.Fatalf("Rename returned %v", err)
+	}
+
+	if _, ok := doc["metadata"].(map[string]any)["annotations"]; ok {
+		t.Error("an empty annotations block was left behind")
+	}
+}

@@ -41,12 +41,6 @@ import (
 // noticing.
 const forbiddenGroup = "toolkit.fluxcd.io"
 
-// allowedAnnotation is the sole legitimate survivor of forbiddenGroup: a real
-// annotation upstream carries on every one of these definitions, instructing a
-// real flux kustomize-controller to leave the definition alone. It addresses
-// that controller, not this module, so it is deliberately left unrenamed.
-const allowedAnnotation = "kustomize.toolkit.fluxcd.io/substitute"
-
 func main() {
 	out := flag.String("out", "", "file to write the renamed definitions to")
 	flag.Parse()
@@ -168,8 +162,7 @@ func checkKnownKind(entryName string, doc map[string]any) error {
 // untidy — the rule can no longer hold against the renamed enum beside it.
 func checkNoLeftoverUpstream(path string, rendered []byte) error {
 	for i, line := range strings.Split(string(rendered), "\n") {
-		stripped := strings.ReplaceAll(line, allowedAnnotation, "")
-		if !strings.Contains(stripped, forbiddenGroup) && !kindWord.MatchString(stripped) {
+		if !strings.Contains(line, forbiddenGroup) && !kindWord.MatchString(line) {
 			continue
 		}
 

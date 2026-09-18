@@ -119,6 +119,18 @@ func Rename(doc map[string]any) error {
 	if !ok {
 		return errors.New("the document has no metadata")
 	}
+	// Upstream tells a real flux kustomize-controller not to substitute
+	// variables into these definitions. Nothing applies them through one —
+	// Deckhouse installs them with the module — so the instruction has no
+	// reader here and only leaves an upstream identity on the object.
+	if annotations, ok := metadata["annotations"].(map[string]any); ok {
+		delete(annotations, "kustomize.toolkit.fluxcd.io/substitute")
+
+		if len(annotations) == 0 {
+			delete(metadata, "annotations")
+		}
+	}
+
 	metadata["name"] = names["plural"].(string) + "." + internal
 	metadata["labels"] = map[string]any{
 		"backup.deckhouse.io/cluster-config": "true",

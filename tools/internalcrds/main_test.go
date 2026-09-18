@@ -65,10 +65,10 @@ func TestCheckNoLeftoverUpstreamFailsOnLeftoverGroup(t *testing.T) {
 	}
 }
 
-func TestCheckNoLeftoverUpstreamAllowsSubstituteAnnotation(t *testing.T) {
+func TestCheckNoLeftoverUpstreamRejectsSubstituteAnnotation(t *testing.T) {
 	rendered := "metadata:\n  annotations:\n    kustomize.toolkit.fluxcd.io/substitute: \"true\"\n"
 
-	if err := checkNoLeftoverUpstream("out.yaml", []byte(rendered)); err != nil {
-		t.Fatalf("checkNoLeftoverUpstream returned %v", err)
+	if err := checkNoLeftoverUpstream("out.yaml", []byte(rendered)); err == nil {
+		t.Fatal("expected an error, got nil")
 	}
 }
