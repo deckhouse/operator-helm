@@ -104,7 +104,8 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, 
 	}
 
 	if op != controllerutil.OperationResultNone {
-		logger.Info("Reconciled helm chart", "operation", op)
+		logger.Info("Reconciled helm chart", "operation", op,
+			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
 	processedStatus := status.ProcessChildConditions(
@@ -112,7 +113,8 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, 
 	)
 
 	if processedStatus.IsReady() {
-		logger.Info("Successfully reconciled helm chart", "operation", op, "chart", rel.ChartRef().Chart)
+		logger.Info("Successfully reconciled helm chart", "operation", op, "chart", rel.ChartRef().Chart,
+			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
 	return ChartResult{

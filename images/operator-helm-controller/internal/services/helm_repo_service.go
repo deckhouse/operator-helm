@@ -81,7 +81,8 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(
 	}
 
 	if op != controllerutil.OperationResultNone {
-		logger.Info("Reconciled helm repository", "operation", op)
+		logger.Info("Reconciled helm repository", "operation", op,
+			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
 	state := InternalRepositoryState{Present: true}

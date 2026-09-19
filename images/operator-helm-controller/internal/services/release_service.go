@@ -118,7 +118,8 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, rel source.Relea
 	}
 
 	if processedStatus.IsReady() {
-		logger.Info("Successfully reconciled helm release", "operation", op)
+		logger.Info("Successfully reconciled helm release", "operation", op,
+			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
 	return ReleaseResult{

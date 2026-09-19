@@ -146,7 +146,8 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 	}
 
 	if op != controllerutil.OperationResultNone {
-		logger.Info("Reconciled oci repository", "operation", op)
+		logger.Info("Reconciled oci repository", "operation", op,
+			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
 	processedStatus := status.ProcessChildConditions(
