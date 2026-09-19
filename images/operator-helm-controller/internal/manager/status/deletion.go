@@ -22,15 +22,19 @@ import (
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 // DeletingResource is an internal resource that is being deleted; its deletion
 // timestamp and conditions are used to derive the owner's status while the
-// deletion is pending.
+// deletion is pending. It is a client.Object so that a caller waiting on one can
+// name it in the log; the resourceName passed alongside stays abstract because that
+// one reaches the user through the owner's status.
 type DeletingResource interface {
-	GetDeletionTimestamp() *metav1.Time
+	client.Object
+
 	GetConditions() []metav1.Condition
 }
 

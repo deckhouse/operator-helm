@@ -82,9 +82,6 @@ type Reconciler struct {
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
-	logger := log.FromContext(ctx)
-	ctx = log.IntoContext(ctx, logger)
-
 	rel := r.deps.NewRelease()
 	if err := r.Get(ctx, req.NamespacedName, rel.Object()); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -420,9 +417,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (r
 // awaitInternalResourceDeletion surfaces that an internal resource is still being
 // deleted on the release's status (via the shared status manager) and requeues
 // without removing the finalizer. The resource name is kept abstract so its
-// internal type is not leaked to the user.
+// internal type is not leaked to the user; the log line names the object itself,
+// which is what someone looking into a stuck deletion has to reach for.
 func (r *Reconciler) awaitInternalResourceDeletion(ctx context.Context, rel source.Release, name string, resource status.DeletingResource) (reconcile.Result, error) {
-	log.FromContext(ctx).Info("Waiting for internal resource to be deleted before removing finalizer", "resource", name)
+	log.FromContext(ctx).Info("Waiting for internal resource to be deleted before removing finalizer",
+		"resource", name,
+		"internalType", fmt.Sprintf("%T", resource),
+		"internalObject", client.ObjectKeyFromObject(resource))
 
 	if err := r.deps.Status.MarkUninstallPending(ctx, rel.Object(), name, resource); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, fmt.Errorf("updating deletion status: %w", err)
