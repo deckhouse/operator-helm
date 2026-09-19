@@ -45,7 +45,7 @@ func MapInternalResources(controllerName, targetNamespace, labelManagedBy, label
 		sourceName := labels[labelSourceName]
 		if sourceName == "" {
 			logger.V(1).Info("resource missing source label, skipping",
-				"controller", controllerName, "name", obj.GetName(), "namespace", obj.GetNamespace())
+				"controller", controllerName, "watchedObject", client.ObjectKeyFromObject(obj))
 
 			return nil
 		}
@@ -86,7 +86,7 @@ func MapNamespacedInternalResources(
 		sourceName, sourceNamespace := labels[labelSourceName], labels[labelSourceNamespace]
 		if sourceName == "" || sourceNamespace == "" {
 			logger.V(1).Info("resource missing source labels, skipping",
-				"controller", controllerName, "name", obj.GetName(), "namespace", obj.GetNamespace())
+				"controller", controllerName, "watchedObject", client.ObjectKeyFromObject(obj))
 
 			return nil
 		}
@@ -106,7 +106,8 @@ func MapRepositoryToAddons(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		addonList := &helmv1alpha1.HelmClusterAddonList{}
 		if err := c.List(ctx, addonList, client.MatchingFields{index.AddonRepository: obj.GetName()}); err != nil {
-			log.FromContext(ctx).Error(err, "Failed to list HelmClusterAddons for repository mapping")
+			log.FromContext(ctx).Error(err, "Failed to list HelmClusterAddons for repository mapping",
+				"watchedObject", client.ObjectKeyFromObject(obj))
 			return nil
 		}
 
@@ -137,7 +138,8 @@ func MapChartToAddons(c client.Client) handler.MapFunc {
 			// Same fail-open tradeoff as knownCharts: without both labels there is no
 			// repository/chart pair to look an addon up by, so this chart object
 			// cannot be mapped back to anything.
-			log.FromContext(ctx).Info("Chart object missing repository or chart label, cannot map to addons", "addonChartName", obj.GetName())
+			log.FromContext(ctx).Info("Chart object missing repository or chart label, cannot map to addons",
+				"watchedObject", client.ObjectKeyFromObject(obj))
 
 			return nil
 		}
@@ -146,7 +148,8 @@ func MapChartToAddons(c client.Client) handler.MapFunc {
 		if err := c.List(ctx, &addons, client.MatchingFields{
 			index.AddonChart: index.AddonChartValue(repoName, chartName),
 		}); err != nil {
-			log.FromContext(ctx).Error(err, "Failed to list HelmClusterAddons for chart mapping")
+			log.FromContext(ctx).Error(err, "Failed to list HelmClusterAddons for chart mapping",
+				"watchedObject", client.ObjectKeyFromObject(obj), "repository", repoName, "chart", chartName)
 
 			return nil
 		}
@@ -170,7 +173,8 @@ func MapRepositoryToApplications(c client.Client, repositoryKind string) handler
 		if err := c.List(ctx, &apps, client.MatchingFields{
 			index.ApplicationRepository: index.ApplicationRepositoryValue(repositoryKind, obj.GetNamespace(), obj.GetName()),
 		}); err != nil {
-			log.FromContext(ctx).Error(err, "Failed to list HelmApplications for repository mapping")
+			log.FromContext(ctx).Error(err, "Failed to list HelmApplications for repository mapping",
+				"repositoryKind", repositoryKind, "watchedObject", client.ObjectKeyFromObject(obj))
 
 			return nil
 		}
@@ -190,7 +194,8 @@ func MapChartToApplications(c client.Client, repositoryKind string) handler.MapF
 		repoName := labels[helmv1alpha1.LabelRepositoryName]
 		chartName := labels[helmv1alpha1.LabelChartName]
 		if repoName == "" || chartName == "" {
-			log.FromContext(ctx).Info("Chart object missing repository or chart label, cannot map to applications", "name", obj.GetName(), "namespace", obj.GetNamespace())
+			log.FromContext(ctx).Info("Chart object missing repository or chart label, cannot map to applications",
+				"repositoryKind", repositoryKind, "watchedObject", client.ObjectKeyFromObject(obj))
 
 			return nil
 		}
@@ -199,7 +204,9 @@ func MapChartToApplications(c client.Client, repositoryKind string) handler.MapF
 		if err := c.List(ctx, &apps, client.MatchingFields{
 			index.ApplicationChart: index.ApplicationChartValue(repositoryKind, obj.GetNamespace(), repoName, chartName),
 		}); err != nil {
-			log.FromContext(ctx).Error(err, "Failed to list HelmApplications for chart mapping")
+			log.FromContext(ctx).Error(err, "Failed to list HelmApplications for chart mapping",
+				"repositoryKind", repositoryKind, "watchedObject", client.ObjectKeyFromObject(obj),
+				"repository", repoName, "chart", chartName)
 
 			return nil
 		}
