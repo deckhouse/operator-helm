@@ -23,7 +23,6 @@ import (
 
 	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -265,17 +264,6 @@ func artifactRepoConfig(repo source.Repository, src utils.ChartSource) *repoclie
 		CACertificate: repo.CACertificate(),
 		Insecure:      repo.InsecureSkipVerify(),
 	}
-}
-
-func (s *OCIRepoService) CleanupOCIRepository(ctx context.Context, names source.InternalNames) error {
-	for _, name := range []string{names.AuthSecret, names.TLSSecret} {
-		nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
-		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {
-			return fmt.Errorf("cleaning up secret %s: %w", name, err)
-		}
-	}
-
-	return nil
 }
 
 // RemoveOCIRepository issues a delete for the internal OCIRepository and returns

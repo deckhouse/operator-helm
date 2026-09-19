@@ -121,13 +121,11 @@ func newReconcilerWithInterceptor(
 		return stub, nil
 	}
 
-	ociRepositoryService := services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil)
-
 	r := New(
 		c,
 		adapter.EmptyAddonRepository,
+		services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
 		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
-		ociRepositoryService,
 		services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(c)),
 		services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
 		status.NewManager(c),
@@ -168,13 +166,11 @@ func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...cli
 		return stub, nil
 	}
 
-	ociRepositoryService := services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil)
-
 	r := New(
 		c,
 		adapter.EmptyApplicationRepository,
+		services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
 		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
-		ociRepositoryService,
 		services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(c)),
 		services.NewRepoSyncService(c, scheme, factory, adapter.NewApplicationCatalog(c)),
 		status.NewManager(c),

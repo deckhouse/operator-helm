@@ -41,13 +41,11 @@ const (
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
-	ociRepositoryService := services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil)
-
 	r := reconcile.New(
 		client,
 		adapter.EmptyAddonRepository,
+		services.NewRepoSecretsService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		ociRepositoryService,
 		services.NewForceService(client, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(client)),
 		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewAddonCatalog(client)),
 		status.NewManager(client),

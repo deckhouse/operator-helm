@@ -50,8 +50,8 @@ const internalResourceDeletionRequeueInterval = 30 * time.Second
 func New(
 	client client.Client,
 	newRepository func() source.Repository,
+	secretsService *services.RepoSecretsService,
 	helmRepositoryService *services.HelmRepoService,
-	ociRepositoryService *services.OCIRepoService,
 	consumers source.ConsumerForcer,
 	chartSyncService *services.RepoSyncService,
 	statusManager *status.Manager,
@@ -59,8 +59,8 @@ func New(
 	return &Reconciler{
 		Client:                client,
 		newRepository:         newRepository,
+		secretsService:        secretsService,
 		helmRepositoryService: helmRepositoryService,
-		ociRepositoryService:  ociRepositoryService,
 		consumers:             consumers,
 		chartSyncService:      chartSyncService,
 		statusManager:         statusManager,
@@ -71,8 +71,8 @@ type Reconciler struct {
 	client.Client
 
 	newRepository         func() source.Repository
+	secretsService        *services.RepoSecretsService
 	helmRepositoryService *services.HelmRepoService
-	ociRepositoryService  *services.OCIRepoService
 	consumers             source.ConsumerForcer
 	chartSyncService      *services.RepoSyncService
 	statusManager         *status.Manager
@@ -134,9 +134,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.finish(ctx, repo, in, false)
 	}
 
-	// Both services embed the same BaseRepoService with the same target namespace,
-	// so one of them reconciles the auxiliary secrets for either repository type.
-	in.SecretsErr = r.helmRepositoryService.EnsureSecrets(ctx, repo, repoType)
+	in.SecretsErr = r.secretsService.Ensure(ctx, repo, repoType)
 
 	if in.SecretsErr == nil {
 		switch repoType {
@@ -237,20 +235,19 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo source.Repository
 
 	names := repo.InternalNames()
 
-	switch repoType {
-	case utils.InternalOCIRepository:
-		if err := r.ociRepositoryService.CleanupOCIRepository(ctx, names); err != nil && !apierrors.IsNotFound(err) {
-			_ = r.statusManager.MarkDeletionFailed(ctx, repo.Object(), "internal repository", err)
-			return reconcile.Result{}, err
-		}
-	default:
-		// The helm path is the default rather than a case of its own because an
-		// unknown repository type is a state a real repository can reach: the url
-		// validation regex on the CRD is looser than url.Parse, so a repository
-		// whose internal objects already exist can be edited to a url that no
-		// longer parses and then deleted. Cleaning up the helm way is safe for
-		// either type — it removes both auxiliary secrets and tolerates a missing
-		// internal repository — and leaving it out would orphan them.
+	if err := r.secretsService.Cleanup(ctx, names); err != nil && !apierrors.IsNotFound(err) {
+		_ = r.statusManager.MarkDeletionFailed(ctx, repo.Object(), "auxiliary secrets", err)
+		return reconcile.Result{}, err
+	}
+
+	// Only a helm repository has an internal object of its own; for an oci one the
+	// secrets above were everything. An unknown repository type takes the helm path
+	// too, because it is a state a real repository can reach: the url validation
+	// regex on the CRD is looser than url.Parse, so a repository whose internal
+	// objects already exist can be edited to a url that no longer parses and then
+	// deleted. Cleaning up the helm way tolerates a missing internal repository, and
+	// leaving it out would orphan one.
+	if repoType != utils.InternalOCIRepository {
 		helmRepo, err := r.helmRepositoryService.CleanupHelmRepository(ctx, names)
 		if err != nil && !apierrors.IsNotFound(err) {
 			_ = r.statusManager.MarkDeletionFailed(ctx, repo.Object(), "internal repository", err)
