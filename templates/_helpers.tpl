@@ -17,3 +17,15 @@ system-cluster-critical
 {{-   end }}
 {{- $updateMode }}
 {{- end }}
+
+{{- define "operator-helm.enable_rbacv2" -}}
+  {{- $raw := (.Values.global).deckhouseVersion | default "dev" | toString -}}
+  {{- $mm := regexFind "^v?[0-9]+[.][0-9]+" $raw -}}
+  {{- if $mm -}}
+    {{- semverCompare ">= 1.78" (printf "%s.0" $mm) -}}
+  {{- else -}}
+    {{- /* "dev" or "unknown": a build off any branch says the same, so answer with the model
+           whose mistake only loses access. A dev stand below 1.78 flips this to false. */ -}}
+    true
+  {{- end -}}
+{{- end -}}

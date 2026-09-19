@@ -1,0 +1,64 @@
+{{- if eq (include "operator-helm.rbacv2_new_scheme" .) "true" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: d8:system-capability:{{ .Chart.Name }}:view
+  annotations:
+    en.meta.deckhouse.io/title: "Module {{ .Chart.Name }}: view configuration"
+    ru.meta.deckhouse.io/title: "Модуль {{ .Chart.Name }}: просмотр конфигурации"
+    en.meta.deckhouse.io/description: "Read-only access to the {{ .Chart.Name }} module configuration."
+    ru.meta.deckhouse.io/description: "Доступ только на чтение к конфигурации модуля {{ .Chart.Name }}."
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "system-capability.%s.view" .Chart.Name) "rbac.deckhouse.io/scope" "system" "rbac.deckhouse.io/namespace" (printf "d8-%s" .Chart.Name) "rbac.deckhouse.io/aggregate-to-delivery-as" "viewer")) | nindent 2 }}
+rules:
+# Both cluster-wide catalogs and the addon releases themselves. The repository kinds are missing
+# here and granted one level up instead: they carry their registry credentials in the object
+# (spec.auth.username and spec.auth.password), and a viewer of a subsystem is not meant to read
+# secrets. A catalog holds no credentials at all — only the chart versions the controller found.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddons
+  - helmclusteraddoncharts
+  - helmclusterapplicationcharts
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - deckhouse.io
+  resourceNames:
+  - {{ .Chart.Name }}
+  resources:
+  - moduleconfigs
+  verbs:
+  - get
+  - list
+  - watch
+{{- else }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: d8:manage:permission:module:{{ .Chart.Name }}:view
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "manage" "rbac.deckhouse.io/level" "module" "rbac.deckhouse.io/namespace" (printf "d8-%s" .Chart.Name) "rbac.deckhouse.io/aggregate-to-delivery-as" "viewer")) | nindent 2 }}
+rules:
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddons
+  - helmclusteraddoncharts
+  - helmclusterapplicationcharts
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - deckhouse.io
+  resourceNames:
+  - {{ .Chart.Name }}
+  resources:
+  - moduleconfigs
+  verbs:
+  - get
+  - list
+  - watch
+{{- end }}

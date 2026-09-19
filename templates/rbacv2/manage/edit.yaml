@@ -1,0 +1,95 @@
+{{- if eq (include "operator-helm.rbacv2_new_scheme" .) "true" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: d8:system-capability:{{ .Chart.Name }}:edit
+  annotations:
+    en.meta.deckhouse.io/title: "Module {{ .Chart.Name }}: edit configuration"
+    ru.meta.deckhouse.io/title: "Модуль {{ .Chart.Name }}: управление конфигурацией"
+    en.meta.deckhouse.io/description: "Manage the {{ .Chart.Name }} module configuration."
+    ru.meta.deckhouse.io/description: "Управление конфигурацией модуля {{ .Chart.Name }}."
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "system-capability.%s.edit" .Chart.Name) "rbac.deckhouse.io/scope" "system" "rbac.deckhouse.io/namespace" (printf "d8-%s" .Chart.Name) "rbac.deckhouse.io/aggregate-to-delivery-as" "manager")) | nindent 2 }}
+rules:
+# Reading a repository is granted here rather than in the view capability, so that it reaches the
+# manager level and no one below it: the registry credentials live in the object in plaintext.
+# This is why the rule carries the read verbs a manager would otherwise inherit from the viewer.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddonrepositories
+  - helmclusterapplicationrepositories
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# Read access to the addon releases comes from the view capability; only the writes are left here.
+# Neither catalog is writable at any level — the controller is its only author.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddons
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - patch
+  - update
+- apiGroups:
+  - deckhouse.io
+  resourceNames:
+  - {{ .Chart.Name }}
+  resources:
+  - moduleconfigs
+  verbs:
+  - create
+  - delete
+  - patch
+  - update
+{{- else }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: d8:manage:permission:module:{{ .Chart.Name }}:edit
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "manage" "rbac.deckhouse.io/level" "module" "rbac.deckhouse.io/namespace" (printf "d8-%s" .Chart.Name) "rbac.deckhouse.io/aggregate-to-delivery-as" "manager")) | nindent 2 }}
+rules:
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddonrepositories
+  - helmclusterapplicationrepositories
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddons
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - patch
+  - update
+- apiGroups:
+  - deckhouse.io
+  resourceNames:
+  - {{ .Chart.Name }}
+  resources:
+  - moduleconfigs
+  verbs:
+  - create
+  - delete
+  - patch
+  - update
+{{- end }}
