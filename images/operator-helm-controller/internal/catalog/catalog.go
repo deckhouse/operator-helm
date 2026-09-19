@@ -97,7 +97,8 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo source.Repository) (repoc
 			// recorded verdicts for this chart cannot be looked up here, so every
 			// tag is re-examined on the next fetch; that is safe but not free, so
 			// it is worth surfacing.
-			logger.Info("Chart object has no chart label, dropping its recorded verdicts", "kind", t.cfg.Kind, "name", chart.GetName())
+			logger.Info("Chart object has no chart label, dropping its recorded verdicts",
+				"kind", t.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
 
 			continue
 		}
@@ -151,7 +152,8 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 		}
 
 		if op != controllerutil.OperationResultNone {
-			logger.Info("Reconciled chart catalog object", "kind", t.cfg.Kind, "operation", op, "name", name)
+			logger.Info("Reconciled chart catalog object",
+				"kind", t.cfg.Kind, "operation", op, "chartObject", client.ObjectKeyFromObject(existing))
 		}
 
 		inUse, err := t.InUseVersions(ctx, repo, chart.Name)
@@ -189,7 +191,8 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 			// InUseVersions cannot find anything to protect and this chart is
 			// pruned even if a consumer still uses it. That fail-open is unavoidable
 			// as written, so at least make it diagnosable.
-			logger.Info("Pruning a chart with no chart label; in-use protection could not be checked", "kind", t.cfg.Kind, "name", chart.GetName())
+			logger.Info("Pruning a chart with no chart label; in-use protection could not be checked",
+				"kind", t.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
 		}
 
 		inUse, err := t.InUseVersions(ctx, repo, chartName)
@@ -200,7 +203,8 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 			// A consumer still references this chart: deleting the object would make
 			// its own reconciliation fail on a missing chart and block every change
 			// to it, including its removal.
-			logger.Info("Keeping a chart referenced by a consumer", "kind", t.cfg.Kind, "name", chart.GetName())
+			logger.Info("Keeping a chart referenced by a consumer",
+				"kind", t.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
 
 			continue
 		}
@@ -268,7 +272,8 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo source.Repository)
 			}
 		}
 
-		logger.Info("Renamed a chart catalog object", "kind", t.cfg.Kind, "from", legacy.GetName(), "to", name, "chart", chartName)
+		logger.Info("Renamed a chart catalog object",
+			"kind", t.cfg.Kind, "from", client.ObjectKeyFromObject(legacy), "to", client.ObjectKeyFromObject(current), "chart", chartName)
 
 		if err := client.IgnoreNotFound(t.client.Delete(ctx, legacy)); err != nil {
 			return fmt.Errorf("deleting chart %s after renaming it: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
