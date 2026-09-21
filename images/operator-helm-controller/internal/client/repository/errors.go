@@ -68,6 +68,12 @@ func TerminalFromStatusCode(code int, url string) *TerminalError {
 			Reason:  helmv1alpha1.ReasonSourceNotFound,
 			Message: fmt.Sprintf("repository %s not found (HTTP %d)", url, code),
 		}
+	case code == http.StatusTooManyRequests:
+		// A throttle is the one rejection in this range that says "later", not "no".
+		// Calling it terminal would park a release on a registry that is merely busy,
+		// and would saturate a repository's failure counter on its first throttled
+		// read instead of letting the backoff spread the next one out.
+		return nil
 	case code >= 400 && code < 500:
 		return &TerminalError{
 			Reason:  helmv1alpha1.ReasonSourceRejectedRequest,
