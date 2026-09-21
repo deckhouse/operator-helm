@@ -102,13 +102,17 @@ rules:
   - patch
   - update
   - watch
-# The namespace role is seeded once and never read back, so create is the only
-# verb the controller uses on it. Neither create nor escalate can be scoped by
-# resourceNames: both are authorized against the name in the request path, which
-# a create does not carry (RoleEscalationAuthorized passes requestInfo.Name, empty
-# here — see k8s.io/kubernetes/pkg/registry/rbac/escalation_check.go). bind is the
-# exception: it is authorized against the name in the binding's roleRef, so it is
-# scoped to the single role this module ever seeds.
+# The namespace role is reconciled on every pass and watched for drift, so the
+# controller reads and rewrites it besides creating it. Only the verbs that carry
+# no name are granted for every role: create is authorized against the name in the
+# request path, which it does not carry (RoleEscalationAuthorized passes
+# requestInfo.Name, empty here — see
+# k8s.io/kubernetes/pkg/registry/rbac/escalation_check.go), escalate follows it for
+# that reason, and list and watch — the informer behind the drift watch — name
+# nothing either. escalate is what lets the controller write a role granting more
+# than it holds itself, on the create and on every patch after it. get and patch do
+# carry a name, and so does bind, authorized against the name in the binding's
+# roleRef: all three are scoped to the single role this module ever writes.
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -116,6 +120,8 @@ rules:
   verbs:
   - create
   - escalate
+  - list
+  - watch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -124,6 +130,8 @@ rules:
   - operator-helm-application
   verbs:
   - bind
+  - get
+  - patch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -132,8 +140,10 @@ rules:
   - create
   - delete
   - get
+  - list
   - patch
   - update
+  - watch
 - apiGroups:
   - helm.internal.operator-helm.deckhouse.io
   resources:
