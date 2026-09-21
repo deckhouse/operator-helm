@@ -80,10 +80,6 @@ func (r *HelmClusterApplicationRepository) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
 }
 
-func (r *HelmClusterApplicationRepository) GetStatus() any {
-	return r.Status
-}
-
 func (r *HelmClusterApplicationRepository) GetConditionTypesForUpdate() []string {
 	return []string{ConditionTypeReady}
 }

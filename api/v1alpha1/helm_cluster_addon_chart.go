@@ -55,10 +55,6 @@ func (r *HelmClusterAddonChart) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
 }
 
-func (r *HelmClusterAddonChart) GetStatus() any {
-	return r.Status
-}
-
 func (r *HelmClusterAddonChart) GetConditionTypesForUpdate() []string {
 	return []string{"Ready"}
 }

@@ -28,10 +28,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
-	"github.com/deckhouse/operator-helm/internal/source"
 )
 
 func testApplication() *helmv1alpha1.HelmApplication {
@@ -60,8 +60,8 @@ func TestEnsureAccessCreatesTheIdentity(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newAccessService(t)
 
-	if err := service.EnsureAccess(context.Background(), rel); err != nil {
-		t.Fatalf("EnsureAccess returned %v", err)
+	if out := service.EnsureAccess(context.Background(), rel); out.Err != nil {
+		t.Fatalf("EnsureAccess returned %v", out.Err)
 	}
 
 	names := rel.InternalNames()
@@ -85,6 +85,9 @@ func TestEnsureAccessCreatesTheIdentity(t *testing.T) {
 	if !reflect.DeepEqual(role.Rules, wantRules) {
 		t.Fatalf("role rules = %+v, want full rights inside the namespace", role.Rules)
 	}
+	if !reflect.DeepEqual(role.Labels, applicationRBACLabels()) {
+		t.Fatalf("role labels = %v, want %v", role.Labels, applicationRBACLabels())
+	}
 
 	binding := &rbacv1.RoleBinding{}
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: names.ServiceAccount}, binding); err != nil {
@@ -97,38 +100,105 @@ func TestEnsureAccessCreatesTheIdentity(t *testing.T) {
 	if !reflect.DeepEqual(binding.Subjects, wantSubjects) {
 		t.Fatalf("subjects = %+v, want %+v", binding.Subjects, wantSubjects)
 	}
+	for key, want := range applicationRBACLabels() {
+		if binding.Labels[key] != want {
+			t.Fatalf("role binding label %q = %q, want %q", key, binding.Labels[key], want)
+		}
+	}
+	for key, want := range rel.SourceLabels() {
+		if binding.Labels[key] != want {
+			t.Fatalf("role binding label %q = %q, want %q", key, binding.Labels[key], want)
+		}
+	}
 }
 
-// TestEnsureAccessLeavesAnEditedRoleAlone pins the seed rule: the Role is the place
-// where a namespace owner may cut the rights down, so an existing Role is never
-// read, compared or rewritten — only a missing one is created.
-func TestEnsureAccessLeavesAnEditedRoleAlone(t *testing.T) {
+// TestEnsureAccessRewritesAnEditedRole pins that a Role of ours is reconciled rather
+// than seeded: rules narrowed out of band are written back, and so is the heritage
+// label. A label someone else put there survives, as on the account and the binding.
+func TestEnsureAccessRewritesAnEditedRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	edited := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: "team-a"},
-		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ApplicationRoleName,
+			Namespace: "team-a",
+			Labels: map[string]string{
+				helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue,
+				"cost-center":               "platform",
+			},
+		},
+		Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}},
 	}
 	service, c := newAccessService(t, edited)
 
-	if err := service.EnsureAccess(context.Background(), rel); err != nil {
-		t.Fatalf("EnsureAccess returned %v", err)
+	if out := service.EnsureAccess(context.Background(), rel); out.Err != nil {
+		t.Fatalf("EnsureAccess returned %v", out.Err)
 	}
 
 	role := &rbacv1.Role{}
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: ApplicationRoleName}, role); err != nil {
 		t.Fatalf("getting role: %v", err)
 	}
-	if !reflect.DeepEqual(role.Rules, edited.Rules) {
-		t.Fatalf("an existing role must not be rewritten, rules = %+v", role.Rules)
+	wantRules := []rbacv1.PolicyRule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}}}
+	if !reflect.DeepEqual(role.Rules, wantRules) {
+		t.Fatalf("a narrowed role must be written back, rules = %+v", role.Rules)
+	}
+	for key, want := range applicationRBACLabels() {
+		if role.Labels[key] != want {
+			t.Fatalf("role label %q = %q, want %q", key, role.Labels[key], want)
+		}
+	}
+	if role.Labels["cost-center"] != "platform" {
+		t.Fatalf("role labels = %v, want the foreign label kept", role.Labels)
 	}
 }
 
-// TestEnsureAccessRefusesToAdoptAForeignRoleBinding pins that a binding already
-// living under our name but pointing at someone else's role is reported, not
-// reused: adding our account as its subject would silently grant that account
-// whatever that role grants. The object is left exactly as it was — deleting a
+// TestEnsureAccessRefusesARoleThatIsNotOurs pins the ownership test on the shared
+// Role. Its name is fixed, so a namespace owner can have put their own Role there;
+// widening it to full rights and binding every application of the namespace to it
+// is not a decision to make on their behalf. The verdict is terminal because the
+// watch on the kind selects on the very label the object lacks: nothing observes it
+// being removed either.
+func TestEnsureAccessRefusesARoleThatIsNotOurs(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+	rules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}}
+	foreign := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: "team-a"},
+		Rules:      rules,
+	}
+	service, c := newAccessService(t, foreign)
+
+	out := service.EnsureAccess(context.Background(), rel)
+	if out.Err == nil {
+		t.Fatal("a role that is not ours must be reported, not seized")
+	}
+	if !out.Terminal {
+		t.Fatalf("outcome = %+v, want it terminal", out)
+	}
+	if out.Reason != helmv1alpha1.ReasonForeignAccessObject {
+		t.Fatalf("reason = %q, want %q", out.Reason, helmv1alpha1.ReasonForeignAccessObject)
+	}
+	if !strings.Contains(out.Message, "team-a/"+ApplicationRoleName) {
+		t.Fatalf("message %q must name the role", out.Message)
+	}
+
+	stored := &rbacv1.Role{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), stored); err != nil {
+		t.Fatalf("the foreign role must survive: %v", err)
+	}
+	if !reflect.DeepEqual(stored.Rules, rules) {
+		t.Fatalf("rules = %+v, want them untouched", stored.Rules)
+	}
+	if len(stored.Labels) != 0 {
+		t.Fatalf("labels = %v, want the foreign role left unlabelled", stored.Labels)
+	}
+}
+
+// TestEnsureAccessRefusesABindingThatIsNotOurs pins the same ownership test on the
+// binding. The derived name is fully computable by anyone, so a binding found under
+// it may belong to someone else; adding our account to it would grant that account
+// whatever the binding grants. The object is left exactly as it was — deleting a
 // binding we did not create is not ours to do either.
-func TestEnsureAccessRefusesToAdoptAForeignRoleBinding(t *testing.T) {
+func TestEnsureAccessRefusesABindingThatIsNotOurs(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	foreign := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: rel.InternalNames().ServiceAccount, Namespace: "team-a"},
@@ -137,17 +207,23 @@ func TestEnsureAccessRefusesToAdoptAForeignRoleBinding(t *testing.T) {
 	}
 	service, c := newAccessService(t, foreign)
 
-	err := service.EnsureAccess(context.Background(), rel)
-	if err == nil {
-		t.Fatal("a binding pointing at a foreign role must be reported, not adopted")
+	out := service.EnsureAccess(context.Background(), rel)
+	if out.Err == nil {
+		t.Fatal("a binding that is not ours must be reported, not adopted")
 	}
-	if !strings.Contains(err.Error(), "someone-elses-role") {
-		t.Fatalf("error %q must name the existing roleRef", err.Error())
+	if !out.Terminal {
+		t.Fatalf("outcome = %+v, want it terminal", out)
+	}
+	if out.Reason != helmv1alpha1.ReasonForeignAccessObject {
+		t.Fatalf("reason = %q, want %q", out.Reason, helmv1alpha1.ReasonForeignAccessObject)
+	}
+	if !strings.Contains(out.Message, "team-a/"+rel.InternalNames().ServiceAccount) {
+		t.Fatalf("message %q must name the binding", out.Message)
 	}
 
 	stored := &rbacv1.RoleBinding{}
-	if getErr := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), stored); getErr != nil {
-		t.Fatalf("the foreign binding must survive: %v", getErr)
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), stored); err != nil {
+		t.Fatalf("the foreign binding must survive: %v", err)
 	}
 	if stored.RoleRef != foreign.RoleRef {
 		t.Fatalf("roleRef = %+v, want it untouched", stored.RoleRef)
@@ -160,18 +236,106 @@ func TestEnsureAccessRefusesToAdoptAForeignRoleBinding(t *testing.T) {
 	}
 }
 
+// TestEnsureAccessReplacesOurBindingThatNamesAnotherRole pins the other side of the
+// ownership test: a binding carrying our label is ours to shape whatever state it is
+// found in, and a roleRef naming some other role is drift like any other. roleRef is
+// immutable, so putting it right means replacing the object rather than patching it.
+func TestEnsureAccessReplacesOurBindingThatNamesAnotherRole(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+	names := rel.InternalNames()
+	misbound := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      names.ServiceAccount,
+			Namespace: "team-a",
+			Labels:    applicationRBACLabels(),
+		},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "some-other-role"},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "someone-else"}},
+	}
+	service, c := newAccessService(t, misbound)
+
+	if out := service.EnsureAccess(context.Background(), rel); out.Err != nil {
+		t.Fatalf("EnsureAccess returned %v", out.Err)
+	}
+
+	stored := &rbacv1.RoleBinding{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(misbound), stored); err != nil {
+		t.Fatalf("getting role binding: %v", err)
+	}
+	if stored.RoleRef != applicationRoleRef() {
+		t.Fatalf("roleRef = %+v, want %+v", stored.RoleRef, applicationRoleRef())
+	}
+	wantSubjects := []rbacv1.Subject{{
+		Kind: rbacv1.ServiceAccountKind, Name: names.ServiceAccount, Namespace: testNamespace,
+	}}
+	if !reflect.DeepEqual(stored.Subjects, wantSubjects) {
+		t.Fatalf("subjects = %+v, want %+v", stored.Subjects, wantSubjects)
+	}
+	for key, want := range applicationRBACLabels() {
+		if stored.Labels[key] != want {
+			t.Fatalf("binding label %q = %q, want %q", key, stored.Labels[key], want)
+		}
+	}
+}
+
+// TestEnsureAccessSurvivesLosingTheRoleCreateRace pins the one object of the three
+// that two applications can race for: the Role is shared by the namespace, so the
+// application that reads it as missing a moment too late is refused the create. It
+// must reach the same end state, not report a failure.
+func TestEnsureAccessSurvivesLosingTheRoleCreateRace(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+
+	var refused bool
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				role, ok := obj.(*rbacv1.Role)
+				if !ok || refused {
+					return cl.Create(ctx, obj, opts...)
+				}
+
+				// The winner of the race stores the Role; this pass learns of it the
+				// way the API server would report it.
+				refused = true
+				if err := cl.Create(ctx, role.DeepCopy(), opts...); err != nil {
+					return err
+				}
+
+				return apierrors.NewAlreadyExists(rbacv1.Resource("roles"), role.Name)
+			},
+		}).
+		Build()
+	service := NewAccessService(c, testNamespace)
+
+	if out := service.EnsureAccess(context.Background(), rel); out.Err != nil {
+		t.Fatalf("EnsureAccess returned %v", out.Err)
+	}
+	if !refused {
+		t.Fatal("the test did not exercise the refused create")
+	}
+
+	role := &rbacv1.Role{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: ApplicationRoleName}, role); err != nil {
+		t.Fatalf("getting role: %v", err)
+	}
+	if !reflect.DeepEqual(role.Labels, applicationRBACLabels()) {
+		t.Fatalf("role labels = %v, want %v", role.Labels, applicationRBACLabels())
+	}
+}
+
 func TestEnsureAccessRecreatesADeletedRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newAccessService(t)
 
-	if err := service.EnsureAccess(context.Background(), rel); err != nil {
-		t.Fatalf("first EnsureAccess returned %v", err)
+	if out := service.EnsureAccess(context.Background(), rel); out.Err != nil {
+		t.Fatalf("first EnsureAccess returned %v", out.Err)
 	}
 	if err := c.Delete(context.Background(), &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: "team-a"}}); err != nil {
 		t.Fatalf("deleting role: %v", err)
 	}
-	if err := service.EnsureAccess(context.Background(), rel); err != nil {
-		t.Fatalf("second EnsureAccess returned %v", err)
+	if out := service.EnsureAccess(context.Background(), rel); out.Err != nil {
+		t.Fatalf("second EnsureAccess returned %v", out.Err)
 	}
 
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: ApplicationRoleName}, &rbacv1.Role{}); err != nil {
@@ -188,8 +352,8 @@ func TestEnsureAccessKeepsForeignLabelsOnTheServiceAccountAndBinding(t *testing.
 	names := rel.InternalNames()
 	service, c := newAccessService(t)
 
-	if err := service.EnsureAccess(context.Background(), rel); err != nil {
-		t.Fatalf("first EnsureAccess returned %v", err)
+	if out := service.EnsureAccess(context.Background(), rel); out.Err != nil {
+		t.Fatalf("first EnsureAccess returned %v", out.Err)
 	}
 
 	sa := &corev1.ServiceAccount{}
@@ -210,8 +374,8 @@ func TestEnsureAccessKeepsForeignLabelsOnTheServiceAccountAndBinding(t *testing.
 		t.Fatalf("labelling role binding: %v", err)
 	}
 
-	if err := service.EnsureAccess(context.Background(), rel); err != nil {
-		t.Fatalf("second EnsureAccess returned %v", err)
+	if out := service.EnsureAccess(context.Background(), rel); out.Err != nil {
+		t.Fatalf("second EnsureAccess returned %v", out.Err)
 	}
 
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: names.ServiceAccount}, sa); err != nil {
@@ -232,8 +396,8 @@ func TestEnsureAccessKeepsForeignLabelsOnTheServiceAccountAndBinding(t *testing.
 func TestEnsureAccessIsANoopForAFamilyWithoutAServiceAccount(t *testing.T) {
 	service, c := newAccessService(t)
 
-	if err := service.EnsureAccess(context.Background(), adapter.NewAddonRelease(testAddon())); err != nil {
-		t.Fatalf("EnsureAccess returned %v", err)
+	if out := service.EnsureAccess(context.Background(), adapter.NewAddonRelease(testAddon())); out.Err != nil {
+		t.Fatalf("EnsureAccess returned %v", out.Err)
 	}
 
 	var accounts corev1.ServiceAccountList
@@ -252,8 +416,8 @@ func TestCleanupAccessRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newAccessService(t)
 
-	if err := service.EnsureAccess(context.Background(), rel); err != nil {
-		t.Fatalf("EnsureAccess returned %v", err)
+	if out := service.EnsureAccess(context.Background(), rel); out.Err != nil {
+		t.Fatalf("EnsureAccess returned %v", out.Err)
 	}
 	if err := service.CleanupAccess(context.Background(), rel); err != nil {
 		t.Fatalf("CleanupAccess returned %v", err)
@@ -274,8 +438,6 @@ func TestCleanupAccessRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T) {
 	if err := service.CleanupAccess(context.Background(), rel); err != nil {
 		t.Fatalf("second CleanupAccess returned %v", err)
 	}
-
-	var _ source.AccessManager = service
 }
 
 // TestCleanupAccessLeavesAForeignRoleBindingAlone pins the delete-side mirror of

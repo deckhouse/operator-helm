@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -66,12 +67,12 @@ func NewRepoSecretsService(client client.Client, scheme *runtime.Scheme, namespa
 func (s *RepoSecretsService) Ensure(
 	ctx context.Context,
 	repo source.Repository,
-	repoType utils.InternalRepositoryType,
+	repoType chartsource.Kind,
 ) error {
 	var err error
 
 	switch repoType {
-	case utils.InternalOCIRepository:
+	case chartsource.OCI:
 		err = s.reconcileDockerConfigAuthSecret(ctx, repo)
 	default:
 		err = s.reconcileBasicAuthSecret(ctx, repo)

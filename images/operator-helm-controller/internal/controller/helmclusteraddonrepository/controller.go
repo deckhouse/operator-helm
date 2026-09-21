@@ -28,9 +28,9 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/repository"
 	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -41,15 +41,14 @@ const (
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
-	r := reconcile.New(
-		client,
-		adapter.EmptyAddonRepository,
-		services.NewRepoSecretsService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewForceService(client, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(client)),
-		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewAddonCatalog(client)),
-		status.NewManager(client),
-	)
+	r := reconcile.New(client, reconcile.Deps{
+		NewRepository: adapter.EmptyAddonRepository,
+		Secrets:       services.NewRepoSecretsService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Internal:      services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Consumers:     services.NewForceService(client, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(client)),
+		Catalog:       services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewAddonCatalog(client)),
+		Status:        status.NewManager(client),
+	})
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).

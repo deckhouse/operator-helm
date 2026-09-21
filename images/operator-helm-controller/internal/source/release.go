@@ -22,7 +22,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/deckhouse/operator-helm/internal/manager/status"
+	"github.com/deckhouse/operator-helm/internal/status"
 )
 
 // RepositoryRef names the repository a release takes its chart from. Kind is one
@@ -95,68 +95,6 @@ type Release interface {
 	// last applied one.
 	IsChartStatusInfoOutdated() bool
 }
-
-// RepositoryResolver loads the repository a release references and the catalog of
-// that repository's kind. The application family picks between two repository
-// kinds; the addon family has one.
-type RepositoryResolver interface {
-	Resolve(ctx context.Context, ref RepositoryRef) (Repository, Catalog, error)
-}
-
-// ChartClaim guards the uniqueness of a repository/chart pair across the releases
-// of one family. The addon family enforces it with a Lease; the application family
-// does not enforce it at all.
-type ChartClaim interface {
-	// Acquire reports whether the release holds the claim on its pair; when it does
-	// not, holder names the release that does.
-	Acquire(ctx context.Context, rel Release) (acquired bool, holder string, err error)
-	// ReleaseStale frees claims this release still holds on pairs it no longer
-	// references.
-	ReleaseStale(ctx context.Context, rel Release) error
-	// Release frees the claim on the release's current pair.
-	Release(ctx context.Context, rel Release) error
-}
-
-// NoChartClaim is the ChartClaim of a family without a uniqueness rule: every
-// release holds its own pair, and the conflict branch of the reconciler is never
-// taken.
-type NoChartClaim struct{}
-
-func (NoChartClaim) Acquire(_ context.Context, rel Release) (bool, string, error) {
-	return true, rel.Name(), nil
-}
-
-func (NoChartClaim) ReleaseStale(context.Context, Release) error { return nil }
-
-func (NoChartClaim) Release(context.Context, Release) error { return nil }
-
-// TargetNamespaceEnsurer makes sure the namespace a release deploys into exists.
-type TargetNamespaceEnsurer interface {
-	EnsureTargetNamespace(ctx context.Context, rel Release) error
-}
-
-// ExistingTargetNamespace is the ensurer of a family whose target namespace is the
-// release's own: it exists by definition, or the release could not.
-type ExistingTargetNamespace struct{}
-
-func (ExistingTargetNamespace) EnsureTargetNamespace(context.Context, Release) error {
-	return nil
-}
-
-// AccessManager provides the identity a release is applied with. The application
-// family creates a ServiceAccount, a Role and a RoleBinding and names the account
-// on the HelmRelease; the addon family applies charts as helm-controller itself.
-type AccessManager interface {
-	EnsureAccess(ctx context.Context, rel Release) error
-	CleanupAccess(ctx context.Context, rel Release) error
-}
-
-// NoAccess is the AccessManager of a family that does not impersonate.
-type NoAccess struct{}
-
-func (NoAccess) EnsureAccess(context.Context, Release) error { return nil }
-
-func (NoAccess) CleanupAccess(context.Context, Release) error { return nil }
 
 // ReleaseLister lists the releases of one family that consume a repository, or
 // only those consuming one chart of it when chartName is not empty. It is how a

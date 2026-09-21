@@ -27,4 +27,12 @@ limitations under the License.
 // adapter is not a registered type, so it is never handed to the client; the
 // object underneath it is reached through Object() at the few places that talk to
 // the API server.
+//
+// Status is managed the way the repository package manages it, and for the same
+// reason: a pass does cluster work and records what came of it in Inputs, and one
+// deterministic function — Evaluate — turns that into the whole desired status,
+// what to requeue and what to hand back to the work queue. No step writes a
+// condition of its own, so what the release reports can be read in one place and
+// tested without a cluster. The services this reconciler drives return outcomes
+// rather than conditions for the same reason.
 package release

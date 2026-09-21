@@ -19,6 +19,7 @@ package release
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,11 +45,12 @@ import (
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -111,7 +113,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 		// Status.Versions. Its own Version field decides whether the lookup by
 		// addon.Spec.Chart.Version ("6.7.1") hits or misses.
 		version        helmv1alpha1.ChartVersion
-		repoType       utils.InternalRepositoryType
+		repoType       chartsource.Kind
 		wantErr        bool
 		wantErrContain string
 	}{
@@ -121,7 +123,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				Version:   "6.7.1",
 				MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
 			},
-			repoType: utils.InternalOCIRepository,
+			repoType: chartsource.OCI,
 		},
 		{
 			// Deliberate: the tag disappeared from the repository, but the entry is
@@ -133,7 +135,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				MediaType:         "application/tar+gzip",
 				UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
 			},
-			repoType: utils.InternalOCIRepository,
+			repoType: chartsource.OCI,
 		},
 		{
 			name: "oci version stuck resolving is rejected with reason and message",
@@ -142,7 +144,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
 				UnavailableMessage: "manifest request failed",
 			},
-			repoType:       utils.InternalOCIRepository,
+			repoType:       chartsource.OCI,
 			wantErr:        true,
 			wantErrContain: "ResolvePending: manifest request failed",
 		},
@@ -152,7 +154,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				Version:           "6.7.1",
 				UnavailableReason: helmv1alpha1.UnavailableReasonUnsupportedMediaType,
 			},
-			repoType:       utils.InternalOCIRepository,
+			repoType:       chartsource.OCI,
 			wantErr:        true,
 			wantErrContain: "UnsupportedMediaType",
 		},
@@ -165,7 +167,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				Version:           "6.7.1",
 				UnavailableReason: helmv1alpha1.UnavailableReasonUnsupportedMediaType,
 			},
-			repoType: utils.InternalHelmRepository,
+			repoType: chartsource.Helm,
 		},
 		{
 			// The repository's URL just switched from oci:// to https://: the
@@ -176,7 +178,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				Version:   "6.7.1",
 				MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
 			},
-			repoType: utils.InternalHelmRepository,
+			repoType: chartsource.Helm,
 		},
 		{
 			// The repository's URL just switched from https:// to oci://, but the
@@ -187,14 +189,14 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			version: helmv1alpha1.ChartVersion{
 				Version: "6.7.1",
 			},
-			repoType:       utils.InternalOCIRepository,
+			repoType:       chartsource.OCI,
 			wantErr:        true,
 			wantErrContain: "has not resolved it yet",
 		},
 		{
 			name:           "a version the addon does not reference is rejected",
 			version:        helmv1alpha1.ChartVersion{Version: "9.9.9"},
-			repoType:       utils.InternalOCIRepository,
+			repoType:       chartsource.OCI,
 			wantErr:        true,
 			wantErrContain: `does not have version "6.7.1"`,
 		},
@@ -207,7 +209,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				Version: "6.7.1",
 				OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 			},
-			repoType: utils.InternalHelmRepository,
+			repoType: chartsource.Helm,
 		},
 		{
 			// Left through, this version would be sent down the helm path and would
@@ -218,7 +220,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				UnavailableReason:  helmv1alpha1.UnavailableReasonInvalidChartReference,
 				UnavailableMessage: "oci reference \"oci://BAD_HOST//:::\" is not a valid tagged reference",
 			},
-			repoType:       utils.InternalHelmRepository,
+			repoType:       chartsource.Helm,
 			wantErr:        true,
 			wantErrContain: "InvalidChartReference",
 		},
@@ -270,7 +272,7 @@ func TestGetHelmClusterAddonChartMissingChart(t *testing.T) {
 	addon := testAddon()
 	r, c := newTestReconciler(t)
 
-	gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c), adapter.NewAddonRepository(helmRepositoryFixture()), adapter.NewAddonRelease(addon), utils.InternalOCIRepository)
+	gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c), adapter.NewAddonRepository(helmRepositoryFixture()), adapter.NewAddonRelease(addon), chartsource.OCI)
 	if err == nil {
 		t.Fatalf("expected an error when the addon chart does not exist, got version %+v", gotVersion)
 	}
@@ -347,7 +349,7 @@ func newFullReconciler(
 		Maintenance:  services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
 		Claim:        services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
 		Namespaces:   services.NewNamespaceService(c, c),
-		Access:       source.NoAccess{},
+		Access:       NoAccess{},
 		Status:       status.NewManager(c),
 	}), c
 }
@@ -358,7 +360,7 @@ func newFullReconciler(
 // identity manager; nil selects the real one over the same fake client.
 func newApplicationFullReconciler(
 	t *testing.T,
-	access source.AccessManager,
+	access AccessManager,
 	objects ...client.Object,
 ) (*Reconciler, client.Client) {
 	t.Helper()
@@ -394,8 +396,8 @@ func newApplicationFullReconciler(
 		OCI:          services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
 		Release:      services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
 		Maintenance:  services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
-		Claim:        source.NoChartClaim{},
-		Namespaces:   source.ExistingTargetNamespace{},
+		Claim:        NoChartClaim{},
+		Namespaces:   ExistingTargetNamespace{},
 		Access:       access,
 		Status:       status.NewManager(c),
 	}), c
@@ -473,6 +475,81 @@ func markInternalChartReady(t *testing.T, c client.Client, name string) {
 	// itself, so there is nothing for a subresource to protect here.
 	if err := c.Update(context.Background(), chart); err != nil {
 		t.Fatalf("updating internal helm chart status: %v", err)
+	}
+}
+
+// markInternalReleaseDeployed stands in for helm-controller: the internal
+// HelmRelease reports the revision it installed only once that controller has run.
+func markInternalReleaseDeployed(t *testing.T, c client.Client, name, version string) {
+	t.Helper()
+
+	release := &helmv2.HelmRelease{}
+	key := client.ObjectKey{Name: name, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), key, release); err != nil {
+		t.Fatalf("the internal release must exist before it can report a revision: %v", err)
+	}
+
+	release.Status.History = helmv2.Snapshots{{Status: "deployed", ChartVersion: version}}
+	release.Status.Conditions = []metav1.Condition{{
+		Type:               "Ready",
+		Status:             metav1.ConditionTrue,
+		Reason:             "InstallSucceeded",
+		ObservedGeneration: release.Generation,
+		LastTransitionTime: metav1.Now(),
+	}}
+	if err := c.Update(context.Background(), release); err != nil {
+		t.Fatalf("updating internal helm release status: %v", err)
+	}
+}
+
+// TestReconcileReportsProgressUntilTheReleaseSettles walks the progress condition
+// through one install. It is raised while an internal object still has work to do,
+// carries that object's own verdict rather than a fixed message, and is taken away
+// by the pass that finds the release settled — without which kstatus would read a
+// healthy release as one that never finishes. The passes in between are driven by
+// the watches on the internal objects, which is what a status write on either of
+// them produces in the real controller.
+func TestReconcileReportsProgressUntilTheReleaseSettles(t *testing.T) {
+	app := testApplication()
+
+	r, c := newApplicationFullReconciler(t, nil, append(applicationFixtures(), app)...)
+
+	names := adapter.NewApplicationRelease(app).InternalNames()
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+
+	progressOf := func(t *testing.T) *metav1.Condition {
+		t.Helper()
+
+		settled := &helmv1alpha1.HelmApplication{}
+		if err := c.Get(context.Background(), key, settled); err != nil {
+			t.Fatalf("getting application: %v", err)
+		}
+
+		return apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	}
+
+	reconcileApplication(t, r, app)
+
+	progress := progressOf(t)
+	if progress == nil || progress.Status != metav1.ConditionTrue {
+		t.Fatalf("Reconciling = %+v, want True while the chart is being pulled", progress)
+	}
+	if progress.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("Reconciling reason = %q, want %q", progress.Reason, helmv1alpha1.ReasonReconciling)
+	}
+
+	markInternalChartReady(t, c, names.HelmChart)
+	reconcileApplication(t, r, app)
+
+	if progress := progressOf(t); progress == nil || progress.Status != metav1.ConditionTrue {
+		t.Fatalf("Reconciling = %+v, want True while the release is rolling out", progress)
+	}
+
+	markInternalReleaseDeployed(t, c, names.HelmRelease, app.Spec.Chart.Version)
+	reconcileApplication(t, r, app)
+
+	if progress := progressOf(t); progress != nil {
+		t.Fatalf("Reconciling = %+v, want it gone once the release settled", progress)
 	}
 }
 
@@ -581,8 +658,12 @@ func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *test
 // failingAccess is an AccessManager whose identity setup never succeeds.
 type failingAccess struct{}
 
-func (failingAccess) EnsureAccess(context.Context, source.Release) error {
-	return errors.New("service account is forbidden")
+func (failingAccess) EnsureAccess(context.Context, source.Release) services.AccessOutcome {
+	return services.AccessOutcome{
+		Err:     errors.New("service account is forbidden"),
+		Reason:  helmv1alpha1.ReasonAccessSetupFailed,
+		Message: "Failed to set up the release identity",
+	}
 }
 
 func (failingAccess) CleanupAccess(context.Context, source.Release) error { return nil }
@@ -628,14 +709,18 @@ func TestReconcileApplicationReportsAccessSetupFailure(t *testing.T) {
 // momentary admission rejection) that clears on its own by the next pass. real is
 // set after construction, once the reconciler's own client exists.
 type intermittentAccess struct {
-	real  source.AccessManager
+	real  AccessManager
 	calls int
 }
 
-func (a *intermittentAccess) EnsureAccess(ctx context.Context, rel source.Release) error {
+func (a *intermittentAccess) EnsureAccess(ctx context.Context, rel source.Release) services.AccessOutcome {
 	a.calls++
 	if a.calls == 1 {
-		return errors.New("service account is forbidden")
+		return services.AccessOutcome{
+			Err:     errors.New("service account is forbidden"),
+			Reason:  helmv1alpha1.ReasonAccessSetupFailed,
+			Message: "Failed to set up the release identity",
+		}
 	}
 	return a.real.EnsureAccess(ctx, rel)
 }
@@ -689,11 +774,109 @@ func TestReconcileApplicationRecoversAfterTransientAccessSetupFailure(t *testing
 	}
 }
 
+// TestReconcileStallsOnAnUnreadableRepositoryURL pins the release-side mirror of the
+// repository's own configuration verdict. The fault is in the repository, not here,
+// and the repository reports it as Stalled too; retrying from this side would only
+// rediscover it, so the release says so and waits for the repository's generation to
+// move — which is what correcting the url does.
+func TestReconcileStallsOnAnUnreadableRepositoryURL(t *testing.T) {
+	app := testApplication()
+	fixtures := applicationFixtures()
+	fixtures[0] = &helmv1alpha1.HelmApplicationRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a", Generation: 1},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "ftp://charts.example.invalid/stable"},
+	}
+
+	r, c := newApplicationFullReconciler(t, nil, append(fixtures, app)...)
+
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("a terminal failure must not be handed to the work queue: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("RequeueAfter = %v, want none", result.RequeueAfter)
+	}
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(context.Background(), key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+
+	stalled := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeStalled)
+	if stalled == nil {
+		t.Fatalf("Stalled must be reported, conditions: %v", settled.Status.Conditions)
+	}
+	if stalled.Status != metav1.ConditionTrue || stalled.Reason != helmv1alpha1.ReasonUnsupportedRepositoryType {
+		t.Fatalf("Stalled is %s/%s, want True/%s",
+			stalled.Status, stalled.Reason, helmv1alpha1.ReasonUnsupportedRepositoryType)
+	}
+}
+
+// TestReconcileApplicationStallsOnAForeignRole pins the end of the terminal path an
+// application reaches when the namespace already holds a Role under the name the
+// identity needs. Nothing observes such an object — the informer behind the watch on
+// the kind selects on the very label it lacks — so the pass must say so on the status
+// rather than come back through the work queue and rediscover it.
+func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
+	app := testApplication()
+	rules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}}
+	foreign := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: services.ApplicationRoleName, Namespace: app.Namespace},
+		Rules:      rules,
+	}
+
+	r, c := newApplicationFullReconciler(t, nil, append(applicationFixtures(), app, foreign)...)
+
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("a terminal failure must not be handed to the work queue: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("RequeueAfter = %v, want none", result.RequeueAfter)
+	}
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(context.Background(), key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+
+	stalled := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeStalled)
+	if stalled == nil {
+		t.Fatalf("Stalled must be reported, conditions: %v", settled.Status.Conditions)
+	}
+	if stalled.Status != metav1.ConditionTrue || stalled.Reason != helmv1alpha1.ReasonForeignAccessObject {
+		t.Fatalf("Stalled is %s/%s, want True/%s", stalled.Status, stalled.Reason, helmv1alpha1.ReasonForeignAccessObject)
+	}
+
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonForeignAccessObject {
+		t.Fatalf("Ready = %+v, want False/%s", ready, helmv1alpha1.ReasonForeignAccessObject)
+	}
+
+	stored := &rbacv1.Role{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), stored); err != nil {
+		t.Fatalf("the foreign role must survive: %v", err)
+	}
+	if !reflect.DeepEqual(stored.Rules, rules) {
+		t.Fatalf("rules = %+v, want them untouched", stored.Rules)
+	}
+
+	names := adapter.NewApplicationRelease(app).InternalNames()
+	releaseKey := client.ObjectKey{Name: names.HelmRelease, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), releaseKey, &helmv2.HelmRelease{}); err == nil {
+		t.Fatal("no release must be created for an application whose identity could not be built")
+	}
+}
+
 // accessCleanupFails is an AccessManager whose teardown never succeeds, standing in
 // for an API failure while removing the release's ServiceAccount or RoleBinding.
 type accessCleanupFails struct{}
 
-func (accessCleanupFails) EnsureAccess(context.Context, source.Release) error { return nil }
+func (accessCleanupFails) EnsureAccess(context.Context, source.Release) services.AccessOutcome {
+	return services.AccessOutcome{}
+}
 
 func (accessCleanupFails) CleanupAccess(context.Context, source.Release) error {
 	return errors.New("role binding deletion forbidden")
@@ -1008,7 +1191,7 @@ func TestLogSourceKindFlipIgnoresStaleEntryFromADifferentChartOrRepository(t *te
 			ctx := log.IntoContext(context.Background(), logger)
 
 			r := &Reconciler{}
-			r.logSourceKindFlip(ctx, adapter.NewAddonRelease(addon), utils.InternalOCIRepository, true)
+			r.logSourceKindFlip(ctx, adapter.NewAddonRelease(addon), chartsource.OCI, true)
 
 			if logged != tt.wantLogged {
 				t.Fatalf("logged = %v, want %v", logged, tt.wantLogged)
@@ -1104,8 +1287,15 @@ func TestReconcileForcedAddonRecordsCompletion(t *testing.T) {
 		t.Fatalf("getting addon: %v", err)
 	}
 
-	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
-		t.Fatalf("Reconciling must be gone once the forced pass finished, got %+v", cond)
+	// The request itself is over, so the reason it raised must be gone; the pass
+	// kicked off a rollout that is still running, and the progress condition is
+	// handed over to the ordinary verdict rather than taken away.
+	cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	if cond == nil {
+		t.Fatalf("Reconciling must still report the rollout, conditions: %v", settled.Status.Conditions)
+	}
+	if cond.Reason == helmv1alpha1.ReasonForceReconcile {
+		t.Fatal("Reconciling must stop carrying ForceReconcile once the forced pass finished")
 	}
 	if settled.Status.LastForceReconcileTime == nil {
 		t.Fatal("lastForceReconcileTime must be recorded by the forced pass")
@@ -1140,39 +1330,6 @@ func TestReconcileUnforcedAddonRecordsNoForceReconcile(t *testing.T) {
 	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil &&
 		cond.Reason == helmv1alpha1.ReasonForceReconcile {
 		t.Fatalf("an unforced pass must not report %s", helmv1alpha1.ReasonForceReconcile)
-	}
-}
-
-// TestReconcileForceAnnotationSkipsUnannotatedAddon pins that an addon carrying
-// unrelated annotations is not written on every pass. Guarding on the map instead
-// of on the annotation itself sends an empty PATCH each time, which costs a write
-// and an update event for every addon in the cluster.
-func TestReconcileForceAnnotationSkipsUnannotatedAddon(t *testing.T) {
-	addon := testAddon()
-	addon.Annotations = map[string]string{"example.io/unrelated": "value"}
-
-	r, c := newForceTestReconciler(t, interceptor.Funcs{}, addon)
-
-	stored := &helmv1alpha1.HelmClusterAddon{}
-	key := types.NamespacedName{Name: addon.Name}
-	if err := c.Get(context.Background(), key, stored); err != nil {
-		t.Fatalf("getting addon: %v", err)
-	}
-	before := stored.ResourceVersion
-
-	if err := r.reconcileForceAnnotation(context.Background(), key); err != nil {
-		t.Fatalf("reconcileForceAnnotation returned %v", err)
-	}
-
-	if err := c.Get(context.Background(), key, stored); err != nil {
-		t.Fatalf("getting addon: %v", err)
-	}
-	if stored.ResourceVersion != before {
-		t.Fatalf("resourceVersion moved from %s to %s: an addon without the force annotation was written",
-			before, stored.ResourceVersion)
-	}
-	if stored.Annotations["example.io/unrelated"] != "value" {
-		t.Fatal("unrelated annotations must be left in place")
 	}
 }
 
@@ -1289,5 +1446,41 @@ func TestReconcileLeavingMaintenanceKeepsForceReconcile(t *testing.T) {
 
 	if _, found := settled.Annotations[helmv1alpha1.AnnotationForceReconcile]; !found {
 		t.Fatal("the force annotation must survive the pass that lifts maintenance")
+	}
+}
+
+// TestReconcileLogsAFailureItDoesNotHandBack pins the one report a quietly failing
+// pass leaves behind. Only the identity failure is handed to the work queue, which
+// logs it on the way past; every other failure ends the pass with no error at all,
+// and several of them report a fixed message, so without this line the cause is
+// written down nowhere.
+func TestReconcileLogsAFailureItDoesNotHandBack(t *testing.T) {
+	addon := testAddon()
+	// No repository object is created, so resolving the one the addon names fails.
+	r, _ := newFullReconciler(t, &stubChartResolver{}, interceptor.Funcs{}, addon)
+
+	var logged []string
+	logger := funcr.New(func(prefix, args string) {
+		logged = append(logged, args)
+	}, funcr.Options{})
+	ctx := log.IntoContext(context.Background(), logger)
+
+	res, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: addon.Name}})
+	if err != nil {
+		t.Fatalf("Reconcile returned %v, want the failure reported rather than handed back", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("RequeueAfter = %v, want none: a watch on the repository wakes the addon", res.RequeueAfter)
+	}
+
+	var found bool
+	for _, line := range logged {
+		if strings.Contains(line, "Failed to get internal repository") &&
+			strings.Contains(line, helmv1alpha1.ReasonFailed) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the failure was not logged, got %q", logged)
 	}
 }

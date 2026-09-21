@@ -38,53 +38,6 @@ type DeletingResource interface {
 	GetConditions() []metav1.Condition
 }
 
-// readyResult sets the Ready condition directly from a Status.
-type readyResult struct {
-	status Status
-}
-
-var _ Provider = readyResult{}
-
-func (r readyResult) GetStatus() Status { return r.status }
-
-func (r readyResult) GetConditionType() string { return helmv1alpha1.ConditionTypeReady }
-
-// uninstallFailedResult carries the state of the UninstallFailed condition, an
-// abnormal-true condition that is True when a Helm release fails to uninstall
-// while its owner is being deleted. The same result is reflected onto the Ready
-// condition with inverted polarity (see reflectUninstallFailedToReady).
-type uninstallFailedResult struct {
-	status Status
-}
-
-var _ Provider = uninstallFailedResult{}
-
-func (r uninstallFailedResult) GetStatus() Status { return r.status }
-
-func (r uninstallFailedResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeUninstallFailed
-}
-
-// reflectUninstallFailedToReady inverts the condition status when the
-// UninstallFailed result is reflected onto the Ready condition: an
-// UninstallFailed=True (an error occurred) must read as Ready=False, while the
-// reason and message are preserved. Unknown stays Unknown, so an in-progress
-// uninstall reflects as Ready=Unknown/Reconciling.
-func reflectUninstallFailedToReady(conditionType string, s Status) Status {
-	if conditionType != helmv1alpha1.ConditionTypeReady {
-		return s
-	}
-
-	switch s.Status {
-	case metav1.ConditionTrue:
-		s.Status = metav1.ConditionFalse
-	case metav1.ConditionFalse:
-		s.Status = metav1.ConditionTrue
-	}
-
-	return s
-}
-
 // MarkUninstallPending records that a Helm release is still being uninstalled
 // while its owner is deleted. A failing release (its Ready condition is False)
 // makes the UninstallFailed condition True and Ready False, both with reason
@@ -92,29 +45,30 @@ func reflectUninstallFailedToReady(conditionType string, s Status) Status {
 // Reconciling until the release disappears. resourceName is a user-facing,
 // abstract name so the internal resource type is not leaked.
 func (s *Manager) MarkUninstallPending(ctx context.Context, obj ObjectWithConditions, resourceName string, resource DeletingResource) error {
-	var st Status
-	if failing, message := deletionFailure(resourceName, resource); failing {
-		st = Status{
-			Observed:           true,
-			Status:             metav1.ConditionTrue,
-			Reason:             helmv1alpha1.ReasonUninstallFailed,
-			Message:            message,
-			ObservedGeneration: obj.GetGeneration(),
-		}
-	} else {
-		st = reconcilingDeletionStatus(obj, message)
+	failing, message := deletionFailure(resourceName, resource)
+
+	uninstallFailed := metav1.Condition{
+		Type:               helmv1alpha1.ConditionTypeUninstallFailed,
+		Status:             metav1.ConditionUnknown,
+		Reason:             helmv1alpha1.ReasonReconciling,
+		Message:            message,
+		ObservedGeneration: obj.GetGeneration(),
 	}
 
-	result := uninstallFailedResult{status: st}
+	// Ready carries the same verdict with the polarity a reader expects: an
+	// uninstall that failed is an owner that is not ready, while one still running
+	// leaves both Unknown.
+	ready := uninstallFailed
+	ready.Type = helmv1alpha1.ConditionTypeReady
 
-	return s.Update(
-		ctx,
-		obj,
-		NoopStatusMutator,
-		reflectUninstallFailedToReady,
-		result,
-		AsCondition(result, helmv1alpha1.ConditionTypeReady),
-	)
+	if failing {
+		uninstallFailed.Status = metav1.ConditionTrue
+		uninstallFailed.Reason = helmv1alpha1.ReasonUninstallFailed
+		ready.Status = metav1.ConditionFalse
+		ready.Reason = helmv1alpha1.ReasonUninstallFailed
+	}
+
+	return s.patchConditions(ctx, obj, uninstallFailed, ready)
 }
 
 // MarkDeletionPending records that an internal resource is still being deleted,
@@ -123,49 +77,59 @@ func (s *Manager) MarkUninstallPending(ctx context.Context, obj ObjectWithCondit
 // Failed and its message; otherwise Ready stays Unknown/Reconciling until the
 // resource disappears. resourceName is a user-facing, abstract name.
 func (s *Manager) MarkDeletionPending(ctx context.Context, obj ObjectWithConditions, resourceName string, resource DeletingResource) error {
-	var st Status
-	if failing, message := deletionFailure(resourceName, resource); failing {
-		st = Status{
-			Observed:           true,
-			Status:             metav1.ConditionFalse,
-			Reason:             helmv1alpha1.ReasonFailed,
-			Message:            message,
-			ObservedGeneration: obj.GetGeneration(),
-		}
-	} else {
-		st = reconcilingDeletionStatus(obj, message)
+	failing, message := deletionFailure(resourceName, resource)
+
+	ready := metav1.Condition{
+		Type:               helmv1alpha1.ConditionTypeReady,
+		Status:             metav1.ConditionUnknown,
+		Reason:             helmv1alpha1.ReasonReconciling,
+		Message:            message,
+		ObservedGeneration: obj.GetGeneration(),
 	}
 
-	return s.Update(ctx, obj, NoopStatusMutator, NoopStatusMapper, readyResult{status: st})
+	if failing {
+		ready.Status = metav1.ConditionFalse
+		ready.Reason = helmv1alpha1.ReasonFailed
+	}
+
+	return s.patchConditions(ctx, obj, ready)
 }
 
 // MarkDeletionFailed sets Ready=False with reason Failed when an internal
 // resource could not be deleted because of a hard error that is not reported
 // through the resource's own conditions (e.g. an API error while deleting a
 // dependency). The message uses the same abstract wording as MarkDeletionPending.
+// err itself is not logged here: every caller hands it back to the work queue,
+// which is where it is reported.
 func (s *Manager) MarkDeletionFailed(ctx context.Context, obj ObjectWithConditions, resourceName string, err error) error {
 	message := fmt.Sprintf("Failed to delete %s", resourceName)
 	if err != nil {
 		message = fmt.Sprintf("%s: %s", message, err.Error())
 	}
 
-	return s.Update(ctx, obj, NoopStatusMutator, NoopStatusMapper, readyResult{status: Status{
-		Observed:           true,
+	return s.patchConditions(ctx, obj, metav1.Condition{
+		Type:               helmv1alpha1.ConditionTypeReady,
 		Status:             metav1.ConditionFalse,
 		Reason:             helmv1alpha1.ReasonFailed,
 		Message:            message,
 		ObservedGeneration: obj.GetGeneration(),
-		Err:                err,
-	}})
+	})
 }
 
-func reconcilingDeletionStatus(obj ObjectWithConditions, message string) Status {
-	return Status{
-		Status:             metav1.ConditionUnknown,
-		Reason:             helmv1alpha1.ReasonReconciling,
-		Message:            message,
-		ObservedGeneration: obj.GetGeneration(),
-	}
+// patchConditions writes the conditions of a deletion pass. observedGeneration is
+// advanced with them: a spec edited while the object is being deleted is still a
+// spec this controller has seen, and leaving it behind would report the teardown as
+// work that has not started.
+func (s *Manager) patchConditions(ctx context.Context, obj ObjectWithConditions, conditions ...metav1.Condition) error {
+	return s.PatchStatus(ctx, obj, func() {
+		for _, condition := range conditions {
+			apimeta.SetStatusCondition(obj.GetConditions(), condition)
+		}
+
+		if generation := obj.GetGeneration(); generation > obj.GetObservedGeneration() {
+			obj.SetObservedGeneration(generation)
+		}
+	})
 }
 
 // deletionFailure reports whether the deleted resource is failing, together with

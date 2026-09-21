@@ -28,8 +28,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/source"
-	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 func newReleaseService(t *testing.T, objects ...client.Object) (*ReleaseService, client.Client) {
@@ -53,8 +53,8 @@ func newReleaseService(t *testing.T, objects ...client.Object) (*ReleaseService,
 func ensureRelease(t *testing.T, service *ReleaseService, c client.Client, rel source.Release) *helmv2.HelmRelease {
 	t.Helper()
 
-	if res := service.EnsureHelmRelease(context.Background(), rel, utils.InternalHelmRepository, ""); res.Status.Err != nil {
-		t.Fatalf("EnsureHelmRelease returned %v", res.Status.Err)
+	if res := service.EnsureHelmRelease(context.Background(), rel, chartsource.Helm, ""); res.Err != nil {
+		t.Fatalf("EnsureHelmRelease returned %v", res.Err)
 	}
 
 	release := &helmv2.HelmRelease{}

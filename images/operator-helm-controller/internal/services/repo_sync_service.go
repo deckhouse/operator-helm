@@ -23,9 +23,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/source"
-	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 type RepoSyncService struct {
@@ -37,7 +37,7 @@ type RepoSyncService struct {
 
 // RepoClientFactory builds the client used to read a repository catalog. It is
 // injected so the synchronization can be tested without a live repository.
-type RepoClientFactory func(repoType utils.InternalRepositoryType) (repoclient.ClientInterface, error)
+type RepoClientFactory func(repoType chartsource.Kind) (repoclient.ClientInterface, error)
 
 // NewRepoSyncService builds the synchronization for one repository kind: the
 // catalog decides which chart catalog kind the fetched charts are mirrored into.
@@ -73,7 +73,7 @@ func (s *RepoSyncService) MigrateNames(ctx context.Context, repo source.Reposito
 func (s *RepoSyncService) Sync(
 	ctx context.Context,
 	repo source.Repository,
-	repoType utils.InternalRepositoryType,
+	repoType chartsource.Kind,
 ) SyncOutcome {
 	known, err := s.catalog.Known(ctx, repo)
 	if err != nil {
@@ -101,7 +101,7 @@ func (s *RepoSyncService) Sync(
 func (s *RepoSyncService) fetchCharts(
 	ctx context.Context,
 	repo source.Repository,
-	repoType utils.InternalRepositoryType,
+	repoType chartsource.Kind,
 	opts repoclient.FetchOptions,
 ) ([]repoclient.Chart, FetchOutcome) {
 	repoClient, err := s.clientFactory(repoType)

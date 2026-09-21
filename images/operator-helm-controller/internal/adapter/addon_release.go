@@ -27,8 +27,8 @@ import (
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -141,7 +141,7 @@ type addonRepositoryResolver struct {
 	catalog source.Catalog
 }
 
-func NewAddonRepositoryResolver(c client.Client) source.RepositoryResolver {
+func NewAddonRepositoryResolver(c client.Client) *addonRepositoryResolver {
 	return &addonRepositoryResolver{client: c, catalog: NewAddonCatalog(c)}
 }
 

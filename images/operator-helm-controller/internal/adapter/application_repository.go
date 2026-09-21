@@ -20,8 +20,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 

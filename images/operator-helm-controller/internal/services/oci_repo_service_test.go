@@ -29,6 +29,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -116,10 +117,10 @@ func ociTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 
 // ociSource resolves the source the way the reconciler does, so the tests exercise
 // the real mapping instead of a hand-built one.
-func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.ChartVersion) utils.ChartSource {
+func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.ChartVersion) chartsource.Source {
 	t.Helper()
 
-	source, err := utils.ResolveChartSource(repo.Spec.URL, version)
+	source, err := chartsource.Resolve(repo.Spec.URL, version)
 	if err != nil {
 		t.Fatalf("resolving chart source: %v", err)
 	}
@@ -178,11 +179,11 @@ func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
 
 	result := service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
-	if result.Status.Reason != helmv1alpha1.ReasonChartVersionRemoved {
-		t.Fatalf("reason is %q, want %q", result.Status.Reason, helmv1alpha1.ReasonChartVersionRemoved)
+	if !result.VersionRemoved {
+		t.Fatal("the outcome must report that the repository no longer offers the tag")
 	}
-	if result.Status.Message == "" {
-		t.Fatal("a removed version must be explained in the message")
+	if result.Version != "6.7.1" || result.RepositoryName != repo.Name {
+		t.Fatalf("outcome names %s/%s, want the pair the message is built from", result.RepositoryName, result.Version)
 	}
 }
 
@@ -244,17 +245,14 @@ func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *
 
 	result := service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
-	if result.Status.Status != metav1.ConditionTrue {
-		t.Fatalf("expected the ready child's status to be mirrored as True, got %v", result.Status.Status)
+	if !result.Internal.Ready() {
+		t.Fatalf("expected the ready child to be mirrored as ready, got %+v", result.Internal)
 	}
-	if result.Status.Reason == helmv1alpha1.ReasonChartVersionRemoved {
-		t.Fatalf("a ready child must not be relabeled with %q", helmv1alpha1.ReasonChartVersionRemoved)
+	if result.Internal.Reason != "Succeeded" {
+		t.Fatalf("reason is %q, want the child's own %q untouched", result.Internal.Reason, "Succeeded")
 	}
-	if result.Status.Reason != "Succeeded" {
-		t.Fatalf("reason is %q, want the child's own %q untouched", result.Status.Reason, "Succeeded")
-	}
-	if result.Status.Message != "stored artifact for revision 6.7.1" {
-		t.Fatalf("message is %q, want the child's own message untouched", result.Status.Message)
+	if result.Internal.Message != "stored artifact for revision 6.7.1" {
+		t.Fatalf("message is %q, want the child's own message untouched", result.Internal.Message)
 	}
 }
 
@@ -567,11 +565,14 @@ func TestEnsureInternalOCIRepositoryReportsTerminalProbeFailure(t *testing.T) {
 		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
-	if result.Status.Reason != helmv1alpha1.ReasonUnsupportedChartArtifact {
-		t.Fatalf("reason = %q, want %q", result.Status.Reason, helmv1alpha1.ReasonUnsupportedChartArtifact)
+	if result.ProbeReason != helmv1alpha1.ReasonUnsupportedChartArtifact {
+		t.Fatalf("reason = %q, want %q", result.ProbeReason, helmv1alpha1.ReasonUnsupportedChartArtifact)
 	}
-	if result.RequeueAfter != 0 {
-		t.Fatalf("requeue = %v, want none: the artifact will not become a chart on its own", result.RequeueAfter)
+	if !result.ProbeTerminal {
+		t.Fatal("a verdict about the artifact must be marked terminal so the release reports it as Stalled")
+	}
+	if result.ProbeRequeueAfter != 0 {
+		t.Fatalf("requeue = %v, want none: the artifact will not become a chart on its own", result.ProbeRequeueAfter)
 	}
 
 	// Nothing must be created from a verdict that says the artifact is unusable: an
@@ -598,10 +599,13 @@ func TestEnsureInternalOCIRepositoryRequeuesRetriableProbeFailure(t *testing.T) 
 		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
-	if result.Status.Status != metav1.ConditionFalse {
-		t.Fatalf("status = %q, want False", result.Status.Status)
+	if result.ProbeErr == nil {
+		t.Fatal("a probe that could not reach the registry must be reported")
 	}
-	if result.RequeueAfter != chartArtifactProbeRequeueInterval {
-		t.Fatalf("requeue = %v, want %v", result.RequeueAfter, chartArtifactProbeRequeueInterval)
+	if result.ProbeTerminal {
+		t.Fatal("a failure that may pass on its own must not be marked terminal")
+	}
+	if result.ProbeRequeueAfter != chartArtifactProbeRequeueInterval {
+		t.Fatalf("requeue = %v, want %v", result.ProbeRequeueAfter, chartArtifactProbeRequeueInterval)
 	}
 }

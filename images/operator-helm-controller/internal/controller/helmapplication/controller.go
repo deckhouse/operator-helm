@@ -18,12 +18,14 @@ limitations under the License.
 // kind: no chart claim, no target-namespace creation (the release deploys into its
 // own namespace), and an identity of its own to apply the chart with. The kind can
 // reference either repository kind of its family, so it watches both, and both
-// catalogs.
+// catalogs. The Role and the RoleBinding making up that identity are watched too, so
+// an edit to either is repaired rather than waited out.
 package helmapplication
 
 import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -32,10 +34,9 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/release"
 	"github.com/deckhouse/operator-helm/internal/services"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -53,8 +54,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		OCI:          services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
 		Release:      services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		Maintenance:  services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Claim:        source.NoChartClaim{},
-		Namespaces:   source.ExistingTargetNamespace{},
+		Claim:        reconcile.NoChartClaim{},
+		Namespaces:   reconcile.ExistingTargetNamespace{},
 		Access:       services.NewAccessService(client, helmv1alpha1.TargetNamespace),
 		Status:       status.NewManager(client),
 	})
@@ -93,14 +94,28 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(mapInternal),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
+		// The Role and the binding are the identity the chart is applied with, and
+		// nothing but these two watches reports an edit to them: they are not derived
+		// from the application's spec, so no event on the application itself follows
+		// when one is narrowed, relabelled or deleted out of band.
+		Watches(
+			&rbacv1.Role{},
+			handler.EnqueueRequestsFromMapFunc(mapRoleToApplications(client)),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(
+			&rbacv1.RoleBinding{},
+			handler.EnqueueRequestsFromMapFunc(mapRoleBindingToApplications(client)),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
 		Watches(
 			&helmv1alpha1.HelmApplicationRepository{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapRepositoryToApplications(client, helmv1alpha1.HelmApplicationRepositoryKind)),
+			handler.EnqueueRequestsFromMapFunc(mapRepositoryToApplications(client, helmv1alpha1.HelmApplicationRepositoryKind)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Watches(
 			&helmv1alpha1.HelmClusterApplicationRepository{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapRepositoryToApplications(client, helmv1alpha1.HelmClusterApplicationRepositoryKind)),
+			handler.EnqueueRequestsFromMapFunc(mapRepositoryToApplications(client, helmv1alpha1.HelmClusterApplicationRepositoryKind)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		// A catalog write is a status-only change, so a generation predicate would
@@ -108,12 +123,12 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		// these two watches firing.
 		Watches(
 			&helmv1alpha1.HelmApplicationChart{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapChartToApplications(client, helmv1alpha1.HelmApplicationRepositoryKind)),
+			handler.EnqueueRequestsFromMapFunc(mapChartToApplications(client, helmv1alpha1.HelmApplicationRepositoryKind)),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Watches(
 			&helmv1alpha1.HelmClusterApplicationChart{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapChartToApplications(client, helmv1alpha1.HelmClusterApplicationRepositoryKind)),
+			handler.EnqueueRequestsFromMapFunc(mapChartToApplications(client, helmv1alpha1.HelmClusterApplicationRepositoryKind)),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)

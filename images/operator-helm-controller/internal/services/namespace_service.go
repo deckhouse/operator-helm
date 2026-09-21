@@ -28,8 +28,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/source"
 )
 
-var _ source.TargetNamespaceEnsurer = (*NamespaceService)(nil)
-
 // NamespaceService implements source.TargetNamespaceEnsurer: it creates a
 // release's target namespace when it does not exist yet, and never modifies an
 // existing one — the namespace belongs to whoever created it. Today only the addon

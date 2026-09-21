@@ -51,8 +51,6 @@ type ClaimService struct {
 	namespace string
 }
 
-var _ source.ChartClaim = (*ClaimService)(nil)
-
 func NewClaimService(c client.Client, reader client.Reader, namespace string) *ClaimService {
 	return &ClaimService{
 		reader:    reader,

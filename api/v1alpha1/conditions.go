@@ -42,6 +42,11 @@ const (
 	// ReasonAccessSetupFailed marks a release whose identity — the ServiceAccount,
 	// Role and RoleBinding the chart is applied with — could not be reconciled.
 	ReasonAccessSetupFailed = "AccessSetupFailed"
+	// ReasonForeignAccessObject marks a release whose identity cannot be built
+	// because a Role or RoleBinding already occupies the name it needs and does not
+	// carry the operator's managed-by label. Such an object belongs to whoever
+	// created it and is never adopted, patched or deleted.
+	ReasonForeignAccessObject = "ForeignAccessObject"
 	// ReasonForceReconcile marks the Reconciling condition raised for a pass that
 	// was requested through the force reconcile annotation.
 	ReasonForceReconcile = "ForceReconcile"

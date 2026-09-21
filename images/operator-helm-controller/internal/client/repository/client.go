@@ -26,7 +26,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/utils"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 )
 
 type Chart struct {
@@ -108,11 +108,11 @@ type ChartResolverInterface interface {
 	ResolveChartArtifact(ctx context.Context, ref string, config *RepoConfig) (string, error)
 }
 
-func NewClient(repoType utils.InternalRepositoryType) (ClientInterface, error) {
+func NewClient(repoType chartsource.Kind) (ClientInterface, error) {
 	switch repoType {
-	case utils.InternalHelmRepository:
+	case chartsource.Helm:
 		return HelmRepositoryDefaultClient, nil
-	case utils.InternalOCIRepository:
+	case chartsource.OCI:
 		return OCIRepositoryDefaultClient, nil
 	default:
 		return nil, fmt.Errorf("unknown repository type: %s", repoType)

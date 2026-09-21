@@ -31,55 +31,38 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
+	"github.com/deckhouse/operator-helm/internal/reconcile/pass"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/source"
-	"github.com/deckhouse/operator-helm/internal/utils"
+	"github.com/deckhouse/operator-helm/internal/status"
 )
 
-// internalResourceDeletionRequeueInterval bounds how often reconcileDelete
-// re-checks whether the internal resources have finished being deleted. Watches
-// on those resources drive most requeues; this is the safety net for a resource
-// whose deletion is stuck and stops emitting events.
-const internalResourceDeletionRequeueInterval = 30 * time.Second
+// Deps are the collaborators of one repository kind, as the release package's Deps
+// are of one release kind. NewRepository returns an empty adapter of that kind for
+// the API object to be read into; Consumers pushes a force request onto the internal
+// sources of whatever consumes the repository in that family.
+type Deps struct {
+	NewRepository func() source.Repository
+	Secrets       SecretManager
+	Internal      InternalRepositoryManager
+	Consumers     source.ConsumerForcer
+	Catalog       CatalogSynchronizer
+	Status        *status.Manager
+}
 
-// New builds the reconciler of one repository kind. newRepository returns an
-// empty adapter of that kind for the API object to be read into; consumers pushes
-// a force request onto the internal sources of whatever consumes the repository
-// in that family.
-func New(
-	client client.Client,
-	newRepository func() source.Repository,
-	secretsService *services.RepoSecretsService,
-	helmRepositoryService *services.HelmRepoService,
-	consumers source.ConsumerForcer,
-	chartSyncService *services.RepoSyncService,
-	statusManager *status.Manager,
-) *Reconciler {
-	return &Reconciler{
-		Client:                client,
-		newRepository:         newRepository,
-		secretsService:        secretsService,
-		helmRepositoryService: helmRepositoryService,
-		consumers:             consumers,
-		chartSyncService:      chartSyncService,
-		statusManager:         statusManager,
-	}
+func New(c client.Client, deps Deps) *Reconciler {
+	return &Reconciler{Client: c, deps: deps}
 }
 
 type Reconciler struct {
 	client.Client
 
-	newRepository         func() source.Repository
-	secretsService        *services.RepoSecretsService
-	helmRepositoryService *services.HelmRepoService
-	consumers             source.ConsumerForcer
-	chartSyncService      *services.RepoSyncService
-	statusManager         *status.Manager
+	deps Deps
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
-	repo := r.newRepository()
+	repo := r.deps.NewRepository()
 	if err := r.Get(ctx, req.NamespacedName, repo.Object()); err != nil {
 		if apierrors.IsNotFound(err) {
 			return reconcile.Result{}, nil
@@ -88,7 +71,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("getting repository: %w", err)
 	}
 
-	repoType, repoTypeErr := utils.GetRepositoryType(repo.URL())
+	repoType, repoTypeErr := chartsource.KindOf(repo.URL())
 
 	if !repo.Object().GetDeletionTimestamp().IsZero() {
 		return r.reconcileDelete(ctx, repo, repoType)
@@ -119,7 +102,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// due for a sync yet, or whose remote is gone for good, still gets its objects
 	// moved. A failure travels to finish() rather than out of Reconcile, or the
 	// repository would report nothing at all while its consumers cannot resolve.
-	in.MigrateErr = r.chartSyncService.MigrateNames(ctx, repo)
+	in.MigrateErr = r.deps.Catalog.MigrateNames(ctx, repo)
 
 	if repoTypeErr != nil {
 		in.ConfigErr = &services.ConfigOutcome{
@@ -131,16 +114,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.finish(ctx, repo, in, false)
 	}
 
-	in.SecretsErr = r.secretsService.Ensure(ctx, repo, repoType)
+	in.SecretsErr = r.deps.Secrets.Ensure(ctx, repo, repoType)
 
 	if in.SecretsErr == nil {
 		switch repoType {
-		case utils.InternalHelmRepository:
-			in.InternalRepository, in.InternalRepositoryErr = r.helmRepositoryService.EnsureInternalHelmRepository(ctx, repo)
-		case utils.InternalOCIRepository:
+		case chartsource.Helm:
+			in.InternalRepository, in.InternalRepositoryErr = r.deps.Internal.EnsureInternalHelmRepository(ctx, repo)
+		case chartsource.OCI:
 			// The url may have changed from helm to oci: drop the internal object
 			// that is no longer used. OCI repositories have none of their own.
-			in.InternalRepositoryErr = r.helmRepositoryService.RemoveHelmRepository(ctx, repo.InternalNames())
+			in.InternalRepositoryErr = r.deps.Internal.RemoveHelmRepository(ctx, repo.InternalNames())
 		}
 	}
 
@@ -156,7 +139,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, err
 		}
 
-		outcome := r.chartSyncService.Sync(ctx, repo, repoType)
+		outcome := r.deps.Catalog.Sync(ctx, repo, repoType)
 
 		in.Attempted = true
 		if outcome.FetchAttempted {
@@ -189,7 +172,7 @@ func (r *Reconciler) finish(
 		log.FromContext(ctx).Error(in.Fetch.Err, in.Fetch.Message)
 	}
 
-	if err := r.statusManager.PatchStatus(ctx, repo.Object(), func() {
+	if err := r.deps.Status.PatchStatus(ctx, repo.Object(), func() {
 		*repo.Status() = decision.Status
 	}); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
@@ -204,12 +187,12 @@ func (r *Reconciler) finish(
 		// archives need no equivalent — there the internal HelmRepository carries the
 		// request and its HelmCharts follow the re-indexed source on their own.
 		if repo.ForceReconcileRequired() {
-			if err := r.consumers.ForceReconcileConsumers(ctx, repo); err != nil {
+			if err := r.deps.Consumers.ForceReconcileConsumers(ctx, repo); err != nil {
 				return reconcile.Result{}, fmt.Errorf("failed to force reconcile internal oci repositories: %w", err)
 			}
 		}
 
-		if err := r.reconcileForceAnnotation(ctx, client.ObjectKeyFromObject(repo.Object())); err != nil {
+		if err := pass.ConsumeForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(repo.Object()), r.deps.NewRepository().Object()); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 		}
 	}
@@ -223,7 +206,7 @@ func (r *Reconciler) finish(
 	return reconcile.Result{RequeueAfter: decision.RequeueAfter}, nil
 }
 
-func (r *Reconciler) reconcileDelete(ctx context.Context, repo source.Repository, repoType utils.InternalRepositoryType) (reconcile.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, repo source.Repository, repoType chartsource.Kind) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(repo.Object(), helmv1alpha1.FinalizerName) {
@@ -232,8 +215,8 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo source.Repository
 
 	names := repo.InternalNames()
 
-	if err := r.secretsService.Cleanup(ctx, names); err != nil && !apierrors.IsNotFound(err) {
-		_ = r.statusManager.MarkDeletionFailed(ctx, repo.Object(), "auxiliary secrets", err)
+	if err := r.deps.Secrets.Cleanup(ctx, names); err != nil && !apierrors.IsNotFound(err) {
+		_ = r.deps.Status.MarkDeletionFailed(ctx, repo.Object(), "auxiliary secrets", err)
 		return reconcile.Result{}, err
 	}
 
@@ -244,19 +227,19 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo source.Repository
 	// objects already exist can be edited to a url that no longer parses and then
 	// deleted. Cleaning up the helm way tolerates a missing internal repository, and
 	// leaving it out would orphan one.
-	if repoType != utils.InternalOCIRepository {
-		helmRepo, err := r.helmRepositoryService.CleanupHelmRepository(ctx, names)
+	if repoType != chartsource.OCI {
+		helmRepo, err := r.deps.Internal.CleanupHelmRepository(ctx, names)
 		if err != nil && !apierrors.IsNotFound(err) {
-			_ = r.statusManager.MarkDeletionFailed(ctx, repo.Object(), "internal repository", err)
+			_ = r.deps.Status.MarkDeletionFailed(ctx, repo.Object(), "internal repository", err)
 			return reconcile.Result{}, err
 		}
 		if helmRepo != nil {
-			return r.awaitInternalResourceDeletion(ctx, repo, "internal repository", helmRepo)
+			return pass.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkDeletionPending, repo.Object(), "internal repository", helmRepo)
 		}
 	}
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		latest := r.newRepository()
+		latest := r.deps.NewRepository()
 		if err := r.Get(ctx, client.ObjectKeyFromObject(repo.Object()), latest.Object()); err != nil {
 			return client.IgnoreNotFound(err)
 		}
@@ -274,24 +257,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo source.Repository
 	logger.Info("Cleanup complete")
 
 	return reconcile.Result{}, nil
-}
-
-// awaitInternalResourceDeletion surfaces that an internal resource is still being
-// deleted on the repository's status (via the shared status manager) and requeues
-// without removing the finalizer. The resource name is kept abstract so its
-// internal type is not leaked to the user; the log line names the object itself,
-// which is what someone looking into a stuck deletion has to reach for.
-func (r *Reconciler) awaitInternalResourceDeletion(ctx context.Context, repo source.Repository, name string, resource status.DeletingResource) (reconcile.Result, error) {
-	log.FromContext(ctx).Info("Waiting for internal resource to be deleted before removing finalizer",
-		"resource", name,
-		"internalType", fmt.Sprintf("%T", resource),
-		"internalObject", client.ObjectKeyFromObject(resource))
-
-	if err := r.statusManager.MarkDeletionPending(ctx, repo.Object(), name, resource); client.IgnoreNotFound(err) != nil {
-		return reconcile.Result{}, fmt.Errorf("updating deletion status: %w", err)
-	}
-
-	return reconcile.Result{RequeueAfter: internalResourceDeletionRequeueInterval}, nil
 }
 
 // markSyncInProgress publishes Reconciling before the synchronization starts, so
@@ -314,7 +279,7 @@ func (r *Reconciler) markSyncInProgress(
 		reason, message = helmv1alpha1.ReasonForceReconcile, "Forced reconciliation in progress"
 	}
 
-	err := r.statusManager.PatchStatus(ctx, repo.Object(), func() {
+	err := r.deps.Status.PatchStatus(ctx, repo.Object(), func() {
 		apimeta.SetStatusCondition(&repo.Status().Conditions, metav1.Condition{
 			Type:               helmv1alpha1.ConditionTypeReconciling,
 			Status:             metav1.ConditionTrue,
@@ -325,37 +290,6 @@ func (r *Reconciler) markSyncInProgress(
 	})
 	if client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("publishing synchronization progress: %w", err)
-	}
-
-	return nil
-}
-
-func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, key client.ObjectKey) error {
-	repo := r.newRepository()
-
-	if err := r.Get(ctx, key, repo.Object()); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-
-		return fmt.Errorf("getting repository: %w", err)
-	}
-
-	annotations := repo.Object().GetAnnotations()
-	if _, found := annotations[helmv1alpha1.AnnotationForceReconcile]; !found {
-		// Guard on the annotation itself, not on the map: a repository carrying
-		// any unrelated annotation would otherwise take an empty PATCH on every
-		// attempted pass.
-		return nil
-	}
-
-	patchBase := client.MergeFrom(repo.Object().DeepCopyObject().(client.Object))
-
-	delete(annotations, helmv1alpha1.AnnotationForceReconcile)
-	repo.Object().SetAnnotations(annotations)
-
-	if err := r.Patch(ctx, repo.Object(), patchBase); err != nil {
-		return fmt.Errorf("removing force reconcile annotation: %w", err)
 	}
 
 	return nil

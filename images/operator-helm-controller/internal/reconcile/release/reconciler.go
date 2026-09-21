@@ -35,17 +35,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
+	"github.com/deckhouse/operator-helm/internal/reconcile/pass"
 	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
-
-// internalResourceDeletionRequeueInterval bounds how often reconcileDelete
-// re-checks whether the internal resources have finished being deleted. Watches
-// on those resources drive most requeues; this is the safety net for a resource
-// whose deletion is stuck and stops emitting events.
-const internalResourceDeletionRequeueInterval = 30 * time.Second
 
 // chartClaimConflictRequeueInterval bounds how often a release that lost the claim
 // on its repository/chart pair re-checks whether the owner has released it. There
@@ -60,14 +55,14 @@ const chartClaimConflictRequeueInterval = 30 * time.Second
 // (Namespaces) and which identity the chart is applied with (Access).
 type Deps struct {
 	NewRelease   func() source.Release
-	Repositories source.RepositoryResolver
-	Chart        *services.ChartService
-	OCI          *services.OCIRepoService
-	Release      *services.ReleaseService
-	Maintenance  *services.MaintenanceService
-	Claim        source.ChartClaim
-	Namespaces   source.TargetNamespaceEnsurer
-	Access       source.AccessManager
+	Repositories RepositoryResolver
+	Chart        ChartManager
+	OCI          OCIRepoManager
+	Release      ReleaseManager
+	Maintenance  MaintenanceManager
+	Claim        ChartClaim
+	Namespaces   TargetNamespaceEnsurer
+	Access       AccessManager
 	Status       *status.Manager
 }
 
@@ -94,6 +89,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.reconcileDelete(ctx, rel)
 	}
 
+	in := Inputs{
+		Generation:         rel.Generation(),
+		ObservedGeneration: rel.Object().GetObservedGeneration(),
+		Now:                time.Now().UTC(),
+		ConditionTypes:     rel.Object().GetConditionTypesForUpdate(),
+	}
+
 	// Claim the repository/chart pair before anything else, including adding the
 	// finalizer. The claim is the authoritative, race-free guard on uniqueness (the
 	// webhook only fast-rejects the obvious duplicate on CREATE and cannot stop
@@ -106,24 +108,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("acquiring chart claim: %w", err)
 	}
 	if !acquired {
-		return reconcile.Result{RequeueAfter: chartClaimConflictRequeueInterval}, r.deps.Status.Update(
-			ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper,
-			services.ReleaseResult{Status: status.Failed(
-				rel.Object(),
-				helmv1alpha1.ReasonChartClaimConflict,
-				fmt.Sprintf("chart %q is already used by %s/%s", rel.ChartRef().Chart, strings.ToLower(rel.Kind()), holder),
-				nil,
-			)},
-		)
+		in.Step = &Failure{
+			Reason: helmv1alpha1.ReasonChartClaimConflict,
+			Message: fmt.Sprintf("chart %q is already used by %s/%s",
+				rel.ChartRef().Chart, strings.ToLower(rel.Kind()), holder),
+			// No watch fires when the owner lets the pair go, so the recovery of a
+			// duplicate rides on this timer alone.
+			RequeueAfter: chartClaimConflictRequeueInterval,
+		}
+
+		return r.finish(ctx, rel, in)
 	}
 
 	if utils.IsSystemNamespace(rel.TargetNamespace()) {
-		return reconcile.Result{}, r.deps.Status.Update(ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonFailed,
-			"Target namespace cannot be a system namespace",
-			fmt.Errorf("target namespace %q is a system namespace", rel.TargetNamespace()),
-		)})
+		in.Step = &Failure{
+			Reason:   helmv1alpha1.ReasonFailed,
+			Message:  "Target namespace cannot be a system namespace",
+			Err:      fmt.Errorf("target namespace %q is a system namespace", rel.TargetNamespace()),
+			Terminal: true,
+		}
+
+		return r.finish(ctx, rel, in)
 	}
 
 	if !controllerutil.ContainsFinalizer(rel.Object(), helmv1alpha1.FinalizerName) {
@@ -142,92 +147,98 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if r.deps.Maintenance.IsMaintenanceModeChangeRequired(rel) {
-		maintenanceRes := r.deps.Maintenance.EnsureMaintenanceMode(ctx, rel)
-		if err := r.deps.Status.Update(ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper, maintenanceRes, status.AsCondition(maintenanceRes, "Ready")); err != nil {
-			return reconcile.Result{}, err
-		}
+		outcome := r.deps.Maintenance.EnsureMaintenanceMode(ctx, rel)
+		in.Maintenance = &outcome
+		// Maintenance being lifted leaves a pending force request in place for the
+		// pass that can honour it; a release settling into maintenance can never act
+		// on one, so it is dropped.
+		in.DiscardForce = rel.MaintenanceActivated()
 
-		if !rel.MaintenanceActivated() {
-			// Maintenance is being lifted: a pending force request is about to become
-			// actionable, so it is left in place for the pass that can honour it.
-			return reconcile.Result{}, nil
-		}
-
-		return reconcile.Result{}, r.discardForceReconcile(ctx, rel)
+		return r.finish(ctx, rel, in)
 	}
 
 	if rel.MaintenanceActivated() {
-		return reconcile.Result{}, r.discardForceReconcile(ctx, rel)
+		in.DiscardForce = true
+
+		return r.finish(ctx, rel, in)
 	}
 
 	repo, catalog, err := r.deps.Repositories.Resolve(ctx, rel.ChartRef().Repository)
 	if err != nil {
-		return reconcile.Result{}, r.deps.Status.Update(ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonFailed,
-			"Failed to get internal repository",
-			fmt.Errorf("getting internal repository: %w", err),
-		)})
+		in.Step = &Failure{
+			Reason:  helmv1alpha1.ReasonFailed,
+			Message: "Failed to get internal repository",
+			Err:     fmt.Errorf("getting internal repository: %w", err),
+		}
+
+		return r.finish(ctx, rel, in)
 	}
 
-	repoType, err := utils.GetRepositoryType(repo.URL())
+	repoType, err := chartsource.KindOf(repo.URL())
 	if err != nil {
-		return reconcile.Result{}, r.deps.Status.Update(ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonFailed,
-			fmt.Sprintf("Failed to parse repository type: %s", err.Error()),
-			err,
-		)})
+		// The repository's own url is what cannot be read, and the repository reports
+		// the same fault as Stalled. Retrying here would only rediscover it; the
+		// release comes back when the repository's generation changes, which is what
+		// correcting the url does.
+		in.Step = &Failure{
+			Reason:   helmv1alpha1.ReasonUnsupportedRepositoryType,
+			Message:  fmt.Sprintf("Failed to parse repository type: %s", err.Error()),
+			Err:      err,
+			Terminal: true,
+		}
+
+		return r.finish(ctx, rel, in)
 	}
 
 	if err := r.deps.Namespaces.EnsureTargetNamespace(ctx, rel); err != nil {
-		return reconcile.Result{}, r.deps.Status.Update(ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonFailed,
-			fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
-			err,
-		)})
+		in.Step = &Failure{
+			Reason:  helmv1alpha1.ReasonFailed,
+			Message: fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
+			Err:     err,
+		}
+
+		return r.finish(ctx, rel, in)
 	}
 
 	// The identity comes before the internal sources: helm-controller checks that
 	// the account named on the HelmRelease exists before it impersonates it, so a
 	// HelmRelease created ahead of its ServiceAccount would fail its first pass.
-	if err := r.deps.Access.EnsureAccess(ctx, rel); err != nil {
-		// The status write is best-effort: what must not be lost is err itself.
-		// Nothing watches the ServiceAccount/RoleBinding this step manages, so the
-		// work queue's rate limiter retrying on the returned error is the only thing
-		// that brings a transient failure back for another pass.
-		_ = r.deps.Status.Update(ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonAccessSetupFailed,
-			fmt.Sprintf("Failed to set up the release identity: %s", err.Error()),
-			err,
-		)})
-		return reconcile.Result{}, err
+	if access := r.deps.Access.EnsureAccess(ctx, rel); access.Err != nil {
+		in.Step = &Failure{
+			Reason:   access.Reason,
+			Message:  access.Message,
+			Err:      access.Err,
+			Terminal: access.Terminal,
+			// The watches on the Role and the RoleBinding only fire on a write that
+			// landed, so a step that failed before writing anything comes back through
+			// the work queue's rate limiter and nothing else. A terminal failure is the
+			// exception: the object in the way carries no managed-by label, so those
+			// watches never see it go either — only a force request or an edit to the
+			// release gets this pass run again.
+			Retry: !access.Terminal,
+		}
+
+		return r.finish(ctx, rel, in)
 	}
 
-	// From here on every path reaches the status update at the end of the pass,
-	// which is what consumes the force request. Marking earlier would leave the
-	// progress condition behind on a validation failure that never consumes it.
-	forced := rel.ForceReconcileRequired()
-	if forced {
+	// From here on every path reaches finish, which is what consumes the force
+	// request. Marking earlier would leave the progress condition behind on a
+	// validation failure that never consumes it.
+	in.Forced = rel.ForceReconcileRequired()
+	if in.Forced {
 		if err := r.markForceReconcileInProgress(ctx, rel); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
-
-	var chartRes services.ChartResult
-	var repoRes services.OCIRepoResult
-	var releaseRes services.ReleaseResult
 
 	_, chartVersion, chartErr := r.getChartVersion(ctx, catalog, repo, rel, repoType)
 
 	// The source is resolved once, before the branches: which internal object a
 	// release needs is a property of the version it asks for, and a version whose
 	// source cannot be resolved is as unusable as a version that is missing.
-	var src utils.ChartSource
+	var src chartsource.Source
 	if chartErr == nil {
-		src, chartErr = utils.ResolveChartSource(repo.URL(), chartVersion)
+		src, chartErr = chartsource.Resolve(repo.URL(), chartVersion)
 	}
 
 	names := rel.InternalNames()
@@ -237,90 +248,140 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// One report for both branches: until the source is known, neither internal
 		// object may be touched, and which one would have been touched is precisely
 		// what could not be determined.
-		chartRes = services.ChartResult{Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonChartFetchFailed,
-			"Failed to resolve the desired chart version",
-			chartErr,
-		)}
-	case src.Kind == utils.InternalHelmRepository:
+		in.ChartSource = &Failure{
+			Reason:  helmv1alpha1.ReasonChartFetchFailed,
+			Message: "Failed to resolve the desired chart version",
+			Err:     chartErr,
+		}
+	case src.Kind == chartsource.Helm:
 		// The version may have moved out of a registry — either because the user
 		// repointed the repository, or because the index re-published it as an
 		// archive. Either way the internal OCIRepository is no longer the source.
 		superseded, err := r.deps.OCI.RemoveOCIRepository(ctx, names)
 		if err != nil {
-			chartRes = services.ChartResult{
-				Status: status.Failed(rel.Object(), helmv1alpha1.ReasonFailed, "Repository change failed", err),
-			}
+			in.ChartSource = repositoryChangeFailure(err)
 
 			break
 		}
 
 		r.logSourceKindFlip(ctx, rel, src.Kind, superseded != nil)
 
-		chartRes = r.deps.Chart.EnsureHelmChart(ctx, rel, repo)
-	case src.Kind == utils.InternalOCIRepository:
+		outcome := r.deps.Chart.EnsureHelmChart(ctx, rel, repo)
+		in.Chart = &outcome
+	case src.Kind == chartsource.OCI:
 		superseded, err := r.deps.Chart.CleanupHelmChart(ctx, names)
 		if err != nil {
-			chartRes = services.ChartResult{
-				Status: status.Failed(rel.Object(), helmv1alpha1.ReasonFailed, "Repository change failed", err),
-			}
+			in.ChartSource = repositoryChangeFailure(err)
 
 			break
 		}
 
 		r.logSourceKindFlip(ctx, rel, src.Kind, superseded != nil)
 
-		repoRes = r.deps.OCI.EnsureInternalOCIRepository(ctx, rel, repo, src, chartVersion)
+		outcome := r.deps.OCI.EnsureInternalOCIRepository(ctx, rel, repo, src, chartVersion)
+		in.OCIRepo = &outcome
 	default:
-		return reconcile.Result{}, r.deps.Status.Update(ctx, rel.Object(), status.NoopStatusMutator, status.NoopStatusMapper, services.ReleaseResult{Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonFailed,
-			fmt.Sprintf("Unsupported chart source: %s", src.Kind),
-			fmt.Errorf("unsupported chart source: %s", src.Kind),
-		)})
-	}
-
-	if chartRes.HasArtifact() || repoRes.HasArtifact() {
-		var artifactRevision string
-		switch src.Kind {
-		case utils.InternalHelmRepository:
-			if chartRes.Artifact != nil {
-				artifactRevision = chartRes.Artifact.Revision
-			}
-		case utils.InternalOCIRepository:
-			if repoRes.Artifact != nil {
-				artifactRevision = repoRes.Artifact.Revision
-			}
+		in.Step = &Failure{
+			Reason:   helmv1alpha1.ReasonFailed,
+			Message:  fmt.Sprintf("Unsupported chart source: %s", src.Kind),
+			Err:      fmt.Errorf("unsupported chart source: %s", src.Kind),
+			Terminal: true,
 		}
 
-		releaseRes = r.deps.Release.EnsureHelmRelease(ctx, rel, src.Kind, artifactRevision)
+		return r.finish(ctx, rel, in)
 	}
 
-	if err := r.deps.Status.Update(
-		ctx,
-		rel.Object(),
-		setStatusAttrs(rel, src.Kind, chartRes, repoRes, releaseRes, forceReconcileOutcome{
-			forced: forced,
-			now:    time.Now().UTC(),
-		}),
-		status.NoopStatusMapper,
-		chartRes,
-		repoRes,
-		releaseRes,
-	); client.IgnoreNotFound(err) != nil {
+	if revision, ok := artifactRevision(in); ok {
+		outcome := r.deps.Release.EnsureHelmRelease(ctx, rel, src.Kind, revision)
+		in.Release = &outcome
+	}
+
+	in.ChartInfoOutdated = rel.IsChartStatusInfoOutdated()
+	in.ValuesDigest = valuesDigest(rel)
+
+	return r.finish(ctx, rel, in)
+}
+
+// finish applies the decision and consumes the force annotation. The annotation is
+// removed after the status patch so a conflict does not lose the request.
+func (r *Reconciler) finish(ctx context.Context, rel source.Release, in Inputs) (reconcile.Result, error) {
+	decision := Evaluate(in)
+
+	if decision.Reported != nil {
+		// Only the access failure is handed to the work queue, which logs it on the
+		// way past; every other failure ends the pass quietly, so this is the one
+		// place its cause is written down.
+		log.FromContext(ctx).Error(decision.Reported.Err, decision.Reported.Message,
+			"reason", decision.Reported.Reason)
+	}
+
+	if err := r.deps.Status.PatchStatus(ctx, rel.Object(), func() {
+		applyDecision(rel, decision)
+	}); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// The annotation is consumed after the status patch, so a conflict on the patch
-	// leaves the request in place to be retried rather than losing it.
-	if err := r.reconcileForceAnnotation(ctx, req.NamespacedName); err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
+	if decision.ConsumeForce {
+		if err := pass.ConsumeForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(rel.Object()), r.deps.NewRelease().Object()); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
+		}
 	}
 
-	// A probe that could not reach the registry asks for another pass: there is no
-	// watch that fires when a foreign registry starts answering again.
-	return reconcile.Result{RequeueAfter: repoRes.RequeueAfter}, nil
+	return reconcile.Result{RequeueAfter: decision.RequeueAfter}, decision.Err
+}
+
+// applyDecision writes the evaluated status onto the release. Conditions are merged
+// rather than replaced: a pass reports on the steps it ran, and the verdicts of the
+// steps it did not run stay where they are.
+func applyDecision(rel source.Release, decision Decision) {
+	conditions := rel.Object().GetConditions()
+
+	for _, condition := range decision.Conditions {
+		apimeta.SetStatusCondition(conditions, condition)
+	}
+
+	for _, conditionType := range decision.RemoveConditions {
+		apimeta.RemoveStatusCondition(conditions, conditionType)
+	}
+
+	if decision.ObservedGeneration != nil {
+		rel.Object().SetObservedGeneration(*decision.ObservedGeneration)
+	}
+
+	if decision.ForceReconcileTime != nil {
+		rel.SetLastForceReconcileTime(*decision.ForceReconcileTime)
+	}
+
+	if decision.ApplyChart {
+		rel.SetLastAppliedChart(rel.ChartRef())
+	}
+
+	if decision.ApplyValues {
+		if rel.Values() == nil {
+			rel.SetLastAppliedValues(nil)
+		} else {
+			rel.SetLastAppliedValues(rel.Values().DeepCopy())
+		}
+	}
+}
+
+// repositoryChangeFailure reports a failure to remove the internal source the
+// release no longer needs. Nothing may be installed while both kinds are present.
+func repositoryChangeFailure(err error) *Failure {
+	return &Failure{Reason: helmv1alpha1.ReasonFailed, Message: "Repository change failed", Err: err}
+}
+
+// valuesDigest is the digest of the values the spec asks for, in the form the
+// deployed revision records the values it was installed with.
+func valuesDigest(rel source.Release) string {
+	rawValues := []byte(`{}`)
+	if rel.Values() != nil {
+		rawValues = rel.Values().Raw
+	}
+
+	values, _ := helmcommon.ReadValues(rawValues)
+
+	return chartutil.DigestValues(digest.Canonical, values).String()
 }
 
 func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (reconcile.Result, error) {
@@ -355,7 +416,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (r
 		if err := r.deps.Release.SyncReleaseSpec(ctx, rel, release); err != nil {
 			return reconcile.Result{}, err
 		}
-		return r.awaitInternalResourceDeletion(ctx, rel, "internal release", release)
+		return pass.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal release", release)
 	}
 
 	chart, err := r.deps.Chart.CleanupHelmChart(ctx, names)
@@ -363,7 +424,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (r
 		return reconcile.Result{}, err
 	}
 	if chart != nil {
-		return r.awaitInternalResourceDeletion(ctx, rel, "internal chart", chart)
+		return pass.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal chart", chart)
 	}
 
 	ociRepo, err := r.deps.OCI.RemoveOCIRepository(ctx, names)
@@ -371,7 +432,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (r
 		return reconcile.Result{}, err
 	}
 	if ociRepo != nil {
-		return r.awaitInternalResourceDeletion(ctx, rel, "internal repository", ociRepo)
+		return pass.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal repository", ociRepo)
 	}
 
 	// The identity goes last: helm-controller uninstalls as that account, so it
@@ -414,24 +475,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (r
 	return reconcile.Result{}, nil
 }
 
-// awaitInternalResourceDeletion surfaces that an internal resource is still being
-// deleted on the release's status (via the shared status manager) and requeues
-// without removing the finalizer. The resource name is kept abstract so its
-// internal type is not leaked to the user; the log line names the object itself,
-// which is what someone looking into a stuck deletion has to reach for.
-func (r *Reconciler) awaitInternalResourceDeletion(ctx context.Context, rel source.Release, name string, resource status.DeletingResource) (reconcile.Result, error) {
-	log.FromContext(ctx).Info("Waiting for internal resource to be deleted before removing finalizer",
-		"resource", name,
-		"internalType", fmt.Sprintf("%T", resource),
-		"internalObject", client.ObjectKeyFromObject(resource))
-
-	if err := r.deps.Status.MarkUninstallPending(ctx, rel.Object(), name, resource); client.IgnoreNotFound(err) != nil {
-		return reconcile.Result{}, fmt.Errorf("updating deletion status: %w", err)
-	}
-
-	return reconcile.Result{RequeueAfter: internalResourceDeletionRequeueInterval}, nil
-}
-
 // markForceReconcileInProgress publishes Reconciling before the work a force
 // request asks for begins. A forced pass is the one case where someone is
 // watching: they annotated the object a moment ago and want to see it was picked
@@ -453,60 +496,6 @@ func (r *Reconciler) markForceReconcileInProgress(ctx context.Context, rel sourc
 	return nil
 }
 
-// discardForceReconcile drops the in-flight force state from a release that is
-// entering, or already sitting in, maintenance mode. Every pass on such a release
-// returns before the work a force request asks for, so the request can never be
-// acted on: leaving Reconciling behind would report work in flight to kstatus
-// forever, and leaving the annotation would replay a request made days earlier the
-// moment maintenance is lifted. Reconciling is removed unconditionally because the
-// force path is its only producer on a release.
-//
-// lastForceReconcileTime is deliberately untouched — the request was discarded,
-// not processed, and the stamp means the latter.
-func (r *Reconciler) discardForceReconcile(ctx context.Context, rel source.Release) error {
-	err := r.deps.Status.PatchStatus(ctx, rel.Object(), func() {
-		apimeta.RemoveStatusCondition(rel.Object().GetConditions(), helmv1alpha1.ConditionTypeReconciling)
-	})
-	if client.IgnoreNotFound(err) != nil {
-		return fmt.Errorf("dropping forced reconciliation progress: %w", err)
-	}
-
-	if err := r.reconcileForceAnnotation(ctx, client.ObjectKeyFromObject(rel.Object())); err != nil {
-		return fmt.Errorf("failed to reconcile force annotation: %w", err)
-	}
-
-	return nil
-}
-
-func (r *Reconciler) reconcileForceAnnotation(ctx context.Context, key client.ObjectKey) error {
-	rel := r.deps.NewRelease()
-
-	if err := r.Get(ctx, key, rel.Object()); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("getting release: %w", err)
-	}
-
-	annotations := rel.Object().GetAnnotations()
-	if _, found := annotations[helmv1alpha1.AnnotationForceReconcile]; !found {
-		// Guard on the annotation itself, not on the map: a release carrying any
-		// unrelated annotation would otherwise take an empty PATCH on every pass.
-		return nil
-	}
-
-	patchBase := client.MergeFrom(rel.Object().DeepCopyObject().(client.Object))
-
-	delete(annotations, helmv1alpha1.AnnotationForceReconcile)
-	rel.Object().SetAnnotations(annotations)
-
-	if err := r.Patch(ctx, rel.Object(), patchBase); err != nil {
-		return fmt.Errorf("removing force reconcile annotation: %w", err)
-	}
-
-	return nil
-}
-
 // getChartVersion resolves the catalog entry for the version the release asks for
 // and rejects an entry that cannot be deployed. Two things make an entry unusable:
 // an index reference that cannot be addressed, and — for a version of an oci://
@@ -523,7 +512,7 @@ func (r *Reconciler) getChartVersion(
 	catalog source.Catalog,
 	repo source.Repository,
 	rel source.Release,
-	repoType utils.InternalRepositoryType,
+	repoType chartsource.Kind,
 ) (client.Object, *helmv1alpha1.ChartVersion, error) {
 	ref := rel.ChartRef()
 
@@ -549,7 +538,7 @@ func (r *Reconciler) getChartVersion(
 			)
 		}
 
-		if repoType == utils.InternalOCIRepository && version.OCIRef == "" && version.MediaType == "" {
+		if repoType == chartsource.OCI && version.OCIRef == "" && version.MediaType == "" {
 			return nil, nil, fmt.Errorf(
 				"chart version %q cannot be deployed: %s",
 				version.Version, versionUnavailableDetail(*version),
@@ -583,7 +572,7 @@ func versionUnavailableDetail(version helmv1alpha1.ChartVersion) string {
 func (r *Reconciler) logSourceKindFlip(
 	ctx context.Context,
 	rel source.Release,
-	kind utils.InternalRepositoryType,
+	kind chartsource.Kind,
 	superseded bool,
 ) {
 	if !superseded {
@@ -606,74 +595,4 @@ func (r *Reconciler) logSourceKindFlip(
 		"version", rel.ChartRef().Version,
 		"source", kind,
 	)
-}
-
-// forceReconcileOutcome carries what the status mutator needs to close out a
-// forced pass. It is a struct so the clock stays with the caller: the mutator
-// runs inside the status manager, after it has snapshotted the object it diffs
-// against, which is the only place a change to the status is actually patched.
-type forceReconcileOutcome struct {
-	forced bool
-	now    time.Time
-}
-
-// setStatusAttrs writes the fields of the status the conditions do not cover. It
-// closes over rel rather than asserting the object's type: rel.Object() is the very
-// object the status manager hands back, so the writes land on it.
-func setStatusAttrs(
-	rel source.Release,
-	sourceKind utils.InternalRepositoryType,
-	chartRes services.ChartResult,
-	repoRes services.OCIRepoResult,
-	releaseRes services.ReleaseResult,
-	force forceReconcileOutcome,
-) status.MutatorFunc {
-	return func(obj status.ObjectWithConditions, results []status.Provider) (status.ObjectWithConditions, []status.Provider) {
-		results = status.DetermineConditions(obj, results...)
-
-		if force.forced {
-			// The stamp records that the request was acted on, not that it succeeded:
-			// the outcome is reported by Ready. Reconciling is removed explicitly —
-			// the status manager only ever sets conditions.
-			rel.SetLastForceReconcileTime(metav1.Time{Time: force.now})
-			apimeta.RemoveStatusCondition(rel.Object().GetConditions(), helmv1alpha1.ConditionTypeReconciling)
-		}
-
-		latestRelease := releaseRes.History.Latest()
-
-		var updateChart bool
-
-		switch sourceKind {
-		case utils.InternalHelmRepository:
-			if chartRes.HasArtifact() && releaseRes.IsReady() && rel.IsChartStatusInfoOutdated() {
-				updateChart = true
-			}
-		case utils.InternalOCIRepository:
-			if repoRes.HasArtifact() && releaseRes.IsReady() && rel.IsChartStatusInfoOutdated() {
-				updateChart = true
-			}
-		}
-
-		if updateChart {
-			rel.SetLastAppliedChart(rel.ChartRef())
-		}
-
-		if releaseRes.IsReady() && latestRelease != nil {
-			rawValues := []byte(`{}`)
-			if rel.Values() != nil {
-				rawValues = rel.Values().Raw
-			}
-
-			values, _ := helmcommon.ReadValues(rawValues)
-			if latestRelease.Status == "deployed" && latestRelease.ConfigDigest == chartutil.DigestValues(digest.Canonical, values).String() {
-				if rel.Values() == nil {
-					rel.SetLastAppliedValues(nil)
-				} else {
-					rel.SetLastAppliedValues(rel.Values().DeepCopy())
-				}
-			}
-		}
-
-		return obj, results
-	}
 }

@@ -52,7 +52,7 @@ const (
 // These notes are deliberately outside the doc comment below — controller-gen folds
 // every non-marker line of that block into the resource's API description.
 
-// HelmApplication represents an installation of a Helm chart inside a single namespace. The release is deployed into the namespace of the resource itself. The chart is applied with a ServiceAccount bound to a Role that grants every permission inside that namespace, so the right to create a HelmApplication is equivalent to administrator rights in its namespace; the Role is created once and may be narrowed by the namespace owner afterwards.
+// HelmApplication represents an installation of a Helm chart inside a single namespace. The release is deployed into the namespace of the resource itself. The chart is applied with a ServiceAccount bound to a Role that grants every permission inside that namespace, so the right to create a HelmApplication is equivalent to administrator rights in its namespace; the Role and the binding belong to the module and are reconciled, so an edit to either does not outlast the application that needs it.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
@@ -85,10 +85,6 @@ func (r *HelmApplication) SetObservedGeneration(generation int64) {
 
 func (r *HelmApplication) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
-}
-
-func (r *HelmApplication) GetStatus() any {
-	return r.Status
 }
 
 // RepositoryName returns the name of the repository the chart is taken from,
@@ -244,9 +240,18 @@ type HelmApplicationStatus struct {
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
 	// Conditions represent the latest available observations of the application state.
 	//
-	// Reconciling is present only while applicable, following the kstatus convention.
-	// It carries the reason ForceReconcile while a reconciliation requested through
-	// the force reconcile annotation is running.
+	// Reconciling and Stalled follow the kstatus convention: they are present only
+	// while applicable. Reconciling means the pass left something to wait for — an
+	// internal object still rolling out, or a failure that has a retry coming — and
+	// it is taken away by the pass that finds nothing left to do. It carries the
+	// reason ForceReconcile while a reconciliation requested through the force
+	// reconcile annotation is running, and hands over to the ordinary verdict once
+	// that pass is over. Stalled means the pass ended in a failure no retry
+	// will resolve: a fault in this object's own spec, a repository whose url cannot
+	// be read, a registry that rejected the pull, or an object already occupying a
+	// name this object needs. Stalled outranks Reconciling: a release that cannot
+	// proceed is not making progress. Such a state is left by correcting the cause
+	// and requesting a reconciliation, not by waiting.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.

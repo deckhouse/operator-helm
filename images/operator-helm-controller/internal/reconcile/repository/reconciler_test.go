@@ -43,10 +43,11 @@ import (
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -117,19 +118,18 @@ func newReconcilerWithInterceptor(
 		}).
 		Build()
 
-	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+	factory := func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stub, nil
 	}
 
-	r := New(
-		c,
-		adapter.EmptyAddonRepository,
-		services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(c)),
-		services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
-		status.NewManager(c),
-	)
+	r := New(c, Deps{
+		NewRepository: adapter.EmptyAddonRepository,
+		Secrets:       services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
+		Internal:      services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		Consumers:     services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(c)),
+		Catalog:       services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
+		Status:        status.NewManager(c),
+	})
 
 	return r, c
 }
@@ -162,19 +162,18 @@ func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...cli
 		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationChart, index.ApplicationChartIndexer).
 		Build()
 
-	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+	factory := func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stub, nil
 	}
 
-	r := New(
-		c,
-		adapter.EmptyApplicationRepository,
-		services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
-		services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(c)),
-		services.NewRepoSyncService(c, scheme, factory, adapter.NewApplicationCatalog(c)),
-		status.NewManager(c),
-	)
+	r := New(c, Deps{
+		NewRepository: adapter.EmptyApplicationRepository,
+		Secrets:       services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
+		Internal:      services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		Consumers:     services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(c)),
+		Catalog:       services.NewRepoSyncService(c, scheme, factory, adapter.NewApplicationCatalog(c)),
+		Status:        status.NewManager(c),
+	})
 
 	return r, c
 }
@@ -666,7 +665,7 @@ func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
 		Spec: helmv1alpha1.RepositorySpec{URL: "https://exa mple.invalid/charts"},
 	}
 
-	if _, err := utils.GetRepositoryType(repo.Spec.URL); err == nil {
+	if _, err := chartsource.KindOf(repo.Spec.URL); err == nil {
 		t.Fatal("the fixture url must be unparsable, otherwise the test proves nothing")
 	}
 

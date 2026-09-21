@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,11 +30,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/source"
 )
 
-var helmChartErrorRules = []status.ErrorConditionRule{
+var helmChartErrorRules = []ErrorConditionRule{
 	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartFetchFailed},
 	{Type: "StorageOperationFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartStorageFailed},
 }
@@ -56,30 +54,7 @@ func NewChartService(client client.Client, scheme *runtime.Scheme, targetNamespa
 	}
 }
 
-var _ status.Provider = (*ChartResult)(nil)
-
-type ChartResult struct {
-	Status   status.Status
-	Artifact *meta.Artifact
-}
-
-func (r ChartResult) GetStatus() status.Status {
-	return r.Status
-}
-
-func (r ChartResult) IsReady() bool {
-	return r.Artifact != nil && r.Status.Observed && r.Status.Status == metav1.ConditionTrue
-}
-
-func (r ChartResult) HasArtifact() bool {
-	return r.Artifact != nil && r.Status.Observed
-}
-
-func (r ChartResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeReady
-}
-
-func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, repo source.Repository) ChartResult {
+func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, repo source.Repository) ChartOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &sourcev1.HelmChart{
@@ -95,12 +70,7 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, 
 		return nil
 	})
 	if err != nil {
-		return ChartResult{Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonHelmChartFailed,
-			"Failed to create helm chart",
-			fmt.Errorf("creating or updating helm chart: %w", err),
-		)}
+		return ChartOutcome{Err: fmt.Errorf("creating or updating helm chart: %w", err)}
 	}
 
 	if op != controllerutil.OperationResultNone {
@@ -108,18 +78,16 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, 
 			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
-	processedStatus := status.ProcessChildConditions(
-		existing.GetConditions(), existing.Generation, rel.Object(), helmChartErrorRules,
-	)
+	internal := reduceInternalConditions(existing.GetConditions(), existing.Generation, helmChartErrorRules)
 
-	if processedStatus.IsReady() {
+	if internal.Ready() {
 		logger.Info("Successfully reconciled helm chart", "operation", op, "chart", rel.ChartRef().Chart,
 			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
-	return ChartResult{
+	return ChartOutcome{
 		Artifact: existing.Status.Artifact,
-		Status:   processedStatus,
+		Internal: internal,
 	}
 }
 

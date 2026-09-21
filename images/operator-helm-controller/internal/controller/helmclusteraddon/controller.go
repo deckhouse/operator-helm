@@ -27,10 +27,9 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/release"
 	"github.com/deckhouse/operator-helm/internal/services"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -50,7 +49,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Maintenance:  services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		Claim:        services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
 		Namespaces:   services.NewNamespaceService(client, mgr.GetAPIReader()),
-		Access:       source.NoAccess{},
+		Access:       reconcile.NoAccess{},
 		Status:       status.NewManager(client),
 	})
 
@@ -105,12 +104,12 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Watches(
 			&helmv1alpha1.HelmClusterAddonRepository{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapRepositoryToAddons(client)),
+			handler.EnqueueRequestsFromMapFunc(mapRepositoryToAddons(client)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Watches(
 			&helmv1alpha1.HelmClusterAddonChart{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapChartToAddons(client)),
+			handler.EnqueueRequestsFromMapFunc(mapChartToAddons(client)),
 			// A catalog write is a status-only change on the chart, so a
 			// generation-only predicate (as used for HelmClusterAddonRepository
 			// above) would never let it through; only a terminal probe verdict

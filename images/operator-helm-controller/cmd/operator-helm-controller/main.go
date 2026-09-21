@@ -24,6 +24,7 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -46,6 +47,12 @@ import (
 )
 
 var scheme = runtime.NewScheme()
+
+// managedByOperatorHelm selects the RBAC objects this module manages in the users'
+// namespaces.
+var managedByOperatorHelm = labels.SelectorFromSet(labels.Set{
+	helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue,
+})
 
 func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
@@ -80,13 +87,16 @@ func main() {
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "operator-helm-controller.helm.deckhouse.io",
 		Client: client.Options{
-			// AccessService reads ServiceAccounts and RoleBindings only to reconcile
-			// the one object its own release names; nothing watches either kind. The
-			// ClusterRole nonetheless grants cluster-wide list/watch on both, and a
-			// cached typed Get starts an informer for its kind, so without this every
-			// ServiceAccount and RoleBinding in the cluster would be held in memory.
+			// AccessService reads these three kinds only to reconcile the objects its
+			// own release names. The Roles and RoleBindings it manages are watched, but
+			// through an informer that selects on the managed-by label — an object
+			// stripped of the label is missing from it, and reading through it would
+			// then report an object that exists as absent and try to create it again.
+			// Reads go to the API server for that reason, and for ServiceAccounts
+			// because nothing watches them at all and a cached typed Get would start a
+			// cluster-wide informer for the kind.
 			Cache: &client.CacheOptions{
-				DisableFor: []client.Object{&corev1.ServiceAccount{}, &rbacv1.RoleBinding{}},
+				DisableFor: []client.Object{&corev1.ServiceAccount{}, &rbacv1.Role{}, &rbacv1.RoleBinding{}},
 			},
 		},
 		Cache: cache.Options{
@@ -99,6 +109,12 @@ func main() {
 						helmv1alpha1.TargetNamespace: {},
 					},
 				},
+				// The application controller watches the Roles and RoleBindings making
+				// up a release identity, in whichever namespace the application lives,
+				// so neither informer can be scoped by namespace. The label is what
+				// keeps them off every other Role and RoleBinding in the cluster.
+				&rbacv1.Role{}:        {Label: managedByOperatorHelm},
+				&rbacv1.RoleBinding{}: {Label: managedByOperatorHelm},
 			},
 		},
 	})

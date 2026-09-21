@@ -30,7 +30,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	statusmgr "github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/source"
 )
 
@@ -50,56 +49,21 @@ func NewMaintenanceService(client client.Client, scheme *runtime.Scheme, targetN
 	}
 }
 
-var _ statusmgr.Provider = (*MaintenanceResult)(nil)
-
-type MaintenanceResult struct {
-	Status statusmgr.Status
-}
-
-func (r MaintenanceResult) GetStatus() statusmgr.Status {
-	return r.Status
-}
-
-func (r MaintenanceResult) IsReady() bool {
-	return r.Status.IsReady()
-}
-
-func (r MaintenanceResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeManaged
-}
-
-func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, rel source.Release) MaintenanceResult {
+func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, rel source.Release) MaintenanceOutcome {
 	logger := log.FromContext(ctx)
 
-	suspendState := rel.MaintenanceActivated()
-	status := metav1.ConditionTrue
-	reason := helmv1alpha1.ReasonMaintenanceModeInactive
-
-	var message string
-
-	if suspendState {
+	activated := rel.MaintenanceActivated()
+	if activated {
 		logger.Info("Enabling maintenance mode")
-		message = "Maintenance mode enabled"
-		status = metav1.ConditionFalse
-		reason = helmv1alpha1.ReasonMaintenanceModeActive
 	} else {
 		logger.Info("Disabling maintenance mode")
-		message = "Maintenance mode disabled"
 	}
 
-	err := s.updateHelmReleaseSuspendState(ctx, rel.InternalNames(), suspendState)
-	if err != nil {
-		return MaintenanceResult{Status: statusmgr.Failed(rel.Object(), helmv1alpha1.ReasonFailed, "Failed to change maintenance mode", err)}
+	if err := s.updateHelmReleaseSuspendState(ctx, rel.InternalNames(), activated); err != nil {
+		return MaintenanceOutcome{Err: err, Activated: activated}
 	}
-	return MaintenanceResult{
-		Status: statusmgr.Status{
-			Observed:           true,
-			Status:             status,
-			ObservedGeneration: rel.Generation(),
-			Message:            message,
-			Reason:             reason,
-		},
-	}
+
+	return MaintenanceOutcome{Activated: activated}
 }
 
 func (s *MaintenanceService) IsMaintenanceModeChangeRequired(rel source.Release) bool {

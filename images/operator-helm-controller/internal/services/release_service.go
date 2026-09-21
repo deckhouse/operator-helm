@@ -33,14 +33,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/source"
-	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 const releaseDriftDetectionInterval = 5 * time.Minute
 
-var helmReleaseErrorRules = []status.ErrorConditionRule{
+var helmReleaseErrorRules = []ErrorConditionRule{
 	{Type: "Released", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonReleaseFailed},
 	{Type: "TestSuccess", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonTestFailed},
 	{Type: "Remediated", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonRemediated},
@@ -62,26 +61,7 @@ func NewReleaseService(client client.Client, scheme *runtime.Scheme, targetNames
 	}
 }
 
-var _ status.Provider = (*ReleaseResult)(nil)
-
-type ReleaseResult struct {
-	Status  status.Status
-	History helmv2.Snapshots
-}
-
-func (r ReleaseResult) GetStatus() status.Status {
-	return r.Status
-}
-
-func (r ReleaseResult) IsReady() bool {
-	return r.Status.IsReady()
-}
-
-func (r ReleaseResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeReady
-}
-
-func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, rel source.Release, sourceKind utils.InternalRepositoryType, artifactRevision string) ReleaseResult {
+func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, rel source.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &helmv2.HelmRelease{
@@ -95,36 +75,26 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, rel source.Relea
 		return applyHelmReleaseSpec(rel, existing, sourceKind, s.TargetNamespace)
 	})
 	if err != nil {
-		return ReleaseResult{Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonReleaseFailed,
-			"Failed to create helm release",
-			fmt.Errorf("reconciling helm release: %w", err),
-		)}
+		return ReleaseOutcome{Err: fmt.Errorf("reconciling helm release: %w", err)}
 	}
 
-	processedStatus := status.ProcessChildConditions(
-		existing.GetConditions(), existing.Generation, rel.Object(), helmReleaseErrorRules,
-	)
+	internal := reduceInternalConditions(existing.GetConditions(), existing.Generation, helmReleaseErrorRules)
 
-	// A chart-version change updates only the referenced HelmChart artifact, not
-	// the HelmRelease spec/generation. The HelmRelease can therefore still report
-	// the readiness of the previous revision until it observes the new artifact.
-	// Downgrade the status to Reconciling until the deployed revision actually
-	// reflects the requested chart, so downstream consumers (lastAppliedChart and
-	// the projected Ready/UpdateInstalled conditions) do not advance prematurely.
-	if processedStatus.IsReady() && !isDesiredChartDeployed(rel, existing.Status.History.Latest(), artifactRevision) {
-		processedStatus = status.Unknown(rel.Object(), helmv1alpha1.ReasonReconciling)
-	}
+	// Whether the deployed revision is the one the spec asks for is a fact about the
+	// object, so it is reported rather than acted on here: a chart-version change
+	// updates the referenced HelmChart artifact without touching the HelmRelease spec
+	// or generation, so the object can go on reporting the previous revision ready.
+	deployed := isDesiredChartDeployed(rel, existing.Status.History.Latest(), artifactRevision)
 
-	if processedStatus.IsReady() {
+	if internal.Ready() && deployed {
 		logger.Info("Successfully reconciled helm release", "operation", op,
 			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
-	return ReleaseResult{
-		History: existing.Status.History,
-		Status:  processedStatus,
+	return ReleaseOutcome{
+		History:       existing.Status.History,
+		Internal:      internal,
+		ChartDeployed: deployed,
 	}
 }
 
@@ -174,7 +144,7 @@ func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, rel source.Release
 	return nil
 }
 
-func applyHelmReleaseSpec(rel source.Release, existing *helmv2.HelmRelease, sourceKind utils.InternalRepositoryType, targetNamespace string) error {
+func applyHelmReleaseSpec(rel source.Release, existing *helmv2.HelmRelease, sourceKind chartsource.Kind, targetNamespace string) error {
 	if rel.ForceReconcileRequired() {
 		setReconcileRequestAnnotations(existing)
 	}
@@ -213,13 +183,13 @@ func applyHelmReleaseSpec(rel source.Release, existing *helmv2.HelmRelease, sour
 	}
 
 	switch sourceKind {
-	case utils.InternalHelmRepository:
+	case chartsource.Helm:
 		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
 			Kind:      sourcev1.HelmChartKind,
 			Name:      names.HelmChart,
 			Namespace: targetNamespace,
 		}
-	case utils.InternalOCIRepository:
+	case chartsource.OCI:
 		existing.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
 			Kind:      sourcev1.OCIRepositoryKind,
 			Name:      names.OCIRepository,

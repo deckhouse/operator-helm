@@ -65,10 +65,6 @@ func (r *HelmClusterApplicationChart) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
 }
 
-func (r *HelmClusterApplicationChart) GetStatus() any {
-	return r.Status
-}
-
 func (r *HelmClusterApplicationChart) GetConditionTypesForUpdate() []string {
 	return []string{ConditionTypeReady}
 }

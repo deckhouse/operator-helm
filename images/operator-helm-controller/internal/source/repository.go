@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
+	"github.com/deckhouse/operator-helm/internal/status"
 )
 
 // InternalNames are the names of the internal objects derived from one

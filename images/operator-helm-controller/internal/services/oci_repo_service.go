@@ -31,13 +31,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-var ociRepositoryErrorRules = []status.ErrorConditionRule{
+var ociRepositoryErrorRules = []ErrorConditionRule{
 	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonOCIFetchFailed},
 	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: "OCIArtifactPullFailed"},
 	{Type: "IncludeUnavailable", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonOCIIncludeUnavailable},
@@ -81,40 +81,13 @@ func NewOCIRepoService(
 	}
 }
 
-var _ status.Provider = (*OCIRepoResult)(nil)
-
-type OCIRepoResult struct {
-	Status   status.Status
-	Artifact *meta.Artifact
-	// RequeueAfter asks the caller to schedule another pass. It is set only when the
-	// artifact could not be examined for a reason that may pass on its own: there is
-	// no watch on a foreign registry.
-	RequeueAfter time.Duration
-}
-
-func (r OCIRepoResult) GetStatus() status.Status {
-	return r.Status
-}
-
-func (r OCIRepoResult) IsReady() bool {
-	return r.Artifact != nil && r.Status.Observed && r.Status.Status == metav1.ConditionTrue
-}
-
-func (r OCIRepoResult) HasArtifact() bool {
-	return r.Artifact != nil && r.Status.Observed
-}
-
-func (r OCIRepoResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeReady
-}
-
 func (s *OCIRepoService) EnsureInternalOCIRepository(
 	ctx context.Context,
 	rel source.Release,
 	repo source.Repository,
-	src utils.ChartSource,
+	src chartsource.Source,
 	version *helmv1alpha1.ChartVersion,
-) OCIRepoResult {
+) OCIRepoOutcome {
 	logger := log.FromContext(ctx)
 
 	mediaType, failure := s.resolveMediaType(ctx, rel, repo, src, version)
@@ -135,14 +108,7 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 		return nil
 	})
 	if err != nil {
-		return OCIRepoResult{
-			Status: status.Failed(
-				rel.Object(),
-				helmv1alpha1.ReasonFailed,
-				"Failed to reconcile oci repository",
-				fmt.Errorf("creating oci repository: %w", err),
-			),
-		}
+		return OCIRepoOutcome{Err: fmt.Errorf("creating oci repository: %w", err)}
 	}
 
 	if op != controllerutil.OperationResultNone {
@@ -150,25 +116,14 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
-	processedStatus := status.ProcessChildConditions(
-		existing.Status.Conditions, existing.Generation, rel.Object(), ociRepositoryErrorRules,
-	)
+	internal := reduceInternalConditions(existing.Status.Conditions, existing.Generation, ociRepositoryErrorRules)
 
-	if version.UnavailableReason == helmv1alpha1.UnavailableReasonRemovedFromRepository &&
-		processedStatus.Status != metav1.ConditionTrue {
-		// The version is still recorded — that is what keeps this addon reconcilable —
-		// but the repository no longer offers the tag, so the pull cannot succeed. Name
-		// that cause instead of leaving only the source controller's "not found".
-		processedStatus.Reason = helmv1alpha1.ReasonChartVersionRemoved
-		processedStatus.Message = fmt.Sprintf(
-			"Version %s is no longer offered by repository %s: %s",
-			version.Version, repo.Name(), processedStatus.Message,
-		)
-	}
-
-	return OCIRepoResult{
-		Artifact: existing.Status.Artifact,
-		Status:   processedStatus,
+	return OCIRepoOutcome{
+		Artifact:       existing.Status.Artifact,
+		Internal:       internal,
+		VersionRemoved: version.UnavailableReason == helmv1alpha1.UnavailableReasonRemovedFromRepository,
+		Version:        version.Version,
+		RepositoryName: repo.Name(),
 	}
 }
 
@@ -186,9 +141,9 @@ func (s *OCIRepoService) resolveMediaType(
 	ctx context.Context,
 	rel source.Release,
 	repo source.Repository,
-	src utils.ChartSource,
+	src chartsource.Source,
 	version *helmv1alpha1.ChartVersion,
-) (string, *OCIRepoResult) {
+) (string, *OCIRepoOutcome) {
 	if version.MediaType != "" {
 		return version.MediaType, nil
 	}
@@ -205,19 +160,19 @@ func (s *OCIRepoService) resolveMediaType(
 	}
 
 	if terminal, ok := repoclient.AsTerminal(err); ok {
-		return "", &OCIRepoResult{
-			Status: status.Failed(rel.Object(), terminal.Reason, terminal.Message, err),
+		return "", &OCIRepoOutcome{
+			ProbeErr:      err,
+			ProbeReason:   terminal.Reason,
+			ProbeMessage:  terminal.Message,
+			ProbeTerminal: true,
 		}
 	}
 
-	return "", &OCIRepoResult{
-		Status: status.Failed(
-			rel.Object(),
-			helmv1alpha1.ReasonOCIFetchFailed,
-			"Failed to examine the chart artifact: "+err.Error(),
-			err,
-		),
-		RequeueAfter: chartArtifactProbeRequeueInterval,
+	return "", &OCIRepoOutcome{
+		ProbeErr:          err,
+		ProbeReason:       helmv1alpha1.ReasonOCIFetchFailed,
+		ProbeMessage:      "Failed to examine the chart artifact: " + err.Error(),
+		ProbeRequeueAfter: chartArtifactProbeRequeueInterval,
 	}
 }
 
@@ -226,7 +181,7 @@ func (s *OCIRepoService) resolveMediaType(
 func (s *OCIRepoService) cachedMediaType(
 	ctx context.Context,
 	names source.ReleaseNames,
-	src utils.ChartSource,
+	src chartsource.Source,
 ) string {
 	nn := types.NamespacedName{
 		Name:      names.OCIRepository,
@@ -252,7 +207,7 @@ func (s *OCIRepoService) cachedMediaType(
 // the host the repository names gets them, and credentials are never included: the
 // internal OCIRepository pulls a foreign registry anonymously, and a probe that
 // authenticated would report a chart the pull could not fetch.
-func artifactRepoConfig(repo source.Repository, src utils.ChartSource) *repoclient.RepoConfig {
+func artifactRepoConfig(repo source.Repository, src chartsource.Source) *repoclient.RepoConfig {
 	if !sameRegistryHost(repo.URL(), src.URL) {
 		return nil
 	}
@@ -288,7 +243,7 @@ func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, names source.R
 func applyOCIRepositorySpec(
 	rel source.Release,
 	repo source.Repository,
-	src utils.ChartSource,
+	src chartsource.Source,
 	mediaType string,
 	existing *sourcev1.OCIRepository,
 ) {
@@ -360,7 +315,7 @@ func sameRegistryHost(repoURL, artifactURL string) bool {
 }
 
 func repositoryIsOCI(repo source.Repository) bool {
-	repoType, err := utils.GetRepositoryType(repo.URL())
+	repoType, err := chartsource.KindOf(repo.URL())
 
-	return err == nil && repoType == utils.InternalOCIRepository
+	return err == nil && repoType == chartsource.OCI
 }

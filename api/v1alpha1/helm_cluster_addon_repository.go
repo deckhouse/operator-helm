@@ -76,10 +76,6 @@ func (r *HelmClusterAddonRepository) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
 }
 
-func (r *HelmClusterAddonRepository) GetStatus() any {
-	return r.Status
-}
-
 func (r *HelmClusterAddonRepository) GetConditionTypesForUpdate() []string {
 	return []string{"Ready"}
 }

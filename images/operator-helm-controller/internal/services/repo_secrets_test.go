@@ -30,6 +30,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -54,7 +55,7 @@ func TestEnsureCreatesAuthAndTLS(t *testing.T) {
 
 	service, c := newRepoSecretsService(t, repo)
 
-	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), utils.InternalHelmRepository); err != nil {
+	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm); err != nil {
 		t.Fatalf("Ensure returned %v", err)
 	}
 
@@ -90,7 +91,7 @@ func TestEnsureRemovesObsoleteSecrets(t *testing.T) {
 
 	service, c := newRepoSecretsService(t, repo, obsolete)
 
-	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), utils.InternalHelmRepository); err != nil {
+	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm); err != nil {
 		t.Fatalf("Ensure returned %v", err)
 	}
 
@@ -111,7 +112,7 @@ func TestEnsureUsesDockerConfigForOCIRepositories(t *testing.T) {
 
 	service, c := newRepoSecretsService(t, repo)
 
-	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository); err != nil {
+	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); err != nil {
 		t.Fatalf("Ensure returned %v", err)
 	}
 
@@ -149,7 +150,7 @@ func TestCleanupRemovesBothSecrets(t *testing.T) {
 	service, c := newRepoSecretsService(t, repo)
 	names := adapter.NewAddonRepository(repo).InternalNames()
 
-	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), utils.InternalHelmRepository); err != nil {
+	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm); err != nil {
 		t.Fatalf("Ensure returned %v", err)
 	}
 

@@ -32,7 +32,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
 	"github.com/deckhouse/operator-helm/internal/source"
 )
 
@@ -96,7 +95,7 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(
 		return state, nil
 	}
 
-	cond, observed := status.IsConditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation)
+	cond, observed := conditionObserved(existing.Status.Conditions, helmv1alpha1.ConditionTypeReady, existing.Generation)
 	if !observed {
 		state.Reason = helmv1alpha1.ReasonReconciling
 		state.Message = "Waiting for the internal repository to be reconciled"

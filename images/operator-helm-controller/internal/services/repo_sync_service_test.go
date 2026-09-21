@@ -30,9 +30,9 @@ import (
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 type stubRepoClient struct {
@@ -73,7 +73,7 @@ func newRepoSyncService(t *testing.T, stub stubRepoClient, objects ...client.Obj
 		}).
 		Build()
 
-	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+	factory := func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stub, nil
 	}
 
@@ -131,7 +131,7 @@ func TestSyncCreatesChartsAndRecordsVersions(t *testing.T) {
 	repo := testRepository()
 	service, c := newRepoSyncService(t, stubRepoClient{charts: []repoclient.Chart{chartFixture("podinfo", "6.7.1")}}, repo)
 
-	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalHelmRepository)
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm)
 	if outcome.Fetch.Err != nil {
 		t.Fatalf("fetch failed: %v", outcome.Fetch.Err)
 	}
@@ -160,7 +160,7 @@ func TestSyncPrunesStaleCharts(t *testing.T) {
 
 	service, c := newRepoSyncService(t, stubRepoClient{charts: []repoclient.Chart{chartFixture("podinfo", "6.7.1")}}, repo, stale)
 
-	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalHelmRepository)
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm)
 	if outcome.Catalog.Err != nil {
 		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
 	}
@@ -180,7 +180,7 @@ func TestSyncReportsTerminalFetchFailure(t *testing.T) {
 
 	service, _ := newRepoSyncService(t, stubRepoClient{err: terminal}, repo)
 
-	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalHelmRepository)
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm)
 	if outcome.Fetch.Err == nil {
 		t.Fatal("expected a fetch failure")
 	}
@@ -196,7 +196,7 @@ func TestSyncReportsTransientFetchFailure(t *testing.T) {
 	repo := testRepository()
 	service, _ := newRepoSyncService(t, stubRepoClient{err: errors.New("connection refused")}, repo)
 
-	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalHelmRepository)
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm)
 	if outcome.Fetch.Err == nil {
 		t.Fatal("expected a fetch failure")
 	}
@@ -225,11 +225,11 @@ func TestSyncPassesKnownVersionsToTheClient(t *testing.T) {
 	}}}
 
 	service, _ := newRepoSyncService(t, stubRepoClient{}, repo, chart)
-	service.clientFactory = func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+	service.clientFactory = func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stub, nil
 	}
 
-	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository); outcome.Fetch.Err != nil {
+	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); outcome.Fetch.Err != nil {
 		t.Fatalf("fetch failed: %v", outcome.Fetch.Err)
 	}
 
@@ -258,11 +258,11 @@ func TestSyncRequestsFullPassOnForceReconcile(t *testing.T) {
 	}}}
 
 	service, _ := newRepoSyncService(t, stubRepoClient{}, repo)
-	service.clientFactory = func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+	service.clientFactory = func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stub, nil
 	}
 
-	service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository)
+	service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 
 	if !stub.opts.Full {
 		t.Fatal("force reconcile must request a full re-index")
@@ -283,7 +283,7 @@ func TestSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
 	}}}
 
 	service, c := newRepoSyncService(t, stub, repo, chart, addon)
-	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository); outcome.Catalog.Err != nil {
+	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); outcome.Catalog.Err != nil {
 		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
 	}
 
@@ -344,7 +344,7 @@ func TestSyncRetainsMediaTypeForReferencedUnsupportedVersion(t *testing.T) {
 	}}}
 
 	service, c := newRepoSyncService(t, stub, repo, chart, addon)
-	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository); outcome.Catalog.Err != nil {
+	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); outcome.Catalog.Err != nil {
 		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
 	}
 
@@ -392,7 +392,7 @@ func TestSyncOrdersVersionsBySemverDescending(t *testing.T) {
 	}}}
 
 	service, c := newRepoSyncService(t, stub, repo)
-	service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository)
+	service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 
 	got := chartStatus(t, c, repo.Name, "podinfo").Versions
 	want := []string{"6.10.0", "6.8.0", "6.7.1"}
@@ -418,7 +418,7 @@ func TestSyncCreatesChartWithNoUsableVersions(t *testing.T) {
 	}}}
 
 	service, c := newRepoSyncService(t, stub, repo)
-	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository)
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 
 	if outcome.Catalog.Err != nil {
 		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
@@ -441,7 +441,7 @@ func TestSyncKeepsChartReferencedByAddon(t *testing.T) {
 	addon := addonUsing(repo.Name, "podinfo", "6.7.1")
 
 	service, c := newRepoSyncService(t, stubRepoClient{charts: nil}, repo, chart, addon)
-	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository); outcome.Catalog.Err != nil {
+	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); outcome.Catalog.Err != nil {
 		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
 	}
 
@@ -476,12 +476,12 @@ func TestSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T) {
 		}).
 		Build()
 
-	factory := func(_ utils.InternalRepositoryType) (repoclient.ClientInterface, error) {
+	factory := func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stubRepoClient{}, nil
 	}
 	service := NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c))
 
-	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), utils.InternalOCIRepository)
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 
 	if outcome.FetchAttempted {
 		t.Fatal("a cluster-side read failure before the fetch must not report FetchAttempted")
