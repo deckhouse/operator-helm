@@ -166,7 +166,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			_, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
 				Get(context.Background(), appRoleName, metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred(),
-				"the role belongs to the namespace and may carry the owner's edits")
+				"the role is shared by every application of the namespace")
 		})
 	})
 }

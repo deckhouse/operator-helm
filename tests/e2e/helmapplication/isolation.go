@@ -164,7 +164,25 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		}
 	})
 
-	It("should leave an edited role alone and recreate a deleted one", func() {
+	It("should carry the module labels on the role and the binding", func() {
+		saName := util.ApplicationServiceAccountName(f.NamespaceName(), appName)
+
+		role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
+			Get(context.Background(), appRoleName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(role.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelManagedBy, apiv1alpha1.LabelManagedByValue))
+		Expect(role.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelDeckhouseHeritage, apiv1alpha1.LabelDeckhouseHeritageValue))
+
+		binding, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+			Get(context.Background(), saName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(binding.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelManagedBy, apiv1alpha1.LabelManagedByValue))
+		Expect(binding.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelDeckhouseHeritage, apiv1alpha1.LabelDeckhouseHeritageValue))
+	})
+
+	// Nothing here forces a reconciliation: the watches on both kinds are what has to
+	// turn the edit into one, and asking for a reconciliation would hide their absence.
+	It("should restore a narrowed role on its own", func() {
 		By("Narrowing the role the way a namespace owner would")
 		narrowed := []rbacv1.PolicyRule{{
 			APIGroups: []string{""},
@@ -183,40 +201,40 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 			g.Expect(err).NotTo(HaveOccurred())
 		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
-		By("Forcing a reconciliation of the application")
-		util.UpdateHelmApplication(f.NamespaceName(), appName, func(app *apiv1alpha1.HelmApplication) {
-			if app.Annotations == nil {
-				app.Annotations = map[string]string{}
-			}
-			app.Annotations[apiv1alpha1.AnnotationForceReconcile] = "true"
-		})
-
-		By("The controller must not rewrite the narrowed role")
-		Consistently(func(g Gomega) {
-			role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-				Get(context.Background(), appRoleName, metav1.GetOptions{})
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(role.Rules).To(Equal(narrowed))
-		}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
-
-		By("Deleting the role must bring it back with full rights")
-		err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-			Delete(context.Background(), appRoleName, metav1.DeleteOptions{})
-		Expect(err).NotTo(HaveOccurred())
-
-		util.UpdateHelmApplication(f.NamespaceName(), appName, func(app *apiv1alpha1.HelmApplication) {
-			if app.Annotations == nil {
-				app.Annotations = map[string]string{}
-			}
-			app.Annotations[apiv1alpha1.AnnotationForceReconcile] = "again"
-		})
-
+		By("The full rights must come back")
 		Eventually(func(g Gomega) {
 			role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
 				Get(context.Background(), appRoleName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(role.Rules).To(HaveLen(1))
 			g.Expect(role.Rules[0].Verbs).To(ContainElement("*"))
+		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+	})
+
+	It("should recreate a deleted role and a deleted binding on its own", func() {
+		saName := util.ApplicationServiceAccountName(f.NamespaceName(), appName)
+
+		By("Deleting both objects")
+		Expect(f.KubeClient().RbacV1().Roles(f.NamespaceName()).
+			Delete(context.Background(), appRoleName, metav1.DeleteOptions{})).To(Succeed())
+		Expect(f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+			Delete(context.Background(), saName, metav1.DeleteOptions{})).To(Succeed())
+
+		By("Both must come back with the rights the release is applied with")
+		Eventually(func(g Gomega) {
+			role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
+				Get(context.Background(), appRoleName, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(role.Rules).To(HaveLen(1))
+			g.Expect(role.Rules[0].Verbs).To(ContainElement("*"))
+
+			binding, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+				Get(context.Background(), saName, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(binding.RoleRef.Name).To(Equal(appRoleName))
+			g.Expect(binding.Subjects).To(HaveLen(1))
+			g.Expect(binding.Subjects[0].Name).To(Equal(saName))
+			g.Expect(binding.Subjects[0].Namespace).To(Equal(moduleNS))
 		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 	})
 })
