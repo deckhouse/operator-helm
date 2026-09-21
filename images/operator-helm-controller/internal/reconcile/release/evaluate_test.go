@@ -304,6 +304,75 @@ func TestEvaluateReportsARetryAfterAFailedRollout(t *testing.T) {
 	}
 }
 
+// TestEvaluateGivenUpReleaseStallsInsteadOfReportingProgress is the case seen on a
+// test cluster: values the chart cannot render leave the internal release Stalled
+// after its remediation attempts are spent. It has stopped acting on that spec, so
+// the verdict cannot change until an edit to the release gives it a new one.
+// Reporting a retry there parks the addon at InProgress for good, because kstatus
+// reads Reconciling before Ready.
+func TestEvaluateGivenUpReleaseStallsInsteadOfReportingProgress(t *testing.T) {
+	const cause = "Helm upgrade failed for release default/podinfo: .spec.replicas: expected numeric, got string"
+
+	in := baseInputs()
+	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.15.0"}, Internal: readyInternal()}
+	in.Release = &services.ReleaseOutcome{
+		Internal: services.InternalObjectState{
+			Observed: true,
+			Stalled:  true,
+			Status:   metav1.ConditionFalse,
+			Reason:   helmv1alpha1.ReasonReleaseFailed,
+			Message:  cause,
+		},
+	}
+
+	decision := Evaluate(in)
+
+	stalled := condition(t, decision, helmv1alpha1.ConditionTypeStalled)
+	if stalled.Status != metav1.ConditionTrue || stalled.Reason != helmv1alpha1.ReasonReleaseFailed {
+		t.Fatalf("Stalled = %s/%s, want True/%s",
+			stalled.Status, stalled.Reason, helmv1alpha1.ReasonReleaseFailed)
+	}
+	if stalled.Message != cause {
+		t.Fatalf("Stalled message = %q, want the fault the internal object named", stalled.Message)
+	}
+	if slices.Contains(decision.RemoveConditions, helmv1alpha1.ConditionTypeStalled) {
+		t.Fatal("Stalled must not be both written and removed")
+	}
+
+	if apimeta.FindStatusCondition(decision.Conditions, helmv1alpha1.ConditionTypeReconciling) != nil {
+		t.Fatal("a release whose internal object gave up must not report a retry that is not coming")
+	}
+	if !slices.Contains(decision.RemoveConditions, helmv1alpha1.ConditionTypeReconciling) {
+		t.Fatal("Reconciling must be taken away once the internal object gave up")
+	}
+}
+
+// TestEvaluateFailingReleaseStillReportsProgress is the counterpart that keeps the
+// rule above from swallowing the ordinary case: the same failure, with the internal
+// object still willing to retry, is progress.
+func TestEvaluateFailingReleaseStillReportsProgress(t *testing.T) {
+	in := baseInputs()
+	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.15.0"}, Internal: readyInternal()}
+	in.Release = &services.ReleaseOutcome{
+		Internal: services.InternalObjectState{
+			Observed: true,
+			Status:   metav1.ConditionFalse,
+			Reason:   helmv1alpha1.ReasonReleaseFailed,
+			Message:  "Helm upgrade failed",
+		},
+	}
+
+	decision := Evaluate(in)
+
+	if apimeta.FindStatusCondition(decision.Conditions, helmv1alpha1.ConditionTypeStalled) != nil {
+		t.Fatal("a failure the internal object has not given up on must not stall the release")
+	}
+	progress := condition(t, decision, helmv1alpha1.ConditionTypeReconciling)
+	if progress.Reason != helmv1alpha1.ReasonProgressingWithRetry {
+		t.Fatalf("Reconciling reason = %q, want %q", progress.Reason, helmv1alpha1.ReasonProgressingWithRetry)
+	}
+}
+
 // TestEvaluateSettledReleaseReportsNoProgress pins the removal: nothing is in
 // flight, so the abnormal-true condition has to go, or kstatus reads a healthy
 // release as one that never finishes.

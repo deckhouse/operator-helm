@@ -216,6 +216,8 @@ func Evaluate(in Inputs) Decision {
 
 	chart, release := evaluateChart(in), evaluateRelease(in)
 
+	var stalled bool
+
 	verdict, found := decide(chart, release)
 	if found {
 		for _, conditionType := range in.ConditionTypes {
@@ -225,14 +227,29 @@ func Evaluate(in Inputs) Decision {
 		decision.Reported = reported(verdict)
 	}
 
-	stalled := in.OCIRepo != nil && in.OCIRepo.ProbeTerminal
-	if stalled {
+	switch {
+	case in.OCIRepo != nil && in.OCIRepo.ProbeTerminal:
 		// The registry rejected the request, or what it serves is not a chart. The
 		// verdict is about the artifact, so no watch and no timer brings it back: the
 		// catalog has to publish something else, or the repository has to be fixed.
+		stalled = true
+
 		decision.setAbnormal(in, helmv1alpha1.ConditionTypeStalled, Failure{
 			Reason:  in.OCIRepo.ProbeReason,
 			Message: in.OCIRepo.ProbeMessage,
+		})
+	case found && verdict.Stalled:
+		// The internal object gave up on the spec it was given, the way the internal
+		// repository does for its own kind. It has stopped acting on that spec, so it
+		// goes quiet and the verdict cannot change: only a new spec — a values or
+		// version edit here — gives it something else to act on. Reported with the
+		// verdict's own reason, which the error rules made specific, rather than with
+		// the internal object's count of spent attempts.
+		stalled = true
+
+		decision.setAbnormal(in, helmv1alpha1.ConditionTypeStalled, Failure{
+			Reason:  verdict.Reason,
+			Message: verdict.Message,
 		})
 	}
 
@@ -264,11 +281,13 @@ func Evaluate(in Inputs) Decision {
 // this pass got".
 //
 // A terminal failure outranks it, as Stalled outranks Reconciling there: a release
-// that cannot proceed is not making progress. Unknown is work genuinely in flight —
-// an internal object still reconciling the spec it was given, or one that has not
-// reported on it yet — and the object's own words are the most specific thing to
-// show for it. False is a failure that is not terminal, so something will come back
-// to it: the watch on the internal object, the probe's timer, or the work queue.
+// that cannot proceed is not making progress, and an internal object that gave up is
+// exactly such a release — it has stopped acting on the spec it was given.
+// Unknown is work genuinely in flight — an internal object still reconciling the spec
+// it was given, or one that has not reported on it yet — and the object's own words
+// are the most specific thing to show for it. False is a failure that is not
+// terminal, so something will come back to it: the watch on the internal object, the
+// probe's timer, or the work queue.
 func evaluateReconciling(verdict conditionState, found, stalled bool) (Failure, bool) {
 	if stalled || !found {
 		return Failure{}, false

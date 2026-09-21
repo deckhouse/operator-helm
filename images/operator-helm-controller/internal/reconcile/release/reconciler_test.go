@@ -553,6 +553,72 @@ func TestReconcileReportsProgressUntilTheReleaseSettles(t *testing.T) {
 	}
 }
 
+// TestReconcileStallsWhenTheInternalReleaseGivesUp wires the two halves of the
+// verdict together on the path a test cluster actually took: bad values leave the
+// internal release Stalled once its remediation attempts are spent. The services
+// layer has to carry that out of the object's conditions and the evaluation has to
+// act on it; each is covered on its own, and this is what proves they meet.
+func TestReconcileStallsWhenTheInternalReleaseGivesUp(t *testing.T) {
+	const cause = "Helm upgrade failed: .spec.replicas: expected numeric (int or float), got string"
+
+	app := testApplication()
+
+	r, c := newApplicationFullReconciler(t, nil, append(applicationFixtures(), app)...)
+
+	names := adapter.NewApplicationRelease(app).InternalNames()
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+
+	reconcileApplication(t, r, app)
+	markInternalChartReady(t, c, names.HelmChart)
+	reconcileApplication(t, r, app)
+
+	release := &helmv2.HelmRelease{}
+	releaseKey := client.ObjectKey{Name: names.HelmRelease, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), releaseKey, release); err != nil {
+		t.Fatalf("the internal release must exist before it can give up: %v", err)
+	}
+	release.Status.Conditions = []metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeStalled,
+			Status:             metav1.ConditionTrue,
+			Reason:             helmv1alpha1.ReasonRetriesExceeded,
+			Message:            "Failed to upgrade after 1 attempt(s)",
+			ObservedGeneration: release.Generation,
+			LastTransitionTime: metav1.Now(),
+		},
+		{
+			Type:               "Released",
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            cause,
+			ObservedGeneration: release.Generation,
+			LastTransitionTime: metav1.Now(),
+		},
+	}
+	if err := c.Update(context.Background(), release); err != nil {
+		t.Fatalf("updating internal helm release status: %v", err)
+	}
+
+	reconcileApplication(t, r, app)
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(context.Background(), key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+
+	stalled := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeStalled)
+	if stalled == nil || stalled.Status != metav1.ConditionTrue {
+		t.Fatalf("Stalled = %+v, want True once the internal release gave up", stalled)
+	}
+	if stalled.Reason != helmv1alpha1.ReasonReleaseFailed || stalled.Message != cause {
+		t.Fatalf("Stalled = %s/%q, want the fault the internal release named", stalled.Reason, stalled.Message)
+	}
+
+	if cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling = %+v, want no retry reported that is not coming", cond)
+	}
+}
+
 // TestReconcileApplicationAppliesTheChartAsItsOwnIdentity is the central claim of
 // the namespaced family: the release is created in the operator namespace, but it
 // is applied as an account of the application's own making, and its storage lives

@@ -36,9 +36,17 @@ import (
 // observed, and that is neither readiness nor failure.
 type InternalObjectState struct {
 	Observed bool
-	Status   metav1.ConditionStatus
-	Reason   string
-	Message  string
+	// Stalled reports that the internal object gave up on the spec it was given:
+	// it exhausted its remediation attempts, or reached a fault it will not retry.
+	// Nothing on this side brings it back — the release has to be changed, which
+	// gives the internal object a new spec to act on — so the release reports it as
+	// Stalled rather than as work still in flight. It is kept apart from Status
+	// because the two answer different questions: Status is the verdict, Stalled is
+	// whether anything more is coming.
+	Stalled bool
+	Status  metav1.ConditionStatus
+	Reason  string
+	Message string
 }
 
 // Ready reports the state every consumer means by it: the object has observed the
@@ -57,31 +65,47 @@ type ErrorConditionRule struct {
 }
 
 // reduceInternalConditions collapses the conditions of an internal object into the
-// state the release evaluation works from. A running reconciliation outranks
-// everything: whatever the object still says about the previous spec is stale until
-// it settles. ProgressingWithRetry is excluded because it is not a reconciliation in
-// flight but a failure that has scheduled one, and the failure is what the release
-// has to report. After that the error rules speak, and only then the object's own
-// Ready — which counts only once observed for the generation that was written.
+// state the release evaluation works from. Having given up outranks everything: an
+// object that will not act on the spec it was given is not going to reach a verdict
+// about it either, so its Reconciling condition — left behind by the attempt that
+// gave up — must not be read as work in flight. Otherwise a running reconciliation
+// comes first: whatever the object still says about the previous spec is stale until
+// it settles, and ProgressingWithRetry is excluded there because it is not a
+// reconciliation in flight but a failure that has scheduled one, and the failure is
+// what the release has to report. After that the error rules speak, and only then
+// the object's own Ready — which counts only once observed for the generation that
+// was written.
+//
+// Whether the object gave up is carried alongside the verdict rather than replacing
+// it: the error rules name the actual fault ("server-side apply failed …"), which is
+// what someone reading the release needs, while the Stalled condition only says how
+// many attempts were spent. The reason from Stalled is used solely where there is no
+// other verdict to report.
 func reduceInternalConditions(
 	conditions []metav1.Condition,
 	generation int64,
 	errorRules []ErrorConditionRule,
 ) InternalObjectState {
+	stalled := apimeta.FindStatusCondition(conditions, helmv1alpha1.ConditionTypeStalled)
+	gaveUp := stalled != nil && stalled.Status == metav1.ConditionTrue
+
 	reconciling := InternalObjectState{
 		Status: metav1.ConditionUnknown,
 		Reason: helmv1alpha1.ReasonReconciling,
 	}
 
-	cond := apimeta.FindStatusCondition(conditions, helmv1alpha1.ConditionTypeReconciling)
-	if cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason != helmv1alpha1.ReasonProgressingWithRetry {
-		return reconciling
+	if !gaveUp {
+		cond := apimeta.FindStatusCondition(conditions, helmv1alpha1.ConditionTypeReconciling)
+		if cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason != helmv1alpha1.ReasonProgressingWithRetry {
+			return reconciling
+		}
 	}
 
 	for _, rule := range errorRules {
 		if cond := apimeta.FindStatusCondition(conditions, rule.Type); cond != nil && cond.Status == rule.TriggerStatus {
 			return InternalObjectState{
 				Observed: true,
+				Stalled:  gaveUp,
 				Status:   metav1.ConditionFalse,
 				Reason:   rule.Reason,
 				Message:  cond.Message,
@@ -91,11 +115,24 @@ func reduceInternalConditions(
 
 	ready, observed := conditionObserved(conditions, helmv1alpha1.ConditionTypeReady, generation)
 	if !observed {
+		if gaveUp {
+			// No rule matched and no verdict was reached for this generation, so the
+			// object's own account of why it stopped is all there is to report.
+			return InternalObjectState{
+				Observed: true,
+				Stalled:  true,
+				Status:   metav1.ConditionFalse,
+				Reason:   stalled.Reason,
+				Message:  stalled.Message,
+			}
+		}
+
 		return reconciling
 	}
 
 	return InternalObjectState{
 		Observed: true,
+		Stalled:  gaveUp,
 		Status:   ready.Status,
 		Reason:   ready.Reason,
 		Message:  ready.Message,
