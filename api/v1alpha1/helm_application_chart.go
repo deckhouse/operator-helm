@@ -27,13 +27,6 @@ const (
 	HelmApplicationChartLabelSourceName = "helm.deckhouse.io/application-chart"
 )
 
-// The object carries no spec on purpose: it is a projection of a repository catalog,
-// not user input. Writes by anyone other than the module's service accounts are
-// refused by the ValidatingAdmissionPolicy in templates/admision-policy.yaml.
-//
-// This note is deliberately outside the doc comment below — controller-gen folds
-// every non-marker line of that block into the resource's API description.
-
 // HelmApplicationChart represents a specific Helm chart discovered within a HelmApplicationRepository. These resources are automatically managed during repository synchronization and are immutable to user modifications.
 //
 // +kubebuilder:object:root=true

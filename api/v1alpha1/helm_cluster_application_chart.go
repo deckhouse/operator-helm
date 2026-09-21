@@ -27,16 +27,6 @@ const (
 	HelmClusterApplicationChartLabelSourceName = "helm.deckhouse.io/cluster-application-chart"
 )
 
-// The status of this kind is the shared ChartCatalogStatus declared in
-// chart_catalog_types.go: every chart catalog kind of the module has the same shape.
-//
-// The object carries no spec on purpose: it is a projection of a repository catalog,
-// not user input. Writes by anyone other than the module's service accounts are
-// refused by the ValidatingAdmissionPolicy in templates/admision-policy.yaml.
-//
-// These notes are deliberately outside the doc comment below — controller-gen folds
-// every non-marker line of that block into the resource's API description.
-
 // HelmClusterApplicationChart represents a specific Helm chart discovered within a HelmClusterApplicationRepository. These resources are automatically managed during repository synchronization and are immutable to user modifications.
 //
 // +kubebuilder:object:root=true

@@ -32,26 +32,6 @@ const (
 	HelmApplicationLabelSourceName = "helm.deckhouse.io/application"
 )
 
-// The release is always deployed into the namespace of the resource itself: there
-// is deliberately no field naming a target namespace, because it would turn a
-// namespaced resource into a way of writing outside its own namespace.
-//
-// The repository is printed by two columns instead of one reading
-// "kind/<name>": a printer column's jsonPath is a simple JSON path with no
-// concatenation and no "first non-empty" choice, so a single cell would require the
-// object to already store a composite value. Both columns carry priority=1, so the
-// default output shows neither and -o wide shows both, exactly one of them filled.
-//
-// The name is bounded because the controller stores it as the value of a source
-// label on the internal resources it creates, and a label value cannot exceed 63
-// characters. There is no lower bound: nothing references a HelmApplication by
-// name. The Helm release name, which Helm caps at 53 characters, is not what this
-// rule guards — the controller derives that by truncation plus hash, the way
-// utils/name.go already derives internal object names.
-//
-// These notes are deliberately outside the doc comment below — controller-gen folds
-// every non-marker line of that block into the resource's API description.
-
 // HelmApplication represents an installation of a Helm chart inside a single namespace. The release is deployed into the namespace of the resource itself. The chart is applied with a ServiceAccount bound to a Role that grants every permission inside that namespace, so the right to create a HelmApplication is equivalent to administrator rights in its namespace; the Role and the binding belong to the module and are reconciled, so an edit to either does not outlast the application that needs it.
 //
 // +kubebuilder:object:root=true
@@ -239,19 +219,6 @@ type HelmApplicationStatus struct {
 	// +optional
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
 	// Conditions represent the latest available observations of the application state.
-	//
-	// Reconciling and Stalled follow the kstatus convention: they are present only
-	// while applicable. Reconciling means the pass left something to wait for — an
-	// internal object still rolling out, or a failure that has a retry coming — and
-	// it is taken away by the pass that finds nothing left to do. It carries the
-	// reason ForceReconcile while a reconciliation requested through the force
-	// reconcile annotation is running, and hands over to the ordinary verdict once
-	// that pass is over. Stalled means the pass ended in a failure no retry
-	// will resolve: a fault in this object's own spec, a repository whose url cannot
-	// be read, a registry that rejected the pull, or an object already occupying a
-	// name this object needs. Stalled outranks Reconciling: a release that cannot
-	// proceed is not making progress. Such a state is left by correcting the cause
-	// and requesting a reconciliation, not by waiting.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
@@ -269,9 +236,9 @@ type HelmApplicationStatus struct {
 // kind field is needed. No validation is declared here: the status is written by
 // the controller, and a rule would only be able to block a write.
 //
-// The controller must replace this struct wholesale rather than merge into it: a
-// merge would leave a stale repository alongside a new clusterRepository, both
-// fields would be set, and IsChartStatusInfoOutdated would pin to true forever.
+// This note is outside the doc comment on purpose, as in repository_types.go: a
+// doc comment attached to a type used as a status field becomes that field's
+// description in the CRD.
 
 type HelmApplicationLastAppliedChartRef struct {
 	// Specifies the name of the Helm chart the release was last deployed from.

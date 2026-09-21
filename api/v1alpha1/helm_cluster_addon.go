@@ -178,18 +178,6 @@ type HelmClusterAddonStatus struct {
 	// +optional
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
 	// Conditions represent the latest available observations of the addon state.
-	//
-	// Reconciling and Stalled follow the kstatus convention: they are present only
-	// while applicable. Reconciling means the pass left something to wait for — an
-	// internal object still rolling out, or a failure that has a retry coming — and
-	// it is taken away by the pass that finds nothing left to do. It carries the
-	// reason ForceReconcile while a reconciliation requested through the force
-	// reconcile annotation is running, and hands over to the ordinary verdict once
-	// that pass is over. Stalled means the pass ended in a failure no retry
-	// will resolve: a fault in this object's own spec, a repository whose url cannot
-	// be read, or a registry that rejected the pull. Stalled outranks Reconciling: an
-	// addon that cannot proceed is not making progress. Such a state is left by
-	// correcting the cause and requesting a reconciliation, not by waiting.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.

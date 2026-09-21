@@ -52,16 +52,12 @@ type ChartVersion struct {
 	// the repository index. It is set only for a version of a helm repository whose
 	// index entry points at a registry instead of a chart archive; such a version is
 	// deployed through an internal OCIRepository even though its repository is a helm
-	// one. The registry host and path keep the spelling the index used, and the tag is
-	// always explicit: an index entry without one is recorded with its own version as
-	// the tag.
+	// one.
 	// +optional
 	OCIRef string `json:"ociRef,omitempty"`
 	// MediaType is the OCI media type of the layer that holds this chart version. It
 	// is set only for a version of an oci:// repository, and only when the layer is
-	// supported: an empty value there means the version cannot be deployed. It stays
-	// empty for a version carrying OCIRef — the layer of such an artifact is examined
-	// at deploy time and is not recorded here.
+	// supported: an empty value there means the version cannot be deployed.
 	// +optional
 	MediaType string `json:"mediaType,omitempty"`
 	// UnavailableReason explains why this version cannot be deployed. Its absence means

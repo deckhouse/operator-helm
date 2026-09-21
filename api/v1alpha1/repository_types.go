@@ -61,18 +61,6 @@ type RepositoryAuth struct {
 
 type RepositoryStatus struct {
 	// Conditions represent the latest available observations of the repository state.
-	//
-	// Ready reports whether the repository is usable: auxiliary resources are in place,
-	// the internal source object is healthy and the repository has responded to a catalog
-	// read on the current spec. A transient read failure does not flip Ready to False.
-	//
-	// Synced reports whether the chart catalog is up to date.
-	//
-	// Reconciling and Stalled follow the kstatus convention: they are present only while
-	// applicable. Reconciling means work is in progress or a retry is scheduled; Stalled
-	// means the repository will not recover without a change. While a synchronization is
-	// running Reconciling carries the reason Synchronization, or ForceReconcile when the
-	// pass was requested through the force reconcile annotation.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
