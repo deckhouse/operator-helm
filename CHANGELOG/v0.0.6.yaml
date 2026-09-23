@@ -1,5 +1,5 @@
 features:
-  - do not mark possible status conditions as intitialized on reconcile
+  - do not mark possible status conditions as initialized on reconcile
 fixes: []
 security: []
 chore:
