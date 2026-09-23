@@ -50,8 +50,15 @@ const (
 	// its request body or receive its response, closing the gap
 	// ReadHeaderTimeout alone leaves open: an unauthenticated client could
 	// otherwise hold either half of the exchange open indefinitely.
+	//
+	// WriteTimeout runs from the moment the headers are read, so it covers the
+	// handler's own work as well as the write. It therefore has to outlast the
+	// slowest answer the resolver can legitimately produce — a registry probe
+	// followed by the download of a whole chart artifact — or a client that should
+	// have been told to retry, or handed the values, gets a reset connection
+	// instead.
 	readTimeout  = 10 * time.Second
-	writeTimeout = 10 * time.Second
+	writeTimeout = 2 * time.Minute
 
 	// maxChartLen bounds the chart field. Chart names are not restricted to a
 	// naming grammar — an index entry may legally contain a space — so only a
