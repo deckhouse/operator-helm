@@ -228,13 +228,20 @@ func (f *Framework) DeferDeleteFunc(fn func() error) {
 	f.deferredDeletes = append(f.deferredDeletes, fn)
 }
 
+// waitDeleted blocks until every object is gone, and says so when one is not. The
+// poll costs LongTimeout per object that never disappears, and the suite runs under
+// a budget of its own, so swallowing that spends the budget somewhere far from the
+// object responsible: the run dies on whichever spec happens to be in flight when
+// the suite timeout lands.
 func (f *Framework) waitDeleted(objs []client.Object) {
+	GinkgoHelper()
+
 	for _, obj := range objs {
 		key := types.NamespacedName{
 			Namespace: obj.GetNamespace(),
 			Name:      obj.GetName(),
 		}
-		_ = wait.PollUntilContextTimeout(
+		err := wait.PollUntilContextTimeout(
 			context.Background(), time.Second, LongTimeout, true,
 			func(ctx context.Context) (bool, error) {
 				err := f.generic.Get(ctx, key, obj)
@@ -244,5 +251,6 @@ func (f *Framework) waitDeleted(objs []client.Object) {
 				return false, nil
 			},
 		)
+		Expect(err).NotTo(HaveOccurred(), "%T %s still exists %s after it was deleted", obj, key, LongTimeout)
 	}
 }
