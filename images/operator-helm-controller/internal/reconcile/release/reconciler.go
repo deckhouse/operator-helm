@@ -52,7 +52,7 @@ const chartClaimConflictRequeueInterval = 30 * time.Second
 // kind; the rest is what tells the families apart: how the API object is read
 // (NewRelease), how its repository and catalog are found (Repositories), whether a
 // repository/chart pair is claimed (Claim), whether the target namespace is created
-// (Namespaces) and which identity the chart is applied with (Access).
+// (Namespaces) and which identity the chart is applied with (RBAC).
 type Deps struct {
 	NewRelease   func() source.Release
 	Repositories RepositoryResolver
@@ -62,7 +62,7 @@ type Deps struct {
 	Maintenance  MaintenanceManager
 	Claim        ChartClaim
 	Namespaces   TargetNamespaceEnsurer
-	Access       AccessManager
+	RBAC         RBACManager
 	Status       *status.Manager
 }
 
@@ -203,19 +203,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// The identity comes before the internal sources: helm-controller checks that
 	// the account named on the HelmRelease exists before it impersonates it, so a
 	// HelmRelease created ahead of its ServiceAccount would fail its first pass.
-	if access := r.deps.Access.EnsureAccess(ctx, rel); access.Err != nil {
+	if rbac := r.deps.RBAC.EnsureRBAC(ctx, rel); rbac.Err != nil {
 		in.Step = &Failure{
-			Reason:   access.Reason,
-			Message:  access.Message,
-			Err:      access.Err,
-			Terminal: access.Terminal,
+			Reason:   rbac.Reason,
+			Message:  rbac.Message,
+			Err:      rbac.Err,
+			Terminal: rbac.Terminal,
 			// The watches on the Role and the RoleBinding only fire on a write that
 			// landed, so a step that failed before writing anything comes back through
 			// the work queue's rate limiter and nothing else. A terminal failure is the
 			// exception: the object in the way carries no managed-by label, so those
 			// watches never see it go either — only a force request or an edit to the
 			// release gets this pass run again.
-			Retry: !access.Terminal,
+			Retry: !rbac.Terminal,
 		}
 
 		return r.finish(ctx, rel, in)
@@ -308,7 +308,7 @@ func (r *Reconciler) finish(ctx context.Context, rel source.Release, in Inputs) 
 	decision := Evaluate(in)
 
 	if decision.Reported != nil {
-		// Only the access failure is handed to the work queue, which logs it on the
+		// Only the RBAC failure is handed to the work queue, which logs it on the
 		// way past; every other failure ends the pass quietly, so this is the one
 		// place its cause is written down.
 		log.FromContext(ctx).Error(decision.Reported.Err, decision.Reported.Message,
@@ -437,7 +437,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (r
 
 	// The identity goes last: helm-controller uninstalls as that account, so it
 	// has to outlive the HelmRelease.
-	if err := r.deps.Access.CleanupAccess(ctx, rel); err != nil {
+	if err := r.deps.RBAC.CleanupRBAC(ctx, rel); err != nil {
 		// By this point the internal release and sources are already gone, so
 		// nothing else on the object would explain why the finalizer is still
 		// there. The write is best-effort, same as the internal-resource waits

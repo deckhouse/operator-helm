@@ -40,7 +40,7 @@ import (
 // and it outlives the applications that are bound to it.
 const ApplicationRoleName = "operator-helm-application"
 
-// AccessService provides the identity a release is applied with: a ServiceAccount in
+// RBACService provides the identity a release is applied with: a ServiceAccount in
 // the operator namespace (next to the HelmRelease, where helm-controller looks it
 // up), a Role in the target namespace and a RoleBinding tying the two together.
 //
@@ -57,43 +57,43 @@ const ApplicationRoleName = "operator-helm-application"
 // manager's client cache (see cmd/operator-helm-controller), so the reads here go
 // to the API server and never depend on the label-scoped informers those watches
 // run on.
-type AccessService struct {
+type RBACService struct {
 	BaseService
 
 	TargetNamespace string
 }
 
-func NewAccessService(c client.Client, targetNamespace string) *AccessService {
-	return &AccessService{
+func NewRBACService(c client.Client, targetNamespace string) *RBACService {
+	return &RBACService{
 		BaseService:     BaseService{Client: c},
 		TargetNamespace: targetNamespace,
 	}
 }
 
-// EnsureAccess reconciles the account, the Role and the binding. A release without a
+// EnsureRBAC reconciles the account, the Role and the binding. A release without a
 // service account name belongs to a family that does not impersonate; nothing is
 // created for it.
-func (s *AccessService) EnsureAccess(ctx context.Context, rel source.Release) AccessOutcome {
+func (s *RBACService) EnsureRBAC(ctx context.Context, rel source.Release) RBACOutcome {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
-		return AccessOutcome{}
+		return RBACOutcome{}
 	}
 
 	namespace := rel.TargetNamespace()
 
 	if err := s.ensureServiceAccount(ctx, rel, name); err != nil {
-		return accessFailure(fmt.Errorf("ensuring service account: %w", err))
+		return rbacFailure(fmt.Errorf("ensuring service account: %w", err))
 	}
 
 	if err := s.ensureRole(ctx, namespace); err != nil {
-		return accessFailure(fmt.Errorf("ensuring role: %w", err))
+		return rbacFailure(fmt.Errorf("ensuring role: %w", err))
 	}
 
 	if err := s.ensureRoleBinding(ctx, rel, namespace, name); err != nil {
-		return accessFailure(fmt.Errorf("ensuring role binding: %w", err))
+		return rbacFailure(fmt.Errorf("ensuring role binding: %w", err))
 	}
 
-	return AccessOutcome{}
+	return RBACOutcome{}
 }
 
 // foreignObjectError marks an object occupying a name the operator derives that is
@@ -106,24 +106,24 @@ type foreignObjectError struct {
 
 func (e *foreignObjectError) Error() string { return e.message }
 
-// accessFailure names the failure the release reports. A foreign object is terminal:
+// rbacFailure names the failure the release reports. A foreign object is terminal:
 // it leaves the way only by being removed or labelled, and neither is something a
 // retry brings about — the informers behind the watches on both kinds select on the
 // managed-by label, so an object without it is not even observed going away.
-func accessFailure(err error) AccessOutcome {
+func rbacFailure(err error) RBACOutcome {
 	var foreign *foreignObjectError
 	if errors.As(err, &foreign) {
-		return AccessOutcome{
+		return RBACOutcome{
 			Err:      err,
 			Terminal: true,
-			Reason:   helmv1alpha1.ReasonForeignAccessObject,
+			Reason:   helmv1alpha1.ReasonForeignRBACObject,
 			Message:  foreign.message,
 		}
 	}
 
-	return AccessOutcome{
+	return RBACOutcome{
 		Err:     err,
-		Reason:  helmv1alpha1.ReasonAccessSetupFailed,
+		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 		Message: "Failed to set up the release identity: " + err.Error(),
 	}
 }
@@ -135,10 +135,10 @@ func managedByOperator(labels map[string]string) bool {
 	return labels[helmv1alpha1.LabelManagedBy] == helmv1alpha1.LabelManagedByValue
 }
 
-// CleanupAccess removes the account and the binding. The Role stays: it is shared by
+// CleanupRBAC removes the account and the binding. The Role stays: it is shared by
 // every application of the namespace, and on its own — with no binding left naming
 // it — it grants nothing.
-func (s *AccessService) CleanupAccess(ctx context.Context, rel source.Release) error {
+func (s *RBACService) CleanupRBAC(ctx context.Context, rel source.Release) error {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
 		return nil
@@ -165,7 +165,7 @@ func (s *AccessService) CleanupAccess(ctx context.Context, rel source.Release) e
 // ensureServiceAccount keeps the account in its desired shape. The account exists
 // only as a subject name — helm-controller impersonates it with headers on top of
 // its own identity — so no token is ever mounted for it.
-func (s *AccessService) ensureServiceAccount(ctx context.Context, rel source.Release, name string) error {
+func (s *RBACService) ensureServiceAccount(ctx context.Context, rel source.Release, name string) error {
 	account := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.TargetNamespace},
 	}
@@ -199,7 +199,7 @@ func (s *AccessService) ensureServiceAccount(ctx context.Context, rel source.Rel
 // namespace reconciling at once both read the Role as missing and both create it,
 // and the loser is refused. They write the same content, so the second attempt is
 // the patch the loser would have made had it read the Role a moment later.
-func (s *AccessService) ensureRole(ctx context.Context, namespace string) error {
+func (s *RBACService) ensureRole(ctx context.Context, namespace string) error {
 	err := s.applyRole(ctx, namespace)
 	if apierrors.IsAlreadyExists(err) {
 		err = s.applyRole(ctx, namespace)
@@ -208,7 +208,7 @@ func (s *AccessService) ensureRole(ctx context.Context, namespace string) error 
 	return err
 }
 
-func (s *AccessService) applyRole(ctx context.Context, namespace string) error {
+func (s *RBACService) applyRole(ctx context.Context, namespace string) error {
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: namespace},
 	}
@@ -275,7 +275,7 @@ func applicationRoleRef() rbacv1.RoleRef {
 // such a binding would grant it whatever that binding grants. It is reported and
 // left exactly as it is — never patched, never deleted — so its owner decides what
 // happens to it.
-func (s *AccessService) ensureRoleBinding(ctx context.Context, rel source.Release, namespace, name string) error {
+func (s *RBACService) ensureRoleBinding(ctx context.Context, rel source.Release, namespace, name string) error {
 	desiredRef := applicationRoleRef()
 
 	existing := &rbacv1.RoleBinding{}
@@ -340,7 +340,7 @@ func (s *AccessService) ensureRoleBinding(ctx context.Context, rel source.Releas
 // found under it may belong to someone else — the same ownership test ensureRoleBinding
 // applies before it touches anything. A binding that is not ours is left alone; that
 // is not an error and must not block the rest of the cleanup.
-func (s *AccessService) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.NamespacedName) error {
+func (s *RBACService) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.NamespacedName) error {
 	binding := &rbacv1.RoleBinding{}
 	if err := s.Client.Get(ctx, nn, binding); err != nil {
 		return client.IgnoreNotFound(err)

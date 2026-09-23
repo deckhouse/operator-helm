@@ -49,7 +49,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Maintenance:  services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		Claim:        services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
 		Namespaces:   services.NewNamespaceService(client, mgr.GetAPIReader()),
-		Access:       reconcile.NoAccess{},
+		RBAC:         reconcile.NoRBAC{},
 		Status:       status.NewManager(client),
 	})
 

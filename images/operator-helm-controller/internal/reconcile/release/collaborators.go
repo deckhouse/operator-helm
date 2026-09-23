@@ -59,12 +59,12 @@ type TargetNamespaceEnsurer interface {
 	EnsureTargetNamespace(ctx context.Context, rel source.Release) error
 }
 
-// AccessManager provides the identity a release is applied with. The application
+// RBACManager provides the identity a release is applied with. The application
 // family creates a ServiceAccount, a Role and a RoleBinding and names the account
 // on the HelmRelease; the addon family applies charts as helm-controller itself.
-type AccessManager interface {
-	EnsureAccess(ctx context.Context, rel source.Release) services.AccessOutcome
-	CleanupAccess(ctx context.Context, rel source.Release) error
+type RBACManager interface {
+	EnsureRBAC(ctx context.Context, rel source.Release) services.RBACOutcome
+	CleanupRBAC(ctx context.Context, rel source.Release) error
 }
 
 // ChartManager owns the internal HelmChart of a release, the source object of a
@@ -130,11 +130,11 @@ func (ExistingTargetNamespace) EnsureTargetNamespace(context.Context, source.Rel
 	return nil
 }
 
-// NoAccess is the AccessManager of a family that does not impersonate.
-type NoAccess struct{}
+// NoRBAC is the RBACManager of a family that does not impersonate.
+type NoRBAC struct{}
 
-func (NoAccess) EnsureAccess(context.Context, source.Release) services.AccessOutcome {
-	return services.AccessOutcome{}
+func (NoRBAC) EnsureRBAC(context.Context, source.Release) services.RBACOutcome {
+	return services.RBACOutcome{}
 }
 
-func (NoAccess) CleanupAccess(context.Context, source.Release) error { return nil }
+func (NoRBAC) CleanupRBAC(context.Context, source.Release) error { return nil }

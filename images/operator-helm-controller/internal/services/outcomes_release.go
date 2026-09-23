@@ -75,12 +75,12 @@ type ReleaseOutcome struct {
 	ChartDeployed bool
 }
 
-// AccessOutcome is the result of reconciling the identity a release is applied
+// RBACOutcome is the result of reconciling the identity a release is applied
 // with. Terminal marks a failure that will not resolve by retrying: an object the
 // identity needs already occupies its name and is not the operator's to touch.
 // Reason and Message are what the release reports, filled in by the service so both
 // classes of failure are named where they are recognized.
-type AccessOutcome struct {
+type RBACOutcome struct {
 	Err      error
 	Terminal bool
 	Reason   string

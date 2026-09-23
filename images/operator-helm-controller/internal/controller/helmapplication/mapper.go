@@ -88,7 +88,7 @@ func mapRoleBindingToApplications(c client.Client) handler.MapFunc {
 func applicationsInNamespace(ctx context.Context, c client.Client, obj client.Object) ([]helmv1alpha1.HelmApplication, error) {
 	var apps helmv1alpha1.HelmApplicationList
 	if err := c.List(ctx, &apps, client.InNamespace(obj.GetNamespace())); err != nil {
-		log.FromContext(ctx).Error(err, "Failed to list HelmApplications for access mapping",
+		log.FromContext(ctx).Error(err, "Failed to list HelmApplications for RBAC mapping",
 			"controller", ControllerName, "watchedObject", client.ObjectKeyFromObject(obj))
 
 		return nil, err

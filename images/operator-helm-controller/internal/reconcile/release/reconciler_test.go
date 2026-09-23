@@ -349,18 +349,18 @@ func newFullReconciler(
 		Maintenance:  services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
 		Claim:        services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
 		Namespaces:   services.NewNamespaceService(c, c),
-		Access:       NoAccess{},
+		RBAC:         NoRBAC{},
 		Status:       status.NewManager(c),
 	}), c
 }
 
 // newApplicationFullReconciler is the sibling of newFullReconciler for the
 // application family: the same services, wired to the namespaced adapters. It is
-// what lets a test prove that one reconciler serves both families. access is the
+// what lets a test prove that one reconciler serves both families. rbac is the
 // identity manager; nil selects the real one over the same fake client.
 func newApplicationFullReconciler(
 	t *testing.T,
-	access AccessManager,
+	rbac RBACManager,
 	objects ...client.Object,
 ) (*Reconciler, client.Client) {
 	t.Helper()
@@ -385,8 +385,8 @@ func newApplicationFullReconciler(
 		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationChart, index.ApplicationChartIndexer).
 		Build()
 
-	if access == nil {
-		access = services.NewAccessService(c, helmv1alpha1.TargetNamespace)
+	if rbac == nil {
+		rbac = services.NewRBACService(c, helmv1alpha1.TargetNamespace)
 	}
 
 	return New(c, Deps{
@@ -398,7 +398,7 @@ func newApplicationFullReconciler(
 		Maintenance:  services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
 		Claim:        NoChartClaim{},
 		Namespaces:   ExistingTargetNamespace{},
-		Access:       access,
+		RBAC:         rbac,
 		Status:       status.NewManager(c),
 	}), c
 }
@@ -721,29 +721,29 @@ func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *test
 	}
 }
 
-// failingAccess is an AccessManager whose identity setup never succeeds.
-type failingAccess struct{}
+// failingRBAC is an RBACManager whose identity setup never succeeds.
+type failingRBAC struct{}
 
-func (failingAccess) EnsureAccess(context.Context, source.Release) services.AccessOutcome {
-	return services.AccessOutcome{
+func (failingRBAC) EnsureRBAC(context.Context, source.Release) services.RBACOutcome {
+	return services.RBACOutcome{
 		Err:     errors.New("service account is forbidden"),
-		Reason:  helmv1alpha1.ReasonAccessSetupFailed,
+		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 		Message: "Failed to set up the release identity",
 	}
 }
 
-func (failingAccess) CleanupAccess(context.Context, source.Release) error { return nil }
+func (failingRBAC) CleanupRBAC(context.Context, source.Release) error { return nil }
 
-// TestReconcileApplicationReportsAccessSetupFailure pins that the pass stops at the
+// TestReconcileApplicationReportsRBACSetupFailure pins that the pass stops at the
 // identity. A release applied without one would run as helm-controller itself,
 // which is exactly the privilege the namespaced family exists to avoid, so the
 // failure has to be reported instead of worked around. It must also be returned
 // as an error: nothing watches the ServiceAccount/RoleBinding this step manages,
 // so the work queue's rate limiter is the only thing that will retry it.
-func TestReconcileApplicationReportsAccessSetupFailure(t *testing.T) {
+func TestReconcileApplicationReportsRBACSetupFailure(t *testing.T) {
 	app := testApplication()
 
-	r, c := newApplicationFullReconciler(t, failingAccess{}, append(applicationFixtures(), app)...)
+	r, c := newApplicationFullReconciler(t, failingRBAC{}, append(applicationFixtures(), app)...)
 
 	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err == nil {
@@ -759,8 +759,8 @@ func TestReconcileApplicationReportsAccessSetupFailure(t *testing.T) {
 	if ready == nil {
 		t.Fatalf("Ready must be reported, conditions: %v", settled.Status.Conditions)
 	}
-	if ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonAccessSetupFailed {
-		t.Fatalf("Ready is %s/%s, want False/%s", ready.Status, ready.Reason, helmv1alpha1.ReasonAccessSetupFailed)
+	if ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonRBACSetupFailed {
+		t.Fatalf("Ready is %s/%s, want False/%s", ready.Status, ready.Reason, helmv1alpha1.ReasonRBACSetupFailed)
 	}
 
 	names := adapter.NewApplicationRelease(app).InternalNames()
@@ -770,41 +770,41 @@ func TestReconcileApplicationReportsAccessSetupFailure(t *testing.T) {
 	}
 }
 
-// intermittentAccess fails the first call to EnsureAccess and delegates to a real
-// AccessManager afterwards, standing in for a transient failure (an API hiccup, a
+// intermittentRBAC fails the first call to EnsureRBAC and delegates to a real
+// RBACManager afterwards, standing in for a transient failure (an API hiccup, a
 // momentary admission rejection) that clears on its own by the next pass. real is
 // set after construction, once the reconciler's own client exists.
-type intermittentAccess struct {
-	real  AccessManager
+type intermittentRBAC struct {
+	real  RBACManager
 	calls int
 }
 
-func (a *intermittentAccess) EnsureAccess(ctx context.Context, rel source.Release) services.AccessOutcome {
+func (a *intermittentRBAC) EnsureRBAC(ctx context.Context, rel source.Release) services.RBACOutcome {
 	a.calls++
 	if a.calls == 1 {
-		return services.AccessOutcome{
+		return services.RBACOutcome{
 			Err:     errors.New("service account is forbidden"),
-			Reason:  helmv1alpha1.ReasonAccessSetupFailed,
+			Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 			Message: "Failed to set up the release identity",
 		}
 	}
-	return a.real.EnsureAccess(ctx, rel)
+	return a.real.EnsureRBAC(ctx, rel)
 }
 
-func (a *intermittentAccess) CleanupAccess(ctx context.Context, rel source.Release) error {
-	return a.real.CleanupAccess(ctx, rel)
+func (a *intermittentRBAC) CleanupRBAC(ctx context.Context, rel source.Release) error {
+	return a.real.CleanupRBAC(ctx, rel)
 }
 
-// TestReconcileApplicationRecoversAfterTransientAccessSetupFailure pins the fix for
-// the gap in TestReconcileApplicationReportsAccessSetupFailure: a failed
-// EnsureAccess must not just be reported, it must get the application requeued, so
+// TestReconcileApplicationRecoversAfterTransientRBACSetupFailure pins the fix for
+// the gap in TestReconcileApplicationReportsRBACSetupFailure: a failed
+// EnsureRBAC must not just be reported, it must get the application requeued, so
 // a transient failure recovers on its own once the cause is gone.
-func TestReconcileApplicationRecoversAfterTransientAccessSetupFailure(t *testing.T) {
+func TestReconcileApplicationRecoversAfterTransientRBACSetupFailure(t *testing.T) {
 	app := testApplication()
 
-	access := &intermittentAccess{}
-	r, c := newApplicationFullReconciler(t, access, append(applicationFixtures(), app)...)
-	access.real = services.NewAccessService(c, helmv1alpha1.TargetNamespace)
+	rbac := &intermittentRBAC{}
+	r, c := newApplicationFullReconciler(t, rbac, append(applicationFixtures(), app)...)
+	rbac.real = services.NewRBACService(c, helmv1alpha1.TargetNamespace)
 
 	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
 
@@ -817,8 +817,8 @@ func TestReconcileApplicationRecoversAfterTransientAccessSetupFailure(t *testing
 		t.Fatalf("getting application: %v", err)
 	}
 	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonAccessSetupFailed {
-		t.Fatalf("Ready = %+v, want False/%s after the first pass", ready, helmv1alpha1.ReasonAccessSetupFailed)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonRBACSetupFailed {
+		t.Fatalf("Ready = %+v, want False/%s after the first pass", ready, helmv1alpha1.ReasonRBACSetupFailed)
 	}
 
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err != nil {
@@ -829,14 +829,14 @@ func TestReconcileApplicationRecoversAfterTransientAccessSetupFailure(t *testing
 	account := &corev1.ServiceAccount{}
 	accountKey := client.ObjectKey{Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace}
 	if err := c.Get(context.Background(), accountKey, account); err != nil {
-		t.Fatalf("the identity must be created once EnsureAccess stops failing: %v", err)
+		t.Fatalf("the identity must be created once EnsureRBAC stops failing: %v", err)
 	}
 
 	if err := c.Get(context.Background(), key, settled); err != nil {
 		t.Fatalf("getting application: %v", err)
 	}
-	if reason := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady).Reason; reason == helmv1alpha1.ReasonAccessSetupFailed {
-		t.Fatal("Ready must move on from AccessSetupFailed once the retried pass sets up the identity")
+	if reason := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady).Reason; reason == helmv1alpha1.ReasonRBACSetupFailed {
+		t.Fatal("Ready must move on from RBACSetupFailed once the retried pass sets up the identity")
 	}
 }
 
@@ -912,13 +912,13 @@ func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
 	if stalled == nil {
 		t.Fatalf("Stalled must be reported, conditions: %v", settled.Status.Conditions)
 	}
-	if stalled.Status != metav1.ConditionTrue || stalled.Reason != helmv1alpha1.ReasonForeignAccessObject {
-		t.Fatalf("Stalled is %s/%s, want True/%s", stalled.Status, stalled.Reason, helmv1alpha1.ReasonForeignAccessObject)
+	if stalled.Status != metav1.ConditionTrue || stalled.Reason != helmv1alpha1.ReasonForeignRBACObject {
+		t.Fatalf("Stalled is %s/%s, want True/%s", stalled.Status, stalled.Reason, helmv1alpha1.ReasonForeignRBACObject)
 	}
 
 	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
-	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonForeignAccessObject {
-		t.Fatalf("Ready = %+v, want False/%s", ready, helmv1alpha1.ReasonForeignAccessObject)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonForeignRBACObject {
+		t.Fatalf("Ready = %+v, want False/%s", ready, helmv1alpha1.ReasonForeignRBACObject)
 	}
 
 	stored := &rbacv1.Role{}
@@ -936,23 +936,23 @@ func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
 	}
 }
 
-// accessCleanupFails is an AccessManager whose teardown never succeeds, standing in
+// accessCleanupFails is an RBACManager whose teardown never succeeds, standing in
 // for an API failure while removing the release's ServiceAccount or RoleBinding.
 type accessCleanupFails struct{}
 
-func (accessCleanupFails) EnsureAccess(context.Context, source.Release) services.AccessOutcome {
-	return services.AccessOutcome{}
+func (accessCleanupFails) EnsureRBAC(context.Context, source.Release) services.RBACOutcome {
+	return services.RBACOutcome{}
 }
 
-func (accessCleanupFails) CleanupAccess(context.Context, source.Release) error {
+func (accessCleanupFails) CleanupRBAC(context.Context, source.Release) error {
 	return errors.New("role binding deletion forbidden")
 }
 
-// TestReconcileDeleteReportsAccessCleanupFailure pins that a failed CleanupAccess
+// TestReconcileDeleteReportsRBACCleanupFailure pins that a failed CleanupRBAC
 // leaves the status saying so. By the time this step runs the internal release and
 // sources are already gone, so nothing else on the object would otherwise explain
 // why the finalizer is still there.
-func TestReconcileDeleteReportsAccessCleanupFailure(t *testing.T) {
+func TestReconcileDeleteReportsRBACCleanupFailure(t *testing.T) {
 	now := metav1.Now()
 	app := &helmv1alpha1.HelmApplication{
 		ObjectMeta: metav1.ObjectMeta{

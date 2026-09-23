@@ -108,7 +108,7 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 		util.UntilConditionTrue(apiv1alpha1.ConditionTypeStalled, framework.LongTimeout, createdApp)
 		util.UntilConditionReason(
 			apiv1alpha1.ConditionTypeStalled,
-			apiv1alpha1.ReasonForeignAccessObject,
+			apiv1alpha1.ReasonForeignRBACObject,
 			framework.LongTimeout,
 			createdApp,
 		)

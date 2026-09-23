@@ -56,7 +56,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Maintenance:  services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		Claim:        reconcile.NoChartClaim{},
 		Namespaces:   reconcile.ExistingTargetNamespace{},
-		Access:       services.NewAccessService(client, helmv1alpha1.TargetNamespace),
+		RBAC:         services.NewRBACService(client, helmv1alpha1.TargetNamespace),
 		Status:       status.NewManager(client),
 	})
 

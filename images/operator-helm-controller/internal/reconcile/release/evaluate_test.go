@@ -96,7 +96,7 @@ func TestEvaluateTerminalFailureStalls(t *testing.T) {
 func TestEvaluateTerminalFailureIsNeverRetried(t *testing.T) {
 	in := baseInputs()
 	in.Step = &Failure{
-		Reason:   helmv1alpha1.ReasonForeignAccessObject,
+		Reason:   helmv1alpha1.ReasonForeignRBACObject,
 		Message:  "role team-a/operator-helm-application already exists and is not managed by the operator",
 		Err:      errors.New("foreign role"),
 		Terminal: true,
@@ -119,7 +119,7 @@ func TestEvaluateTerminalFailureIsNeverRetried(t *testing.T) {
 func TestEvaluateTerminalFailureDropsTheForceRequest(t *testing.T) {
 	in := baseInputs()
 	in.Step = &Failure{
-		Reason:   helmv1alpha1.ReasonForeignAccessObject,
+		Reason:   helmv1alpha1.ReasonForeignRBACObject,
 		Message:  "role binding team-a/app already exists and is not managed by the operator",
 		Err:      errors.New("foreign binding"),
 		Terminal: true,
@@ -143,7 +143,7 @@ func TestEvaluateTerminalFailureDropsTheForceRequest(t *testing.T) {
 func TestEvaluateRecoverableFailureKeepsTheForceRequest(t *testing.T) {
 	in := baseInputs()
 	in.Step = &Failure{
-		Reason:  helmv1alpha1.ReasonAccessSetupFailed,
+		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 		Message: "Failed to set up the release identity",
 		Err:     errors.New("forbidden"),
 		Retry:   true,
@@ -213,7 +213,7 @@ func TestEvaluateRecoverableProbeFailureDoesNotStall(t *testing.T) {
 func TestEvaluateStepFailureOwnsReadyAlone(t *testing.T) {
 	in := baseInputs()
 	in.Step = &Failure{
-		Reason:  helmv1alpha1.ReasonAccessSetupFailed,
+		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 		Message: "Failed to set up the release identity",
 		Err:     errors.New("forbidden"),
 		Retry:   true,
