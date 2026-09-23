@@ -69,12 +69,12 @@ flowchart TB
 
 - [`HelmClusterAddonRepository`](/modules/operator-helm/cr.html#helmclusteraddonrepository) — репозиторий Helm или OCI с чартами для установки на уровне кластера;
 - [`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon) — описание релиза: целевая версия чарта, неймспейс развёртывания и расширенные параметры установки (при необходимости);
-- [`HelmClusterApplicationRepository`](/modules/operator-helm/cr.html#helmclusterapplicationrepository) — репозиторий, чарты которого доступны ресурсам `HelmApplication` из любого неймспейса.
+- [`HelmClusterApplicationRepository`](/modules/operator-helm/cr.html#helmclusterapplicationrepository) — репозиторий, чарты которого доступны ресурсам [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) из любого неймспейса.
 
 Администратор неймспейса работает с ресурсами своего неймспейса:
 
-- [`HelmApplicationRepository`](/modules/operator-helm/cr.html#helmapplicationrepository) — репозиторий, чарты которого доступны ресурсам `HelmApplication` того же неймспейса;
-- [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) — описание релиза в собственном неймспейсе: целевая версия чарта, ссылка на `HelmApplicationRepository` или `HelmClusterApplicationRepository` и расширенные параметры установки (при необходимости).
+- [`HelmApplicationRepository`](/modules/operator-helm/cr.html#helmapplicationrepository) — репозиторий, чарты которого доступны ресурсам [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) того же неймспейса;
+- [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) — описание релиза в собственном неймспейсе: целевая версия чарта, ссылка на [`HelmApplicationRepository`](/modules/operator-helm/cr.html#helmapplicationrepository) или [`HelmClusterApplicationRepository`](/modules/operator-helm/cr.html#helmclusterapplicationrepository) и расширенные параметры установки (при необходимости).
 
 Примеры настройки вышеописанных ресурсов приведены в [руководстве администратора](admin_guide.html) и [руководстве пользователя](user_guide.html).
 
