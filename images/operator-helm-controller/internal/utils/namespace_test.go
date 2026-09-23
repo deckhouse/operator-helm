@@ -30,7 +30,11 @@ func TestIsSystemNamespace(t *testing.T) {
 		{"kube-system", true},
 		{"kube-node-lease", true},
 		{"kube-public", true},
-		{"kube-anything", true},
+		// A reserved-looking prefix is not itself a verdict: an addon may already
+		// be installed in such a namespace, and this predicate is what would park
+		// it as permanently failed.
+		{"kube-anything", false},
+		{"kube-prometheus", false},
 		{"default", false},
 		{"d8-operator-helm", true},
 		{"d8-system", true},
