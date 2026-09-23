@@ -69,10 +69,13 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 			ObjectMeta: metav1.ObjectMeta{Name: appRoleName, Namespace: f.NamespaceName()},
 			Rules:      foreignRules,
 		}
-		createdRole, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
+		// Deliberately not registered for deletion. Once the module adopts this Role
+		// it recreates it for as long as an application lives in the namespace, and
+		// CleanupRBAC keeps it on purpose, so waiting for it to disappear would wait
+		// out the full timeout. It goes away with the namespace.
+		_, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
 			Create(context.Background(), role, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		f.DeferDelete(createdRole)
 
 		By("Creating the repository and the application over it")
 		repo := &apiv1alpha1.HelmApplicationRepository{
