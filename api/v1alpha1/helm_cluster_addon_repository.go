@@ -28,13 +28,21 @@ const (
 	HelmClusterAddonRepositoryLabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 )
 
+// The name rule below is only the upper half of the one the application repositories
+// carry. This kind shipped without any rule, and a root rule is re-evaluated on every
+// write to the object — a status patch included — so a minimum added now would not
+// merely forbid new short names, it would freeze every repository already created with
+// one, with no way out but deleting it and its whole catalog. The cap is different: a
+// name longer than a label value can hold already breaks the internal objects that
+// carry it.
+
 // HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:singular=helmclusteraddonrepository,scope=Cluster
-// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() >= 3 && self.metadata.name.size() <= 63",message="repository name must be between 3 and 63 characters long"
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="repository name must be at most 63 characters long"
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the repository"
 // +kubebuilder:printcolumn:name="Synced",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status",description="Repository synchronization status"
 // +kubebuilder:printcolumn:name="Last Sync",type="date",JSONPath=".status.lastSuccessfulSyncTime",description="Time of the last successful catalog synchronization"

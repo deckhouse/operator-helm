@@ -67,7 +67,7 @@ spec:
                       the connection details and credentials for the repository where
                       the chart is located.
                     maxLength: 63
-                    minLength: 3
+                    minLength: 1
                     type: string
                   version:
                     description: Versions holds the HelmClusterAddon chart version.

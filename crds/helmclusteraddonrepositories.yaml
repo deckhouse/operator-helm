@@ -202,8 +202,8 @@ spec:
         - spec
         type: object
         x-kubernetes-validations:
-        - message: repository name must be between 3 and 63 characters long
-          rule: self.metadata.name.size() >= 3 && self.metadata.name.size() <= 63
+        - message: repository name must be at most 63 characters long
+          rule: self.metadata.name.size() <= 63
     served: true
     storage: true
     subresources:

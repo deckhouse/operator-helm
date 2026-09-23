@@ -160,10 +160,15 @@ type HelmClusterAddonChartRef struct {
 	// from the defined repository (e.g., "ingress-nginx" or "redis").
 	// +kubebuilder:validation:MinLength=1
 	HelmClusterAddonChartName string `json:"helmClusterAddonChart"`
+	// The minimum below is 1, not 3: the referenced kind shipped without a minimum of
+	// its own, so a repository created under a shorter name must stay referenceable.
+	// This note is outside the doc comment on purpose — a doc comment becomes the
+	// field's description in the CRD.
+
 	// Specifies the name of the HelmClusterAddonRepository custom resource that contains
 	// the connection details and credentials for the repository where
 	// the chart is located.
-	// +kubebuilder:validation:MinLength=3
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	HelmClusterAddonRepository string `json:"helmClusterAddonRepository"`
 	// Versions holds the HelmClusterAddon chart version.
