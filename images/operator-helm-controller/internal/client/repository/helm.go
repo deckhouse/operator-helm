@@ -107,6 +107,16 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 			return false, nil
 		}
 
+		// A throttle is not terminal, and the nil that says so must not be read here
+		// as permission to go on: the body a registry sends with it is JSON, which
+		// decodes into an empty index without error, and the caller would then prune
+		// the repository's whole catalog as if it had gone empty.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			lastErr = fmt.Errorf("repository %s throttled the request (HTTP %d)", url, resp.StatusCode)
+
+			return false, nil
+		}
+
 		if terminal := TerminalFromStatusCode(resp.StatusCode, url); terminal != nil {
 			return true, terminal
 		}
