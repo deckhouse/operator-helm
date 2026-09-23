@@ -246,12 +246,10 @@ func (s *RBACService) applyRole(ctx context.Context, namespace string) error {
 // applicationRBACLabels mark the namespace Role and every role binding we own. The
 // managed-by label is both the ownership test and what the informers behind the
 // watches on both kinds select on, so losing it reads as a deletion, brings the
-// object back here and has it refused as foreign; heritage is what the rest of
-// Deckhouse recognizes a module's object by.
+// object back here and has it refused as foreign.
 func applicationRBACLabels() map[string]string {
 	return map[string]string{
-		helmv1alpha1.LabelManagedBy:         helmv1alpha1.LabelManagedByValue,
-		helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+		helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue,
 	}
 }
 

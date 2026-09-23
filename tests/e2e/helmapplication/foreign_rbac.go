@@ -160,9 +160,6 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(stored.Rules).To(HaveLen(1))
 			g.Expect(stored.Rules[0].Verbs).To(ContainElement("*"))
-			g.Expect(stored.Labels).To(HaveKeyWithValue(
-				apiv1alpha1.LabelDeckhouseHeritage, apiv1alpha1.LabelDeckhouseHeritageValue,
-			))
 		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 	})
 })

@@ -164,20 +164,18 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		}
 	})
 
-	It("should carry the module labels on the role and the binding", func() {
+	It("should carry the module label on the role and the binding", func() {
 		saName := util.ApplicationServiceAccountName(f.NamespaceName(), appName)
 
 		role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
 			Get(context.Background(), appRoleName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(role.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelManagedBy, apiv1alpha1.LabelManagedByValue))
-		Expect(role.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelDeckhouseHeritage, apiv1alpha1.LabelDeckhouseHeritageValue))
 
 		binding, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 			Get(context.Background(), saName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(binding.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelManagedBy, apiv1alpha1.LabelManagedByValue))
-		Expect(binding.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelDeckhouseHeritage, apiv1alpha1.LabelDeckhouseHeritageValue))
 	})
 
 	// Nothing here forces a reconciliation: the watches on both kinds are what has to

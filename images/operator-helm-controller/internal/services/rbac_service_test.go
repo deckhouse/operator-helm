@@ -113,8 +113,8 @@ func TestEnsureRBACCreatesTheIdentity(t *testing.T) {
 }
 
 // TestEnsureRBACRewritesAnEditedRole pins that a Role of ours is reconciled rather
-// than seeded: rules narrowed out of band are written back, and so is the heritage
-// label. A label someone else put there survives, as on the account and the binding.
+// than seeded: rules narrowed out of band are written back, and the managed-by label
+// is kept. A label someone else put there survives, as on the account and the binding.
 func TestEnsureRBACRewritesAnEditedRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	edited := &rbacv1.Role{
