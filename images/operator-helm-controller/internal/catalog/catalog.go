@@ -19,8 +19,10 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -125,6 +127,19 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 	desired := make(map[string]struct{}, len(charts))
 
 	for _, chart := range charts {
+		if errs := validation.IsValidLabelValue(chart.Name); len(errs) > 0 {
+			// The chart label carries the name verbatim, and it is a query surface:
+			// a user finds a catalog object by it. Writing a sanitized value would
+			// answer the wrong query, and omitting the label would hide the object
+			// from every such query while leaving it in the catalog. Neither is
+			// better than not offering a chart whose name the API cannot hold — and
+			// an index may legally publish one, so this must not cost the pass.
+			logger.Info("Skipping a chart whose name cannot be recorded on a catalog object",
+				"kind", t.cfg.Kind, "chart", chart.Name, "reason", strings.Join(errs, "; "))
+
+			continue
+		}
+
 		name := t.cfg.ObjectName(repo.Name(), chart.Name)
 		// A chart with no usable version is still created: it carries the reason each of
 		// its versions is unusable, and skipping it here would let the pruning loop below

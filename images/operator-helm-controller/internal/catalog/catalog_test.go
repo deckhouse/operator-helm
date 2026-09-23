@@ -27,6 +27,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -620,5 +622,84 @@ func TestMigrationSurvivesAFailedStatusWrite(t *testing.T) {
 	}
 	if !retained {
 		t.Fatalf("versions = %+v, want 1.0.0 and its media type carried over on the retry", got.Status.Versions)
+	}
+}
+
+// rejectInvalidLabels makes the fake client behave like the API server on the one
+// rule this test turns on: a label value outside the label grammar is rejected. The
+// fake client accepts any string, so without this the failure under test cannot
+// happen at all.
+func rejectInvalidLabels() interceptor.Funcs {
+	check := func(obj client.Object) error {
+		for key, value := range obj.GetLabels() {
+			if errs := validation.IsValidLabelValue(value); len(errs) > 0 {
+				return apierrors.NewInvalid(
+					obj.GetObjectKind().GroupVersionKind().GroupKind(), obj.GetName(),
+					field.ErrorList{field.Invalid(field.NewPath("metadata", "labels", key), value, strings.Join(errs, "; "))},
+				)
+			}
+		}
+
+		return nil
+	}
+
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if err := check(obj); err != nil {
+				return err
+			}
+
+			return c.Create(ctx, obj, opts...)
+		},
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if err := check(obj); err != nil {
+				return err
+			}
+
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	}
+}
+
+// TestReconcileSkipsAChartWhoseNameCannotBeALabel pins that one chart the catalog
+// cannot record does not cost the whole repository its synchronization. The chart
+// name is copied verbatim into a label value, and an index may legally publish a
+// name no label value can hold; the write is rejected, and a pass that returned
+// there would leave every chart listed after it unwritten and never reach the
+// pruning loop at all — so a chart removed from the repository would stay in the
+// catalog forever and the repository would never report a successful sync.
+func TestReconcileSkipsAChartWhoseNameCannotBeALabel(t *testing.T) {
+	stale := legacyAddonChart(naming.HelmClusterAddonChartName("example", "gone"), "example", "gone",
+		helmv1alpha1.ChartVersion{Version: "1.0.0"})
+
+	c := newAddonClientWithInterceptor(t, rejectInvalidLabels(), stale)
+	cat := adapter.NewAddonCatalog(c)
+	repo := addonRepo()
+
+	// The unwritable chart comes first, so a pass that stopped on it would also be
+	// missing the one after it.
+	err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{
+		chart("my chart", "1.0.0"),
+		chart("podinfo", "6.7.1"),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned %v, want the pass to complete", err)
+	}
+
+	good := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "podinfo")}, good); err != nil {
+		t.Fatalf("the chart listed after the unwritable one was not created: %v", err)
+	}
+
+	skipped := &helmv1alpha1.HelmClusterAddonChart{}
+	err = c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "my chart")}, skipped)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("getting the skipped chart returned %v, want NotFound", err)
+	}
+
+	pruned := &helmv1alpha1.HelmClusterAddonChart{}
+	err = c.Get(context.Background(), client.ObjectKey{Name: stale.Name}, pruned)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("the stale chart was not pruned (%v), so the pass never reached the pruning loop", err)
 	}
 }
