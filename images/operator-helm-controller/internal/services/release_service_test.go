@@ -126,3 +126,35 @@ func TestEnsureHelmReleaseKeepsForeignLabels(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDesiredChartDeployedSurvivesASourceKindFlip pins that a revision carrying no
+// digest is read as "not the desired chart" rather than indexed into. A release
+// installed from a registry keeps an OCI digest in its history; when the repository
+// index republishes that version as an archive, the chart is resolved through a
+// HelmChart whose revision is a bare version, and the two shapes meet here.
+func TestIsDesiredChartDeployedSurvivesASourceKindFlip(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+
+	cases := []struct {
+		name             string
+		artifactRevision string
+	}{
+		{"a helm chart revision carries no digest", "6.7.1"},
+		{"an empty revision", ""},
+		{"a digest too short to slice", "6.7.1@sha256:ab"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			latest := &helmv2.Snapshot{
+				Status:       "deployed",
+				OCIDigest:    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				ChartVersion: "6.7.1+0123456789ab",
+			}
+
+			if isDesiredChartDeployed(rel, latest, tc.artifactRevision) {
+				t.Fatalf("isDesiredChartDeployed(_, _, %q) = true, want false", tc.artifactRevision)
+			}
+		})
+	}
+}

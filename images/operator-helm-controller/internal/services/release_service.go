@@ -212,8 +212,16 @@ func isDesiredChartDeployed(rel source.Release, latest *helmv2.Snapshot, artifac
 	desired := rel.ChartRef().Version
 
 	if latest.OCIDigest != "" {
-		ociDigestParts := strings.Split(artifactRevision, "@")
-		latestDigest := ociDigestParts[1]
+		// The history says the deployed chart came from a registry, but the revision
+		// the source now offers need not: a version the index republishes as an
+		// archive is resolved through a HelmChart, whose revision is a bare version
+		// with no digest to compare against. That is a chart other than the deployed
+		// one, not a reason to index into a revision that has no digest part.
+		_, latestDigest, ok := strings.Cut(artifactRevision, "@")
+		if !ok || len(latestDigest) < 19 {
+			return false
+		}
+
 		desiredVersion := desired + "+" + latestDigest[7:19]
 
 		return latest.OCIDigest == latestDigest && latest.ChartVersion == desiredVersion
