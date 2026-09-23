@@ -85,6 +85,11 @@ def main() -> int:
     parser_release_notes.add_argument(
         "--lang", "-l", type=str, required=True, help="Target language."
     )
+    parser_release_notes.add_argument(
+        "--full",
+        action="store_true",
+        help="Regenerate all versions instead of only adding missing ones.",
+    )
 
     parser_release_notes = subparsers.add_parser(
         "translate",
@@ -121,6 +126,7 @@ def main() -> int:
             parsed_args.directory,
             parsed_args.lang,
             parsed_args.output,
+            parsed_args.full,
         )
 
     if parsed_args.subcommand == "translate":
@@ -241,10 +247,18 @@ def changelog_handler(
 
 
 @ensure_yq
-def release_notes_handler(changelog_dir: str, lang: str, output: str = "") -> int:
+def release_notes_handler(
+    changelog_dir: str, lang: str, output: str = "", full: bool = False
+) -> int:
     if lang not in ["en", "ru"]:
         logging.error('language must be either "en" or "ru".')
         return 1
+
+    # existing sections are kept verbatim unless --full is set,
+    # so already released versions are never rewritten
+    existing_sections = {}
+    if not full and output and os.path.exists(output):
+        existing_sections = parse_release_notes_sections(output)
 
     changelog_files = sorted(
         glob.glob(pathname=os.path.join(changelog_dir, "*.yaml")), key=lambda f: [int(n) for n in re.findall(r'\d+', f)], reverse=True
@@ -301,6 +315,11 @@ def release_notes_handler(changelog_dir: str, lang: str, output: str = "") -> in
             "chore": "",
         }
 
+        if entries["version"] in existing_sections:
+            logging.debug("keeping existing section: %s", entries["version"])
+            markdown += existing_sections[entries["version"]]
+            continue
+
         for category, changes in changelog.items():
             logging.debug("processing category: %s", category)
             if changes:
@@ -323,6 +342,20 @@ def release_notes_handler(changelog_dir: str, lang: str, output: str = "") -> in
         print(markdown)
 
     return 0
+
+
+def parse_release_notes_sections(filename: str) -> dict:
+    """Split an existing release notes file into per-version markdown sections."""
+    with open(filename, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    sections = {}
+    for match in re.finditer(
+        r"\n## (v\S+)\n.*?(?=\n## v|\Z)", content, flags=re.S
+    ):
+        sections[match.group(1)] = match.group(0).rstrip() + "\n"
+
+    return sections
 
 
 # Leading verbs converted to past tense when rendering release notes.
