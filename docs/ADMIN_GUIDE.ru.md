@@ -1,6 +1,6 @@
 ---
 title: "Руководство администратора"
-description: "Deckhouse Kubernetes Platform — управление кластерными ресурсами модуля operator-helm: репозитории, каталоги чартов и аддоны."
+description: "Deckhouse Platform — управление кластерными ресурсами модуля operator-helm: репозитории, каталоги чартов и аддоны."
 weight: 40
 ---
 
