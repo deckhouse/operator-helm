@@ -368,8 +368,8 @@ status:
 | `Ready` | `False` | `ChartFetchFailed`, `ChartStorageFailed` | Чарт не удалось загрузить из репозитория или сохранить в кластере. |
 | `Ready` | `False` | `OCIFetchFailed`, `OCIIncludeUnavailable`, `OCIStorageFailed`, `OCIVerificationFailed` | Не удалось получить или проверить чарт из OCI-реестра. |
 | `Ready` | `False` | `ChartVersionRemoved` | Указанная версия чарта больше не публикуется репозиторием. Выберите другую версию. |
-| `Ready` | `False` | `AccessSetupFailed` | Не удалось подготовить `ServiceAccount`, `Role` или `RoleBinding`, от имени которых устанавливается чарт. Попытка повторится автоматически. |
-| `Ready` | `False` | `ForeignAccessObject` | Занято имя `Role` или `RoleBinding`, которые модуль создаёт для приложения. `Role` всегда называется `operator-helm-application`, имя `RoleBinding` совпадает с именем `ServiceAccount` приложения и приведено в поле `message`. Объект с таким именем создан не модулем, поэтому модуль его не трогает. Удалите чужой объект и запросите принудительную реконсиляцию. |
+| `Ready` | `False` | `RBACSetupFailed` | Не удалось подготовить `ServiceAccount`, `Role` или `RoleBinding`, от имени которых устанавливается чарт. Попытка повторится автоматически. |
+| `Ready` | `False` | `ForeignRBACObject` | Занято имя `Role` или `RoleBinding`, которые модуль создаёт для приложения. `Role` всегда называется `operator-helm-application`, имя `RoleBinding` совпадает с именем `ServiceAccount` приложения и приведено в поле `message`. Объект с таким именем создан не модулем, поэтому модуль его не трогает. Удалите чужой объект и запросите принудительную реконсиляцию. |
 | `Ready` | `False` | `UnsupportedRepositoryType` | У репозитория, на который ссылается приложение, нечитаемый URL. Обратитесь к владельцу репозитория. |
 | `Ready` | `False` | `Failed` | Прочие ошибки. Причина приведена в поле `message`. |
 | `Installed` | как у `Ready` | та же, что у `Ready` | Результат первой установки релиза. |

@@ -368,8 +368,8 @@ status:
 | `Ready` | `False` | `ChartFetchFailed`, `ChartStorageFailed` | The chart could not be downloaded from the repository or stored in the cluster. |
 | `Ready` | `False` | `OCIFetchFailed`, `OCIIncludeUnavailable`, `OCIStorageFailed`, `OCIVerificationFailed` | The chart could not be retrieved from the OCI registry or verified. |
 | `Ready` | `False` | `ChartVersionRemoved` | The specified chart version is no longer published by the repository. Select another version. |
-| `Ready` | `False` | `AccessSetupFailed` | The `ServiceAccount`, `Role` or `RoleBinding` used to install the chart could not be prepared. The attempt will be repeated automatically. |
-| `Ready` | `False` | `ForeignAccessObject` | The name of the `Role` or the `RoleBinding` that the module creates for the application is taken. The `Role` is always named `operator-helm-application`, and the name of the `RoleBinding` matches the name of the application's `ServiceAccount` and is given in the `message` field. An object with such a name was not created by the module, so the module does not touch it. Delete the foreign object and request a forced reconciliation. |
+| `Ready` | `False` | `RBACSetupFailed` | The `ServiceAccount`, `Role` or `RoleBinding` used to install the chart could not be prepared. The attempt will be repeated automatically. |
+| `Ready` | `False` | `ForeignRBACObject` | The name of the `Role` or the `RoleBinding` that the module creates for the application is taken. The `Role` is always named `operator-helm-application`, and the name of the `RoleBinding` matches the name of the application's `ServiceAccount` and is given in the `message` field. An object with such a name was not created by the module, so the module does not touch it. Delete the foreign object and request a forced reconciliation. |
 | `Ready` | `False` | `UnsupportedRepositoryType` | The repository the application refers to has an unreadable URL. Contact the repository owner. |
 | `Ready` | `False` | `Failed` | Other errors. The cause is given in the `message` field. |
 | `Installed` | same as `Ready` | same as for `Ready` | The outcome of the first installation of the release. |
