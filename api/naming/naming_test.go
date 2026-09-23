@@ -272,3 +272,32 @@ func TestChartNameSeparatesATrailingDot(t *testing.T) {
 		t.Fatalf("(%q, %q) and (%q, %q) both produce %q", "foo", "bar.", "foo", "bar", withDot)
 	}
 }
+
+// TestChartNameSanitizesAnIllegalDot pins that a chart name from an index or an OCI
+// tag list cannot produce an invalid object name. A dot is legal in a DNS-1123
+// subdomain only between two alphanumerics, so a name that carries one next to a
+// separator — or next to another dot — must not reach the API server as is:
+// CreateOrPatch would reject the object, and the catalog synchronization of the
+// whole repository stops on the first rejection.
+func TestChartNameSanitizesAnIllegalDot(t *testing.T) {
+	charts := []string{
+		"my chart. v2",
+		".foo",
+		"a..b",
+		"a.-b",
+		"foo.-bar",
+		"名.app",
+		"foo-.bar",
+		".",
+		"..",
+	}
+
+	for _, chart := range charts {
+		t.Run(chart, func(t *testing.T) {
+			got := HelmClusterAddonChartName("repo", chart)
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("HelmClusterAddonChartName(%q, %q) = %q, which is not a valid DNS-1123 subdomain: %v", "repo", chart, got, errs)
+			}
+		})
+	}
+}

@@ -82,7 +82,26 @@ func chartObjectName(repoName, chartName string) string {
 
 	// A repoPart that sanitizes to empty (or to only separators) leaves the fixed
 	// "-chart-" literal leading the name, so the trim has to reach the front too.
-	return strings.Trim(result, "-.") + "-" + hash
+	readable := []byte(strings.Trim(result, "-."))
+
+	// Trimming the ends is not enough. sanitize keeps dots, and a dot is only legal
+	// between two alphanumerics, so an input like "my chart. v2" leaves ".-" inside
+	// the readable part and the whole name stops being a subdomain the API server
+	// accepts. Every dot the label rules cannot hold becomes a dash instead; the
+	// readable part is only a hint, and the hash keeps the name injective whatever
+	// this does to it. The bounds hold because the trim above already removed every
+	// leading and trailing separator.
+	for i := 1; i < len(readable)-1; i++ {
+		if readable[i] == '.' && (!isAlphanumeric(readable[i-1]) || !isAlphanumeric(readable[i+1])) {
+			readable[i] = '-'
+		}
+	}
+
+	return string(readable) + "-" + hash
+}
+
+func isAlphanumeric(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 }
 
 // sanitize lower-cases s and replaces every character that cannot appear in a
