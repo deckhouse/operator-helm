@@ -18,8 +18,18 @@ limitations under the License.
 
 package v1alpha1
 
+type HelmApplicationExpansion interface{}
+
+type HelmApplicationChartExpansion interface{}
+
+type HelmApplicationRepositoryExpansion interface{}
+
 type HelmClusterAddonExpansion interface{}
 
 type HelmClusterAddonChartExpansion interface{}
 
 type HelmClusterAddonRepositoryExpansion interface{}
+
+type HelmClusterApplicationChartExpansion interface{}
+
+type HelmClusterApplicationRepositoryExpansion interface{}

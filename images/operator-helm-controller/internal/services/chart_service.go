@@ -19,9 +19,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"maps"
 
-	"github.com/werf/3p-fluxcd-pkg/apis/meta"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,13 +29,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
-	"github.com/deckhouse/operator-helm/internal/utils"
+	"github.com/deckhouse/operator-helm/internal/source"
 )
 
-var helmChartErrorRules = []status.ErrorConditionRule{
+var helmChartErrorRules = []ErrorConditionRule{
 	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartFetchFailed},
 	{Type: "StorageOperationFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartStorageFailed},
 }
@@ -56,77 +54,49 @@ func NewChartService(client client.Client, scheme *runtime.Scheme, targetNamespa
 	}
 }
 
-var _ status.Provider = (*ChartResult)(nil)
-
-type ChartResult struct {
-	Status   status.Status
-	Artifact *meta.Artifact
-}
-
-func (r ChartResult) GetStatus() status.Status {
-	return r.Status
-}
-
-func (r ChartResult) IsReady() bool {
-	return r.Artifact != nil && r.Status.Observed && r.Status.Status == metav1.ConditionTrue
-}
-
-func (r ChartResult) HasArtifact() bool {
-	return r.Artifact != nil && r.Status.Observed
-}
-
-func (r ChartResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeReady
-}
-
-func (s *ChartService) EnsureHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) ChartResult {
+func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, repo source.Repository) ChartOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      utils.GetInternalHelmChartName(addon.Name),
+			Name:      rel.InternalNames().HelmChart,
 			Namespace: s.TargetNamespace,
 		},
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		applyHelmChartSpec(addon, existing)
+		applyHelmChartSpec(rel, repo, existing)
 
 		return nil
 	})
 	if err != nil {
-		return ChartResult{Status: status.Failed(
-			addon,
-			helmv1alpha1.ReasonHelmChartFailed,
-			"Failed to create helm chart",
-			fmt.Errorf("creating or updating helm chart: %w", err),
-		)}
+		return ChartOutcome{Err: fmt.Errorf("creating or updating helm chart: %w", err)}
 	}
 
 	if op != controllerutil.OperationResultNone {
-		logger.Info("Reconciled helm chart", "operation", op)
+		logger.Info("Reconciled helm chart", "operation", op,
+			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
-	processedStatus := status.ProcessChildConditions(
-		existing.GetConditions(), existing.Generation, addon, helmChartErrorRules,
-	)
+	internal := reduceInternalConditions(existing.GetConditions(), existing.Generation, helmChartErrorRules)
 
-	if processedStatus.IsReady() {
-		logger.Info("Successfully reconciled helm chart", "operation", op, "chart", addon.Spec.Chart.HelmClusterAddonChartName)
+	if internal.Ready() {
+		logger.Info("Successfully reconciled helm chart", "operation", op, "chart", rel.ChartRef().Chart,
+			"internalObject", client.ObjectKeyFromObject(existing))
 	}
 
-	return ChartResult{
+	return ChartOutcome{
 		Artifact: existing.Status.Artifact,
-		Status:   processedStatus,
+		Internal: internal,
 	}
 }
 
 // CleanupHelmChart issues a delete for the internal HelmChart and returns it
 // while it is still present, so the caller can inspect its conditions and wait
-// for nelm-source-controller to finish removing it. It returns nil once the
+// for source-controller to finish removing it. It returns nil once the
 // HelmChart is gone.
-func (s *ChartService) CleanupHelmChart(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (*sourcev1.HelmChart, error) {
-	nn := types.NamespacedName{Name: utils.GetInternalHelmChartName(addon.Name), Namespace: s.TargetNamespace}
+func (s *ChartService) CleanupHelmChart(ctx context.Context, names source.ReleaseNames) (*sourcev1.HelmChart, error) {
+	nn := types.NamespacedName{Name: names.HelmChart, Namespace: s.TargetNamespace}
 	chart := &sourcev1.HelmChart{}
 	exists, err := s.deleteAndCheck(ctx, nn, chart)
 	if err != nil {
@@ -139,26 +109,25 @@ func (s *ChartService) CleanupHelmChart(ctx context.Context, addon *helmv1alpha1
 	return chart, nil
 }
 
-func applyHelmChartSpec(addon *helmv1alpha1.HelmClusterAddon, existing *sourcev1.HelmChart) {
-	if addon.ForceReconcileRequired() {
+func applyHelmChartSpec(rel source.Release, repo source.Repository, existing *sourcev1.HelmChart) {
+	if rel.ForceReconcileRequired() {
 		setReconcileRequestAnnotations(existing)
 	}
 
+	// Merge rather than replace: the internal HelmChart may carry labels put there
+	// by someone else (a policy engine, a cost allocator), and dropping them on
+	// every pass would fight whoever set them.
 	if existing.Labels == nil {
 		existing.Labels = map[string]string{}
 	}
+	maps.Copy(existing.Labels, rel.HelmChartLabels())
 
-	existing.Labels[helmv1alpha1.LabelManagedBy] = helmv1alpha1.LabelManagedByValue
-	existing.Labels[helmv1alpha1.HelmClusterAddonLabelSourceName] = addon.Name
-	existing.Labels[helmv1alpha1.HelmClusterAddonChartLabelSourceName] = naming.HelmClusterAddonChartName(
-		addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName,
-	)
-
-	existing.Spec.Chart = addon.Spec.Chart.HelmClusterAddonChartName
-	existing.Spec.Version = addon.Spec.Chart.Version
+	ref := rel.ChartRef()
+	existing.Spec.Chart = ref.Chart
+	existing.Spec.Version = ref.Version
 
 	existing.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
 		Kind: sourcev1.HelmRepositoryKind,
-		Name: utils.GetInternalHelmRepositoryName(addon.Spec.Chart.HelmClusterAddonRepository),
+		Name: repo.InternalNames().HelmRepository,
 	}
 }

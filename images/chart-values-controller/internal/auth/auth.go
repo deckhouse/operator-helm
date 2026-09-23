@@ -27,12 +27,15 @@ import (
 	authzclientv1 "k8s.io/client-go/kubernetes/typed/authorization/v1"
 )
 
-// Access is the cluster-scoped resource permission a request must hold. It maps
-// directly onto a SubjectAccessReview resource attribute check.
+// Access is the resource permission a request must hold. It maps directly onto a
+// SubjectAccessReview resource attribute check. Namespace is empty for a
+// cluster-scoped resource; for a namespaced one it must be set, or the API server
+// answers for the cluster scope — a different question with a different answer.
 type Access struct {
-	Group    string
-	Resource string
-	Verb     string
+	Group     string
+	Resource  string
+	Verb      string
+	Namespace string
 }
 
 // Result reports the outcome of reviewing a bearer token. Authorized is only
@@ -77,9 +80,10 @@ func (r *Reviewer) Review(ctx context.Context, token string, access Access) (Res
 			Groups: user.Groups,
 			Extra:  convertExtra(user.Extra),
 			ResourceAttributes: &authzv1.ResourceAttributes{
-				Verb:     access.Verb,
-				Group:    access.Group,
-				Resource: access.Resource,
+				Namespace: access.Namespace,
+				Verb:      access.Verb,
+				Group:     access.Group,
+				Resource:  access.Resource,
 			},
 		},
 	}, metav1.CreateOptions{})

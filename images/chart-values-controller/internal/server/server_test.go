@@ -46,6 +46,30 @@ func (f fakeReviewer) Review(_ context.Context, _ string, _ auth.Access) (auth.R
 	return f.result, f.err
 }
 
+type recordingReviewer struct {
+	result auth.Result
+	err    error
+	access auth.Access
+}
+
+func (f *recordingReviewer) Review(_ context.Context, _ string, access auth.Access) (auth.Result, error) {
+	f.access = access
+
+	return f.result, f.err
+}
+
+type recordingResolver struct {
+	result resolver.Result
+	err    error
+	req    resolver.Request
+}
+
+func (f *recordingResolver) Resolve(_ context.Context, req resolver.Request) (resolver.Result, error) {
+	f.req = req
+
+	return f.result, f.err
+}
+
 // authorized is the default reviewer for tests unconcerned with authorization.
 var authorized = fakeReviewer{result: auth.Result{Authenticated: true, Authorized: true}}
 
@@ -192,5 +216,318 @@ func assertCode(t *testing.T, body []byte, field, want string) {
 	}
 	if resp[field] != want {
 		t.Fatalf("%s = %v, want %q", field, resp[field], want)
+	}
+}
+
+// TestHandleRejectsANamespacedKindWithoutANamespace covers the request-shape guard
+// at the HTTP boundary: the resolver would refuse it too, but the client deserves a
+// 400 naming the missing field rather than a generic outcome.
+func TestHandleRejectsANamespacedKindWithoutANamespace(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "the field is absent",
+			body: `{"repositoryKind":"HelmApplicationRepository","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			// Without this, a namespace no cluster can have reaches the access
+			// review and comes back as a 403 the caller cannot act on.
+			name: "the field holds a name no namespace can have",
+			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"  ","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, fakeResolver{}, tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+			assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
+		})
+	}
+}
+
+// TestHandleAuthorizesPerFamily pins which permission each repository kind demands:
+// the addon family a cluster-scoped create of HelmClusterAddon, both application
+// kinds a create of HelmApplication in the request's namespace — that is the
+// resource whose values are exposed by the answer.
+func TestHandleAuthorizesPerFamily(t *testing.T) {
+	cases := []struct {
+		name          string
+		body          string
+		wantResource  string
+		wantNamespace string
+	}{
+		{
+			name:         "addon",
+			body:         validBody,
+			wantResource: "helmclusteraddons",
+		},
+		{
+			name:          "namespaced application repository",
+			body:          `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
+			wantResource:  "helmapplications",
+			wantNamespace: "team-a",
+		},
+		{
+			name:          "cluster application repository",
+			body:          `{"repositoryKind":"HelmClusterApplicationRepository","namespace":"team-a","repositoryName":"shared","chart":"podinfo","version":"6.7.1"}`,
+			wantResource:  "helmapplications",
+			wantNamespace: "team-a",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rev := &recordingReviewer{result: auth.Result{Authenticated: true, Authorized: true}}
+			rec := doAuth(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}}, rev, tc.body)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			if rev.access.Resource != tc.wantResource || rev.access.Namespace != tc.wantNamespace || rev.access.Verb != "create" {
+				t.Fatalf("access = %+v, want create on %s in %q", rev.access, tc.wantResource, tc.wantNamespace)
+			}
+		})
+	}
+}
+
+// TestHandlePassesTheNamespaceToTheResolver makes sure the namespace is not merely
+// validated and dropped.
+func TestHandlePassesTheNamespaceToTheResolver(t *testing.T) {
+	res := &recordingResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}}
+	rec := doAuth(t, res, authorized, `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if res.req.Namespace != "team-a" || res.req.Kind != resolver.RepositoryKindHelmApplication {
+		t.Fatalf("request = %+v, want the namespace and the lower-cased kind", res.req)
+	}
+}
+
+// TestHandleInvalidRequestOutcome maps the resolver's request-shape refusal.
+func TestHandleInvalidRequestOutcome(t *testing.T) {
+	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeInvalidRequest, Message: "detail"}}, validBody)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
+}
+
+// TestHandleUnknownRepositoryKind pins the response contract for a kind the server
+// does not recognise: it must be reported as UNSUPPORTED_REPOSITORY_KIND, the same
+// code the resolver's own outcome of that name maps to, not a generic INVALID_REQUEST.
+func TestHandleUnknownRepositoryKind(t *testing.T) {
+	rec := do(t, fakeResolver{}, `{"repositoryKind":"SomethingElse","repositoryName":"github","chart":"podinfo","version":"6.7.1"}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "UNSUPPORTED_REPOSITORY_KIND")
+	assertCode(t, rec.Body.Bytes(), "error", `unsupported repository kind "SomethingElse"`)
+}
+
+// TestHandleForbiddenMessageNamesTheResourceKind pins the FORBIDDEN message's
+// wording: it names the Kubernetes kind the caller may not create (e.g.
+// "HelmClusterAddon"), not the lower-cased plural resource string used in the
+// SubjectAccessReview.
+func TestHandleForbiddenMessageNamesTheResourceKind(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantMsg string
+	}{
+		{"addon", validBody, "not allowed to create HelmClusterAddon"},
+		{
+			"namespaced application repository",
+			`{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
+			"not allowed to create HelmApplication",
+		},
+		{
+			"cluster application repository",
+			`{"repositoryKind":"HelmClusterApplicationRepository","namespace":"team-a","repositoryName":"shared","chart":"podinfo","version":"6.7.1"}`,
+			"not allowed to create HelmApplication",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doAuth(t, fakeResolver{}, fakeReviewer{result: auth.Result{Authenticated: true, Authorized: false}}, tc.body)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+			assertCode(t, rec.Body.Bytes(), "code", "FORBIDDEN")
+			assertCode(t, rec.Body.Bytes(), "error", tc.wantMsg)
+		})
+	}
+}
+
+// TestHandleRequestTooLarge covers the bound placed on the whole body: a
+// legitimate request is five short string fields, so a client sending far more
+// gets rejected with 413 instead of being decoded in full.
+func TestHandleRequestTooLarge(t *testing.T) {
+	oversized := `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"` +
+		strings.Repeat("a", maxRequestBodyBytes) + `","version":"6.7.1"}`
+
+	rec := do(t, fakeResolver{}, oversized)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "REQUEST_TOO_LARGE")
+}
+
+// TestHandleMissingTokenRejectsBeforeReadingAnOversizedBody pins the ordering fix:
+// the cheap bearer-token check runs before the body is even read, so an
+// unauthenticated caller sending an oversized body gets 401, not 413 — the body
+// limit is never consulted for a request that never gets past authentication.
+func TestHandleMissingTokenRejectsBeforeReadingAnOversizedBody(t *testing.T) {
+	oversized := `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"` +
+		strings.Repeat("a", maxRequestBodyBytes) + `","version":"6.7.1"}`
+
+	srv := New("", fakeResolver{}, authorized, NewOptions{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chart-values", strings.NewReader(oversized))
+	srv.handleChartValues(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "UNAUTHENTICATED")
+}
+
+// TestNewHTTPServerSetsEveryTimeout pins the fix for the entry point that
+// previously set only ReadHeaderTimeout: an unauthenticated client could hold the
+// handler open on the rest of the request, or on an unfinished response.
+func TestNewHTTPServerSetsEveryTimeout(t *testing.T) {
+	srv := newHTTPServer("", http.NewServeMux())
+
+	if srv.ReadHeaderTimeout <= 0 {
+		t.Fatal("ReadHeaderTimeout is not set")
+	}
+	if srv.ReadTimeout <= 0 {
+		t.Fatal("ReadTimeout is not set")
+	}
+	if srv.WriteTimeout <= 0 {
+		t.Fatal("WriteTimeout is not set")
+	}
+}
+
+// TestHandleValidatesRepositoryName pins the fields the resolver received only an
+// emptiness check for: an invalid name would otherwise reach the resolver and read
+// back as repository_not_found, telling the caller nothing about the field they
+// got wrong.
+func TestHandleValidatesRepositoryName(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "not a valid object name",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"Not Valid!","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			// HelmApplicationRepository's CRD enforces a 3-63 character name.
+			name: "shorter than the application repository CRD allows",
+			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			name: "longer than the application repository CRD allows",
+			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"` +
+				strings.Repeat("a", 64) + `","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			name: "longer than the cluster application repository CRD allows",
+			body: `{"repositoryKind":"HelmClusterApplicationRepository","namespace":"team-a","repositoryName":"` +
+				strings.Repeat("a", 64) + `","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			name: "longer than the addon repository CRD allows",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"` +
+				strings.Repeat("a", 64) + `","chart":"podinfo","version":"6.7.1"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, fakeResolver{}, tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
+		})
+	}
+}
+
+// TestHandleAcceptsAShortAddonRepositoryName pins the half of the bound that is
+// not shared: HelmClusterAddonRepository shipped without a minimum length and
+// cannot gain one, so a name under 3 characters — which the application repository
+// CRDs reject — must still be accepted for this kind.
+func TestHandleAcceptsAShortAddonRepositoryName(t *testing.T) {
+	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}},
+		`{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleValidatesChartAndVersion pins the whitespace-only and length bounds
+// placed on chart and version. Neither field is checked against a naming grammar:
+// chart names may contain a space (an index entry can legally be "my chart"), and
+// an OCI tag is not semver, so imposing either grammar would reject legal input.
+func TestHandleValidatesChartAndVersion(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "a whitespace-only version never matches a catalog entry and would poll pending forever",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"podinfo","version":" "}`,
+		},
+		{
+			name: "a whitespace-only chart",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"   ","version":"6.7.1"}`,
+		},
+		{
+			name: "a chart longer than the bound",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"` +
+				strings.Repeat("a", maxChartLen+1) + `","version":"6.7.1"}`,
+		},
+		{
+			name: "a version longer than the OCI tag bound",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"podinfo","version":"` +
+				strings.Repeat("1", maxVersionLen+1) + `"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, fakeResolver{}, tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
+		})
+	}
+}
+
+// TestHandleAcceptsAChartNameWithASpace pins that chart carries no character
+// grammar: only a whitespace-only value and the length bound are rejected.
+func TestHandleAcceptsAChartNameWithASpace(t *testing.T) {
+	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}},
+		`{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"my chart","version":"6.7.1"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }

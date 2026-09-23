@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -114,7 +115,7 @@ func isUniquenessBypassed(ctx context.Context) bool {
 }
 
 func (v *HelmClusterAddonWebhookValidator) checkUniqueness(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
-	owned, err := v.claimService.OwnedBy(ctx, addon)
+	owned, err := v.claimService.OwnedBy(ctx, adapter.NewAddonRelease(addon))
 	if err != nil {
 		return fmt.Errorf("failed to check if helmclusteraddon/%s owns chart claim: %w", addon.Name, err)
 	}

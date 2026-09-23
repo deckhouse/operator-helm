@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 
-	helmv2 "github.com/werf/3p-helm-controller/api/v2"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,8 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	statusmgr "github.com/deckhouse/operator-helm/internal/manager/status"
-	"github.com/deckhouse/operator-helm/internal/utils"
+	"github.com/deckhouse/operator-helm/internal/source"
 )
 
 type MaintenanceService struct {
@@ -50,75 +49,40 @@ func NewMaintenanceService(client client.Client, scheme *runtime.Scheme, targetN
 	}
 }
 
-var _ statusmgr.Provider = (*MaintenanceResult)(nil)
-
-type MaintenanceResult struct {
-	Status statusmgr.Status
-}
-
-func (r MaintenanceResult) GetStatus() statusmgr.Status {
-	return r.Status
-}
-
-func (r MaintenanceResult) IsReady() bool {
-	return r.Status.IsReady()
-}
-
-func (r MaintenanceResult) GetConditionType() string {
-	return helmv1alpha1.ConditionTypeManaged
-}
-
-func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) MaintenanceResult {
+func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, rel source.Release) MaintenanceOutcome {
 	logger := log.FromContext(ctx)
 
-	suspendState := addon.MaintenanceModeActivated()
-	status := metav1.ConditionTrue
-	reason := helmv1alpha1.ReasonMaintenanceModeInactive
-
-	var message string
-
-	if suspendState {
+	activated := rel.MaintenanceActivated()
+	if activated {
 		logger.Info("Enabling maintenance mode")
-		message = "Maintenance mode enabled"
-		status = metav1.ConditionFalse
-		reason = helmv1alpha1.ReasonMaintenanceModeActive
 	} else {
 		logger.Info("Disabling maintenance mode")
-		message = "Maintenance mode disabled"
 	}
 
-	err := s.updateHelmReleaseSuspendState(ctx, addon, suspendState)
-	if err != nil {
-		return MaintenanceResult{Status: statusmgr.Failed(addon, helmv1alpha1.ReasonFailed, "Failed to change maintenance mode", err)}
+	if err := s.updateHelmReleaseSuspendState(ctx, rel.InternalNames(), activated); err != nil {
+		return MaintenanceOutcome{Err: err, Activated: activated}
 	}
-	return MaintenanceResult{
-		Status: statusmgr.Status{
-			Observed:           true,
-			Status:             status,
-			ObservedGeneration: addon.Generation,
-			Message:            message,
-			Reason:             reason,
-		},
-	}
+
+	return MaintenanceOutcome{Activated: activated}
 }
 
-func (s *MaintenanceService) IsMaintenanceModeChangeRequired(addon *helmv1alpha1.HelmClusterAddon) bool {
-	if addon.MaintenanceModeActivated() && !addon.MaintenanceModeEnabled() {
+func (s *MaintenanceService) IsMaintenanceModeChangeRequired(rel source.Release) bool {
+	if rel.MaintenanceActivated() && !rel.MaintenanceEnabled() {
 		return true
 	}
 
-	if !addon.MaintenanceModeActivated() && (addon.MaintenanceModeEnabled() ||
-		apimeta.IsStatusConditionPresentAndEqual(addon.Status.Conditions, helmv1alpha1.ConditionTypeManaged, metav1.ConditionUnknown)) {
+	if !rel.MaintenanceActivated() && (rel.MaintenanceEnabled() ||
+		apimeta.IsStatusConditionPresentAndEqual(*rel.Object().GetConditions(), helmv1alpha1.ConditionTypeManaged, metav1.ConditionUnknown)) {
 		return true
 	}
 
 	return false
 }
 
-func (s *MaintenanceService) updateHelmReleaseSuspendState(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon, suspend bool) error {
+func (s *MaintenanceService) updateHelmReleaseSuspendState(ctx context.Context, names source.ReleaseNames, suspend bool) error {
 	helmRelease := &helmv2.HelmRelease{}
 	if err := s.Client.Get(ctx, types.NamespacedName{
-		Name:      utils.GetInternalHelmReleaseName(addon.Name),
+		Name:      names.HelmRelease,
 		Namespace: s.TargetNamespace,
 	}, helmRelease); err != nil {
 		if apierrors.IsNotFound(err) {

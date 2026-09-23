@@ -24,3 +24,20 @@ webhooks:
         {{ .Values.operatorHelm.internal.controller.cert.ca | b64enc }}
     admissionReviewVersions: ["v1"]
     sideEffects: None
+  - name: "helmapplications.operator-helm-controller.validate.d8-operator-helm"
+    rules:
+      - apiGroups:   ["helm.deckhouse.io"]
+        apiVersions: ["v1alpha1"]
+        operations:  ["CREATE", "UPDATE", "DELETE"]
+        resources:   ["helmapplications"]
+        scope:       "Namespaced"
+    clientConfig:
+      service:
+        namespace: d8-{{ .Chart.Name }}
+        name: operator-helm-controller
+        path: /validate-helm-deckhouse-io-v1alpha1-helmapplication
+        port: 443
+      caBundle: |
+        {{ .Values.operatorHelm.internal.controller.cert.ca | b64enc }}
+    admissionReviewVersions: ["v1"]
+    sideEffects: None

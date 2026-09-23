@@ -16,6 +16,9 @@ controllers:
         # Expected in the stall scenario that points a repository at a missing
         # source; the reconciler logs every failed read with the repository name.
         - "repo-source-not-found"
+        # Expected in the stall scenario that puts a foreign Role under the name the
+        # application identity needs; the reconciler logs the refusal to adopt it.
+        - "is not managed by the operator"
         # Transient controller-runtime cache reflector reconnects (watch/list drop,
         # unexpected EOF); self-recovering, not a real failure.
         - "Unexpected error when reading response body"
@@ -30,11 +33,11 @@ controllers:
     logFilters:
       exclude: []
       excludeRegexp: []
-  - name: "nelm-source-controller"
+  - name: "source-controller"
     namespace: "d8-operator-helm"
-    labelSelector: "app=nelm-source-controller"
+    labelSelector: "app=source-controller"
     containers:
-      - "nelm-source-controller"
+      - "source-controller"
     logFilters:
       exclude: []
       excludeRegexp:

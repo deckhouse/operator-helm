@@ -183,3 +183,27 @@ func TestFetchChartsHelmRecordsOCIReferences(t *testing.T) {
 		t.Fatalf("21.0.0 oci ref = %q, want empty: the entry has no urls", got)
 	}
 }
+
+// TestFetchChartsThrottleIsRetriedNotDecoded pins that a throttled read is never
+// mistaken for an empty repository. A throttle is deliberately not terminal, and the
+// body registries send with it is JSON, which decodes into an empty index without
+// error — so letting it reach the decoder would report a successful fetch of zero
+// charts and prune the repository's whole catalog.
+func TestFetchChartsThrottleIsRetriedNotDecoded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"errors":[{"code":"TOOMANYREQUESTS","message":"pull rate limit exceeded"}]}`))
+	}))
+	defer srv.Close()
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+	if err == nil {
+		t.Fatalf("expected an error for repeated 429 responses, got %d charts", len(charts))
+	}
+	if _, ok := AsTerminal(err); ok {
+		t.Fatalf("a throttle must stay retriable, got terminal error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Fatalf("expected the status code in the reported cause, got %v", err)
+	}
+}

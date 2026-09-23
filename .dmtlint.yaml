@@ -1,25 +1,38 @@
+# One finding is knowingly left standing and cannot be recorded below: markdownlint
+# reports MD013/line-length on docs/README.ru.md, where the paragraph on what
+# creating a HelmApplication grants runs past the limit. Breaking it would split a
+# single argument the reader has to follow whole. The documentation linter takes no
+# exclusion list — only a severity — so silencing that one line would mean turning
+# off every documentation check. It stays a warning, and a warning does not fail the
+# lint.
+
 linters-settings:
   openapi:
     exclude-rules:
       enum:
         - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.sts.properties.provider"
         - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.provider"
-        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.provider"
-        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.sts.properties.provider"
         - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.upgrade.properties.remediation.properties.strategy.properties"
         - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.uninstall.properties.deletionPropagation"
         - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.driftDetection.properties.mode"
         - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.upgrade.properties.remediation.properties.strategy"
         - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.chart.properties.spec.properties.verify.properties.provider"
         - "spec.versions[0].schema.openAPIV3Schema.properties.status.properties.lastAttemptedReleaseAction"
-        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.chart.properties.spec.properties.verify.properties.provider"
-        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.driftDetection.properties.mode"
-        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.postRenderers.items.properties.kustomize.properties.patchesJson6902.items.properties.patch.items.properties.op"
-        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.uninstall.properties.deletionPropagation"
-        - "spec.versions[1].schema.openAPIV3Schema.properties.spec.properties.upgrade.properties.remediation.properties.strategy"
-        - "spec.versions[1].schema.openAPIV3Schema.properties.status.properties.lastAttemptedReleaseAction"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.upgrade.properties.serverSideApply"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.rollback.properties.serverSideApply"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.waitStrategy.properties.name"
+        - "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.postRenderStrategy"
         - "properties.logLevel"
         - "properties.logFormat"
+  # The RBACv2 capability ClusterRoles are bilingual by contract: Deckhouse reads
+  # the module's capabilities out of ru.meta.deckhouse.io/title and
+  # ru.meta.deckhouse.io/description, which is where the Cyrillic the linter finds
+  # lives. Excluded as a directory rather than file by file, because every template
+  # this tree will ever hold carries the same pair of annotations.
+  no-cyrillic:
+    exclude-rules:
+      directories:
+        - "templates/rbacv2"
   rbac:
     exclude-rules:
       wildcards:

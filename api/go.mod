@@ -1,6 +1,6 @@
 module github.com/deckhouse/operator-helm/api
 
-go 1.25.0
+go 1.26.3
 
 tool (
 	k8s.io/code-generator

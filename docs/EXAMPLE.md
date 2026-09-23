@@ -78,6 +78,43 @@ Only one instance of HelmClusterAddon using a specific Helm chart from a specifi
 The `.spec.chart.version` parameter is optional. If omitted, the latest available version of the chart will be installed.
 {{< /alert >}}
 
+## Deploying a namespaced application
+
+A namespace owner can deploy a chart into their own namespace without cluster-wide rights, using HelmApplicationRepository and HelmApplication instead of the cluster-scoped resources above.
+
+To add a repository, create a HelmApplicationRepository resource in the target namespace:
+
+```yaml
+apiVersion: helm.deckhouse.io/v1alpha1
+kind: HelmApplicationRepository
+metadata:
+  name: podinfo
+  namespace: test
+spec:
+  url: https://stefanprodan.github.io/podinfo
+```
+
+To deploy a chart from it, create a HelmApplication resource in the same namespace, specifying the chart name, version, and the repository to take it from:
+
+```yaml
+apiVersion: helm.deckhouse.io/v1alpha1
+kind: HelmApplication
+metadata:
+  name: podinfo
+  namespace: test
+spec:
+  chart:
+    name: podinfo
+    repository: podinfo
+    version: 6.10.2
+```
+
+The release is always deployed into the namespace of the HelmApplication resource itself, so there is no separate namespace field to set. A chart may also be taken from a cluster-wide HelmClusterApplicationRepository by setting `.spec.chart.clusterRepository` instead of `.spec.chart.repository`.
+
+{{< alert level="warning" >}}
+Creating a HelmApplication grants it administrator-level rights inside its namespace — see the module documentation's Limitations section for details.
+{{< /alert >}}
+
 ## Triggering a manual reconciliation
 
 To trigger an immediate reconciliation of a resource without waiting for the next scheduled sync, annotate it with `reconcile.helm.deckhouse.io/force`. The controller will detect the annotation, run a full reconciliation cycle, and remove the annotation automatically once processing is complete.

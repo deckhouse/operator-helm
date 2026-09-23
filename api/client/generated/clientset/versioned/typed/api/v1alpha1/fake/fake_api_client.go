@@ -28,6 +28,18 @@ type FakeHelmV1alpha1 struct {
 	*testing.Fake
 }
 
+func (c *FakeHelmV1alpha1) HelmApplications(namespace string) v1alpha1.HelmApplicationInterface {
+	return newFakeHelmApplications(c, namespace)
+}
+
+func (c *FakeHelmV1alpha1) HelmApplicationCharts(namespace string) v1alpha1.HelmApplicationChartInterface {
+	return newFakeHelmApplicationCharts(c, namespace)
+}
+
+func (c *FakeHelmV1alpha1) HelmApplicationRepositories(namespace string) v1alpha1.HelmApplicationRepositoryInterface {
+	return newFakeHelmApplicationRepositories(c, namespace)
+}
+
 func (c *FakeHelmV1alpha1) HelmClusterAddons() v1alpha1.HelmClusterAddonInterface {
 	return newFakeHelmClusterAddons(c)
 }
@@ -38,6 +50,14 @@ func (c *FakeHelmV1alpha1) HelmClusterAddonCharts() v1alpha1.HelmClusterAddonCha
 
 func (c *FakeHelmV1alpha1) HelmClusterAddonRepositories() v1alpha1.HelmClusterAddonRepositoryInterface {
 	return newFakeHelmClusterAddonRepositories(c)
+}
+
+func (c *FakeHelmV1alpha1) HelmClusterApplicationCharts() v1alpha1.HelmClusterApplicationChartInterface {
+	return newFakeHelmClusterApplicationCharts(c)
+}
+
+func (c *FakeHelmV1alpha1) HelmClusterApplicationRepositories() v1alpha1.HelmClusterApplicationRepositoryInterface {
+	return newFakeHelmClusterApplicationRepositories(c)
 }
 
 // RESTClient returns a RESTClient that is used to communicate

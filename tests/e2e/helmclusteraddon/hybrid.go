@@ -151,7 +151,7 @@ var _ = Describe("Using a helm repository whose index publishes a version in a r
 	It("should create HelmClusterAddonRepository and reach Ready and Synced", func() {
 		repo := &apiv1alpha1.HelmClusterAddonRepository{
 			ObjectMeta: metav1.ObjectMeta{Name: repoName},
-			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+			Spec: apiv1alpha1.RepositorySpec{
 				URL: fmt.Sprintf("http://%s.%s.svc", indexName, f.NamespaceName()),
 			},
 		}

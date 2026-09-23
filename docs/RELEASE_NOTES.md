@@ -105,4 +105,3 @@ description: "Release notes for Deckhouse operator-helm."
 ### New Features
 
 * initial release with basic capabilities
-

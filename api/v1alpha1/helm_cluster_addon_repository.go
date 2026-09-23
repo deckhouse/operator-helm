@@ -28,12 +28,13 @@ const (
 	HelmClusterAddonRepositoryLabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 )
 
-// The "Next Sync" print column below is a string, not a date, on purpose: a date
-// column prints how long ago its value was, and kubectl renders any instant more
-// than a second in the future as <invalid>. nextSyncTime is always in the future.
-//
-// This note is deliberately outside the doc comment below — controller-gen folds
-// every non-marker line of that block into the resource's API description.
+// The name rule below is only the upper half of the one the application repositories
+// carry. This kind shipped without any rule, and a root rule is re-evaluated on every
+// write to the object — a status patch included — so a minimum added now would not
+// merely forbid new short names, it would freeze every repository already created with
+// one, with no way out but deleting it and its whole catalog. The cap is different: a
+// name longer than a label value can hold already breaks the internal objects that
+// carry it.
 
 // HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
 //
@@ -41,6 +42,7 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:singular=helmclusteraddonrepository,scope=Cluster
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="repository name must be at most 63 characters long"
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the repository"
 // +kubebuilder:printcolumn:name="Synced",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status",description="Repository synchronization status"
 // +kubebuilder:printcolumn:name="Last Sync",type="date",JSONPath=".status.lastSuccessfulSyncTime",description="Time of the last successful catalog synchronization"
@@ -54,8 +56,8 @@ type HelmClusterAddonRepository struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   HelmClusterAddonRepositorySpec   `json:"spec"`
-	Status HelmClusterAddonRepositoryStatus `json:"status,omitempty"`
+	Spec   RepositorySpec   `json:"spec"`
+	Status RepositoryStatus `json:"status,omitempty"`
 }
 
 func (r *HelmClusterAddonRepository) GetConditions() *[]metav1.Condition {
@@ -68,10 +70,6 @@ func (r *HelmClusterAddonRepository) SetObservedGeneration(generation int64) {
 
 func (r *HelmClusterAddonRepository) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
-}
-
-func (r *HelmClusterAddonRepository) GetStatus() any {
-	return r.Status
 }
 
 func (r *HelmClusterAddonRepository) GetConditionTypesForUpdate() []string {
@@ -87,70 +85,6 @@ func (r *HelmClusterAddonRepository) ForceReconcileRequired() bool {
 	_, found := annotations[AnnotationForceReconcile]
 
 	return found
-}
-
-type HelmClusterAddonRepositorySpec struct {
-	// URL of the Helm repository. Supports http(s):// and oci:// protocols.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:XValidation:rule="self.matches('^(https?|oci)://.+$')",message="URL must have a valid protocol (http, https, oci) and a non-empty path"
-	URL string `json:"url"`
-
-	// Auth contains authentication credentials for the repository.
-	// +optional
-	Auth *HelmClusterAddonRepositoryAuth `json:"auth,omitempty"`
-
-	// CACertificate is the PEM encoded CA certificate for TLS verification.
-	// +optional
-	CACertificate string `json:"caCertificate,omitempty"`
-
-	// InsecureSkipVerify disable TLS certificate verification.
-	// +optional
-	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
-}
-
-type HelmClusterAddonRepositoryAuth struct {
-	// Repository authentication username.
-	// +kubebuilder:validation:MinLength=1
-	Username string `json:"username"`
-	// Repository authentication password.
-	// +kubebuilder:validation:MinLength=1
-	Password string `json:"password"`
-}
-
-type HelmClusterAddonRepositoryStatus struct {
-	// Conditions represent the latest available observations of the repository state.
-	//
-	// Ready reports whether the repository is usable: auxiliary resources are in place,
-	// the internal source object is healthy and the repository has responded to a catalog
-	// read on the current spec. A transient read failure does not flip Ready to False.
-	//
-	// Synced reports whether the chart catalog is up to date.
-	//
-	// Reconciling and Stalled follow the kstatus convention: they are present only while
-	// applicable. Reconciling means work is in progress or a retry is scheduled; Stalled
-	// means the repository will not recover without a change. While a synchronization is
-	// running Reconciling carries the reason Synchronization, or ForceReconcile when the
-	// pass was requested through the force reconcile annotation.
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generation represents resource generation that was last processed by the controller.
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// LastSuccessfulSyncTime is the last time the chart catalog was fully brought up to date,
-	// including creating and pruning chart resources.
-	// +optional
-	LastSuccessfulSyncTime *metav1.Time `json:"lastSuccessfulSyncTime,omitempty"`
-	// NextSyncTime is the scheduled time of the next synchronization attempt.
-	// +optional
-	NextSyncTime *metav1.Time `json:"nextSyncTime,omitempty"`
-	// LastForceReconcileTime is the time the most recent force reconcile request was
-	// processed. It records that the request was acted on, not that it succeeded:
-	// the outcome is reported by Ready and Synced.
-	// +optional
-	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
-	// ConsecutiveFetchFailures counts consecutive failures to read from the repository.
-	// It drives the retry backoff and resets on the first success.
-	// +optional
-	ConsecutiveFetchFailures int32 `json:"consecutiveFetchFailures,omitempty"`
 }
 
 // HelmClusterAddonRepositoryList contains a list of HelmClusterAddonRepositories.

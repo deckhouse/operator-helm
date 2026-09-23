@@ -20,7 +20,6 @@ import (
 	"reflect"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -65,10 +64,6 @@ func (r *HelmClusterAddon) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
 }
 
-func (r *HelmClusterAddon) GetStatus() any {
-	return r.Status
-}
-
 func (r *HelmClusterAddon) MaintenanceModeActivated() bool {
 	return r.Spec.Maintenance == string(NoResourceReconciliation)
 }
@@ -78,20 +73,20 @@ func (r *HelmClusterAddon) MaintenanceModeEnabled() bool {
 }
 
 func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
-	conditionTypes := []string{"Ready"}
+	conditionTypes := []string{ConditionTypeReady}
 
-	if r.Status.LastAppliedChart == nil || !meta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue) {
+	if r.Status.LastAppliedChart == nil || !apimeta.IsStatusConditionPresentAndEqual(r.Status.Conditions, ConditionTypeInstalled, metav1.ConditionTrue) {
 		return append(conditionTypes, ConditionTypeInstalled)
 	}
 
 	if r.IsChartStatusInfoOutdated() ||
-		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeUpdateInstalled) ||
+		apimeta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeUpdateInstalled) ||
 		r.UpdateInstallInProgress() {
 		conditionTypes = append(conditionTypes, ConditionTypeUpdateInstalled)
 	}
 
 	if !reflect.DeepEqual(r.Spec.Values, r.Status.LastAppliedValues) ||
-		meta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeConfigurationApplied) ||
+		apimeta.IsStatusConditionFalse(r.Status.Conditions, ConditionTypeConfigurationApplied) ||
 		r.ConfigurationApplyInProgress() {
 		conditionTypes = append(conditionTypes, ConditionTypeConfigurationApplied)
 	}
@@ -100,21 +95,21 @@ func (r *HelmClusterAddon) GetConditionTypesForUpdate() []string {
 }
 
 func (r *HelmClusterAddon) ConfigurationApplyInProgress() bool {
-	cond := meta.FindStatusCondition(r.Status.Conditions, ConditionTypeConfigurationApplied)
+	cond := apimeta.FindStatusCondition(r.Status.Conditions, ConditionTypeConfigurationApplied)
 	if cond == nil {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Reason == "Reconciling"
+	return cond.Status == metav1.ConditionUnknown && cond.Reason == ReasonReconciling
 }
 
 func (r *HelmClusterAddon) UpdateInstallInProgress() bool {
-	cond := meta.FindStatusCondition(r.Status.Conditions, ConditionTypeUpdateInstalled)
+	cond := apimeta.FindStatusCondition(r.Status.Conditions, ConditionTypeUpdateInstalled)
 	if cond == nil {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Reason == "Reconciling"
+	return cond.Status == metav1.ConditionUnknown && cond.Reason == ReasonReconciling
 }
 
 func (r *HelmClusterAddon) IsChartStatusInfoOutdated() bool {
@@ -165,10 +160,15 @@ type HelmClusterAddonChartRef struct {
 	// from the defined repository (e.g., "ingress-nginx" or "redis").
 	// +kubebuilder:validation:MinLength=1
 	HelmClusterAddonChartName string `json:"helmClusterAddonChart"`
+	// The minimum below is 1, not 3: the referenced kind shipped without a minimum of
+	// its own, so a repository created under a shorter name must stay referenceable.
+	// This note is outside the doc comment on purpose — a doc comment becomes the
+	// field's description in the CRD.
+
 	// Specifies the name of the HelmClusterAddonRepository custom resource that contains
 	// the connection details and credentials for the repository where
 	// the chart is located.
-	// +kubebuilder:validation:MinLength=3
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	HelmClusterAddonRepository string `json:"helmClusterAddonRepository"`
 	// Versions holds the HelmClusterAddon chart version.
@@ -183,10 +183,6 @@ type HelmClusterAddonStatus struct {
 	// +optional
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
 	// Conditions represent the latest available observations of the addon state.
-	//
-	// Reconciling is present only while applicable, following the kstatus convention.
-	// It carries the reason ForceReconcile while a reconciliation requested through
-	// the force reconcile annotation is running.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.

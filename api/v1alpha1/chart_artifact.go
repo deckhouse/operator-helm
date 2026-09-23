@@ -21,7 +21,7 @@ import (
 	"strings"
 )
 
-// The media types below are the value domain of HelmClusterAddonChartVersion.MediaType
+// The media types below are the value domain of ChartVersion.MediaType
 // and the rule for recognizing a packaged Helm chart inside an OCI artifact. They live
 // in the API module because more than one component has to agree on them: the operator
 // records a verdict against them, and the chart-values service examines the same
@@ -54,7 +54,7 @@ func IsChartConfigMediaType(mediaType string) bool {
 	return false
 }
 
-// SplitOCIRef splits the value of HelmClusterAddonChartVersion.OCIRef into the
+// SplitOCIRef splits the value of ChartVersion.OCIRef into the
 // repository address and the tag. fallbackTag is used when the reference carries no
 // tag of its own, which is how an index entry that relies on its own version field
 // spells the reference; a reference read back from the catalog always carries one, so

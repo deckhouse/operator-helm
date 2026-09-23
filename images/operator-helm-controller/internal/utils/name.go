@@ -22,11 +22,14 @@ import (
 	"strings"
 )
 
+// hashLength is how much of the digest every derived name carries.
+const hashLength = 12
+
 func GetHash(s string) string {
 	h := sha256.New()
 	h.Write([]byte(s))
 
-	return fmt.Sprintf("%x", h.Sum(nil))[:12]
+	return fmt.Sprintf("%x", h.Sum(nil))[:hashLength]
 }
 
 func GetInternalRepositoryAuthSecretName(internalRepoName string) string {
@@ -45,7 +48,7 @@ func GetInternalRepositoryAuthSecretName(internalRepoName string) string {
 		result += internalRepoName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func GetInternalRepositoryTLSSecretName(internalRepoName string) string {
@@ -64,7 +67,7 @@ func GetInternalRepositoryTLSSecretName(internalRepoName string) string {
 		result += internalRepoName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func GetInternalHelmReleaseName(addonName string) string {
@@ -81,7 +84,7 @@ func GetInternalHelmReleaseName(addonName string) string {
 		result += addonName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func GetInternalHelmChartName(addonName string) string {
@@ -102,7 +105,7 @@ func GetInternalOCIRepositoryName(addonName string) string {
 		result += addonName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 // GetChartClaimLeaseName derives the name of the Lease that guards uniqueness of a
@@ -131,5 +134,88 @@ func GetInternalHelmRepositoryName(addonRepositoryName string) string {
 		result += addonRepositoryName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
+}
+
+// derivedPartLimit bounds the namespace and the name parts of a derived name. With
+// the longest prefix in use ("hcapr-auth", 10 characters), two parts of this size, a
+// 12-character hash and three dashes the result is 61 characters, under the
+// 63-character limit shared by object names and label values.
+const derivedPartLimit = 18
+
+// DerivedName builds the name of an internal object derived from a source of the
+// application family. Unlike the addon scheme above, the hash is always present and
+// covers the kind, the namespace and the name of the source: internal objects of
+// every family share one namespace, so two same-named sources in different
+// namespaces, or in different kinds, must never derive the same internal name. The
+// namespace part is omitted for a cluster-scoped source.
+//
+// The addon functions above keep their own scheme on purpose: their output names
+// live objects, and changing it would re-create them.
+func DerivedName(prefix, kind, namespace, name string) string {
+	hash := GetHash(kind + "/" + namespace + "/" + name)
+
+	parts := []string{prefix}
+	if namespace != "" {
+		parts = append(parts, truncatePart(namespace))
+	}
+	parts = append(parts, truncatePart(name), hash)
+
+	return strings.Join(parts, "-")
+}
+
+// truncatePart cuts a name part to derivedPartLimit and drops a dash or a dot the
+// cut may have left at the end. A dash would double up when the parts are joined;
+// a dot would put the separator at the start of a DNS label, which the API server
+// rejects. Object names carry dots because a resource name is a DNS subdomain.
+func truncatePart(part string) string {
+	if len(part) > derivedPartLimit {
+		part = part[:derivedPartLimit]
+	}
+
+	return strings.TrimRight(part, "-.")
+}
+
+// helmReleaseNameLimit is the longest release name Helm accepts.
+const helmReleaseNameLimit = 53
+
+// releaseReadableLimit is what is left for the readable part once the hash and its
+// separator are taken out of helmReleaseNameLimit.
+const releaseReadableLimit = helmReleaseNameLimit - len("-") - hashLength
+
+// HelmReleaseName bounds a release name to what Helm accepts. A name within the
+// limit is used as is — that keeps every existing addon release untouched — and a
+// longer one is cut and suffixed with a hash of the full name, so two long names
+// that share a prefix stay distinct.
+//
+// The two branches are not injective between themselves: a short name spelled
+// exactly like the cut and hashed form of a long one produces the same release, and
+// two releases sharing a name in one namespace share one storage. Nothing can be
+// done about that here without moving every addon release that exists, so the addon
+// family carries it; a family whose releases are not yet installed anywhere should
+// use HashedReleaseName instead.
+func HelmReleaseName(name string) string {
+	if len(name) <= helmReleaseNameLimit {
+		return name
+	}
+
+	return cutForHash(name) + "-" + GetHash(name)
+}
+
+// HashedReleaseName bounds a release name the same way but always carries the hash,
+// which is what makes it injective: every name goes through the one branch, so no
+// two names can meet. See HelmReleaseName for what happens when they can.
+func HashedReleaseName(name string) string {
+	return cutForHash(name) + "-" + GetHash(name)
+}
+
+// cutForHash trims the readable part to the room the hash leaves it. A trailing dash
+// would double up against the suffix, and a trailing dot would leave the suffix
+// starting a DNS label, which is not a valid name.
+func cutForHash(name string) string {
+	if len(name) > releaseReadableLimit {
+		name = name[:releaseReadableLimit]
+	}
+
+	return strings.TrimRight(name, "-.")
 }

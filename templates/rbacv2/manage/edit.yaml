@@ -1,0 +1,40 @@
+{{- if eq (include "operator-helm.enable_rbacv2" .) "true" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: d8:system-capability:{{ .Chart.Name }}:edit
+  annotations:
+    en.meta.deckhouse.io/title: "Module {{ .Chart.Name }}: edit configuration"
+    ru.meta.deckhouse.io/title: "Модуль {{ .Chart.Name }}: управление конфигурацией"
+    en.meta.deckhouse.io/description: "Manage the {{ .Chart.Name }} module configuration."
+    ru.meta.deckhouse.io/description: "Управление конфигурацией модуля {{ .Chart.Name }}."
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "system-capability.%s.edit" .Chart.Name) "rbac.deckhouse.io/scope" "system" "rbac.deckhouse.io/namespace" (printf "d8-%s" .Chart.Name) "rbac.deckhouse.io/aggregate-to-delivery-as" "manager")) | nindent 2 }}
+rules:
+# helmclusteraddons is deliberately absent, and stays reserved for a cluster
+# administrator as the legacy access levels already reserve it. An addon names no
+# service account, so helm-controller applies its chart as itself — with rights over
+# every resource in the cluster — and whoever may create one may therefore grant
+# themselves anything. A repository only publishes charts and grants nothing.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmclusteraddonrepositories
+  - helmclusterapplicationrepositories
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - patch
+  - update
+- apiGroups:
+  - deckhouse.io
+  resourceNames:
+  - {{ .Chart.Name }}
+  resources:
+  - moduleconfigs
+  verbs:
+  - create
+  - delete
+  - patch
+  - update
+{{- end }}

@@ -24,11 +24,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"go.yaml.in/yaml/v3"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	"github.com/Masterminds/semver/v3"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -104,6 +103,16 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 
 		if resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("repository %s is unavailable (HTTP %d)", url, resp.StatusCode)
+
+			return false, nil
+		}
+
+		// A throttle is not terminal, and the nil that says so must not be read here
+		// as permission to go on: the body a registry sends with it is JSON, which
+		// decodes into an empty index without error, and the caller would then prune
+		// the repository's whole catalog as if it had gone empty.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			lastErr = fmt.Errorf("repository %s throttled the request (HTTP %d)", url, resp.StatusCode)
 
 			return false, nil
 		}
