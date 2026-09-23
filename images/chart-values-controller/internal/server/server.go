@@ -65,6 +65,11 @@ const (
 	// generous length ceiling is enforced.
 	maxChartLen = 253
 
+	// maxRepositoryNameLen bounds the repositoryName field at what every repository
+	// CRD enforces on metadata.name: the name travels on as a label value, and that
+	// is the length one can hold.
+	maxRepositoryNameLen = 63
+
 	// maxVersionLen bounds the version field at the OCI Distribution Spec's own
 	// tag length limit (128 characters): a version may travel on as an OCI tag,
 	// and a Helm repository index version is always far shorter. It is not
@@ -296,19 +301,20 @@ func accessFor(kind, namespace string) (access auth.Access, displayKind string, 
 	}
 }
 
-// repositoryNameBounds returns the length bounds kind's own repository CRD
-// enforces on metadata.name, so a repositoryName that could never have been
-// created is rejected here instead of reaching the resolver and reading back as
-// repository_not_found. A zero bound means the CRD imposes none beyond a valid
-// object name: HelmClusterAddonRepository carries no name-length rule, while
-// HelmApplicationRepository and HelmClusterApplicationRepository both require
-// between 3 and 63 characters.
-func repositoryNameBounds(kind string) (minLen, maxLen int) {
+// repositoryNameMinLen returns the minimum length kind's own repository CRD
+// enforces on metadata.name, so a repositoryName that could never have been created
+// is rejected here instead of reaching the resolver and reading back as
+// repository_not_found. Zero means the CRD imposes none: HelmClusterAddonRepository
+// shipped without a minimum and cannot gain one without invalidating the short names
+// already in use, while HelmApplicationRepository and HelmClusterApplicationRepository
+// both require three characters. The maximum is not per-kind — every repository CRD
+// caps the name at the length a label value can hold.
+func repositoryNameMinLen(kind string) int {
 	switch strings.ToLower(kind) {
 	case string(resolver.RepositoryKindHelmApplication), string(resolver.RepositoryKindHelmClusterApplication):
-		return 3, 63
+		return 3
 	default:
-		return 0, 0
+		return 0
 	}
 }
 
@@ -318,12 +324,11 @@ func validateChartValuesFields(req chartValuesRequest) error {
 	if errs := validation.IsDNS1123Subdomain(req.RepositoryName); len(errs) > 0 {
 		return fmt.Errorf("repositoryName must be a valid object name: %s", strings.Join(errs, "; "))
 	}
-	minLen, maxLen := repositoryNameBounds(req.RepositoryKind)
-	if minLen > 0 && len(req.RepositoryName) < minLen {
+	if minLen := repositoryNameMinLen(req.RepositoryKind); minLen > 0 && len(req.RepositoryName) < minLen {
 		return fmt.Errorf("repositoryName must be at least %d characters long", minLen)
 	}
-	if maxLen > 0 && len(req.RepositoryName) > maxLen {
-		return fmt.Errorf("repositoryName must be at most %d characters long", maxLen)
+	if len(req.RepositoryName) > maxRepositoryNameLen {
+		return fmt.Errorf("repositoryName must be at most %d characters long", maxRepositoryNameLen)
 	}
 
 	// chart and version carry no naming grammar of their own — a repository index

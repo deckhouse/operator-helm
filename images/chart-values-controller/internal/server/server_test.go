@@ -448,6 +448,11 @@ func TestHandleValidatesRepositoryName(t *testing.T) {
 			body: `{"repositoryKind":"HelmClusterApplicationRepository","namespace":"team-a","repositoryName":"` +
 				strings.Repeat("a", 64) + `","chart":"podinfo","version":"6.7.1"}`,
 		},
+		{
+			name: "longer than the addon repository CRD allows",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"` +
+				strings.Repeat("a", 64) + `","chart":"podinfo","version":"6.7.1"}`,
+		},
 	}
 
 	for _, tc := range cases {
@@ -462,11 +467,11 @@ func TestHandleValidatesRepositoryName(t *testing.T) {
 	}
 }
 
-// TestHandleAcceptsARepositoryNameAtTheAddonCRDsUnboundedLength pins the other
-// side of the per-kind bound: HelmClusterAddonRepository's CRD imposes no length
-// rule of its own, so a name under 3 characters (which the application repository
-// CRDs would reject) must still be accepted for this kind.
-func TestHandleAcceptsARepositoryNameAtTheAddonCRDsUnboundedLength(t *testing.T) {
+// TestHandleAcceptsAShortAddonRepositoryName pins the half of the bound that is
+// not shared: HelmClusterAddonRepository shipped without a minimum length and
+// cannot gain one, so a name under 3 characters — which the application repository
+// CRDs reject — must still be accepted for this kind.
+func TestHandleAcceptsAShortAddonRepositoryName(t *testing.T) {
 	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}},
 		`{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`)
 
