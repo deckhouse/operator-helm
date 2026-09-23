@@ -70,4 +70,37 @@ spec:
   matchResources:
     namespaceSelector: {}
     objectSelector: {}
+---
+{{- $applicationSubject := printf "system:serviceaccount:d8-%s:hap-" .Chart.Name }}
+apiVersion: {{ $apiVersion }}
+kind: ValidatingAdmissionPolicy
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: operator-helm-application-namespace-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources:
+          - "namespaces"
+          - "namespaces/status"
+          - "namespaces/finalize"
+  validations:
+    - expression: '!request.userInfo.username.startsWith("{{ $applicationSubject }}")'
+      message: "An application may not modify or delete the namespace it is deployed into."
+---
+apiVersion: {{ $apiVersion }}
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: operator-helm-application-namespace-policy-binding
+spec:
+  policyName: operator-helm-application-namespace-policy
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector: {}
+    objectSelector: {}
 {{- end }}
