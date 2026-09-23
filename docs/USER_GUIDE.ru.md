@@ -1,6 +1,6 @@
 ---
 title: "Руководство пользователя"
-description: "Deckhouse Kubernetes Platform — установка Helm-чартов в своём неймспейсе с помощью модуля operator-helm."
+description: "Deckhouse Platform — установка Helm-чартов в своём неймспейсе с помощью модуля operator-helm."
 weight: 50
 ---
 
