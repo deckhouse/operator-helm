@@ -69,6 +69,8 @@ type Release interface {
 	// TargetNamespace is where the release is deployed.
 	TargetNamespace() string
 	Values() *apiextensionsv1.JSON
+	// Timeout is nil when the spec leaves it to helm-controller's default.
+	Timeout() *metav1.Duration
 	MaintenanceActivated() bool
 	MaintenanceEnabled() bool
 	ForceReconcileRequired() bool

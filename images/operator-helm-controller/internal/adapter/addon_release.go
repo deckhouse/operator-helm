@@ -70,6 +70,7 @@ func (r *AddonRelease) ChartRef() source.ChartRef {
 
 func (r *AddonRelease) TargetNamespace() string         { return r.obj.Spec.Namespace }
 func (r *AddonRelease) Values() *apiextensionsv1.JSON   { return r.obj.Spec.Values }
+func (r *AddonRelease) Timeout() *metav1.Duration       { return r.obj.Spec.Timeout }
 func (r *AddonRelease) MaintenanceActivated() bool      { return r.obj.MaintenanceModeActivated() }
 func (r *AddonRelease) MaintenanceEnabled() bool        { return r.obj.MaintenanceModeEnabled() }
 func (r *AddonRelease) ForceReconcileRequired() bool    { return r.obj.ForceReconcileRequired() }

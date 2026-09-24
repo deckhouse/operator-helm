@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
@@ -124,6 +125,62 @@ func TestEnsureHelmReleaseKeepsForeignLabels(t *testing.T) {
 		if release.Labels[key] != want {
 			t.Fatalf("label %q = %q, want %q", key, release.Labels[key], want)
 		}
+	}
+}
+
+// TestEnsureHelmReleaseCarriesTheTimeout pins that spec.timeout reaches the
+// HelmRelease for both families, and that removing it from the spec removes it
+// from the HelmRelease too, so helm-controller falls back to its own default
+// instead of keeping the last value it was given.
+func TestEnsureHelmReleaseCarriesTheTimeout(t *testing.T) {
+	timeout := &metav1.Duration{Duration: 15 * time.Minute}
+
+	withTimeout := func(d *metav1.Duration) []source.Release {
+		app := testApplication()
+		app.Spec.Timeout = d
+		addon := testAddon()
+		addon.Spec.Timeout = d
+
+		return []source.Release{adapter.NewApplicationRelease(app), adapter.NewAddonRelease(addon)}
+	}
+
+	for i, rel := range withTimeout(timeout) {
+		t.Run(rel.Kind(), func(t *testing.T) {
+			service, c := newReleaseService(t)
+
+			release := ensureRelease(t, service, c, rel)
+			if release.Spec.Timeout == nil || *release.Spec.Timeout != *timeout {
+				t.Fatalf("timeout = %v, want %v", release.Spec.Timeout, timeout)
+			}
+
+			release = ensureRelease(t, service, c, withTimeout(nil)[i])
+			if release.Spec.Timeout != nil {
+				t.Fatalf("timeout = %v, want it unset once the spec drops it", release.Spec.Timeout)
+			}
+		})
+	}
+}
+
+// TestSyncReleaseSpecCarriesTheTimeout pins that a timeout changed while the
+// release is being deleted reaches the HelmRelease: it bounds the uninstall, and
+// raising it is how a stuck uninstall is let through.
+func TestSyncReleaseSpecCarriesTheTimeout(t *testing.T) {
+	app := testApplication()
+	rel := adapter.NewApplicationRelease(app)
+	service, c := newReleaseService(t)
+	release := ensureRelease(t, service, c, rel)
+
+	app.Spec.Timeout = &metav1.Duration{Duration: 20 * time.Minute}
+	if err := service.SyncReleaseSpec(context.Background(), rel, release); err != nil {
+		t.Fatalf("SyncReleaseSpec returned %v", err)
+	}
+
+	synced := &helmv2.HelmRelease{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(release), synced); err != nil {
+		t.Fatalf("getting helm release: %v", err)
+	}
+	if synced.Spec.Timeout == nil || *synced.Spec.Timeout != *app.Spec.Timeout {
+		t.Fatalf("timeout = %v, want %v", synced.Spec.Timeout, app.Spec.Timeout)
 	}
 }
 
