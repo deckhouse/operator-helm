@@ -294,6 +294,11 @@ func (in *HelmApplicationSpec) DeepCopyInto(out *HelmApplicationSpec) {
 		*out = new(apiextensionsv1.JSON)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.Timeout != nil {
+		in, out := &in.Timeout, &out.Timeout
+		*out = new(v1.Duration)
+		**out = **in
+	}
 	return
 }
 
@@ -571,6 +576,11 @@ func (in *HelmClusterAddonSpec) DeepCopyInto(out *HelmClusterAddonSpec) {
 		in, out := &in.Values, &out.Values
 		*out = new(apiextensionsv1.JSON)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.Timeout != nil {
+		in, out := &in.Timeout, &out.Timeout
+		*out = new(v1.Duration)
+		**out = **in
 	}
 	return
 }
