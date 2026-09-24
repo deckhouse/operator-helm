@@ -120,6 +120,17 @@ spec:
                 - ""
                 - NoResourceReconciliation
                 type: string
+              timeout:
+                description: |-
+                  Timeout is the time to wait for any individual Kubernetes operation (like Jobs
+                  for hooks) during the performance of any Helm action. Defaults to 5m.
+                pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
+                type: string
+                x-kubernetes-validations:
+                - message: timeout must be greater than zero
+                  rule: duration(self) > duration('0s')
+                - message: timeout must not exceed 2h
+                  rule: duration(self) <= duration('2h')
               values:
                 description: Values holds the values for this HelmApplication release.
                 x-kubernetes-preserve-unknown-fields: true

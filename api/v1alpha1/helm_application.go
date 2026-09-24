@@ -180,6 +180,14 @@ type HelmApplicationSpec struct {
 	// +kubebuilder:validation:Enum="";NoResourceReconciliation
 	// +optional
 	Maintenance string `json:"maintenance,omitempty"`
+	// Timeout is the time to wait for any individual Kubernetes operation (like Jobs
+	// for hooks) during the performance of any Helm action. Defaults to 5m.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern="^([0-9]+(\\.[0-9]+)?(ms|s|m|h))+$"
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="timeout must be greater than zero"
+	// +kubebuilder:validation:XValidation:rule="duration(self) <= duration('2h')",message="timeout must not exceed 2h"
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
 }
 
 // The XValidation rule below states the relationship between the two reference
