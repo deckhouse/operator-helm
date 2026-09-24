@@ -1,44 +1,84 @@
 ---
 title: "Module operator-helm"
-description: "Deckhouse Kubernetes Platform — the operator-helm module for declarative Helm chart management."
+description: "Deckhouse Platform — the operator-helm module for declarative Helm chart management."
 weight: 10
 ---
 
-The `operator-helm` module allows you to declaratively manage Helm chart deployments in the cluster. It automates chart installation using custom resources and covers two scopes: a cluster-scoped addon family for cluster administrators and DevOps engineers, and a namespaced application family that lets a namespace owner install charts into their own namespace without cluster-wide privileges.
+The `operator-helm` module deploys Helm charts declaratively and targets two audiences: platform administrators and namespace administrators. It divides charts into addons and applications according to the objects they create.
 
-The module controller monitors the state of HelmClusterAddon and HelmApplication resources and automatically reconciles Helm releases in the cluster with the specified parameters.
+**Addons** ([`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon)) may contain CRDs and other cluster-scoped objects, so a platform administrator deploys them. Such a Helm chart can affect the state of the cluster, so managing it stays at the cluster level.
 
-## Main Features
+**Applications** ([`HelmApplication`](/modules/operator-helm/cr.html#helmapplication)) consist solely of objects that belong to a single namespace. A namespace administrator deploys them.
 
-- Deploying Helm charts from classic HTTP/HTTPS repositories and OCI registries through a unified declarative API.
-- Automatic chart version discovery and tracking via HelmClusterAddonChart, HelmApplicationChart and HelmClusterApplicationChart resources.
-- Configurable chart values through HelmClusterAddon and HelmApplication resources.
-- Namespace-scoped chart installation through HelmApplication, in addition to cluster-wide installation through HelmClusterAddon.
-- Maintenance mode to pause reconciliation on managed releases.
-- TLS verification and authentication support for private Helm and OCI repositories.
-- Management through CLI (`d8 k`) or the Deckhouse web interface.
+## Key features
 
+The module provides the following capabilities:
 
-## Custom Resources
+- declarative management of Helm chart deployment;
+- installing charts from HTTP(S) and OCI repositories through the same API;
+- automatic repository synchronization for browsing and searching the available Helm charts and their versions;
+- chart installation by a namespace administrator without granting them cluster-wide rights;
+- support for shared application repositories available in every namespace;
+- automatic correction of configuration drift;
+- maintenance mode that pauses reconciliation so that a release can be modified manually;
+- support for private repositories that use a corporate PKI;
+- management via `d8 k` or the Deckhouse Platform web interface.
 
-The following custom resources are used to manage Helm charts in the module:
+## Custom resources
 
-- **HelmClusterAddonRepository** — a Helm or OCI registry containing Helm charts for deployment in the cluster.
-- **HelmClusterAddon** — a declarative description of a specific Helm chart release. The resource contains the target chart version, the namespace name for deployment, and custom values.
-- **HelmApplicationRepository** — a Helm or OCI registry containing Helm charts that can be referenced by HelmApplication resources from the same namespace.
-- **HelmClusterApplicationRepository** — a Helm or OCI registry containing Helm charts that can be referenced by HelmApplication resources from any namespace.
-- **HelmApplication** — a declarative description of a Helm chart installation inside a single namespace. The release is always deployed into the namespace of the resource itself; the resource contains the target chart version, a reference to either a same-namespace HelmApplicationRepository or a cluster-wide HelmClusterApplicationRepository, and custom values.
+The module's resources fall into two groups by scope. Cluster-scoped resources are managed by a platform administrator, and the resources of a given namespace by a namespace administrator.
 
-Each repository also publishes a catalog of the charts it offers — HelmClusterAddonChart, HelmApplicationChart and HelmClusterApplicationChart. The controller creates and updates them during repository synchronization; they are read-only and are not edited by hand.
+```mermaid
+flowchart TB
+  classDef actor fill:#ffffff,stroke:#000000,color:#000000,stroke-width:3px;
+  classDef cluster fill:#e0e7ff,stroke:#1a237e,color:#000000,stroke-width:2px;
+  classDef ns fill:#f0fdfa,stroke:#004d40,color:#000000,stroke-width:2px;
+
+  ADM(["<font size=12px>fa:fa-user</font><br/><b>Platform<br/>administrator</b>"]):::actor
+  USR(["<font size=12px>fa:fa-user</font><br/><b>Namespace<br/>administrator</b>"]):::actor
+
+  HCA["<b>HelmClusterAddon</b>"]:::cluster
+  HCAR["<b>HelmClusterAddonRepository</b>"]:::cluster
+  HCApR["<b>HelmClusterApplicationRepository</b>"]:::cluster
+
+  HA["<b>HelmApplication</b>"]:::ns
+  HAR["<b>HelmApplicationRepository</b>"]:::ns
+
+  HCAC["<b>HelmClusterAddonChart</b>"]:::cluster
+  HCApC["<b>HelmClusterApplicationChart</b>"]:::cluster
+  HAC["<b>HelmApplicationChart</b>"]:::ns
+
+  ADM -->|Manages| HCA
+  ADM -->|Manages| HCAR
+  ADM -->|Manages| HCApR
+  HCA -->|Uses| HCAC
+  HCAR -->|Maintains| HCAC
+
+  USR -->|Manages| HA
+  USR -->|Manages| HAR
+  HA -->|Uses| HAC
+  HA -->|Uses| HCApC
+  HAR -->|Maintains| HAC
+
+  HCApR -->|Maintains| HCApC
+```
+
+Blue fill marks cluster-scoped resources; turquoise marks the resources inside a namespace. The module maintains the chart catalogs itself; they are not edited by hand.
+
+A platform administrator works with the cluster-scoped resources:
+
+- [`HelmClusterAddonRepository`](/modules/operator-helm/cr.html#helmclusteraddonrepository) — a Helm or OCI repository with charts to be installed at the cluster level;
+- [`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon) — a release description: the target chart version, the namespace to deploy into and, where required, extended installation parameters;
+- [`HelmClusterApplicationRepository`](/modules/operator-helm/cr.html#helmclusterapplicationrepository) — a repository whose charts are available to [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) resources from any namespace.
+
+A namespace administrator works with the resources of their own namespace:
+
+- [`HelmApplicationRepository`](/modules/operator-helm/cr.html#helmapplicationrepository) — a repository whose charts are available to [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) resources of the same namespace;
+- [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) — a release description in the administrator's own namespace: the target chart version, a reference to a [`HelmApplicationRepository`](/modules/operator-helm/cr.html#helmapplicationrepository) or a [`HelmClusterApplicationRepository`](/modules/operator-helm/cr.html#helmclusterapplicationrepository) and, where required, extended installation parameters.
+
+Configuration examples for the resources described above are given in the [administrator guide](admin_guide.html) and the [user guide](user_guide.html).
 
 ## Limitations
 
-- The addon family (HelmClusterAddon, HelmClusterAddonChart, HelmClusterAddonRepository) is entirely cluster-scoped, so managing it requires the `ClusterAdmin` role.
-- The application family is namespaced: a namespace owner can create and manage HelmApplication and HelmApplicationRepository in their own namespace without cluster-wide rights, with the `Admin` role. HelmClusterApplicationRepository is cluster-scoped, so creating one requires the `ClusterAdmin` role, but any HelmApplication may reference an existing one from its own namespace.
-- Creating a HelmApplication is effectively equivalent to having administrator rights inside its namespace: the controller creates a Role there with unrestricted rights over the namespace (`apiGroups: ["*"]`, `resources: ["*"]`, `verbs: ["*"]`) and binds it to the application's ServiceAccount. Both objects are owned by the module and reconciled: the controller watches them and restores its own rules, subjects and labels, so narrowing or deleting either does not outlast the application that needs it. Ownership is decided by the `helm.deckhouse.io/managed-by: operator-helm` label: an object occupying one of these names without that label — pre-created by someone else, or stripped of the label afterwards — is never adopted, patched or deleted, and the application reports `Stalled` with the reason `ForeignAccessObject` and installs nothing. Restoring the label resumes the application on its own; removing an object that never carried the label does not, because nothing watches it, so ask for a reconciliation with the `reconcile.helm.deckhouse.io/force` annotation afterwards. Because the granted rights come from the module rather than from the creator's own rights, granting someone only the right to create a HelmApplication — without other rights in the namespace — hands them the same namespace-admin-level access through the installed chart.
-- A HelmApplication cannot be created in a system namespace (`kube-system`, `kube-public`, `kube-node-lease`, or any namespace whose name starts with `d8-`, including the module's own `d8-operator-helm`); the admission webhook rejects it.
-- `HelmApplicationRepository` and `HelmClusterApplicationRepository` store their registry credentials in plaintext (`spec.auth.username` and `spec.auth.password`; there is no `secretRef` alternative), so any right to read a repository resource is a right to read its password. That is one reason repositories are reachable no lower than `Admin`.
-- Two Deckhouse roles reach this module, and the levels accumulate upwards. `Admin` may do anything with HelmApplication and HelmApplicationRepository, and may read both catalogs an application can pick a chart from: HelmApplicationChart and HelmClusterApplicationChart. `ClusterAdmin` covers the cluster-scoped kinds: full rights over HelmClusterAddon, HelmClusterAddonRepository and HelmClusterApplicationRepository, and a read of HelmClusterAddonChart. Note what the first of these means: installing an application is equivalent to namespace-admin rights, as explained above, so `Admin` is the lowest level that reaches this module at all. No level may write a chart catalog of any kind — the controller is its only author.
-- A HelmClusterAddon resource referencing a specific HelmClusterAddonChart can only be created as a single instance in the cluster. This is because Helm charts can contain custom resource definitions (CRDs), and installing them multiple times at the cluster level is not allowed.
-
-See [usage examples](example.html) for practical scenarios.
+- A [`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon) resource referring to a given [`HelmClusterAddonChart`](/modules/operator-helm/cr.html#helmclusteraddonchart) can only be created as a single instance. Helm charts used in an addon may contain custom resource definitions (CRDs), and installing them again at the cluster level can disrupt running services;
+- Creating a [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) requires permissions no lower than `Admin`, because applications are deployed using a `ServiceAccount` that holds equivalent privileges.

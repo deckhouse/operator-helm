@@ -1,5 +1,5 @@
 features:
-  - apply deckhouse runtime time review recommendations
+  - apply deckhouse runtime review recommendations
 fixes: []
 security: []
 chore: []
