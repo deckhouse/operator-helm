@@ -23,7 +23,7 @@ limitations under the License.
 // claimed, whether the target namespace is created, and which identity the chart
 // is applied with. The reconciler itself never names a kind.
 //
-// The API object is only ever reached through a source.Release adapter. The
+// The API object is only ever reached through a contract.Release adapter. The
 // adapter is not a registered type, so it is never handed to the client; the
 // object underneath it is reached through Object() at the few places that talk to
 // the API server.

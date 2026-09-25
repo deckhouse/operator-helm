@@ -25,14 +25,14 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 type RepoSyncService struct {
 	BaseService
 
 	clientFactory RepoClientFactory
-	catalog       source.Catalog
+	catalog       contract.Catalog
 }
 
 // RepoClientFactory builds the client used to read a repository catalog. It is
@@ -41,7 +41,7 @@ type RepoClientFactory func(repoType chartsource.Kind) (repoclient.ClientInterfa
 
 // NewRepoSyncService builds the synchronization for one repository kind: the
 // catalog decides which chart catalog kind the fetched charts are mirrored into.
-func NewRepoSyncService(client client.Client, scheme *runtime.Scheme, factory RepoClientFactory, catalog source.Catalog) *RepoSyncService {
+func NewRepoSyncService(client client.Client, scheme *runtime.Scheme, factory RepoClientFactory, catalog contract.Catalog) *RepoSyncService {
 	if factory == nil {
 		factory = repoclient.NewClient
 	}
@@ -63,7 +63,7 @@ func NewRepoSyncService(client client.Client, scheme *runtime.Scheme, factory Re
 // succeed again.
 //
 // TRANSITIONAL: remove together with the catalog's own migration.
-func (s *RepoSyncService) MigrateNames(ctx context.Context, repo source.Repository) error {
+func (s *RepoSyncService) MigrateNames(ctx context.Context, repo contract.Repository) error {
 	return s.catalog.MigrateNames(ctx, repo)
 }
 
@@ -72,7 +72,7 @@ func (s *RepoSyncService) MigrateNames(ctx context.Context, repo source.Reposito
 // remote, a catalog failure is about this cluster.
 func (s *RepoSyncService) Sync(
 	ctx context.Context,
-	repo source.Repository,
+	repo contract.Repository,
 	repoType chartsource.Kind,
 ) SyncOutcome {
 	known, err := s.catalog.Known(ctx, repo)
@@ -100,7 +100,7 @@ func (s *RepoSyncService) Sync(
 
 func (s *RepoSyncService) fetchCharts(
 	ctx context.Context,
-	repo source.Repository,
+	repo contract.Repository,
 	repoType chartsource.Kind,
 	opts repoclient.FetchOptions,
 ) ([]repoclient.Chart, FetchOutcome) {
@@ -148,7 +148,7 @@ func countPending(charts []repoclient.Chart) int {
 	return pending
 }
 
-func buildRepoConfig(repo source.Repository) *repoclient.RepoConfig {
+func buildRepoConfig(repo contract.Repository) *repoclient.RepoConfig {
 	if repo.Auth() == nil && repo.CACertificate() == "" && !repo.InsecureSkipVerify() {
 		return nil
 	}

@@ -28,8 +28,8 @@ import (
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -72,21 +72,21 @@ func TestApplicationReleaseResolvesTheRepositoryReference(t *testing.T) {
 	cases := []struct {
 		name          string
 		app           *helmv1alpha1.HelmApplication
-		wantRef       source.RepositoryRef
+		wantRef       contract.RepositoryRef
 		wantChartLbl  string
 		wantChartName string
 	}{
 		{
 			name:          "namespaced repository lives in the application namespace",
 			app:           namespacedApp("team-a", "my-app", "stable"),
-			wantRef:       source.RepositoryRef{Kind: helmv1alpha1.HelmApplicationRepositoryKind, Namespace: "team-a", Name: "stable"},
+			wantRef:       contract.RepositoryRef{Kind: helmv1alpha1.HelmApplicationRepositoryKind, Namespace: "team-a", Name: "stable"},
 			wantChartLbl:  helmv1alpha1.HelmApplicationChartLabelSourceName,
 			wantChartName: naming.ApplicationChartName("stable", "podinfo"),
 		},
 		{
 			name:          "cluster repository has no namespace",
 			app:           clusterApp("team-a", "my-app", "shared"),
-			wantRef:       source.RepositoryRef{Kind: helmv1alpha1.HelmClusterApplicationRepositoryKind, Name: "shared"},
+			wantRef:       contract.RepositoryRef{Kind: helmv1alpha1.HelmClusterApplicationRepositoryKind, Name: "shared"},
 			wantChartLbl:  helmv1alpha1.HelmClusterApplicationChartLabelSourceName,
 			wantChartName: naming.ClusterApplicationChartName("shared", "podinfo"),
 		},
@@ -96,7 +96,7 @@ func TestApplicationReleaseResolvesTheRepositoryReference(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rel := NewApplicationRelease(tc.app)
 
-			want := source.ChartRef{Repository: tc.wantRef, Chart: "podinfo", Version: "6.7.1"}
+			want := contract.ChartRef{Repository: tc.wantRef, Chart: "podinfo", Version: "6.7.1"}
 			if got := rel.ChartRef(); got != want {
 				t.Fatalf("ChartRef = %+v, want %+v", got, want)
 			}
@@ -133,7 +133,7 @@ func TestApplicationReleaseNamesAndLabels(t *testing.T) {
 	}
 
 	const derived = "hap-team-a-my-app-de20cad3987c"
-	want := source.ReleaseNames{HelmChart: derived, HelmRelease: derived, OCIRepository: derived, ServiceAccount: derived}
+	want := contract.ReleaseNames{HelmChart: derived, HelmRelease: derived, OCIRepository: derived, ServiceAccount: derived}
 	if got := rel.InternalNames(); got != want {
 		t.Fatalf("InternalNames = %+v, want %+v", got, want)
 	}
@@ -192,7 +192,7 @@ func TestApplicationRepositoryResolverPicksTheKind(t *testing.T) {
 	}
 	resolver := NewApplicationRepositoryResolver(applicationClient(t, namespaced, cluster))
 
-	repo, _, err := resolver.Resolve(context.Background(), source.RepositoryRef{Kind: helmv1alpha1.HelmApplicationRepositoryKind, Namespace: "team-a", Name: "stable"})
+	repo, _, err := resolver.Resolve(context.Background(), contract.RepositoryRef{Kind: helmv1alpha1.HelmApplicationRepositoryKind, Namespace: "team-a", Name: "stable"})
 	if err != nil {
 		t.Fatalf("Resolve(namespaced) returned %v", err)
 	}
@@ -200,7 +200,7 @@ func TestApplicationRepositoryResolverPicksTheKind(t *testing.T) {
 		t.Fatalf("resolved %v %q", repo.OwnerGVK(), repo.Namespace())
 	}
 
-	repo, _, err = resolver.Resolve(context.Background(), source.RepositoryRef{Kind: helmv1alpha1.HelmClusterApplicationRepositoryKind, Name: "shared"})
+	repo, _, err = resolver.Resolve(context.Background(), contract.RepositoryRef{Kind: helmv1alpha1.HelmClusterApplicationRepositoryKind, Name: "shared"})
 	if err != nil {
 		t.Fatalf("Resolve(cluster) returned %v", err)
 	}
@@ -208,7 +208,7 @@ func TestApplicationRepositoryResolverPicksTheKind(t *testing.T) {
 		t.Fatalf("resolved %v", repo.OwnerGVK())
 	}
 
-	if _, _, err := resolver.Resolve(context.Background(), source.RepositoryRef{Kind: "Something", Name: "x"}); err == nil {
+	if _, _, err := resolver.Resolve(context.Background(), contract.RepositoryRef{Kind: "Something", Name: "x"}); err == nil {
 		t.Fatal("an unknown repository kind must be an error")
 	}
 }

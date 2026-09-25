@@ -22,8 +22,8 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 
 	"github.com/deckhouse/operator-helm/internal/chartsource"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/services"
-	"github.com/deckhouse/operator-helm/internal/source"
 )
 
 // The collaborators of one reconcile pass, declared where they are used rather than
@@ -32,28 +32,28 @@ import (
 // SecretManager owns the auxiliary secrets a repository needs to be read: the
 // credentials of its registry and, for an oci:// one, the TLS material.
 type SecretManager interface {
-	Ensure(ctx context.Context, repo source.Repository, repoType chartsource.Kind) error
-	Cleanup(ctx context.Context, names source.InternalNames) error
+	Ensure(ctx context.Context, repo contract.Repository, repoType chartsource.Kind) error
+	Cleanup(ctx context.Context, names contract.InternalNames) error
 }
 
 // InternalRepositoryManager owns the internal HelmRepository, which exists only for
 // a repository that hands out packaged archives.
 type InternalRepositoryManager interface {
-	EnsureInternalHelmRepository(ctx context.Context, repo source.Repository) (services.InternalRepositoryState, error)
+	EnsureInternalHelmRepository(ctx context.Context, repo contract.Repository) (services.InternalRepositoryState, error)
 	// RemoveHelmRepository drops the object a repository no longer needs, after its
 	// url moved from helm to oci.
-	RemoveHelmRepository(ctx context.Context, names source.InternalNames) error
+	RemoveHelmRepository(ctx context.Context, names contract.InternalNames) error
 	// CleanupHelmRepository returns the object while it is still present, so the
 	// caller can wait for it to actually go away.
-	CleanupHelmRepository(ctx context.Context, names source.InternalNames) (*sourcev1.HelmRepository, error)
+	CleanupHelmRepository(ctx context.Context, names contract.InternalNames) (*sourcev1.HelmRepository, error)
 }
 
 // CatalogSynchronizer reads the remote and writes the chart catalog of one
 // repository.
 type CatalogSynchronizer interface {
-	Sync(ctx context.Context, repo source.Repository, repoType chartsource.Kind) services.SyncOutcome
+	Sync(ctx context.Context, repo contract.Repository, repoType chartsource.Kind) services.SyncOutcome
 	// MigrateNames moves the catalog objects to their current names.
 	//
 	// TRANSITIONAL: remove together with the catalog's own migration.
-	MigrateNames(ctx context.Context, repo source.Repository) error
+	MigrateNames(ctx context.Context, repo contract.Repository) error
 }

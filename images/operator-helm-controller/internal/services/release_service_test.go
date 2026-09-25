@@ -29,7 +29,7 @@ import (
 
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 func newReleaseService(t *testing.T, objects ...client.Object) (*ReleaseService, client.Client) {
@@ -50,7 +50,7 @@ func newReleaseService(t *testing.T, objects ...client.Object) (*ReleaseService,
 	return NewReleaseService(c, scheme, testNamespace), c
 }
 
-func ensureRelease(t *testing.T, service *ReleaseService, c client.Client, rel source.Release) *helmv2.HelmRelease {
+func ensureRelease(t *testing.T, service *ReleaseService, c client.Client, rel contract.Release) *helmv2.HelmRelease {
 	t.Helper()
 
 	if res := service.EnsureHelmRelease(context.Background(), rel, chartsource.Helm, ""); res.Err != nil {

@@ -24,12 +24,12 @@ import (
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/catalog"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 // NewAddonCatalog builds the HelmClusterAddonChart catalog. Its consumers are the
 // HelmClusterAddon objects referencing a repository/chart pair.
-func NewAddonCatalog(c client.Client) source.Catalog {
+func NewAddonCatalog(c client.Client) contract.Catalog {
 	return catalog.New(c, catalog.Config[*helmv1alpha1.HelmClusterAddonChart, *helmv1alpha1.HelmClusterAddonChartList]{
 		Kind:      helmv1alpha1.HelmClusterAddonChartKind,
 		NewObject: func() *helmv1alpha1.HelmClusterAddonChart { return &helmv1alpha1.HelmClusterAddonChart{} },
@@ -44,7 +44,7 @@ func NewAddonCatalog(c client.Client) source.Catalog {
 }
 
 // NewApplicationCatalog builds the HelmApplicationChart catalog; its consumers are the HelmApplication objects of the repository's namespace.
-func NewApplicationCatalog(c client.Client) source.Catalog {
+func NewApplicationCatalog(c client.Client) contract.Catalog {
 	return catalog.New(c, catalog.Config[*helmv1alpha1.HelmApplicationChart, *helmv1alpha1.HelmApplicationChartList]{
 		Kind:      helmv1alpha1.HelmApplicationChartKind,
 		NewObject: func() *helmv1alpha1.HelmApplicationChart { return &helmv1alpha1.HelmApplicationChart{} },
@@ -59,7 +59,7 @@ func NewApplicationCatalog(c client.Client) source.Catalog {
 }
 
 // NewClusterApplicationCatalog builds the HelmClusterApplicationChart catalog; its consumers are the HelmApplication objects of every namespace.
-func NewClusterApplicationCatalog(c client.Client) source.Catalog {
+func NewClusterApplicationCatalog(c client.Client) contract.Catalog {
 	return catalog.New(c, catalog.Config[*helmv1alpha1.HelmClusterApplicationChart, *helmv1alpha1.HelmClusterApplicationChartList]{
 		Kind:      helmv1alpha1.HelmClusterApplicationChartKind,
 		NewObject: func() *helmv1alpha1.HelmClusterApplicationChart { return &helmv1alpha1.HelmClusterApplicationChart{} },
@@ -90,14 +90,14 @@ func pointers[T any](items []T) []*T {
 // repository/chart pair: LastAppliedChart can lag behind the spec after a release
 // was repointed at another chart, and a stale entry would protect a phantom version
 // on the new chart while no longer protecting the version applied on the old one.
-func chartConsumers(list source.ReleaseLister) func(context.Context, source.Repository, string) (map[string]struct{}, error) {
-	return func(ctx context.Context, repo source.Repository, chartName string) (map[string]struct{}, error) {
+func chartConsumers(list contract.ReleaseLister) func(context.Context, contract.Repository, string) (map[string]struct{}, error) {
+	return func(ctx context.Context, repo contract.Repository, chartName string) (map[string]struct{}, error) {
 		releases, err := list(ctx, repo, chartName)
 		if err != nil {
 			return nil, err
 		}
 
-		pair := source.RepositoryRef{Kind: repo.OwnerGVK().Kind, Namespace: repo.Namespace(), Name: repo.Name()}
+		pair := contract.RepositoryRef{Kind: repo.OwnerGVK().Kind, Namespace: repo.Namespace(), Name: repo.Name()}
 		inUse := make(map[string]struct{}, 2*len(releases))
 
 		for _, rel := range releases {

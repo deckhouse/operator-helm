@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 type MaintenanceService struct {
@@ -49,7 +49,7 @@ func NewMaintenanceService(client client.Client, scheme *runtime.Scheme, targetN
 	}
 }
 
-func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, rel source.Release) MaintenanceOutcome {
+func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, rel contract.Release) MaintenanceOutcome {
 	logger := log.FromContext(ctx)
 
 	activated := rel.MaintenanceActivated()
@@ -66,7 +66,7 @@ func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, rel sour
 	return MaintenanceOutcome{Activated: activated}
 }
 
-func (s *MaintenanceService) IsMaintenanceModeChangeRequired(rel source.Release) bool {
+func (s *MaintenanceService) IsMaintenanceModeChangeRequired(rel contract.Release) bool {
 	if rel.MaintenanceActivated() && !rel.MaintenanceEnabled() {
 		return true
 	}
@@ -79,7 +79,7 @@ func (s *MaintenanceService) IsMaintenanceModeChangeRequired(rel source.Release)
 	return false
 }
 
-func (s *MaintenanceService) updateHelmReleaseSuspendState(ctx context.Context, names source.ReleaseNames, suspend bool) error {
+func (s *MaintenanceService) updateHelmReleaseSuspendState(ctx context.Context, names contract.ReleaseNames, suspend bool) error {
 	helmRelease := &helmv2.HelmRelease{}
 	if err := s.Client.Get(ctx, types.NamespacedName{
 		Name:      names.HelmRelease,

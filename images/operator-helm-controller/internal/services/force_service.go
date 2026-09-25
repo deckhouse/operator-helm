@@ -25,10 +25,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-var _ source.ConsumerForcer = (*ForceService)(nil)
+var _ contract.ConsumerForcer = (*ForceService)(nil)
 
 // ForceService pushes a repository's force reconcile request onto the internal
 // OCIRepository of every release consuming it. Which releases those are is the
@@ -36,10 +36,10 @@ var _ source.ConsumerForcer = (*ForceService)(nil)
 type ForceService struct {
 	client          client.Client
 	targetNamespace string
-	list            source.ReleaseLister
+	list            contract.ReleaseLister
 }
 
-func NewForceService(c client.Client, targetNamespace string, list source.ReleaseLister) *ForceService {
+func NewForceService(c client.Client, targetNamespace string, list contract.ReleaseLister) *ForceService {
 	return &ForceService{client: c, targetNamespace: targetNamespace, list: list}
 }
 
@@ -54,7 +54,7 @@ func NewForceService(c client.Client, targetNamespace string, list source.Releas
 // A release whose internal OCIRepository does not exist yet is skipped: the force
 // request must not be blocked by a release that has not reached the point of
 // building one.
-func (s *ForceService) ForceReconcileConsumers(ctx context.Context, repo source.Repository) error {
+func (s *ForceService) ForceReconcileConsumers(ctx context.Context, repo contract.Repository) error {
 	releases, err := s.list(ctx, repo, "")
 	if err != nil {
 		return err

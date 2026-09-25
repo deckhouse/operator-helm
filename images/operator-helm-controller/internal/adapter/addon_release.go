@@ -26,13 +26,13 @@ import (
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-var _ source.Release = (*AddonRelease)(nil)
+var _ contract.Release = (*AddonRelease)(nil)
 
 // AddonRelease adapts a HelmClusterAddon. Its labels and internal names are exactly
 // what the addon controller has always written; the release name is the addon name
@@ -47,7 +47,7 @@ func NewAddonRelease(obj *helmv1alpha1.HelmClusterAddon) *AddonRelease {
 
 // EmptyAddonRelease returns an adapter around a zero object, for the reconciler to
 // read the API object into.
-func EmptyAddonRelease() source.Release {
+func EmptyAddonRelease() contract.Release {
 	return NewAddonRelease(&helmv1alpha1.HelmClusterAddon{})
 }
 
@@ -57,9 +57,9 @@ func (r *AddonRelease) Name() string                        { return r.obj.Name 
 func (r *AddonRelease) Namespace() string                   { return r.obj.Namespace }
 func (r *AddonRelease) Generation() int64                   { return r.obj.Generation }
 
-func (r *AddonRelease) ChartRef() source.ChartRef {
-	return source.ChartRef{
-		Repository: source.RepositoryRef{
+func (r *AddonRelease) ChartRef() contract.ChartRef {
+	return contract.ChartRef{
+		Repository: contract.RepositoryRef{
 			Kind: helmv1alpha1.HelmClusterAddonRepositoryKind,
 			Name: r.obj.Spec.Chart.HelmClusterAddonRepository,
 		},
@@ -95,22 +95,22 @@ func (r *AddonRelease) HelmChartLabels() map[string]string {
 	return labels
 }
 
-func (r *AddonRelease) InternalNames() source.ReleaseNames {
-	return source.ReleaseNames{
+func (r *AddonRelease) InternalNames() contract.ReleaseNames {
+	return contract.ReleaseNames{
 		HelmChart:     utils.GetInternalHelmChartName(r.obj.Name),
 		HelmRelease:   utils.GetInternalHelmReleaseName(r.obj.Name),
 		OCIRepository: utils.GetInternalOCIRepositoryName(r.obj.Name),
 	}
 }
 
-func (r *AddonRelease) LastAppliedChart() *source.ChartRef {
+func (r *AddonRelease) LastAppliedChart() *contract.ChartRef {
 	last := r.obj.Status.LastAppliedChart
 	if last == nil {
 		return nil
 	}
 
-	return &source.ChartRef{
-		Repository: source.RepositoryRef{
+	return &contract.ChartRef{
+		Repository: contract.RepositoryRef{
 			Kind: helmv1alpha1.HelmClusterAddonRepositoryKind,
 			Name: last.HelmClusterAddonRepository,
 		},
@@ -119,7 +119,7 @@ func (r *AddonRelease) LastAppliedChart() *source.ChartRef {
 	}
 }
 
-func (r *AddonRelease) SetLastAppliedChart(ref source.ChartRef) {
+func (r *AddonRelease) SetLastAppliedChart(ref contract.ChartRef) {
 	r.obj.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
 		HelmClusterAddonChartName:  ref.Chart,
 		HelmClusterAddonRepository: ref.Repository.Name,
@@ -137,14 +137,14 @@ func (r *AddonRelease) SetLastForceReconcileTime(t metav1.Time) {
 
 type addonRepositoryResolver struct {
 	client  client.Client
-	catalog source.Catalog
+	catalog contract.Catalog
 }
 
 func NewAddonRepositoryResolver(c client.Client) *addonRepositoryResolver {
 	return &addonRepositoryResolver{client: c, catalog: NewAddonCatalog(c)}
 }
 
-func (r *addonRepositoryResolver) Resolve(ctx context.Context, ref source.RepositoryRef) (source.Repository, source.Catalog, error) {
+func (r *addonRepositoryResolver) Resolve(ctx context.Context, ref contract.RepositoryRef) (contract.Repository, contract.Catalog, error) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{}
 	if err := r.client.Get(ctx, client.ObjectKey{Name: ref.Name}, repo); err != nil {
 		return nil, nil, fmt.Errorf("getting %s %q: %w", helmv1alpha1.HelmClusterAddonRepositoryKind, ref.Name, err)
@@ -155,8 +155,8 @@ func (r *addonRepositoryResolver) Resolve(ctx context.Context, ref source.Reposi
 
 // ListAddonReleases lists the HelmClusterAddon objects consuming a repository, or
 // only those consuming one of its charts, through the two addon indexes.
-func ListAddonReleases(c client.Client) source.ReleaseLister {
-	return func(ctx context.Context, repo source.Repository, chartName string) ([]source.Release, error) {
+func ListAddonReleases(c client.Client) contract.ReleaseLister {
+	return func(ctx context.Context, repo contract.Repository, chartName string) ([]contract.Release, error) {
 		selector := client.MatchingFields{index.AddonRepository: repo.Name()}
 		if chartName != "" {
 			selector = client.MatchingFields{index.AddonChart: index.AddonChartValue(repo.Name(), chartName)}
@@ -167,7 +167,7 @@ func ListAddonReleases(c client.Client) source.ReleaseLister {
 			return nil, fmt.Errorf("listing addons of repository %q: %w", repo.Name(), err)
 		}
 
-		releases := make([]source.Release, 0, len(addons.Items))
+		releases := make([]contract.Release, 0, len(addons.Items))
 		for i := range addons.Items {
 			releases = append(releases, NewAddonRelease(&addons.Items[i]))
 		}

@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 var helmChartErrorRules = []ErrorConditionRule{
@@ -54,7 +54,7 @@ func NewChartService(client client.Client, scheme *runtime.Scheme, targetNamespa
 	}
 }
 
-func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, repo source.Repository) ChartOutcome {
+func (s *ChartService) EnsureHelmChart(ctx context.Context, rel contract.Release, repo contract.Repository) ChartOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &sourcev1.HelmChart{
@@ -95,7 +95,7 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, rel source.Release, 
 // while it is still present, so the caller can inspect its conditions and wait
 // for source-controller to finish removing it. It returns nil once the
 // HelmChart is gone.
-func (s *ChartService) CleanupHelmChart(ctx context.Context, names source.ReleaseNames) (*sourcev1.HelmChart, error) {
+func (s *ChartService) CleanupHelmChart(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error) {
 	nn := types.NamespacedName{Name: names.HelmChart, Namespace: s.TargetNamespace}
 	chart := &sourcev1.HelmChart{}
 	exists, err := s.deleteAndCheck(ctx, nn, chart)
@@ -109,7 +109,7 @@ func (s *ChartService) CleanupHelmChart(ctx context.Context, names source.Releas
 	return chart, nil
 }
 
-func applyHelmChartSpec(rel source.Release, repo source.Repository, existing *sourcev1.HelmChart) {
+func applyHelmChartSpec(rel contract.Release, repo contract.Repository, existing *sourcev1.HelmChart) {
 	if rel.ForceReconcileRequired() {
 		setReconcileRequestAnnotations(existing)
 	}

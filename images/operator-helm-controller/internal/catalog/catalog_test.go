@@ -37,8 +37,8 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/source"
 )
 
 func newClient(t *testing.T) client.Client {
@@ -57,7 +57,7 @@ func newClient(t *testing.T) client.Client {
 		Build()
 }
 
-func applicationRepo(namespace, name string) source.Repository { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
+func applicationRepo(namespace, name string) contract.Repository { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
 	return adapter.NewApplicationRepository(&helmv1alpha1.HelmApplicationRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(namespace + "/" + name)},
 		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/" + name},
@@ -98,7 +98,7 @@ func newAddonClientWithInterceptor(t *testing.T, funcs interceptor.Funcs, object
 		Build()
 }
 
-func addonRepo() source.Repository {
+func addonRepo() contract.Repository {
 	return adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "example"}})
 }
 
@@ -140,7 +140,7 @@ func legacyAddonChart(name, repoName, chartName string, versions ...helmv1alpha1
 // being written over; it lives in the reconciler, so the test that owns it is
 // TestUnfinishedRenameDoesNotOverwriteTheCatalog in internal/reconcile/repository,
 // not here.
-func syncCatalog(cat source.Catalog, repo source.Repository, charts ...repoclient.Chart) error {
+func syncCatalog(cat contract.Catalog, repo contract.Repository, charts ...repoclient.Chart) error {
 	if err := cat.MigrateNames(context.Background(), repo); err != nil {
 		return err
 	}

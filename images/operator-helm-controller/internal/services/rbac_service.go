@@ -32,7 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 // ApplicationRoleName is the Role every application release of a namespace is bound
@@ -73,7 +73,7 @@ func NewRBACService(c client.Client, targetNamespace string) *RBACService {
 // EnsureRBAC reconciles the account, the Role and the binding. A release without a
 // service account name belongs to a family that does not impersonate; nothing is
 // created for it.
-func (s *RBACService) EnsureRBAC(ctx context.Context, rel source.Release) RBACOutcome {
+func (s *RBACService) EnsureRBAC(ctx context.Context, rel contract.Release) RBACOutcome {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
 		return RBACOutcome{}
@@ -138,7 +138,7 @@ func managedByOperator(labels map[string]string) bool {
 // CleanupRBAC removes the account and the binding. The Role stays: it is shared by
 // every application of the namespace, and on its own — with no binding left naming
 // it — it grants nothing.
-func (s *RBACService) CleanupRBAC(ctx context.Context, rel source.Release) error {
+func (s *RBACService) CleanupRBAC(ctx context.Context, rel contract.Release) error {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
 		return nil
@@ -165,7 +165,7 @@ func (s *RBACService) CleanupRBAC(ctx context.Context, rel source.Release) error
 // ensureServiceAccount keeps the account in its desired shape. The account exists
 // only as a subject name — helm-controller impersonates it with headers on top of
 // its own identity — so no token is ever mounted for it.
-func (s *RBACService) ensureServiceAccount(ctx context.Context, rel source.Release, name string) error {
+func (s *RBACService) ensureServiceAccount(ctx context.Context, rel contract.Release, name string) error {
 	account := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.TargetNamespace},
 	}
@@ -272,7 +272,7 @@ func applicationRoleRef() rbacv1.RoleRef {
 // such a binding would grant it whatever that binding grants. It is reported and
 // left exactly as it is — never patched, never deleted — so its owner decides what
 // happens to it.
-func (s *RBACService) ensureRoleBinding(ctx context.Context, rel source.Release, namespace, name string) error {
+func (s *RBACService) ensureRoleBinding(ctx context.Context, rel contract.Release, namespace, name string) error {
 	desiredRef := applicationRoleRef()
 
 	existing := &rbacv1.RoleBinding{}

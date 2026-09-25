@@ -26,7 +26,7 @@ import (
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -60,8 +60,8 @@ func TestAddonReleaseKeepsTheReleasedNamesAndLabels(t *testing.T) {
 		t.Fatalf("identity = %s %q/%q gen %d", rel.Kind(), rel.Namespace(), rel.Name(), rel.Generation())
 	}
 
-	wantRef := source.ChartRef{
-		Repository: source.RepositoryRef{Kind: helmv1alpha1.HelmClusterAddonRepositoryKind, Name: "example"},
+	wantRef := contract.ChartRef{
+		Repository: contract.RepositoryRef{Kind: helmv1alpha1.HelmClusterAddonRepositoryKind, Name: "example"},
 		Chart:      "podinfo",
 		Version:    "6.7.1",
 	}
@@ -100,7 +100,7 @@ func TestAddonReleaseKeepsTheReleasedNamesAndLabels(t *testing.T) {
 		t.Fatalf("HelmChartLabels = %v, want %v", got, wantChartLabels)
 	}
 
-	wantNames := source.ReleaseNames{
+	wantNames := contract.ReleaseNames{
 		HelmChart:     utils.GetInternalHelmChartName("consumer"),
 		HelmRelease:   utils.GetInternalHelmReleaseName("consumer"),
 		OCIRepository: utils.GetInternalOCIRepositoryName("consumer"),
@@ -164,7 +164,7 @@ func TestAddonRepositoryResolverLoadsTheRepositoryAndTheAddonCatalog(t *testing.
 	}
 	c := addonClient(t, repo)
 
-	got, cat, err := NewAddonRepositoryResolver(c).Resolve(context.Background(), source.RepositoryRef{
+	got, cat, err := NewAddonRepositoryResolver(c).Resolve(context.Background(), contract.RepositoryRef{
 		Kind: helmv1alpha1.HelmClusterAddonRepositoryKind, Name: "example",
 	})
 	if err != nil {
@@ -177,7 +177,7 @@ func TestAddonRepositoryResolverLoadsTheRepositoryAndTheAddonCatalog(t *testing.
 		t.Fatal("Resolve must return the addon catalog")
 	}
 
-	if _, _, err := NewAddonRepositoryResolver(c).Resolve(context.Background(), source.RepositoryRef{
+	if _, _, err := NewAddonRepositoryResolver(c).Resolve(context.Background(), contract.RepositoryRef{
 		Kind: helmv1alpha1.HelmClusterAddonRepositoryKind, Name: "missing",
 	}); err == nil {
 		t.Fatal("Resolve of a missing repository must fail")
@@ -214,7 +214,7 @@ func TestListAddonReleasesUsesTheIndexes(t *testing.T) {
 	}
 }
 
-func releaseNames(releases []source.Release) map[string]bool {
+func releaseNames(releases []contract.Release) map[string]bool {
 	out := make(map[string]bool, len(releases))
 	for _, rel := range releases {
 		out[rel.Name()] = true

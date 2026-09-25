@@ -36,8 +36,8 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/reconcile/pass"
-	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -54,7 +54,7 @@ const chartClaimConflictRequeueInterval = 30 * time.Second
 // repository/chart pair is claimed (Claim), whether the target namespace is created
 // (Namespaces) and which identity the chart is applied with (RBAC).
 type Deps struct {
-	NewRelease   func() source.Release
+	NewRelease   func() contract.Release
 	Repositories RepositoryResolver
 	Chart        ChartManager
 	OCI          OCIRepoManager
@@ -304,7 +304,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 // finish applies the decision and consumes the force annotation. The annotation is
 // removed after the status patch so a conflict does not lose the request.
-func (r *Reconciler) finish(ctx context.Context, rel source.Release, in Inputs) (reconcile.Result, error) {
+func (r *Reconciler) finish(ctx context.Context, rel contract.Release, in Inputs) (reconcile.Result, error) {
 	decision := Evaluate(in)
 
 	if decision.Reported != nil {
@@ -333,7 +333,7 @@ func (r *Reconciler) finish(ctx context.Context, rel source.Release, in Inputs) 
 // applyDecision writes the evaluated status onto the release. Conditions are merged
 // rather than replaced: a pass reports on the steps it ran, and the verdicts of the
 // steps it did not run stay where they are.
-func applyDecision(rel source.Release, decision Decision) {
+func applyDecision(rel contract.Release, decision Decision) {
 	conditions := rel.Object().GetConditions()
 
 	for _, condition := range decision.Conditions {
@@ -373,7 +373,7 @@ func repositoryChangeFailure(err error) *Failure {
 
 // valuesDigest is the digest of the values the spec asks for, in the form the
 // deployed revision records the values it was installed with.
-func valuesDigest(rel source.Release) string {
+func valuesDigest(rel contract.Release) string {
 	rawValues := []byte(`{}`)
 	if rel.Values() != nil {
 		rawValues = rel.Values().Raw
@@ -384,7 +384,7 @@ func valuesDigest(rel source.Release) string {
 	return chartutil.DigestValues(digest.Canonical, values).String()
 }
 
-func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (reconcile.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(rel.Object(), helmv1alpha1.FinalizerName) {
@@ -479,7 +479,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel source.Release) (r
 // request asks for begins. A forced pass is the one case where someone is
 // watching: they annotated the object a moment ago and want to see it was picked
 // up. The condition is removed again by the status update that ends the pass.
-func (r *Reconciler) markForceReconcileInProgress(ctx context.Context, rel source.Release) error {
+func (r *Reconciler) markForceReconcileInProgress(ctx context.Context, rel contract.Release) error {
 	err := r.deps.Status.PatchStatus(ctx, rel.Object(), func() {
 		apimeta.SetStatusCondition(rel.Object().GetConditions(), metav1.Condition{
 			Type:               helmv1alpha1.ConditionTypeReconciling,
@@ -509,9 +509,9 @@ func (r *Reconciler) markForceReconcileInProgress(ctx context.Context, rel sourc
 // everything else — its values, its maintenance mode, its removal.
 func (r *Reconciler) getChartVersion(
 	ctx context.Context,
-	catalog source.Catalog,
-	repo source.Repository,
-	rel source.Release,
+	catalog contract.Catalog,
+	repo contract.Repository,
+	rel contract.Release,
 	repoType chartsource.Kind,
 ) (client.Object, *helmv1alpha1.ChartVersion, error) {
 	ref := rel.ChartRef()
@@ -570,7 +570,7 @@ func versionUnavailableDetail(version helmv1alpha1.ChartVersion) string {
 // kind was actually removed in this pass.
 func (r *Reconciler) logSourceKindFlip(
 	ctx context.Context,
-	rel source.Release,
+	rel contract.Release,
 	kind chartsource.Kind,
 	superseded bool,
 ) {

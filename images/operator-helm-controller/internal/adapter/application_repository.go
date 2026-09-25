@@ -20,7 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -34,7 +34,7 @@ const (
 	applicationRepositoryTLSPrefix  = "hapr-tls"
 )
 
-var _ source.Repository = (*ApplicationRepository)(nil)
+var _ contract.Repository = (*ApplicationRepository)(nil)
 
 // ApplicationRepository adapts a HelmApplicationRepository. The kind is
 // namespaced while its internal objects live in the operator namespace, so both
@@ -47,7 +47,7 @@ func NewApplicationRepository(obj *helmv1alpha1.HelmApplicationRepository) *Appl
 	return &ApplicationRepository{obj: obj}
 }
 
-func EmptyApplicationRepository() source.Repository {
+func EmptyApplicationRepository() contract.Repository {
 	return NewApplicationRepository(&helmv1alpha1.HelmApplicationRepository{})
 }
 
@@ -76,10 +76,10 @@ func (r *ApplicationRepository) SourceLabels() map[string]string {
 	}
 }
 
-func (r *ApplicationRepository) InternalNames() source.InternalNames {
+func (r *ApplicationRepository) InternalNames() contract.InternalNames {
 	kind := helmv1alpha1.HelmApplicationRepositoryKind
 
-	return source.InternalNames{
+	return contract.InternalNames{
 		HelmRepository: utils.DerivedName(applicationRepositoryPrefix, kind, r.obj.Namespace, r.obj.Name),
 		AuthSecret:     utils.DerivedName(applicationRepositoryAuthPrefix, kind, r.obj.Namespace, r.obj.Name),
 		TLSSecret:      utils.DerivedName(applicationRepositoryTLSPrefix, kind, r.obj.Namespace, r.obj.Name),

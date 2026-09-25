@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Package adapter binds each user-facing kind to the contracts of
-// internal/source. Everything that differs between two kinds of the same role —
+// internal/contract. Everything that differs between two kinds of the same role —
 // labels, internal object names, the catalog kind, who consumes the charts —
 // lives here and nowhere else; the services and the reconcilers stay kind-agnostic.
 //

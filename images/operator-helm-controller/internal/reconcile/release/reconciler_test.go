@@ -47,9 +47,9 @@ import (
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/services"
-	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -719,7 +719,7 @@ func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *test
 
 type failingRBAC struct{}
 
-func (failingRBAC) EnsureRBAC(context.Context, source.Release) services.RBACOutcome {
+func (failingRBAC) EnsureRBAC(context.Context, contract.Release) services.RBACOutcome {
 	return services.RBACOutcome{
 		Err:     errors.New("service account is forbidden"),
 		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
@@ -727,7 +727,7 @@ func (failingRBAC) EnsureRBAC(context.Context, source.Release) services.RBACOutc
 	}
 }
 
-func (failingRBAC) CleanupRBAC(context.Context, source.Release) error { return nil }
+func (failingRBAC) CleanupRBAC(context.Context, contract.Release) error { return nil }
 
 // TestReconcileApplicationReportsRBACSetupFailure pins that the pass stops at the
 // identity. A release applied without one would run as helm-controller itself,
@@ -774,7 +774,7 @@ type intermittentRBAC struct {
 	calls int
 }
 
-func (a *intermittentRBAC) EnsureRBAC(ctx context.Context, rel source.Release) services.RBACOutcome {
+func (a *intermittentRBAC) EnsureRBAC(ctx context.Context, rel contract.Release) services.RBACOutcome {
 	a.calls++
 	if a.calls == 1 {
 		return services.RBACOutcome{
@@ -786,7 +786,7 @@ func (a *intermittentRBAC) EnsureRBAC(ctx context.Context, rel source.Release) s
 	return a.real.EnsureRBAC(ctx, rel)
 }
 
-func (a *intermittentRBAC) CleanupRBAC(ctx context.Context, rel source.Release) error {
+func (a *intermittentRBAC) CleanupRBAC(ctx context.Context, rel contract.Release) error {
 	return a.real.CleanupRBAC(ctx, rel)
 }
 
@@ -933,11 +933,11 @@ func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
 
 type accessCleanupFails struct{}
 
-func (accessCleanupFails) EnsureRBAC(context.Context, source.Release) services.RBACOutcome {
+func (accessCleanupFails) EnsureRBAC(context.Context, contract.Release) services.RBACOutcome {
 	return services.RBACOutcome{}
 }
 
-func (accessCleanupFails) CleanupRBAC(context.Context, source.Release) error {
+func (accessCleanupFails) CleanupRBAC(context.Context, contract.Release) error {
 	return errors.New("role binding deletion forbidden")
 }
 

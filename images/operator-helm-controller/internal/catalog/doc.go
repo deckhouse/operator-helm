@@ -19,6 +19,6 @@ limitations under the License.
 // generic over API types: the catalog objects must be created, listed and
 // status-patched with their concrete kind, and everything a kind contributes —
 // constructors, accessors, the naming function, who consumes the charts — arrives
-// through a Config. The result is exposed as source.Catalog, so no generic type
+// through a Config. The result is exposed as contract.Catalog, so no generic type
 // leaks into the services.
 package catalog

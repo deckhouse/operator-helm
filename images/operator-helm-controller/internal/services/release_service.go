@@ -34,7 +34,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 const releaseDriftDetectionInterval = 5 * time.Minute
@@ -61,7 +61,7 @@ func NewReleaseService(client client.Client, scheme *runtime.Scheme, targetNames
 	}
 }
 
-func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, rel source.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {
+func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, rel contract.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &helmv2.HelmRelease{
@@ -102,7 +102,7 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, rel source.Relea
 // while it is still present, so the caller can inspect its conditions and wait
 // for helm-controller to finish uninstalling before proceeding. It returns nil
 // once the HelmRelease is gone.
-func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, names source.ReleaseNames) (*helmv2.HelmRelease, error) {
+func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error) {
 	nn := types.NamespacedName{Name: names.HelmRelease, Namespace: s.TargetNamespace}
 	release := &helmv2.HelmRelease{}
 	exists, err := s.deleteAndCheck(ctx, nn, release)
@@ -125,7 +125,7 @@ func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, names source.Re
 // failed uninstall may be external (e.g. kube-apiserver issues) and leave the
 // spec unchanged, so helm-controller must be nudged out of its error backoff to
 // retry on every pass regardless.
-func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, rel source.Release, release *helmv2.HelmRelease) error {
+func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, rel contract.Release, release *helmv2.HelmRelease) error {
 	base := release.DeepCopy()
 
 	release.Spec.TargetNamespace = rel.TargetNamespace()
@@ -144,7 +144,7 @@ func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, rel source.Release
 	return nil
 }
 
-func applyHelmReleaseSpec(rel source.Release, existing *helmv2.HelmRelease, sourceKind chartsource.Kind, targetNamespace string) error {
+func applyHelmReleaseSpec(rel contract.Release, existing *helmv2.HelmRelease, sourceKind chartsource.Kind, targetNamespace string) error {
 	if rel.ForceReconcileRequired() {
 		setReconcileRequestAnnotations(existing)
 	}
@@ -202,7 +202,7 @@ func applyHelmReleaseSpec(rel source.Release, existing *helmv2.HelmRelease, sour
 	return nil
 }
 
-func isDesiredChartDeployed(rel source.Release, latest *helmv2.Snapshot, artifactRevision string) bool {
+func isDesiredChartDeployed(rel contract.Release, latest *helmv2.Snapshot, artifactRevision string) bool {
 	if latest == nil || latest.Status != "deployed" {
 		return false
 	}

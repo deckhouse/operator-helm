@@ -30,7 +30,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -66,7 +66,7 @@ func NewRepoSecretsService(client client.Client, scheme *runtime.Scheme, namespa
 // secret is touched.
 func (s *RepoSecretsService) Ensure(
 	ctx context.Context,
-	repo source.Repository,
+	repo contract.Repository,
 	repoType chartsource.Kind,
 ) error {
 	var err error
@@ -92,7 +92,7 @@ func (s *RepoSecretsService) Ensure(
 // reconcileBasicAuthSecret reconciles the internal auth secret as an Opaque secret
 // holding username/password keys, the shape HelmRepository expects for HTTP basic
 // auth.
-func (s *RepoSecretsService) reconcileBasicAuthSecret(ctx context.Context, repo source.Repository) error {
+func (s *RepoSecretsService) reconcileBasicAuthSecret(ctx context.Context, repo contract.Repository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeOpaque,
 		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
 			return map[string]string{
@@ -106,7 +106,7 @@ func (s *RepoSecretsService) reconcileBasicAuthSecret(ctx context.Context, repo 
 // reconcileDockerConfigAuthSecret reconciles the internal auth secret as a
 // kubernetes.io/dockerconfigjson secret, the only shape OCIRepository accepts in
 // its spec.secretRef.
-func (s *RepoSecretsService) reconcileDockerConfigAuthSecret(ctx context.Context, repo source.Repository) error {
+func (s *RepoSecretsService) reconcileDockerConfigAuthSecret(ctx context.Context, repo contract.Repository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeDockerConfigJson,
 		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
 			config, err := utils.BuildDockerConfigJSON(repo.URL(), auth.Username, auth.Password)
@@ -121,7 +121,7 @@ func (s *RepoSecretsService) reconcileDockerConfigAuthSecret(ctx context.Context
 
 func (s *RepoSecretsService) reconcileAuthSecret(
 	ctx context.Context,
-	repo source.Repository,
+	repo contract.Repository,
 	secretType corev1.SecretType,
 	buildData func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error),
 ) error {
@@ -216,7 +216,7 @@ func (s *RepoSecretsService) removeAuthSecretOfOtherType(
 	return true, nil
 }
 
-func (s *RepoSecretsService) reconcileTLSSecret(ctx context.Context, repo source.Repository) error {
+func (s *RepoSecretsService) reconcileTLSSecret(ctx context.Context, repo contract.Repository) error {
 	secretName := repo.InternalNames().TLSSecret
 
 	if repo.CACertificate() == "" {
@@ -253,7 +253,7 @@ func (s *RepoSecretsService) reconcileTLSSecret(ctx context.Context, repo source
 
 // Cleanup removes both secrets. They carry no finalizers, so they disappear at
 // once and the caller need not wait for them.
-func (s *RepoSecretsService) Cleanup(ctx context.Context, names source.InternalNames) error {
+func (s *RepoSecretsService) Cleanup(ctx context.Context, names contract.InternalNames) error {
 	for _, name := range []string{names.AuthSecret, names.TLSSecret} {
 		nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
 		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {

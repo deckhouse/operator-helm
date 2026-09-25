@@ -29,7 +29,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 // Config describes one chart catalog kind. C is the pointer type of the object,
@@ -49,11 +49,11 @@ type Config[C client.Object, CL client.ObjectList] struct {
 	// Consumers reports the versions of one chart that resources of the family
 	// still reference. nil means nothing in the family can reference a chart yet,
 	// and every unlisted version is prunable.
-	Consumers func(ctx context.Context, repo source.Repository, chartName string) (map[string]struct{}, error)
+	Consumers func(ctx context.Context, repo contract.Repository, chartName string) (map[string]struct{}, error)
 }
 
-// New builds the source.Catalog of one kind.
-func New[C client.Object, CL client.ObjectList](c client.Client, cfg Config[C, CL]) source.Catalog {
+// New builds the contract.Catalog of one kind.
+func New[C client.Object, CL client.ObjectList](c client.Client, cfg Config[C, CL]) contract.Catalog {
 	return &typed[C, CL]{client: c, cfg: cfg}
 }
 
@@ -66,7 +66,7 @@ type typed[C client.Object, CL client.ObjectList] struct {
 // objects live in its namespace; for a cluster repository the namespace is empty and
 // InNamespace is a no-op. Listing by namespace is what keeps two same-named
 // repositories in different namespaces apart.
-func (t *typed[C, CL]) list(ctx context.Context, repo source.Repository) ([]C, error) {
+func (t *typed[C, CL]) list(ctx context.Context, repo contract.Repository) ([]C, error) {
 	list := t.cfg.NewList()
 	if err := t.client.List(ctx, list,
 		client.InNamespace(repo.Namespace()),
@@ -82,7 +82,7 @@ func (t *typed[C, CL]) list(ctx context.Context, repo source.Repository) ([]C, e
 // Known collects the verdicts recorded by previous passes, so the client can skip
 // the tags it has already examined. The chart objects are the only store of that
 // state: keeping a separate fingerprint would be one more thing to drift.
-func (t *typed[C, CL]) Known(ctx context.Context, repo source.Repository) (repoclient.KnownCharts, error) {
+func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (repoclient.KnownCharts, error) {
 	charts, err := t.list(ctx, repo)
 	if err != nil {
 		return nil, err
@@ -121,7 +121,7 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo source.Repository) (repoc
 	return known, nil
 }
 
-func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, charts []repoclient.Chart) error {
+func (t *typed[C, CL]) Reconcile(ctx context.Context, repo contract.Repository, charts []repoclient.Chart) error {
 	logger := log.FromContext(ctx)
 
 	desired := make(map[string]struct{}, len(charts))
@@ -246,7 +246,7 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo source.Repository, ch
 //
 // TRANSITIONAL: remove this method, its interface entry and its call once every
 // cluster has reconciled each repository at least once under the current scheme.
-func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo source.Repository) error {
+func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repository) error {
 	logger := log.FromContext(ctx)
 
 	existingCharts, err := t.list(ctx, repo)
@@ -298,7 +298,7 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo source.Repository)
 	return nil
 }
 
-func (t *typed[C, CL]) InUseVersions(ctx context.Context, repo source.Repository, chartName string) (map[string]struct{}, error) {
+func (t *typed[C, CL]) InUseVersions(ctx context.Context, repo contract.Repository, chartName string) (map[string]struct{}, error) {
 	if chartName == "" || t.cfg.Consumers == nil {
 		return nil, nil
 	}
@@ -306,7 +306,7 @@ func (t *typed[C, CL]) InUseVersions(ctx context.Context, repo source.Repository
 	return t.cfg.Consumers(ctx, repo, chartName)
 }
 
-func (t *typed[C, CL]) Lookup(ctx context.Context, repo source.Repository, chartName string) (client.Object, *helmv1alpha1.ChartCatalogStatus, error) {
+func (t *typed[C, CL]) Lookup(ctx context.Context, repo contract.Repository, chartName string) (client.Object, *helmv1alpha1.ChartCatalogStatus, error) {
 	obj := t.cfg.NewObject()
 	key := client.ObjectKey{Namespace: repo.Namespace(), Name: t.cfg.ObjectName(repo.Name(), chartName)}
 

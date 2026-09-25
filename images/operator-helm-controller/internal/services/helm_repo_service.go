@@ -32,7 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 const InternalRepositoryInterval = 5 * time.Minute
@@ -59,7 +59,7 @@ func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace 
 // error and is reported through the state instead.
 func (s *HelmRepoService) EnsureInternalHelmRepository(
 	ctx context.Context,
-	repo source.Repository,
+	repo contract.Repository,
 ) (InternalRepositoryState, error) {
 	logger := log.FromContext(ctx)
 
@@ -110,7 +110,7 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(
 	return state, nil
 }
 
-func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, names source.InternalNames) error {
+func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, names contract.InternalNames) error {
 	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.TargetNamespace}
 	if err := s.ensureResourceDeleted(ctx, nn, &sourcev1.HelmRepository{}); err != nil {
 		return fmt.Errorf("removing helm repository: %w", err)
@@ -123,7 +123,7 @@ func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, names source
 // returns it while it is still present, so the caller can inspect its conditions
 // and wait for source-controller to finish removing it. It returns nil once
 // the HelmRepository is gone.
-func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, names source.InternalNames) (*sourcev1.HelmRepository, error) {
+func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, names contract.InternalNames) (*sourcev1.HelmRepository, error) {
 	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.TargetNamespace}
 	helmRepo := &sourcev1.HelmRepository{}
 	exists, err := s.deleteAndCheck(ctx, nn, helmRepo)
@@ -137,7 +137,7 @@ func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, names sourc
 	return helmRepo, nil
 }
 
-func applyHelmRepositorySpec(repo source.Repository, existing *sourcev1.HelmRepository) {
+func applyHelmRepositorySpec(repo contract.Repository, existing *sourcev1.HelmRepository) {
 	if repo.ForceReconcileRequired() {
 		if existing.Annotations == nil {
 			existing.Annotations = map[string]string{}

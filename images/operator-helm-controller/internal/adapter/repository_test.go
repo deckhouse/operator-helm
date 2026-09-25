@@ -23,7 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -74,7 +74,7 @@ func TestAddonRepositoryKeepsTheReleasedNamesAndLabels(t *testing.T) {
 		t.Fatalf("SourceLabels = %v, want %v", got, wantLabels)
 	}
 
-	wantNames := source.InternalNames{
+	wantNames := contract.InternalNames{
 		HelmRepository: utils.GetInternalHelmRepositoryName("example"),
 		AuthSecret:     utils.GetInternalRepositoryAuthSecretName("example"),
 		TLSSecret:      utils.GetInternalRepositoryTLSSecretName("example"),
@@ -107,7 +107,7 @@ func TestApplicationRepositoryCarriesNamespaceInLabelsAndNames(t *testing.T) {
 		t.Fatalf("SourceLabels = %v, want %v", got, wantLabels)
 	}
 
-	want := source.InternalNames{
+	want := contract.InternalNames{
 		HelmRepository: "hapr-team-a-stable-42df68033b1e",
 		AuthSecret:     utils.DerivedName("hapr-auth", helmv1alpha1.HelmApplicationRepositoryKind, "team-a", "stable"),
 		TLSSecret:      utils.DerivedName("hapr-tls", helmv1alpha1.HelmApplicationRepositoryKind, "team-a", "stable"),
@@ -138,7 +138,7 @@ func TestSameNamedRepositoriesNeverShareInternalNames(t *testing.T) {
 	})
 
 	seen := map[string]string{}
-	for label, repo := range map[string]source.Repository{"team-a": teamA, "team-b": teamB, "cluster": cluster, "addon": addon} {
+	for label, repo := range map[string]contract.Repository{"team-a": teamA, "team-b": teamB, "cluster": cluster, "addon": addon} {
 		names := repo.InternalNames()
 		for _, n := range []string{names.HelmRepository, names.AuthSecret, names.TLSSecret} {
 			if owner, dup := seen[n]; dup {
@@ -179,7 +179,7 @@ func TestClusterApplicationRepositoryHasNoNamespaceLabel(t *testing.T) {
 
 func TestEmptyConstructorsReturnAddressableObjectsOfTheirKind(t *testing.T) {
 	cases := map[string]struct {
-		repo source.Repository
+		repo contract.Repository
 		gvk  string
 	}{
 		"addon":               {EmptyAddonRepository(), helmv1alpha1.HelmClusterAddonRepositoryKind},

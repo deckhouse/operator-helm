@@ -20,7 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -32,7 +32,7 @@ const (
 	clusterApplicationRepositoryTLSPrefix  = "hcapr-tls"
 )
 
-var _ source.Repository = (*ClusterApplicationRepository)(nil)
+var _ contract.Repository = (*ClusterApplicationRepository)(nil)
 
 // ClusterApplicationRepository adapts a HelmClusterApplicationRepository. It is
 // cluster-scoped, so its derived names carry no namespace part, and its labels no
@@ -45,7 +45,7 @@ func NewClusterApplicationRepository(obj *helmv1alpha1.HelmClusterApplicationRep
 	return &ClusterApplicationRepository{obj: obj}
 }
 
-func EmptyClusterApplicationRepository() source.Repository {
+func EmptyClusterApplicationRepository() contract.Repository {
 	return NewClusterApplicationRepository(&helmv1alpha1.HelmClusterApplicationRepository{})
 }
 
@@ -83,10 +83,10 @@ func (r *ClusterApplicationRepository) SourceLabels() map[string]string {
 	}
 }
 
-func (r *ClusterApplicationRepository) InternalNames() source.InternalNames {
+func (r *ClusterApplicationRepository) InternalNames() contract.InternalNames {
 	kind := helmv1alpha1.HelmClusterApplicationRepositoryKind
 
-	return source.InternalNames{
+	return contract.InternalNames{
 		HelmRepository: utils.DerivedName(clusterApplicationRepositoryPrefix, kind, "", r.obj.Name),
 		AuthSecret:     utils.DerivedName(clusterApplicationRepositoryAuthPrefix, kind, "", r.obj.Name),
 		TLSSecret:      utils.DerivedName(clusterApplicationRepositoryTLSPrefix, kind, "", r.obj.Name),

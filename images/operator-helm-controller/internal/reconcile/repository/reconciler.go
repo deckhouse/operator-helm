@@ -32,9 +32,9 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/reconcile/pass"
 	"github.com/deckhouse/operator-helm/internal/services"
-	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
@@ -43,10 +43,10 @@ import (
 // the API object to be read into; Consumers pushes a force request onto the internal
 // sources of whatever consumes the repository in that family.
 type Deps struct {
-	NewRepository func() source.Repository
+	NewRepository func() contract.Repository
 	Secrets       SecretManager
 	Internal      InternalRepositoryManager
-	Consumers     source.ConsumerForcer
+	Consumers     contract.ConsumerForcer
 	Catalog       CatalogSynchronizer
 	Status        *status.Manager
 }
@@ -160,7 +160,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 // does not lose the request.
 func (r *Reconciler) finish(
 	ctx context.Context,
-	repo source.Repository,
+	repo contract.Repository,
 	in Inputs,
 	attempted bool,
 ) (reconcile.Result, error) {
@@ -206,7 +206,7 @@ func (r *Reconciler) finish(
 	return reconcile.Result{RequeueAfter: decision.RequeueAfter}, nil
 }
 
-func (r *Reconciler) reconcileDelete(ctx context.Context, repo source.Repository, repoType chartsource.Kind) (reconcile.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, repo contract.Repository, repoType chartsource.Kind) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(repo.Object(), helmv1alpha1.FinalizerName) {
@@ -271,7 +271,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo source.Repository
 // own.
 func (r *Reconciler) markSyncInProgress(
 	ctx context.Context,
-	repo source.Repository,
+	repo contract.Repository,
 	forced bool,
 ) error {
 	reason, message := helmv1alpha1.ReasonSynchronization, "Repository synchronization in progress"

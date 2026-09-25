@@ -26,8 +26,8 @@ import (
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/source"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -37,7 +37,7 @@ import (
 // addon's do. The same prefix starts the Helm release name.
 const applicationPrefix = "hap"
 
-var _ source.Release = (*ApplicationRelease)(nil)
+var _ contract.Release = (*ApplicationRelease)(nil)
 
 // ApplicationRelease adapts a HelmApplication. This is the one place the two
 // mutually exclusive repository fields are read: everything downstream sees the
@@ -51,7 +51,7 @@ func NewApplicationRelease(obj *helmv1alpha1.HelmApplication) *ApplicationReleas
 	return &ApplicationRelease{obj: obj}
 }
 
-func EmptyApplicationRelease() source.Release {
+func EmptyApplicationRelease() contract.Release {
 	return NewApplicationRelease(&helmv1alpha1.HelmApplication{})
 }
 
@@ -61,8 +61,8 @@ func (r *ApplicationRelease) Name() string                        { return r.obj
 func (r *ApplicationRelease) Namespace() string                   { return r.obj.Namespace }
 func (r *ApplicationRelease) Generation() int64                   { return r.obj.Generation }
 
-func (r *ApplicationRelease) repositoryRef(kind, name string) source.RepositoryRef {
-	ref := source.RepositoryRef{Kind: kind, Name: name}
+func (r *ApplicationRelease) repositoryRef(kind, name string) contract.RepositoryRef {
+	ref := contract.RepositoryRef{Kind: kind, Name: name}
 	if kind == helmv1alpha1.HelmApplicationRepositoryKind {
 		ref.Namespace = r.obj.Namespace
 	}
@@ -70,8 +70,8 @@ func (r *ApplicationRelease) repositoryRef(kind, name string) source.RepositoryR
 	return ref
 }
 
-func (r *ApplicationRelease) ChartRef() source.ChartRef {
-	return source.ChartRef{
+func (r *ApplicationRelease) ChartRef() contract.ChartRef {
+	return contract.ChartRef{
 		Repository: r.repositoryRef(r.obj.RepositoryKind(), r.obj.RepositoryName()),
 		Chart:      r.obj.Spec.Chart.Name,
 		Version:    r.obj.Spec.Chart.Version,
@@ -125,10 +125,10 @@ func (r *ApplicationRelease) HelmChartLabels() map[string]string {
 	return labels
 }
 
-func (r *ApplicationRelease) InternalNames() source.ReleaseNames {
+func (r *ApplicationRelease) InternalNames() contract.ReleaseNames {
 	name := utils.DerivedName(applicationPrefix, helmv1alpha1.HelmApplicationKind, r.obj.Namespace, r.obj.Name)
 
-	return source.ReleaseNames{
+	return contract.ReleaseNames{
 		HelmChart:      name,
 		HelmRelease:    name,
 		OCIRepository:  name,
@@ -136,13 +136,13 @@ func (r *ApplicationRelease) InternalNames() source.ReleaseNames {
 	}
 }
 
-func (r *ApplicationRelease) LastAppliedChart() *source.ChartRef {
+func (r *ApplicationRelease) LastAppliedChart() *contract.ChartRef {
 	last := r.obj.Status.LastAppliedChart
 	if last == nil || last.RepositoryKind() == "" {
 		return nil
 	}
 
-	return &source.ChartRef{
+	return &contract.ChartRef{
 		Repository: r.repositoryRef(last.RepositoryKind(), last.RepositoryName()),
 		Chart:      last.Name,
 		Version:    last.Version,
@@ -152,7 +152,7 @@ func (r *ApplicationRelease) LastAppliedChart() *source.ChartRef {
 // SetLastAppliedChart replaces the record wholesale. A merge would leave the old
 // repository field set next to the new clusterRepository, both fields would be
 // filled, and IsChartStatusInfoOutdated would stay true forever.
-func (r *ApplicationRelease) SetLastAppliedChart(ref source.ChartRef) {
+func (r *ApplicationRelease) SetLastAppliedChart(ref contract.ChartRef) {
 	last := &helmv1alpha1.HelmApplicationLastAppliedChartRef{
 		Name:    ref.Chart,
 		Version: ref.Version,
@@ -178,8 +178,8 @@ func (r *ApplicationRelease) SetLastForceReconcileTime(t metav1.Time) {
 
 type applicationRepositoryResolver struct {
 	client         client.Client
-	namespaced     source.Catalog
-	clusterCatalog source.Catalog
+	namespaced     contract.Catalog
+	clusterCatalog contract.Catalog
 }
 
 func NewApplicationRepositoryResolver(c client.Client) *applicationRepositoryResolver {
@@ -190,7 +190,7 @@ func NewApplicationRepositoryResolver(c client.Client) *applicationRepositoryRes
 	}
 }
 
-func (r *applicationRepositoryResolver) Resolve(ctx context.Context, ref source.RepositoryRef) (source.Repository, source.Catalog, error) {
+func (r *applicationRepositoryResolver) Resolve(ctx context.Context, ref contract.RepositoryRef) (contract.Repository, contract.Catalog, error) {
 	switch ref.Kind {
 	case helmv1alpha1.HelmApplicationRepositoryKind:
 		repo := &helmv1alpha1.HelmApplicationRepository{}
@@ -217,8 +217,8 @@ func (r *applicationRepositoryResolver) Resolve(ctx context.Context, ref source.
 // or only those consuming one of its charts. The index value carries the repository
 // kind and namespace, so a namespaced repository only ever sees the applications of
 // its own namespace.
-func ListApplicationReleases(c client.Client) source.ReleaseLister {
-	return func(ctx context.Context, repo source.Repository, chartName string) ([]source.Release, error) {
+func ListApplicationReleases(c client.Client) contract.ReleaseLister {
+	return func(ctx context.Context, repo contract.Repository, chartName string) ([]contract.Release, error) {
 		kind := repo.OwnerGVK().Kind
 
 		selector := client.MatchingFields{index.ApplicationRepository: index.ApplicationRepositoryValue(kind, repo.Namespace(), repo.Name())}
@@ -231,7 +231,7 @@ func ListApplicationReleases(c client.Client) source.ReleaseLister {
 			return nil, fmt.Errorf("listing applications of repository %s %s/%s: %w", kind, repo.Namespace(), repo.Name(), err)
 		}
 
-		releases := make([]source.Release, 0, len(apps.Items))
+		releases := make([]contract.Release, 0, len(apps.Items))
 		for i := range apps.Items {
 			releases = append(releases, NewApplicationRelease(&apps.Items[i]))
 		}

@@ -20,12 +20,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-var _ source.Repository = (*AddonRepository)(nil)
+var _ contract.Repository = (*AddonRepository)(nil)
 
 // AddonRepository adapts a HelmClusterAddonRepository. Its labels and internal
 // names are exactly what the addon controller has always written: those are live
@@ -40,7 +40,7 @@ func NewAddonRepository(obj *helmv1alpha1.HelmClusterAddonRepository) *AddonRepo
 
 // EmptyAddonRepository returns an adapter around a zero object, for the reconciler
 // to read the API object into.
-func EmptyAddonRepository() source.Repository {
+func EmptyAddonRepository() contract.Repository {
 	return NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{})
 }
 
@@ -68,8 +68,8 @@ func (r *AddonRepository) SourceLabels() map[string]string {
 	}
 }
 
-func (r *AddonRepository) InternalNames() source.InternalNames {
-	return source.InternalNames{
+func (r *AddonRepository) InternalNames() contract.InternalNames {
+	return contract.InternalNames{
 		HelmRepository: utils.GetInternalHelmRepositoryName(r.obj.Name),
 		AuthSecret:     utils.GetInternalRepositoryAuthSecretName(r.obj.Name),
 		TLSSecret:      utils.GetInternalRepositoryTLSSecretName(r.obj.Name),

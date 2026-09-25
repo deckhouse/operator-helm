@@ -33,7 +33,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
-	"github.com/deckhouse/operator-helm/internal/source"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -83,8 +83,8 @@ func NewOCIRepoService(
 
 func (s *OCIRepoService) EnsureInternalOCIRepository(
 	ctx context.Context,
-	rel source.Release,
-	repo source.Repository,
+	rel contract.Release,
+	repo contract.Repository,
 	src chartsource.Source,
 	version *helmv1alpha1.ChartVersion,
 ) OCIRepoOutcome {
@@ -139,8 +139,8 @@ func (s *OCIRepoService) EnsureInternalOCIRepository(
 // — or when a force request asks for a re-examination.
 func (s *OCIRepoService) resolveMediaType(
 	ctx context.Context,
-	rel source.Release,
-	repo source.Repository,
+	rel contract.Release,
+	repo contract.Repository,
 	src chartsource.Source,
 	version *helmv1alpha1.ChartVersion,
 ) (string, *OCIRepoOutcome) {
@@ -180,7 +180,7 @@ func (s *OCIRepoService) resolveMediaType(
 // is a verdict about this exact artifact.
 func (s *OCIRepoService) cachedMediaType(
 	ctx context.Context,
-	names source.ReleaseNames,
+	names contract.ReleaseNames,
 	src chartsource.Source,
 ) string {
 	nn := types.NamespacedName{
@@ -207,7 +207,7 @@ func (s *OCIRepoService) cachedMediaType(
 // the host the repository names gets them, and credentials are never included: the
 // internal OCIRepository pulls a foreign registry anonymously, and a probe that
 // authenticated would report a chart the pull could not fetch.
-func artifactRepoConfig(repo source.Repository, src chartsource.Source) *repoclient.RepoConfig {
+func artifactRepoConfig(repo contract.Repository, src chartsource.Source) *repoclient.RepoConfig {
 	if !sameRegistryHost(repo.URL(), src.URL) {
 		return nil
 	}
@@ -226,7 +226,7 @@ func artifactRepoConfig(repo source.Repository, src chartsource.Source) *repocli
 // it while it is still present, so the caller can inspect its conditions and wait
 // for source-controller to finish removing it. It returns nil once the
 // OCIRepository is gone.
-func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, names source.ReleaseNames) (*sourcev1.OCIRepository, error) {
+func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error) {
 	nn := types.NamespacedName{Name: names.OCIRepository, Namespace: s.TargetNamespace}
 	ociRepo := &sourcev1.OCIRepository{}
 	exists, err := s.deleteAndCheck(ctx, nn, ociRepo)
@@ -241,8 +241,8 @@ func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, names source.R
 }
 
 func applyOCIRepositorySpec(
-	rel source.Release,
-	repo source.Repository,
+	rel contract.Release,
+	repo contract.Repository,
 	src chartsource.Source,
 	mediaType string,
 	existing *sourcev1.OCIRepository,
@@ -314,7 +314,7 @@ func sameRegistryHost(repoURL, artifactURL string) bool {
 	return repoHost == artifactHost
 }
 
-func repositoryIsOCI(repo source.Repository) bool {
+func repositoryIsOCI(repo contract.Repository) bool {
 	repoType, err := chartsource.KindOf(repo.URL())
 
 	return err == nil && repoType == chartsource.OCI
