@@ -14,14 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package rbac
 
-// RBACOutcome is the result of reconciling the identity a release is applied
+// IdentityOutcome is the result of reconciling the identity a release is applied
 // with. Terminal marks a failure that will not resolve by retrying: an object the
 // identity needs already occupies its name and is not the operator's to touch.
 // Reason and Message are what the release reports, filled in by the service so both
 // classes of failure are named where they are recognized.
-type RBACOutcome struct {
+type IdentityOutcome struct {
 	Err      error
 	Terminal bool
 	Reason   string

@@ -28,7 +28,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/rbac"
 )
 
 // mapRoleToApplications enqueues every application of the namespace a change to the
@@ -45,7 +45,7 @@ import (
 // unseen and the application finds it on a pass it runs for another reason.
 func mapRoleToApplications(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		if obj.GetName() != services.ApplicationRoleName {
+		if obj.GetName() != rbac.ApplicationRoleName {
 			return nil
 		}
 

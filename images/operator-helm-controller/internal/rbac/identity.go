@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package rbac
 
 import (
 	"context"
@@ -41,7 +41,7 @@ import (
 // and it outlives the applications that are bound to it.
 const ApplicationRoleName = "operator-helm-application"
 
-// RBACService provides the identity a release is applied with: a ServiceAccount in
+// Identity provides the identity a release is applied with: a ServiceAccount in
 // the operator namespace (next to the HelmRelease, where helm-controller looks it
 // up), a Role in the target namespace and a RoleBinding tying the two together.
 //
@@ -58,22 +58,22 @@ const ApplicationRoleName = "operator-helm-application"
 // manager's client cache (see cmd/operator-helm-controller), so the reads here go
 // to the API server and never depend on the label-scoped informers those watches
 // run on.
-type RBACService struct {
+type Identity struct {
 	client          client.Client
 	targetNamespace string
 }
 
-func NewRBACService(c client.Client, targetNamespace string) *RBACService {
-	return &RBACService{client: c, targetNamespace: targetNamespace}
+func NewIdentity(c client.Client, targetNamespace string) *Identity {
+	return &Identity{client: c, targetNamespace: targetNamespace}
 }
 
 // Ensure reconciles the account, the Role and the binding. A release without a
 // service account name belongs to a family that does not impersonate; nothing is
 // created for it.
-func (s *RBACService) Ensure(ctx context.Context, rel contract.Release) RBACOutcome {
+func (s *Identity) Ensure(ctx context.Context, rel contract.Release) IdentityOutcome {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
-		return RBACOutcome{}
+		return IdentityOutcome{}
 	}
 
 	namespace := rel.TargetNamespace()
@@ -90,7 +90,7 @@ func (s *RBACService) Ensure(ctx context.Context, rel contract.Release) RBACOutc
 		return rbacFailure(fmt.Errorf("ensuring role binding: %w", err))
 	}
 
-	return RBACOutcome{}
+	return IdentityOutcome{}
 }
 
 // foreignObjectError marks an object occupying a name the operator derives that is
@@ -107,10 +107,10 @@ func (e *foreignObjectError) Error() string { return e.message }
 // it leaves the way only by being removed or labelled, and neither is something a
 // retry brings about — the informers behind the watches on both kinds select on the
 // managed-by label, so an object without it is not even observed going away.
-func rbacFailure(err error) RBACOutcome {
+func rbacFailure(err error) IdentityOutcome {
 	var foreign *foreignObjectError
 	if errors.As(err, &foreign) {
-		return RBACOutcome{
+		return IdentityOutcome{
 			Err:      err,
 			Terminal: true,
 			Reason:   helmv1alpha1.ReasonForeignRBACObject,
@@ -118,7 +118,7 @@ func rbacFailure(err error) RBACOutcome {
 		}
 	}
 
-	return RBACOutcome{
+	return IdentityOutcome{
 		Err:     err,
 		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 		Message: "Failed to set up the release identity: " + err.Error(),
@@ -135,7 +135,7 @@ func managedByOperator(labels map[string]string) bool {
 // Cleanup removes the account and the binding. The Role stays: it is shared by
 // every application of the namespace, and on its own — with no binding left naming
 // it — it grants nothing.
-func (s *RBACService) Cleanup(ctx context.Context, rel contract.Release) error {
+func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) error {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
 		return nil
@@ -162,7 +162,7 @@ func (s *RBACService) Cleanup(ctx context.Context, rel contract.Release) error {
 // ensureServiceAccount keeps the account in its desired shape. The account exists
 // only as a subject name — helm-controller impersonates it with headers on top of
 // its own identity — so no token is ever mounted for it.
-func (s *RBACService) ensureServiceAccount(ctx context.Context, rel contract.Release, name string) error {
+func (s *Identity) ensureServiceAccount(ctx context.Context, rel contract.Release, name string) error {
 	account := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.targetNamespace},
 	}
@@ -196,7 +196,7 @@ func (s *RBACService) ensureServiceAccount(ctx context.Context, rel contract.Rel
 // namespace reconciling at once both read the Role as missing and both create it,
 // and the loser is refused. They write the same content, so the second attempt is
 // the patch the loser would have made had it read the Role a moment later.
-func (s *RBACService) ensureRole(ctx context.Context, namespace string) error {
+func (s *Identity) ensureRole(ctx context.Context, namespace string) error {
 	err := s.applyRole(ctx, namespace)
 	if apierrors.IsAlreadyExists(err) {
 		err = s.applyRole(ctx, namespace)
@@ -205,7 +205,7 @@ func (s *RBACService) ensureRole(ctx context.Context, namespace string) error {
 	return err
 }
 
-func (s *RBACService) applyRole(ctx context.Context, namespace string) error {
+func (s *Identity) applyRole(ctx context.Context, namespace string) error {
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: namespace},
 	}
@@ -269,7 +269,7 @@ func applicationRoleRef() rbacv1.RoleRef {
 // such a binding would grant it whatever that binding grants. It is reported and
 // left exactly as it is — never patched, never deleted — so its owner decides what
 // happens to it.
-func (s *RBACService) ensureRoleBinding(ctx context.Context, rel contract.Release, namespace, name string) error {
+func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, namespace, name string) error {
 	desiredRef := applicationRoleRef()
 
 	existing := &rbacv1.RoleBinding{}
@@ -334,7 +334,7 @@ func (s *RBACService) ensureRoleBinding(ctx context.Context, rel contract.Releas
 // found under it may belong to someone else — the same ownership test ensureRoleBinding
 // applies before it touches anything. A binding that is not ours is left alone; that
 // is not an error and must not block the rest of the cleanup.
-func (s *RBACService) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.NamespacedName) error {
+func (s *Identity) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.NamespacedName) error {
 	binding := &rbacv1.RoleBinding{}
 	if err := s.client.Get(ctx, nn, binding); err != nil {
 		return client.IgnoreNotFound(err)

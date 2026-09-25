@@ -50,6 +50,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
+	"github.com/deckhouse/operator-helm/internal/rbac"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -355,11 +356,12 @@ func newFullReconciler(
 
 // newApplicationFullReconciler is the sibling of newFullReconciler for the
 // application family: the same services, wired to the namespaced adapters. It is
-// what lets a test prove that one reconciler serves both families. rbac is the
-// identity manager; nil selects the real one over the same fake client.
+// what lets a test prove that one reconciler serves both families. identity is the
+// identity the release is applied with; nil selects the real one over the same fake
+// client.
 func newApplicationFullReconciler(
 	t *testing.T,
-	rbac Identity,
+	identity Identity,
 	objects ...client.Object,
 ) (*Reconciler, client.Client) {
 	t.Helper()
@@ -384,8 +386,8 @@ func newApplicationFullReconciler(
 		WithIndex(&helmv1alpha1.HelmApplication{}, index.ApplicationChart, index.ApplicationChartIndexer).
 		Build()
 
-	if rbac == nil {
-		rbac = services.NewRBACService(c, helmv1alpha1.TargetNamespace)
+	if identity == nil {
+		identity = rbac.NewIdentity(c, helmv1alpha1.TargetNamespace)
 	}
 
 	return New(c, Deps{
@@ -397,7 +399,7 @@ func newApplicationFullReconciler(
 		Maintenance:     internalobj.NewMaintenance(c, scheme, helmv1alpha1.TargetNamespace),
 		Claims:          NoClaims{},
 		Namespaces:      ExistingTargetNamespace{},
-		Identity:        rbac,
+		Identity:        identity,
 		Status:          status.NewManager(c),
 	}), c
 }
@@ -705,8 +707,8 @@ func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *test
 	if err := c.List(context.Background(), &roles, inNamespace); err != nil {
 		t.Fatalf("listing roles: %v", err)
 	}
-	if len(roles.Items) != 1 || roles.Items[0].Name != services.ApplicationRoleName {
-		t.Fatalf("roles = %+v, want only %s", roles.Items, services.ApplicationRoleName)
+	if len(roles.Items) != 1 || roles.Items[0].Name != rbac.ApplicationRoleName {
+		t.Fatalf("roles = %+v, want only %s", roles.Items, rbac.ApplicationRoleName)
 	}
 
 	var bindings rbacv1.RoleBindingList
@@ -718,17 +720,17 @@ func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *test
 	}
 }
 
-type failingRBAC struct{}
+type failingIdentity struct{}
 
-func (failingRBAC) Ensure(context.Context, contract.Release) services.RBACOutcome {
-	return services.RBACOutcome{
+func (failingIdentity) Ensure(context.Context, contract.Release) rbac.IdentityOutcome {
+	return rbac.IdentityOutcome{
 		Err:     errors.New("service account is forbidden"),
 		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 		Message: "Failed to set up the release identity",
 	}
 }
 
-func (failingRBAC) Cleanup(context.Context, contract.Release) error { return nil }
+func (failingIdentity) Cleanup(context.Context, contract.Release) error { return nil }
 
 // TestReconcileApplicationReportsRBACSetupFailure pins that the pass stops at the
 // identity. A release applied without one would run as helm-controller itself,
@@ -739,7 +741,7 @@ func (failingRBAC) Cleanup(context.Context, contract.Release) error { return nil
 func TestReconcileApplicationReportsRBACSetupFailure(t *testing.T) {
 	app := testApplication()
 
-	r, c := newApplicationFullReconciler(t, failingRBAC{}, append(applicationFixtures(), app)...)
+	r, c := newApplicationFullReconciler(t, failingIdentity{}, append(applicationFixtures(), app)...)
 
 	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); err == nil {
@@ -766,19 +768,19 @@ func TestReconcileApplicationReportsRBACSetupFailure(t *testing.T) {
 	}
 }
 
-// intermittentRBAC fails the first call to Ensure and delegates to a real
+// intermittentIdentity fails the first call to Ensure and delegates to a real
 // Identity afterwards, standing in for a transient failure (an API hiccup, a
 // momentary admission rejection) that clears on its own by the next pass. real is
 // set after construction, once the reconciler's own client exists.
-type intermittentRBAC struct {
+type intermittentIdentity struct {
 	real  Identity
 	calls int
 }
 
-func (a *intermittentRBAC) Ensure(ctx context.Context, rel contract.Release) services.RBACOutcome {
+func (a *intermittentIdentity) Ensure(ctx context.Context, rel contract.Release) rbac.IdentityOutcome {
 	a.calls++
 	if a.calls == 1 {
-		return services.RBACOutcome{
+		return rbac.IdentityOutcome{
 			Err:     errors.New("service account is forbidden"),
 			Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 			Message: "Failed to set up the release identity",
@@ -787,7 +789,7 @@ func (a *intermittentRBAC) Ensure(ctx context.Context, rel contract.Release) ser
 	return a.real.Ensure(ctx, rel)
 }
 
-func (a *intermittentRBAC) Cleanup(ctx context.Context, rel contract.Release) error {
+func (a *intermittentIdentity) Cleanup(ctx context.Context, rel contract.Release) error {
 	return a.real.Cleanup(ctx, rel)
 }
 
@@ -798,9 +800,9 @@ func (a *intermittentRBAC) Cleanup(ctx context.Context, rel contract.Release) er
 func TestReconcileApplicationRecoversAfterTransientRBACSetupFailure(t *testing.T) {
 	app := testApplication()
 
-	rbac := &intermittentRBAC{}
-	r, c := newApplicationFullReconciler(t, rbac, append(applicationFixtures(), app)...)
-	rbac.real = services.NewRBACService(c, helmv1alpha1.TargetNamespace)
+	flaky := &intermittentIdentity{}
+	r, c := newApplicationFullReconciler(t, flaky, append(applicationFixtures(), app)...)
+	flaky.real = rbac.NewIdentity(c, helmv1alpha1.TargetNamespace)
 
 	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
 
@@ -884,7 +886,7 @@ func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
 	app := testApplication()
 	rules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}}
 	foreign := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: services.ApplicationRoleName, Namespace: app.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: rbac.ApplicationRoleName, Namespace: app.Namespace},
 		Rules:      rules,
 	}
 
@@ -934,8 +936,8 @@ func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
 
 type accessCleanupFails struct{}
 
-func (accessCleanupFails) Ensure(context.Context, contract.Release) services.RBACOutcome {
-	return services.RBACOutcome{}
+func (accessCleanupFails) Ensure(context.Context, contract.Release) rbac.IdentityOutcome {
+	return rbac.IdentityOutcome{}
 }
 
 func (accessCleanupFails) Cleanup(context.Context, contract.Release) error {

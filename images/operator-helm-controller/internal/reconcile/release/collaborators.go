@@ -26,7 +26,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/rbac"
 )
 
 // The collaborators of one reconcile pass, declared where they are used rather than
@@ -64,7 +64,7 @@ type Namespaces interface {
 // family creates a ServiceAccount, a Role and a RoleBinding and names the account
 // on the HelmRelease; the addon family applies charts as helm-controller itself.
 type Identity interface {
-	Ensure(ctx context.Context, rel contract.Release) services.RBACOutcome
+	Ensure(ctx context.Context, rel contract.Release) rbac.IdentityOutcome
 	Cleanup(ctx context.Context, rel contract.Release) error
 }
 
@@ -134,8 +134,8 @@ func (ExistingTargetNamespace) EnsureTarget(context.Context, contract.Release) e
 // NoIdentity is the Identity of a family that does not impersonate.
 type NoIdentity struct{}
 
-func (NoIdentity) Ensure(context.Context, contract.Release) services.RBACOutcome {
-	return services.RBACOutcome{}
+func (NoIdentity) Ensure(context.Context, contract.Release) rbac.IdentityOutcome {
+	return rbac.IdentityOutcome{}
 }
 
 func (NoIdentity) Cleanup(context.Context, contract.Release) error { return nil }

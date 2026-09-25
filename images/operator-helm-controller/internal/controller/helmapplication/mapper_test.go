@@ -33,7 +33,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/rbac"
 )
 
 func newMapperClient(t *testing.T, objects ...client.Object) client.Client {
@@ -69,7 +69,7 @@ func TestMapRoleToApplications(t *testing.T) {
 	)
 	mapper := mapRoleToApplications(c)
 
-	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: services.ApplicationRoleName, Namespace: "team-a"}}
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: rbac.ApplicationRoleName, Namespace: "team-a"}}
 	got := mapper(context.Background(), role)
 
 	want := []reconcile.Request{

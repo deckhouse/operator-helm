@@ -35,8 +35,8 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
+	"github.com/deckhouse/operator-helm/internal/rbac"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/release"
-	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -57,7 +57,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Maintenance:     internalobj.NewMaintenance(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		Claims:          reconcile.NoClaims{},
 		Namespaces:      reconcile.ExistingTargetNamespace{},
-		Identity:        services.NewRBACService(client, helmv1alpha1.TargetNamespace),
+		Identity:        rbac.NewIdentity(client, helmv1alpha1.TargetNamespace),
 		Status:          status.NewManager(client),
 	})
 
