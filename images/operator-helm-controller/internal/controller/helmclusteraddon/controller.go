@@ -27,9 +27,10 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/claim"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
+	"github.com/deckhouse/operator-helm/internal/namespace"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/release"
-	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -48,8 +49,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		OCIRepositories: internalobj.NewOCIRepositories(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
 		Releases:        internalobj.NewReleases(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		Maintenance:     internalobj.NewMaintenance(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Claims:          services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
-		Namespaces:      services.NewNamespaceService(client, mgr.GetAPIReader()),
+		Claims:          claim.NewClaims(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
+		Namespaces:      namespace.NewNamespaces(client, mgr.GetAPIReader()),
 		Identity:        reconcile.NoIdentity{},
 		Status:          status.NewManager(client),
 	})

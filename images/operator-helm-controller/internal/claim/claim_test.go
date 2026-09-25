@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package claim
 
 import (
 	"context"
@@ -52,8 +52,8 @@ func claimingAddon(name, chart string) *helmv1alpha1.HelmClusterAddon {
 	}
 }
 
-// claimFor builds the Lease the service would find for the pair, held by holder.
-// The name is derived the same way the service derives it, so a change to the
+// claimFor builds the Lease the package would find for the pair, held by holder.
+// The name is derived the same way the package derives it, so a change to the
 // derivation cannot pass this suite by rewriting both sides.
 func claimFor(repo, chart, holder, labelSource string) *coordinationv1.Lease {
 	return &coordinationv1.Lease{
@@ -69,12 +69,12 @@ func claimFor(repo, chart, holder, labelSource string) *coordinationv1.Lease {
 	}
 }
 
-func newClaimService(t *testing.T, objects ...client.Object) (*ClaimService, client.Client) {
+func newClaims(t *testing.T, objects ...client.Object) (*Claims, client.Client) {
 	t.Helper()
 
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objects...).Build()
 
-	return NewClaimService(c, c, testNamespace), c
+	return NewClaims(c, c, testNamespace), c
 }
 
 func claimHolder(t *testing.T, c client.Client, repo, chart string) string {
@@ -95,9 +95,9 @@ func claimHolder(t *testing.T, c client.Client, repo, chart string) string {
 func TestAcquireClaimsAFreePair(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 	rel := adapter.NewAddonRelease(addon)
-	service, c := newClaimService(t, addon)
+	claims, c := newClaims(t, addon)
 
-	acquired, holder, err := service.Acquire(context.Background(), rel)
+	acquired, holder, err := claims.Acquire(context.Background(), rel)
 	if err != nil {
 		t.Fatalf("Acquire returned %v", err)
 	}
@@ -125,9 +125,9 @@ func TestAcquireClaimsAFreePair(t *testing.T) {
 // conflict with the addon itself.
 func TestAcquireIsIdempotentForTheHolder(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
-	service, _ := newClaimService(t, addon, claimFor("stable", "podinfo", "metrics", "metrics"))
+	claims, _ := newClaims(t, addon, claimFor("stable", "podinfo", "metrics", "metrics"))
 
-	acquired, holder, err := service.Acquire(context.Background(), adapter.NewAddonRelease(addon))
+	acquired, holder, err := claims.Acquire(context.Background(), adapter.NewAddonRelease(addon))
 	if err != nil {
 		t.Fatalf("Acquire returned %v", err)
 	}
@@ -142,9 +142,9 @@ func TestAcquireIsIdempotentForTheHolder(t *testing.T) {
 func TestAcquireReportsTheHolderOfATakenPair(t *testing.T) {
 	owner := claimingAddon("metrics", "podinfo")
 	duplicate := claimingAddon("metrics-copy", "podinfo")
-	service, c := newClaimService(t, owner, duplicate, claimFor("stable", "podinfo", "metrics", "metrics"))
+	claims, c := newClaims(t, owner, duplicate, claimFor("stable", "podinfo", "metrics", "metrics"))
 
-	acquired, holder, err := service.Acquire(context.Background(), adapter.NewAddonRelease(duplicate))
+	acquired, holder, err := claims.Acquire(context.Background(), adapter.NewAddonRelease(duplicate))
 	if err != nil {
 		t.Fatalf("Acquire returned %v", err)
 	}
@@ -187,9 +187,9 @@ func TestAcquireTakesOverAClaimNoOneKeeps(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			addon := claimingAddon("metrics", "podinfo")
-			service, c := newClaimService(t, append(test.objects, addon)...)
+			claims, c := newClaims(t, append(test.objects, addon)...)
 
-			acquired, holder, err := service.Acquire(context.Background(), adapter.NewAddonRelease(addon))
+			acquired, holder, err := claims.Acquire(context.Background(), adapter.NewAddonRelease(addon))
 			if err != nil {
 				t.Fatalf("Acquire returned %v", err)
 			}
@@ -232,9 +232,9 @@ func TestAcquireRereadsTheLeaseAfterLosingTheCreateRace(t *testing.T) {
 			},
 		}).
 		Build()
-	service := NewClaimService(c, c, testNamespace)
+	claims := NewClaims(c, c, testNamespace)
 
-	acquired, holder, err := service.Acquire(context.Background(), adapter.NewAddonRelease(addon))
+	acquired, holder, err := claims.Acquire(context.Background(), adapter.NewAddonRelease(addon))
 	if err != nil {
 		t.Fatalf("Acquire returned %v", err)
 	}
@@ -267,9 +267,9 @@ func TestAcquireReportsAConflictWhenTheTakeOverIsRejected(t *testing.T) {
 			},
 		}).
 		Build()
-	service := NewClaimService(c, c, testNamespace)
+	claims := NewClaims(c, c, testNamespace)
 
-	acquired, holder, err := service.Acquire(context.Background(), adapter.NewAddonRelease(addon))
+	acquired, holder, err := claims.Acquire(context.Background(), adapter.NewAddonRelease(addon))
 	if err != nil {
 		t.Fatalf("Acquire returned %v, want the conflict reported as a taken pair", err)
 	}
@@ -306,9 +306,9 @@ func TestOwnedByAnswersFromTheLeaseHolder(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			addon := claimingAddon("metrics", "podinfo")
-			service, _ := newClaimService(t, append(test.objects, addon)...)
+			claims, _ := newClaims(t, append(test.objects, addon)...)
 
-			owned, err := service.OwnedBy(context.Background(), adapter.NewAddonRelease(addon))
+			owned, err := claims.OwnedBy(context.Background(), adapter.NewAddonRelease(addon))
 			if err != nil {
 				t.Fatalf("OwnedBy returned %v", err)
 			}
@@ -319,22 +319,22 @@ func TestOwnedByAnswersFromTheLeaseHolder(t *testing.T) {
 	}
 }
 
-// TestReleaseFreesOnlyTheCallerOwnClaim pins the guard that makes Release safe to
+// TestDropFreesOnlyTheCallerOwnClaim pins the guard that makes Release safe to
 // call from any addon's deletion path: a duplicate that never acquired the pair
 // must not free the claim of the addon that did.
-func TestReleaseFreesOnlyTheCallerOwnClaim(t *testing.T) {
+func TestDropFreesOnlyTheCallerOwnClaim(t *testing.T) {
 	owner := claimingAddon("metrics", "podinfo")
 	duplicate := claimingAddon("metrics-copy", "podinfo")
-	service, c := newClaimService(t, owner, duplicate, claimFor("stable", "podinfo", "metrics", "metrics"))
+	claims, c := newClaims(t, owner, duplicate, claimFor("stable", "podinfo", "metrics", "metrics"))
 
-	if err := service.Drop(context.Background(), adapter.NewAddonRelease(duplicate)); err != nil {
+	if err := claims.Drop(context.Background(), adapter.NewAddonRelease(duplicate)); err != nil {
 		t.Fatalf("Drop returned %v", err)
 	}
 	if got := claimHolder(t, c, "stable", "podinfo"); got != "metrics" {
 		t.Fatalf("holder = %q, want the owner's claim left intact", got)
 	}
 
-	if err := service.Drop(context.Background(), adapter.NewAddonRelease(owner)); err != nil {
+	if err := claims.Drop(context.Background(), adapter.NewAddonRelease(owner)); err != nil {
 		t.Fatalf("Drop returned %v", err)
 	}
 
@@ -348,19 +348,19 @@ func TestReleaseFreesOnlyTheCallerOwnClaim(t *testing.T) {
 // TestReleaseTolerAtesAMissingClaim pins that a deletion path which runs twice, or
 // one whose claim was never created, reports no failure: the finalizer must not be
 // held by a claim that is already gone.
-func TestReleaseToleratesAMissingClaim(t *testing.T) {
+func TestDropToleratesAMissingClaim(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
-	service, _ := newClaimService(t, addon)
+	claims, _ := newClaims(t, addon)
 
-	if err := service.Drop(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+	if err := claims.Drop(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
 		t.Fatalf("Drop returned %v, want a missing claim to be no failure", err)
 	}
 }
 
-// TestReleaseLeavesAClaimTakenOverInBetween pins the precondition on the delete:
+// TestDropLeavesAClaimTakenOverInBetween pins the precondition on the delete:
 // between the read and the delete another addon may take the pair over, and the
 // rejected delete must leave the new owner's claim standing.
-func TestReleaseLeavesAClaimTakenOverInBetween(t *testing.T) {
+func TestDropLeavesAClaimTakenOverInBetween(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 
 	c := fake.NewClientBuilder().
@@ -374,9 +374,9 @@ func TestReleaseLeavesAClaimTakenOverInBetween(t *testing.T) {
 			},
 		}).
 		Build()
-	service := NewClaimService(c, c, testNamespace)
+	claims := NewClaims(c, c, testNamespace)
 
-	if err := service.Drop(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+	if err := claims.Drop(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
 		t.Fatalf("Drop returned %v, want the rejected delete to be no failure", err)
 	}
 	if got := claimHolder(t, c, "stable", "podinfo"); got != "metrics" {
@@ -384,20 +384,20 @@ func TestReleaseLeavesAClaimTakenOverInBetween(t *testing.T) {
 	}
 }
 
-// TestReleaseStaleDropsTheClaimsTheSpecMovedAwayFrom pins the cleanup a chart
+// TestDropStaleDropsTheClaimsTheSpecMovedAwayFrom pins the cleanup a chart
 // change leaves behind: the claim for the pair the addon now uses stays, the claims
 // it moved away from go, and a pair another addon has since taken over is not
 // touched even though the label still names this addon.
-func TestReleaseStaleDropsTheClaimsTheSpecMovedAwayFrom(t *testing.T) {
+func TestDropStaleDropsTheClaimsTheSpecMovedAwayFrom(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
-	service, c := newClaimService(t,
+	claims, c := newClaims(t,
 		addon,
 		claimFor("stable", "podinfo", "metrics", "metrics"),
 		claimFor("stable", "old-chart", "metrics", "metrics"),
 		claimFor("other-repo", "podinfo", "someone-else", "metrics"),
 	)
 
-	if err := service.DropStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+	if err := claims.DropStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
 		t.Fatalf("DropStale returned %v", err)
 	}
 
@@ -415,18 +415,18 @@ func TestReleaseStaleDropsTheClaimsTheSpecMovedAwayFrom(t *testing.T) {
 	}
 }
 
-// TestReleaseStaleIgnoresClaimsOfOtherAddons pins the label scope: the list is
+// TestDropStaleIgnoresClaimsOfOtherAddons pins the label scope: the list is
 // filtered by the addon's own source labels, so a claim belonging to a different
 // addon is never a candidate for cleanup.
-func TestReleaseStaleIgnoresClaimsOfOtherAddons(t *testing.T) {
+func TestDropStaleIgnoresClaimsOfOtherAddons(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
-	service, c := newClaimService(t,
+	claims, c := newClaims(t,
 		addon,
 		claimFor("stable", "podinfo", "metrics", "metrics"),
 		claimFor("other-repo", "other-chart", "another-addon", "another-addon"),
 	)
 
-	if err := service.DropStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+	if err := claims.DropStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
 		t.Fatalf("DropStale returned %v", err)
 	}
 

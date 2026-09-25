@@ -27,8 +27,8 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/claim"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -40,7 +40,7 @@ func SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &helmv1alpha1.HelmClusterAddon{}).
 		WithValidator(&HelmClusterAddonWebhookValidator{
 			Client:       mgr.GetClient(),
-			claimService: services.NewClaimService(mgr.GetClient(), mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
+			claimService: claim.NewClaims(mgr.GetClient(), mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
 		}).
 		Complete()
 }
@@ -49,7 +49,7 @@ var _ admission.Validator[*helmv1alpha1.HelmClusterAddon] = (*HelmClusterAddonWe
 
 type HelmClusterAddonWebhookValidator struct {
 	Client       client.Client
-	claimService *services.ClaimService
+	claimService *claim.Claims
 }
 
 func (v *HelmClusterAddonWebhookValidator) ValidateCreate(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {

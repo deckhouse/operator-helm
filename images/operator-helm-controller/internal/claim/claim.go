@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package claim
 
 import (
 	"context"
@@ -31,7 +31,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// ClaimService enforces that at most one HelmClusterAddon uses a given
+// Claims enforces that at most one HelmClusterAddon uses a given
 // repository/chart pair. A validating webhook cannot guarantee this: admission
 // requests are served concurrently and before the object is persisted, so two
 // simultaneous creates can both pass. Uniqueness is instead delegated to the API
@@ -43,7 +43,7 @@ import (
 // neither the release kind nor a namespace, and the holder recorded on it is read
 // back as a HelmClusterAddon. Another family needing uniqueness would have to
 // bring its own implementation of the reconciler's Claims rather than reuse this one.
-type ClaimService struct {
+type Claims struct {
 	// reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
 	// controller cache: an acquisition decision must never be made against stale data.
 	reader    client.Reader
@@ -51,8 +51,8 @@ type ClaimService struct {
 	namespace string
 }
 
-func NewClaimService(c client.Client, reader client.Reader, namespace string) *ClaimService {
-	return &ClaimService{
+func NewClaims(c client.Client, reader client.Reader, namespace string) *Claims {
+	return &Claims{
 		reader:    reader,
 		client:    c,
 		namespace: namespace,
@@ -62,7 +62,7 @@ func NewClaimService(c client.Client, reader client.Reader, namespace string) *C
 // Acquire ensures the addon owns the claim for its repository/chart pair. It
 // reports whether the claim is held by this addon; when it is not, holder names
 // the addon that currently owns it so the caller can surface a conflict.
-func (s *ClaimService) Acquire(ctx context.Context, rel contract.Release) (acquired bool, holder string, err error) {
+func (s *Claims) Acquire(ctx context.Context, rel contract.Release) (acquired bool, holder string, err error) {
 	nn := s.leaseKey(rel)
 
 	lease := &coordinationv1.Lease{}
@@ -114,7 +114,7 @@ func (s *ClaimService) Acquire(ctx context.Context, rel contract.Release) (acqui
 // OwnedBy reports whether the addon currently holds the claim Lease for its
 // repository/chart pair. It reads through the direct reader for the same reason
 // Acquire does: an ownership decision must not be made against stale cache data.
-func (s *ClaimService) OwnedBy(ctx context.Context, rel contract.Release) (bool, error) {
+func (s *Claims) OwnedBy(ctx context.Context, rel contract.Release) (bool, error) {
 	lease := &coordinationv1.Lease{}
 	err := s.reader.Get(ctx, s.leaseKey(rel), lease)
 	if apierrors.IsNotFound(err) {
@@ -129,7 +129,7 @@ func (s *ClaimService) OwnedBy(ctx context.Context, rel contract.Release) (bool,
 
 // Release deletes the claim Lease, but only if this addon still owns it, so a
 // duplicate addon that never acquired the pair cannot free the real owner's claim.
-func (s *ClaimService) Drop(ctx context.Context, rel contract.Release) error {
+func (s *Claims) Drop(ctx context.Context, rel contract.Release) error {
 	nn := s.leaseKey(rel)
 
 	lease := &coordinationv1.Lease{}
@@ -161,7 +161,7 @@ func (s *ClaimService) Drop(ctx context.Context, rel contract.Release) error {
 // orphans are found instead by the source-name label every claim already carries.
 // Only the addon's own claims (by HolderIdentity) other than the current one are
 // removed, so a pair taken over by another addon is left intact.
-func (s *ClaimService) DropStale(ctx context.Context, rel contract.Release) error {
+func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
 	current := s.leaseKey(rel).Name
 
 	// Direct reader, not the cached client: claim Leases are not watched, so the
@@ -194,7 +194,7 @@ func (s *ClaimService) DropStale(ctx context.Context, rel contract.Release) erro
 	return nil
 }
 
-func (s *ClaimService) create(ctx context.Context, nn types.NamespacedName, rel contract.Release) (created bool, err error) {
+func (s *Claims) create(ctx context.Context, nn types.NamespacedName, rel contract.Release) (created bool, err error) {
 	holder := rel.Name()
 	lease := &coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -218,7 +218,7 @@ func (s *ClaimService) create(ctx context.Context, nn types.NamespacedName, rel 
 	return true, nil
 }
 
-func (s *ClaimService) takeOver(ctx context.Context, lease *coordinationv1.Lease, rel contract.Release) error {
+func (s *Claims) takeOver(ctx context.Context, lease *coordinationv1.Lease, rel contract.Release) error {
 	holder := rel.Name()
 	lease.Spec.HolderIdentity = &holder
 
@@ -235,7 +235,7 @@ func (s *ClaimService) takeOver(ctx context.Context, lease *coordinationv1.Lease
 // isHolderStale reports whether the recorded holder no longer keeps this claim: it
 // either no longer exists or its current spec points at a different chart, in which
 // case the Lease is an orphan left behind by a deletion or a chart change.
-func (s *ClaimService) isHolderStale(ctx context.Context, holder, leaseName string) (bool, error) {
+func (s *Claims) isHolderStale(ctx context.Context, holder, leaseName string) (bool, error) {
 	if holder == "" {
 		return true, nil
 	}
@@ -256,7 +256,7 @@ func (s *ClaimService) isHolderStale(ctx context.Context, holder, leaseName stri
 	return holderLease != leaseName, nil
 }
 
-func (s *ClaimService) leaseKey(rel contract.Release) types.NamespacedName {
+func (s *Claims) leaseKey(rel contract.Release) types.NamespacedName {
 	ref := rel.ChartRef()
 	return types.NamespacedName{
 		Name:      utils.GetChartClaimLeaseName(ref.Repository.Name, ref.Chart),

@@ -41,20 +41,6 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-func testAddon() *helmv1alpha1.HelmClusterAddon {
-	return &helmv1alpha1.HelmClusterAddon{
-		ObjectMeta: metav1.ObjectMeta{Name: "consumer", Generation: 1},
-		Spec: helmv1alpha1.HelmClusterAddonSpec{
-			Namespace: "app",
-			Chart: helmv1alpha1.HelmClusterAddonChartRef{
-				HelmClusterAddonRepository: "example",
-				HelmClusterAddonChartName:  "podinfo",
-				Version:                    "6.7.1",
-			},
-		},
-	}
-}
-
 func testRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},

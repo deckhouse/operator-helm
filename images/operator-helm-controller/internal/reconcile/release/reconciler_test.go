@@ -46,12 +46,13 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
+	"github.com/deckhouse/operator-helm/internal/claim"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
+	"github.com/deckhouse/operator-helm/internal/namespace"
 	"github.com/deckhouse/operator-helm/internal/rbac"
-	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -347,8 +348,8 @@ func newFullReconciler(
 		OCIRepositories: internalobj.NewOCIRepositories(c, scheme, helmv1alpha1.TargetNamespace, resolver),
 		Releases:        internalobj.NewReleases(c, scheme, helmv1alpha1.TargetNamespace),
 		Maintenance:     internalobj.NewMaintenance(c, scheme, helmv1alpha1.TargetNamespace),
-		Claims:          services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
-		Namespaces:      services.NewNamespaceService(c, c),
+		Claims:          claim.NewClaims(c, c, helmv1alpha1.TargetNamespace),
+		Namespaces:      namespace.NewNamespaces(c, c),
 		Identity:        NoIdentity{},
 		Status:          status.NewManager(c),
 	}), c

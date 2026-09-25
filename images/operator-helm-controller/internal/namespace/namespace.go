@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package namespace
 
 import (
 	"context"
@@ -28,12 +28,12 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-// NamespaceService is the release reconciler's Namespaces: it creates a
+// Namespaces is the release reconciler's Namespaces: it creates a
 // release's target namespace when it does not exist yet, and never modifies an
 // existing one — the namespace belongs to whoever created it. Today only the addon
 // controller wires it in; other families deploy into a namespace that must already
 // exist (their own).
-type NamespaceService struct {
+type Namespaces struct {
 	// reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
 	// controller cache: nothing watches Namespaces, so a cached typed Get would start
 	// an informer the ClusterRole has no watch permission for.
@@ -41,11 +41,11 @@ type NamespaceService struct {
 	client client.Client
 }
 
-func NewNamespaceService(c client.Client, reader client.Reader) *NamespaceService {
-	return &NamespaceService{client: c, reader: reader}
+func NewNamespaces(c client.Client, reader client.Reader) *Namespaces {
+	return &Namespaces{client: c, reader: reader}
 }
 
-func (s *NamespaceService) EnsureTarget(ctx context.Context, rel contract.Release) error {
+func (s *Namespaces) EnsureTarget(ctx context.Context, rel contract.Release) error {
 	ns := &corev1.Namespace{}
 
 	err := s.reader.Get(ctx, client.ObjectKey{Name: rel.TargetNamespace()}, ns)

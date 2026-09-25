@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package namespace
 
 import (
 	"context"
@@ -27,13 +27,13 @@ import (
 	"github.com/deckhouse/operator-helm/internal/adapter"
 )
 
-// TestEnsureTargetNamespaceCreatesItOnceAndLeavesItAlone pins the addon rule moved
+// TestNamespacesEnsureTargetCreatesItOnceAndLeavesItAlone pins the addon rule moved
 // here from the reconciler: a missing target namespace is created, an existing one
 // — labels included — is not touched.
-func TestEnsureTargetNamespaceCreatesItOnceAndLeavesItAlone(t *testing.T) {
+func TestNamespacesEnsureTargetCreatesItOnceAndLeavesItAlone(t *testing.T) {
 	addon := testAddon()
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
-	service := NewNamespaceService(c, c)
+	service := NewNamespaces(c, c)
 
 	if err := service.EnsureTarget(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
 		t.Fatalf("EnsureTarget returned %v", err)
