@@ -29,10 +29,12 @@ limitations under the License.
 // the API server.
 //
 // Status is managed the way the repository package manages it, and for the same
-// reason: a pass does cluster work and records what came of it in Inputs, and one
-// deterministic function — Evaluate — turns that into the whole desired status,
-// what to requeue and what to hand back to the work queue. No step writes a
-// condition of its own, so what the release reports can be read in one place and
-// tested without a cluster. The collaborators this reconciler drives return outcomes
-// rather than conditions for the same reason.
+// reason: a pass does cluster work and ends in one Outcome, and one deterministic
+// function — Evaluate — turns that into the whole desired status, what to requeue
+// and what to hand back to the work queue. The four outcomes are the four endings a
+// pass has, and each carries only what its ending can say anything about, so a pass
+// cannot describe a state it was never in. No step writes a condition of its own,
+// so what the release reports can be read in one place and tested without a
+// cluster. The collaborators this reconciler drives return outcomes rather than
+// conditions for the same reason.
 package release

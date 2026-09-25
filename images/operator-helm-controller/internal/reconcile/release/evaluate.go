@@ -17,6 +17,7 @@ limitations under the License.
 package release
 
 import (
+	"fmt"
 	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -48,17 +49,9 @@ type Failure struct {
 }
 
 // Inputs carries everything Evaluate needs. It holds no clients and no clock: Now,
-// the current conditions and the derived facts about the release are supplied by the
-// caller, so the function is deterministic and unit testable. It is the release-side
+// the current conditions and the outcome of the pass are supplied by the caller, so
+// the function is deterministic and unit testable. It is the release-side
 // counterpart of the repository package's Inputs.
-//
-// The failure fields differ in how far the verdict reaches, not in severity. Step is
-// a failure of one of the steps that run before the chart is resolved; it owns Ready
-// alone, because the pass never got far enough to say anything about installing or
-// configuring. ChartSource stands in for the chart outcome when the pass could not
-// decide which internal source the release needs, so it is projected across
-// ConditionTypes exactly as an outcome would be. Whether a failure is terminal is
-// orthogonal to either: it is carried by the Failure itself and adds Stalled.
 type Inputs struct {
 	Generation         int64
 	ObservedGeneration int64
@@ -68,27 +61,43 @@ type Inputs struct {
 	// from the release's own status, which is why the caller computes it.
 	ConditionTypes []string
 
+	// Outcome is how the pass ended. Exactly one of the four is what happened, and
+	// each carries only what that ending can say anything about.
+	Outcome Outcome
+}
+
+// Outcome is how one reconcile pass ended. The interface is sealed: the four
+// implementations below are the four endings a pass has, and a pass cannot end in
+// two of them at once.
+type Outcome interface{ outcome() }
+
+// StepFailed is a failure of one of the steps that run before the chart is
+// resolved. It owns Ready alone, because the pass never got far enough to say
+// anything about installing or configuring. Whether the failure is terminal is
+// carried by the Failure itself and adds Stalled.
+type StepFailed struct{ Failure Failure }
+
+// MaintenanceChanged is the pass that moved the release into or out of maintenance
+// mode. Such a pass reports nothing else: the chart is not touched.
+type MaintenanceChanged struct {
+	Result internalobj.MaintenanceOutcome
+}
+
+// InMaintenance is the pass that found the release already in maintenance and left
+// it there. Nothing ran, and the release's spec may have changed since.
+type InMaintenance struct{}
+
+// ChartReached is the pass that got as far as the chart. Release is nil when the
+// pass never reached the internal HelmRelease, which is every pass whose source did
+// not produce an artifact.
+type ChartReached struct {
 	// Forced reports whether this pass was requested through the force reconcile
-	// annotation.
+	// annotation. It belongs here alone: the other three endings either cannot act on
+	// a force request or deliberately discard it.
 	Forced bool
 
-	Step        *Failure
-	ChartSource *Failure
-
-	// Maintenance is set on the pass that moved the release into or out of
-	// maintenance mode. Such a pass reports nothing else: the chart is not touched.
-	Maintenance *internalobj.MaintenanceOutcome
-	// DiscardForce asks for an in-flight force request to be dropped. A release
-	// sitting in maintenance can never act on one, and leaving Reconciling behind
-	// would report work in flight to kstatus forever.
-	DiscardForce bool
-
-	// Chart and OCIRepo are the two internal source kinds, and they are mutually
-	// exclusive: a release is served by an internal HelmChart or by an internal
-	// OCIRepository, never both.
-	Chart   *internalobj.ChartOutcome
-	OCIRepo *internalobj.OCIRepoOutcome
-	Release *internalobj.ReleaseOutcome
+	Internal InternalSource
+	Release  *internalobj.ReleaseOutcome
 
 	// ChartInfoOutdated and ValuesDigest are the two facts the record of what was
 	// last applied turns on. ValuesDigest is the digest of the values the spec asks
@@ -96,6 +105,29 @@ type Inputs struct {
 	ChartInfoOutdated bool
 	ValuesDigest      string
 }
+
+// InternalSource is which internal source serves the release, or the failure to
+// decide. The interface is sealed: a release is served by an internal HelmChart or
+// by an internal OCIRepository, never both.
+type InternalSource interface{ internalSource() }
+
+// SourceUnresolved stands in for the source outcome when the pass could not decide
+// which internal source the release needs. It is projected across ConditionTypes
+// exactly as an outcome would be.
+type SourceUnresolved struct{ Failure Failure }
+
+type ServedByHelmChart struct{ Result internalobj.ChartOutcome }
+
+type ServedByOCIRepository struct{ Result internalobj.OCIRepoOutcome }
+
+func (StepFailed) outcome()         {}
+func (MaintenanceChanged) outcome() {}
+func (InMaintenance) outcome()      {}
+func (ChartReached) outcome()       {}
+
+func (SourceUnresolved) internalSource()      {}
+func (ServedByHelmChart) internalSource()     {}
+func (ServedByOCIRepository) internalSource() {}
 
 // Decision is the full desired status plus the scheduling verdict. Removing a
 // condition is expressed by its presence in RemoveConditions; the field writes are
@@ -185,53 +217,78 @@ func evaluate(in Inputs) Decision {
 		},
 	}
 
-	switch {
-	case in.Step != nil:
-		decision.set(in, helmv1alpha1.ConditionTypeReady, failureState(*in.Step))
-		if in.Step.Terminal {
-			decision.setAbnormal(in, helmv1alpha1.ConditionTypeStalled, *in.Step)
-			// Dropped rather than processed, as a release settling into maintenance
-			// drops one: the stamp means the request was acted on, so it stays
-			// untouched, while the request itself is taken away. A terminal failure
-			// leaves no later pass to hand it to, and the annotation is matched on
-			// presence alone — leaving it behind would make the next force request
-			// change nothing about the object and so fire no event at all, which is
-			// exactly how someone who corrected the cause would ask to be retried.
-			decision.ConsumeForce = true
-		} else {
-			decision.setAbnormal(in, helmv1alpha1.ConditionTypeReconciling, Failure{
-				Reason:  helmv1alpha1.ReasonProgressingWithRetry,
-				Message: "Retrying the step that failed",
-			})
-		}
-		decision.Reported = in.Step
-		decision.Err = retryErr(*in.Step)
-		decision.RequeueAfter = in.Step.RequeueAfter
-
-		return decision
-	case in.Maintenance != nil:
-		state := maintenanceState(*in.Maintenance)
-		decision.set(in, helmv1alpha1.ConditionTypeManaged, state)
-		decision.set(in, helmv1alpha1.ConditionTypeReady, state)
-		decision.Reported = reported(state)
-	}
-
-	if in.DiscardForce {
-		// Dropped, not processed: the stamp means the latter, so it stays untouched,
-		// while the request itself is taken away — replaying one made days earlier the
-		// moment maintenance is lifted would surprise whoever lifted it. Reconciling
-		// goes with it, which the default above already arranges: a release in
-		// maintenance has nothing in flight to report.
+	switch outcome := in.Outcome.(type) {
+	case StepFailed:
+		return evaluateStepFailed(in, decision, outcome)
+	case MaintenanceChanged:
+		return evaluateMaintenanceChanged(in, decision, outcome)
+	case InMaintenance:
+		// The force request is dropped, not processed: the stamp means the latter, so
+		// it stays untouched, while the request itself is taken away — replaying one
+		// made days earlier the moment maintenance is lifted would surprise whoever
+		// lifted it. Reconciling goes with it, which RemoveConditions already
+		// arranges: a release in maintenance has nothing in flight to report.
 		decision.ConsumeForce = true
 
 		return decision
+	case ChartReached:
+		return evaluateChartReached(in, decision, outcome)
+	default:
+		// Unreachable by construction, and silence is the one thing it must not be
+		// met with: an empty decision writes no status at all, so a pass that ended in
+		// no outcome would leave the release reporting whatever it reported before,
+		// indefinitely. The error goes to the work queue instead, which logs it and
+		// brings the release back with backoff.
+		return Decision{Err: fmt.Errorf("reconcile pass ended in no outcome: %T", in.Outcome)}
+	}
+}
+
+func evaluateStepFailed(in Inputs, decision Decision, outcome StepFailed) Decision {
+	decision.set(in, helmv1alpha1.ConditionTypeReady, failureState(outcome.Failure))
+
+	if outcome.Failure.Terminal {
+		decision.setAbnormal(in, helmv1alpha1.ConditionTypeStalled, outcome.Failure)
+		// Dropped rather than processed, as a release settling into maintenance drops
+		// one: the stamp means the request was acted on, so it stays untouched, while
+		// the request itself is taken away. A terminal failure leaves no later pass to
+		// hand it to, and the annotation is matched on presence alone — leaving it
+		// behind would make the next force request change nothing about the object and
+		// so fire no event at all, which is exactly how someone who corrected the cause
+		// would ask to be retried.
+		decision.ConsumeForce = true
+	} else {
+		decision.setAbnormal(in, helmv1alpha1.ConditionTypeReconciling, Failure{
+			Reason:  helmv1alpha1.ReasonProgressingWithRetry,
+			Message: "Retrying the step that failed",
+		})
 	}
 
-	if in.Maintenance != nil {
-		return decision
+	decision.Reported = &outcome.Failure
+	decision.Err = retryErr(outcome.Failure)
+	decision.RequeueAfter = outcome.Failure.RequeueAfter
+
+	return decision
+}
+
+func evaluateMaintenanceChanged(in Inputs, decision Decision, outcome MaintenanceChanged) Decision {
+	state := maintenanceState(outcome.Result)
+	decision.set(in, helmv1alpha1.ConditionTypeManaged, state)
+	decision.set(in, helmv1alpha1.ConditionTypeReady, state)
+	decision.Reported = reported(state)
+
+	if outcome.Result.Activated {
+		// Settling into maintenance drops an in-flight force request for the same
+		// reason a release already in it does: the release will not act on the request
+		// while it is held, and leaving Reconciling behind would report work in flight
+		// to kstatus forever.
+		decision.ConsumeForce = true
 	}
 
-	chart, release := evaluateChart(in), evaluateRelease(in)
+	return decision
+}
+
+func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) Decision {
+	chart, release := evaluateChart(outcome.Internal), evaluateRelease(outcome.Release)
 
 	var stalled bool
 
@@ -244,16 +301,18 @@ func evaluate(in Inputs) Decision {
 		decision.Reported = reported(verdict)
 	}
 
+	oci, servedByOCI := outcome.Internal.(ServedByOCIRepository)
+
 	switch {
-	case in.OCIRepo != nil && in.OCIRepo.ProbeTerminal:
+	case servedByOCI && oci.Result.ProbeTerminal:
 		// The registry rejected the request, or what it serves is not a chart. The
 		// verdict is about the artifact, so no watch and no timer brings it back: the
 		// catalog has to publish something else, or the repository has to be fixed.
 		stalled = true
 
 		decision.setAbnormal(in, helmv1alpha1.ConditionTypeStalled, Failure{
-			Reason:  in.OCIRepo.ProbeReason,
-			Message: in.OCIRepo.ProbeMessage,
+			Reason:  oci.Result.ProbeReason,
+			Message: oci.Result.ProbeMessage,
 		})
 	case found && verdict.Stalled:
 		// The internal object gave up on the spec it was given, the way the internal
@@ -274,7 +333,7 @@ func evaluate(in Inputs) Decision {
 		decision.setAbnormal(in, helmv1alpha1.ConditionTypeReconciling, progress)
 	}
 
-	if in.Forced {
+	if outcome.Forced {
 		decision.ForceReconcileTime = &metav1.Time{Time: in.Now}
 		decision.ConsumeForce = true
 		// Reconciling is not taken away here. The pass the force request asked for
@@ -283,10 +342,10 @@ func evaluate(in Inputs) Decision {
 		// still running, and the pass that sees the release settle removes it.
 	}
 
-	_, installable := artifactRevision(in)
-	decision.ApplyChart = installable && release.Ready() && in.ChartInfoOutdated
-	decision.ApplyValues = release.Ready() && valuesDeployed(in)
-	decision.RequeueAfter = probeRequeueAfter(in)
+	_, installable := artifactRevision(outcome.Internal)
+	decision.ApplyChart = installable && release.Ready() && outcome.ChartInfoOutdated
+	decision.ApplyValues = release.Ready() && valuesDeployed(outcome)
+	decision.RequeueAfter = probeRequeueAfter(outcome.Internal)
 
 	return decision
 }
@@ -346,24 +405,22 @@ func decide(states ...conditionState) (conditionState, bool) {
 }
 
 // evaluateChart reduces whichever internal source this release needs to one verdict.
-// The two kinds are mutually exclusive: a release is served by an internal HelmChart
-// or by an internal OCIRepository, never both.
-func evaluateChart(in Inputs) conditionState {
-	switch {
-	case in.ChartSource != nil:
-		return failureState(*in.ChartSource)
-	case in.Chart != nil:
-		if in.Chart.Err != nil {
+func evaluateChart(src InternalSource) conditionState {
+	switch source := src.(type) {
+	case SourceUnresolved:
+		return failureState(source.Failure)
+	case ServedByHelmChart:
+		if source.Result.Err != nil {
 			return failureState(Failure{
 				Reason:  helmv1alpha1.ReasonHelmChartFailed,
 				Message: "Failed to create helm chart",
-				Err:     in.Chart.Err,
+				Err:     source.Result.Err,
 			})
 		}
 
-		return conditionState{InternalObjectState: in.Chart.Internal}
-	case in.OCIRepo != nil:
-		return evaluateOCIRepo(*in.OCIRepo)
+		return conditionState{InternalObjectState: source.Result.Internal}
+	case ServedByOCIRepository:
+		return evaluateOCIRepo(source.Result)
 	default:
 		return conditionState{}
 	}
@@ -397,22 +454,22 @@ func evaluateOCIRepo(out internalobj.OCIRepoOutcome) conditionState {
 	return state
 }
 
-func evaluateRelease(in Inputs) conditionState {
-	if in.Release == nil {
+func evaluateRelease(out *internalobj.ReleaseOutcome) conditionState {
+	if out == nil {
 		return conditionState{}
 	}
 
-	if in.Release.Err != nil {
+	if out.Err != nil {
 		return failureState(Failure{
 			Reason:  helmv1alpha1.ReasonReleaseFailed,
 			Message: "Failed to create helm release",
-			Err:     in.Release.Err,
+			Err:     out.Err,
 		})
 	}
 
-	state := conditionState{InternalObjectState: in.Release.Internal}
+	state := conditionState{InternalObjectState: out.Internal}
 
-	if state.Ready() && !in.Release.ChartDeployed {
+	if state.Ready() && !out.ChartDeployed {
 		// The HelmRelease still reports the readiness of the previous revision: a
 		// chart-version change moves the artifact without touching its spec. Hold the
 		// verdict at Reconciling so the record of what was applied, and the conditions
@@ -481,36 +538,44 @@ func retryErr(failure Failure) error {
 }
 
 // artifactRevision is the revision the release would be installed from, and whether
-// there is one at all. The two internal source kinds are mutually exclusive — a pass
-// reconciles one or the other — so which one answered is not asked, and a failed
-// pass leaves no artifact behind to be mistaken for one.
-func artifactRevision(in Inputs) (string, bool) {
-	switch {
-	case in.Chart != nil && in.Chart.Artifact != nil && in.Chart.Internal.Observed:
-		return in.Chart.Artifact.Revision, true
-	case in.OCIRepo != nil && in.OCIRepo.Artifact != nil && in.OCIRepo.Internal.Observed:
-		return in.OCIRepo.Artifact.Revision, true
+// there is one at all. A failed pass leaves no artifact behind to be mistaken for
+// one, which is what the Observed check stands for.
+func artifactRevision(src InternalSource) (string, bool) {
+	switch source := src.(type) {
+	case ServedByHelmChart:
+		if source.Result.Artifact == nil || !source.Result.Internal.Observed {
+			return "", false
+		}
+
+		return source.Result.Artifact.Revision, true
+	case ServedByOCIRepository:
+		if source.Result.Artifact == nil || !source.Result.Internal.Observed {
+			return "", false
+		}
+
+		return source.Result.Artifact.Revision, true
 	default:
 		return "", false
 	}
 }
 
-func valuesDeployed(in Inputs) bool {
-	if in.Release == nil {
+func valuesDeployed(outcome ChartReached) bool {
+	if outcome.Release == nil {
 		return false
 	}
 
-	latest := in.Release.History.Latest()
+	latest := outcome.Release.History.Latest()
 
-	return latest != nil && latest.Status == "deployed" && latest.ConfigDigest == in.ValuesDigest
+	return latest != nil && latest.Status == "deployed" && latest.ConfigDigest == outcome.ValuesDigest
 }
 
-func probeRequeueAfter(in Inputs) time.Duration {
-	if in.OCIRepo == nil {
+func probeRequeueAfter(src InternalSource) time.Duration {
+	source, ok := src.(ServedByOCIRepository)
+	if !ok {
 		return 0
 	}
 
-	return in.OCIRepo.ProbeRequeueAfter
+	return source.Result.ProbeRequeueAfter
 }
 
 func (d *Decision) set(in Inputs, conditionType string, state conditionState) {

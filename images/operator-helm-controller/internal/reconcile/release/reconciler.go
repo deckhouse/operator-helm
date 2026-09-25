@@ -48,11 +48,11 @@ import (
 // recover once the conflicting release is deleted or repointed at another chart.
 const chartClaimConflictRequeueInterval = 30 * time.Second
 
-// Deps are the collaborators of one release kind. Their implementations are shared by every
-// kind; the rest is what tells the families apart: how the API object is read
-// (NewRelease), how its repository and catalog are found (Repositories), whether a
-// repository/chart pair is claimed (Claim), whether the target namespace is created
-// (Namespaces) and which identity the chart is applied with (RBAC).
+// Deps are the collaborators of one release kind. Their implementations are shared
+// by every kind; the rest is what tells the families apart: how the API object is
+// read (NewRelease), how its repository and catalog are found (Repositories),
+// whether a repository/chart pair is claimed (Claims), whether the target namespace
+// is created (Namespaces) and which identity the chart is applied with (Identity).
 type Deps struct {
 	NewRelease      func() contract.Release
 	Repositories    Repositories
@@ -108,27 +108,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("acquiring chart claim: %w", err)
 	}
 	if !acquired {
-		in.Step = &Failure{
+		return r.finish(ctx, rel, in, StepFailed{Failure{
 			Reason: helmv1alpha1.ReasonChartClaimConflict,
 			Message: fmt.Sprintf("chart %q is already used by %s/%s",
 				rel.ChartRef().Chart, strings.ToLower(rel.Kind()), holder),
 			// No watch fires when the owner lets the pair go, so the recovery of a
 			// duplicate rides on this timer alone.
 			RequeueAfter: chartClaimConflictRequeueInterval,
-		}
-
-		return r.finish(ctx, rel, in)
+		}})
 	}
 
 	if utils.IsSystemNamespace(rel.TargetNamespace()) {
-		in.Step = &Failure{
+		return r.finish(ctx, rel, in, StepFailed{Failure{
 			Reason:   helmv1alpha1.ReasonFailed,
 			Message:  "Target namespace cannot be a system namespace",
 			Err:      fmt.Errorf("target namespace %q is a system namespace", rel.TargetNamespace()),
 			Terminal: true,
-		}
-
-		return r.finish(ctx, rel, in)
+		}})
 	}
 
 	if !controllerutil.ContainsFinalizer(rel.Object(), helmv1alpha1.FinalizerName) {
@@ -147,31 +143,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if r.deps.Maintenance.ChangeRequired(rel) {
-		outcome := r.deps.Maintenance.Ensure(ctx, rel)
-		in.Maintenance = &outcome
-		// Maintenance being lifted leaves a pending force request in place for the
-		// pass that can honour it; a release settling into maintenance can never act
-		// on one, so it is dropped.
-		in.DiscardForce = rel.MaintenanceActivated()
-
-		return r.finish(ctx, rel, in)
+		return r.finish(ctx, rel, in, MaintenanceChanged{Result: r.deps.Maintenance.Ensure(ctx, rel)})
 	}
 
 	if rel.MaintenanceActivated() {
-		in.DiscardForce = true
-
-		return r.finish(ctx, rel, in)
+		return r.finish(ctx, rel, in, InMaintenance{})
 	}
 
 	repo, catalog, err := r.deps.Repositories.Resolve(ctx, rel.ChartRef().Repository)
 	if err != nil {
-		in.Step = &Failure{
+		return r.finish(ctx, rel, in, StepFailed{Failure{
 			Reason:  helmv1alpha1.ReasonFailed,
 			Message: "Failed to get internal repository",
 			Err:     fmt.Errorf("getting internal repository: %w", err),
-		}
-
-		return r.finish(ctx, rel, in)
+		}})
 	}
 
 	repoType, err := chartsource.KindOf(repo.URL())
@@ -180,135 +165,180 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// the same fault as Stalled. Retrying here would only rediscover it; the
 		// release comes back when the repository's generation changes, which is what
 		// correcting the url does.
-		in.Step = &Failure{
+		return r.finish(ctx, rel, in, StepFailed{Failure{
 			Reason:   helmv1alpha1.ReasonUnsupportedRepositoryType,
 			Message:  fmt.Sprintf("Failed to parse repository type: %s", err.Error()),
 			Err:      err,
 			Terminal: true,
-		}
-
-		return r.finish(ctx, rel, in)
+		}})
 	}
 
 	if err := r.deps.Namespaces.EnsureTarget(ctx, rel); err != nil {
-		in.Step = &Failure{
+		return r.finish(ctx, rel, in, StepFailed{Failure{
 			Reason:  helmv1alpha1.ReasonFailed,
 			Message: fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
 			Err:     err,
-		}
-
-		return r.finish(ctx, rel, in)
+		}})
 	}
 
 	// The identity comes before the internal sources: helm-controller checks that
 	// the account named on the HelmRelease exists before it impersonates it, so a
 	// HelmRelease created ahead of its ServiceAccount would fail its first pass.
-	if rbac := r.deps.Identity.Ensure(ctx, rel); rbac.Err != nil {
-		in.Step = &Failure{
-			Reason:   rbac.Reason,
-			Message:  rbac.Message,
-			Err:      rbac.Err,
-			Terminal: rbac.Terminal,
+	if identity := r.deps.Identity.Ensure(ctx, rel); identity.Err != nil {
+		return r.finish(ctx, rel, in, StepFailed{Failure{
+			Reason:   identity.Reason,
+			Message:  identity.Message,
+			Err:      identity.Err,
+			Terminal: identity.Terminal,
 			// The watches on the Role and the RoleBinding only fire on a write that
 			// landed, so a step that failed before writing anything comes back through
 			// the work queue's rate limiter and nothing else. A terminal failure is the
 			// exception: the object in the way carries no managed-by label, so those
 			// watches never see it go either — only a force request or an edit to the
 			// release gets this pass run again.
-			Retry: !rbac.Terminal,
-		}
-
-		return r.finish(ctx, rel, in)
+			Retry: !identity.Terminal,
+		}})
 	}
 
 	// From here on every path reaches finish, which is what consumes the force
 	// request. Marking earlier would leave the progress condition behind on a
 	// validation failure that never consumes it.
-	in.Forced = rel.ForceReconcileRequired()
-	if in.Forced {
+	forced := rel.ForceReconcileRequired()
+	if forced {
 		if err := r.markForceReconcileInProgress(ctx, rel); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
 
-	_, chartVersion, chartErr := r.getChartVersion(ctx, catalog, repo, rel, repoType)
+	return r.finish(ctx, rel, in, r.reconcileChart(ctx, rel, repo, catalog, repoType, forced))
+}
 
-	// The source is resolved once, before the branches: which internal object a
-	// release needs is a property of the version it asks for, and a version whose
-	// source cannot be resolved is as unusable as a version that is missing.
-	var src chartsource.Source
-	if chartErr == nil {
-		src, chartErr = chartsource.Resolve(repo.URL(), chartVersion)
+// reconcileChart carries the pass to the internal objects: it resolves the version
+// and the source it is served from, brings that internal source to the state the
+// release asks for and, once the source has an artifact, the internal HelmRelease.
+// Nothing here is handed to the work queue — every failure it meets is part of the
+// outcome the release reports.
+func (r *Reconciler) reconcileChart(
+	ctx context.Context,
+	rel contract.Release,
+	repo contract.Repository,
+	catalog contract.Catalog,
+	repoType chartsource.Kind,
+	forced bool,
+) Outcome {
+	src, chartVersion, failure := r.resolveSource(ctx, rel, repo, catalog, repoType)
+
+	outcome := ChartReached{
+		Forced:            forced,
+		ChartInfoOutdated: rel.IsChartStatusInfoOutdated(),
+		ValuesDigest:      valuesDigest(rel),
 	}
 
-	names := rel.InternalNames()
-
 	switch {
-	case chartErr != nil:
-		// One report for both branches: until the source is known, neither internal
-		// object may be touched, and which one would have been touched is precisely
-		// what could not be determined.
-		in.ChartSource = &Failure{
-			Reason:  helmv1alpha1.ReasonChartFetchFailed,
-			Message: "Failed to resolve the desired chart version",
-			Err:     chartErr,
-		}
+	case failure != nil:
+		outcome.Internal = SourceUnresolved{Failure: *failure}
 	case src.Kind == chartsource.Helm:
-		// The version may have moved out of a registry — either because the user
-		// repointed the repository, or because the index re-published it as an
-		// archive. Either way the internal OCIRepository is no longer the source.
-		superseded, err := r.deps.OCIRepositories.Remove(ctx, names)
-		if err != nil {
-			in.ChartSource = repositoryChangeFailure(err)
-
-			break
-		}
-
-		r.logSourceKindFlip(ctx, rel, src.Kind, superseded != nil)
-
-		outcome := r.deps.Charts.Ensure(ctx, rel, repo)
-		in.Chart = &outcome
+		outcome.Internal = r.serveFromHelmChart(ctx, rel, repo, src.Kind)
 	case src.Kind == chartsource.OCI:
-		superseded, err := r.deps.Charts.Cleanup(ctx, names)
-		if err != nil {
-			in.ChartSource = repositoryChangeFailure(err)
-
-			break
-		}
-
-		r.logSourceKindFlip(ctx, rel, src.Kind, superseded != nil)
-
-		outcome := r.deps.OCIRepositories.Ensure(ctx, rel, repo, src, chartVersion)
-		in.OCIRepo = &outcome
+		outcome.Internal = r.serveFromOCIRepository(ctx, rel, repo, src, chartVersion)
 	default:
-		in.Step = &Failure{
+		return StepFailed{Failure{
 			Reason:   helmv1alpha1.ReasonFailed,
 			Message:  fmt.Sprintf("Unsupported chart source: %s", src.Kind),
 			Err:      fmt.Errorf("unsupported chart source: %s", src.Kind),
 			Terminal: true,
+		}}
+	}
+
+	if revision, ok := artifactRevision(outcome.Internal); ok {
+		result := r.deps.Releases.Ensure(ctx, rel, src.Kind, revision)
+		outcome.Release = &result
+	}
+
+	return outcome
+}
+
+// resolveSource is the version the release asks for and the source it is installed
+// from. The source is resolved once, before the branches: which internal object a
+// release needs is a property of the version it asks for, and a version whose source
+// cannot be resolved is as unusable as a version that is missing. One report covers
+// both, because until the source is known, neither internal object may be touched,
+// and which one would have been touched is precisely what could not be determined.
+func (r *Reconciler) resolveSource(
+	ctx context.Context,
+	rel contract.Release,
+	repo contract.Repository,
+	catalog contract.Catalog,
+	repoType chartsource.Kind,
+) (chartsource.Source, *helmv1alpha1.ChartVersion, *Failure) {
+	_, chartVersion, err := r.getChartVersion(ctx, catalog, repo, rel, repoType)
+
+	var src chartsource.Source
+	if err == nil {
+		src, err = chartsource.Resolve(repo.URL(), chartVersion)
+	}
+
+	if err != nil {
+		return src, chartVersion, &Failure{
+			Reason:  helmv1alpha1.ReasonChartFetchFailed,
+			Message: "Failed to resolve the desired chart version",
+			Err:     err,
 		}
-
-		return r.finish(ctx, rel, in)
 	}
 
-	if revision, ok := artifactRevision(in); ok {
-		outcome := r.deps.Releases.Ensure(ctx, rel, src.Kind, revision)
-		in.Release = &outcome
+	return src, chartVersion, nil
+}
+
+// serveFromHelmChart takes the internal OCIRepository away before bringing up the
+// internal HelmChart. The version may have moved out of a registry — either because
+// the user repointed the repository, or because the index re-published it as an
+// archive — and either way the internal OCIRepository is no longer the source.
+func (r *Reconciler) serveFromHelmChart(
+	ctx context.Context,
+	rel contract.Release,
+	repo contract.Repository,
+	kind chartsource.Kind,
+) InternalSource {
+	superseded, err := r.deps.OCIRepositories.Remove(ctx, rel.InternalNames())
+	if err != nil {
+		return SourceUnresolved{Failure: repositoryChangeFailure(err)}
 	}
 
-	in.ChartInfoOutdated = rel.IsChartStatusInfoOutdated()
-	in.ValuesDigest = valuesDigest(rel)
+	r.logSourceKindFlip(ctx, rel, kind, superseded != nil)
 
-	return r.finish(ctx, rel, in)
+	return ServedByHelmChart{Result: r.deps.Charts.Ensure(ctx, rel, repo)}
+}
+
+func (r *Reconciler) serveFromOCIRepository(
+	ctx context.Context,
+	rel contract.Release,
+	repo contract.Repository,
+	src chartsource.Source,
+	chartVersion *helmv1alpha1.ChartVersion,
+) InternalSource {
+	superseded, err := r.deps.Charts.Cleanup(ctx, rel.InternalNames())
+	if err != nil {
+		return SourceUnresolved{Failure: repositoryChangeFailure(err)}
+	}
+
+	r.logSourceKindFlip(ctx, rel, src.Kind, superseded != nil)
+
+	return ServedByOCIRepository{Result: r.deps.OCIRepositories.Ensure(ctx, rel, repo, src, chartVersion)}
 }
 
 // finish applies the decision and consumes the force annotation. The annotation is
 // removed after the status patch so a conflict does not lose the request.
-func (r *Reconciler) finish(ctx context.Context, rel contract.Release, in Inputs) (reconcile.Result, error) {
+func (r *Reconciler) finish(
+	ctx context.Context,
+	rel contract.Release,
+	in Inputs,
+	outcome Outcome,
+) (reconcile.Result, error) {
+	in.Outcome = outcome
 	decision := Evaluate(in)
 
 	if decision.Reported != nil {
-		// Only the RBAC failure is handed to the work queue, which logs it on the
+		// Only the identity failure is handed to the work queue, which logs it on the
 		// way past; every other failure ends the pass quietly, so this is the one
 		// place its cause is written down.
 		log.FromContext(ctx).Error(decision.Reported.Err, decision.Reported.Message,
@@ -367,8 +397,8 @@ func applyDecision(rel contract.Release, decision Decision) {
 
 // repositoryChangeFailure reports a failure to remove the internal source the
 // release no longer needs. Nothing may be installed while both kinds are present.
-func repositoryChangeFailure(err error) *Failure {
-	return &Failure{Reason: helmv1alpha1.ReasonFailed, Message: "Repository change failed", Err: err}
+func repositoryChangeFailure(err error) Failure {
+	return Failure{Reason: helmv1alpha1.ReasonFailed, Message: "Repository change failed", Err: err}
 }
 
 // valuesDigest is the digest of the values the spec asks for, in the form the
