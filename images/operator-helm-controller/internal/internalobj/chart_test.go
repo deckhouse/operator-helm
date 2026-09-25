@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -31,7 +31,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-func newChartService(t *testing.T, objects ...client.Object) (*ChartService, client.Client) {
+func newCharts(t *testing.T, objects ...client.Object) (*Charts, client.Client) {
 	t.Helper()
 
 	scheme := testScheme(t)
@@ -41,7 +41,7 @@ func newChartService(t *testing.T, objects ...client.Object) (*ChartService, cli
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return NewChartService(c, scheme, testNamespace), c
+	return NewCharts(c, scheme, testNamespace), c
 }
 
 // chartTestRepository is the repository the test addon references; the chart
@@ -53,14 +53,14 @@ func chartTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	}
 }
 
-// TestEnsureHelmChartForcesReconcileFromAddon covers the force reconcile
+// TestChartsEnsureForcesReconcileFromAddon covers the force reconcile
 // annotation applied to the HelmClusterAddon: on the internal Helm repository
 // path it must reach the HelmChart, so that a forced addon re-pulls its source
 // instead of only nudging the HelmRelease.
-func TestEnsureHelmChartForcesReconcileFromAddon(t *testing.T) {
+func TestChartsEnsureForcesReconcileFromAddon(t *testing.T) {
 	addon := testAddon()
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
-	service, c := newChartService(t, addon)
+	service, c := newCharts(t, addon)
 
 	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository()))
 
@@ -78,12 +78,12 @@ func TestEnsureHelmChartForcesReconcileFromAddon(t *testing.T) {
 	}
 }
 
-// TestEnsureHelmChartDoesNotForceReconcileWithoutAnnotation is the complement:
+// TestChartsEnsureDoesNotForceReconcileWithoutAnnotation is the complement:
 // an unannotated addon must not stamp a fresh timestamp on every pass, which
 // would make the source controller re-reconcile continuously.
-func TestEnsureHelmChartDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
+func TestChartsEnsureDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
 	addon := testAddon()
-	service, c := newChartService(t, addon)
+	service, c := newCharts(t, addon)
 
 	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository()))
 
@@ -98,11 +98,11 @@ func TestEnsureHelmChartDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
 	}
 }
 
-// TestEnsureHelmChartKeepsForeignLabels pins that our labels are merged into the
+// TestChartsEnsureKeepsForeignLabels pins that our labels are merged into the
 // internal chart rather than replacing what is there. Something else in the
 // cluster may label the object — a policy engine, a cost allocator — and wiping
 // those labels on every pass would fight whoever set them.
-func TestEnsureHelmChartKeepsForeignLabels(t *testing.T) {
+func TestChartsEnsureKeepsForeignLabels(t *testing.T) {
 	addon := testAddon()
 	existing := &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
@@ -111,7 +111,7 @@ func TestEnsureHelmChartKeepsForeignLabels(t *testing.T) {
 			Labels:    map[string]string{"cost-center": "team-a"},
 		},
 	}
-	service, c := newChartService(t, addon, existing)
+	service, c := newCharts(t, addon, existing)
 
 	rel := adapter.NewAddonRelease(addon)
 	service.Ensure(context.Background(), rel, adapter.NewAddonRepository(chartTestRepository()))

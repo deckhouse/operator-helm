@@ -49,6 +49,7 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -341,10 +342,10 @@ func newFullReconciler(
 	return New(c, Deps{
 		NewRelease:      adapter.EmptyAddonRelease,
 		Repositories:    adapter.NewAddonRepositoryResolver(c),
-		Charts:          services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
-		OCIRepositories: services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, resolver),
-		Releases:        services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
-		Maintenance:     services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
+		Charts:          internalobj.NewCharts(c, scheme, helmv1alpha1.TargetNamespace),
+		OCIRepositories: internalobj.NewOCIRepositories(c, scheme, helmv1alpha1.TargetNamespace, resolver),
+		Releases:        internalobj.NewReleases(c, scheme, helmv1alpha1.TargetNamespace),
+		Maintenance:     internalobj.NewMaintenance(c, scheme, helmv1alpha1.TargetNamespace),
 		Claims:          services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
 		Namespaces:      services.NewNamespaceService(c, c),
 		Identity:        NoIdentity{},
@@ -390,10 +391,10 @@ func newApplicationFullReconciler(
 	return New(c, Deps{
 		NewRelease:      adapter.EmptyApplicationRelease,
 		Repositories:    adapter.NewApplicationRepositoryResolver(c),
-		Charts:          services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
-		OCIRepositories: services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
-		Releases:        services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
-		Maintenance:     services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
+		Charts:          internalobj.NewCharts(c, scheme, helmv1alpha1.TargetNamespace),
+		OCIRepositories: internalobj.NewOCIRepositories(c, scheme, helmv1alpha1.TargetNamespace, nil),
+		Releases:        internalobj.NewReleases(c, scheme, helmv1alpha1.TargetNamespace),
+		Maintenance:     internalobj.NewMaintenance(c, scheme, helmv1alpha1.TargetNamespace),
 		Claims:          NoClaims{},
 		Namespaces:      ExistingTargetNamespace{},
 		Identity:        rbac,

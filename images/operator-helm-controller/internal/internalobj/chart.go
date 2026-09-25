@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -39,17 +39,17 @@ var helmChartErrorRules = []ErrorConditionRule{
 	{Type: "StorageOperationFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartStorageFailed},
 }
 
-type ChartService struct {
+type Charts struct {
 	client          client.Client
 	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewChartService(client client.Client, scheme *runtime.Scheme, targetNamespace string) *ChartService {
-	return &ChartService{client: client, scheme: scheme, targetNamespace: targetNamespace}
+func NewCharts(client client.Client, scheme *runtime.Scheme, targetNamespace string) *Charts {
+	return &Charts{client: client, scheme: scheme, targetNamespace: targetNamespace}
 }
 
-func (s *ChartService) Ensure(ctx context.Context, rel contract.Release, repo contract.Repository) ChartOutcome {
+func (s *Charts) Ensure(ctx context.Context, rel contract.Release, repo contract.Repository) ChartOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &sourcev1.HelmChart{
@@ -90,7 +90,7 @@ func (s *ChartService) Ensure(ctx context.Context, rel contract.Release, repo co
 // while it is still present, so the caller can inspect its conditions and wait
 // for source-controller to finish removing it. It returns nil once the
 // HelmChart is gone.
-func (s *ChartService) Cleanup(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error) {
+func (s *Charts) Cleanup(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error) {
 	nn := types.NamespacedName{Name: names.HelmChart, Namespace: s.targetNamespace}
 	chart := &sourcev1.HelmChart{}
 	exists, err := utils.DeleteIfPresent(ctx, s.client, nn, chart)

@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/cli-utils/pkg/kstatus/status"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/services"
 )
 
@@ -62,7 +63,7 @@ func TestKstatusVerdicts(t *testing.T) {
 			name: "healthy repository is current",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{},
 				Catalog:            &services.CatalogOutcome{},
@@ -73,7 +74,7 @@ func TestKstatusVerdicts(t *testing.T) {
 			name: "retrying repository is in progress",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{Err: errors.New("connection refused"), Message: "cannot read index.yaml"},
 			},
@@ -83,7 +84,7 @@ func TestKstatusVerdicts(t *testing.T) {
 			name: "terminal failure is failed",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch: &services.FetchOutcome{
 					Err: errors.New("unauthorized"), Terminal: true,
@@ -100,7 +101,7 @@ func TestKstatusVerdicts(t *testing.T) {
 			name: "catalog write failure stays in progress between attempts",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: catalogFailedStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 			},
 			want: status.InProgressStatus,
 		},
@@ -108,7 +109,7 @@ func TestKstatusVerdicts(t *testing.T) {
 			name: "stalled is not masked by a lagging observedGeneration",
 			in: Inputs{
 				Generation: 3, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch: &services.FetchOutcome{
 					Err: errors.New("not found"), Terminal: true,

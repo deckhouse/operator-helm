@@ -25,6 +25,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/services"
 )
 
@@ -70,7 +71,7 @@ type Identity interface {
 // Charts owns the internal HelmChart of a release, the source object of a
 // repository that hands out packaged archives.
 type Charts interface {
-	Ensure(ctx context.Context, rel contract.Release, repo contract.Repository) services.ChartOutcome
+	Ensure(ctx context.Context, rel contract.Release, repo contract.Repository) internalobj.ChartOutcome
 	// Cleanup returns the object while it is still present, so the caller
 	// can wait for it to actually go away.
 	Cleanup(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error)
@@ -85,7 +86,7 @@ type OCIRepositories interface {
 		repo contract.Repository,
 		src chartsource.Source,
 		version *helmv1alpha1.ChartVersion,
-	) services.OCIRepoOutcome
+	) internalobj.OCIRepoOutcome
 	Remove(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error)
 }
 
@@ -96,7 +97,7 @@ type Releases interface {
 		rel contract.Release,
 		sourceKind chartsource.Kind,
 		artifactRevision string,
-	) services.ReleaseOutcome
+	) internalobj.ReleaseOutcome
 	Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error)
 	// SyncSpec keeps a release that is being deleted in step with its spec, so
 	// an uninstall blocked by a bad parameter can be unblocked by correcting it.
@@ -106,7 +107,7 @@ type Releases interface {
 // Maintenance suspends and resumes the internal HelmRelease.
 type Maintenance interface {
 	ChangeRequired(rel contract.Release) bool
-	Ensure(ctx context.Context, rel contract.Release) services.MaintenanceOutcome
+	Ensure(ctx context.Context, rel contract.Release) internalobj.MaintenanceOutcome
 }
 
 // NoClaims is the Claims of a family without a uniqueness rule: every

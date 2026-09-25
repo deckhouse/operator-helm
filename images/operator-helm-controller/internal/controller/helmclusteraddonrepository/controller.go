@@ -28,6 +28,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/repository"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/status"
@@ -44,8 +45,8 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	r := reconcile.New(client, reconcile.Deps{
 		NewRepository:    adapter.EmptyAddonRepository,
 		Secrets:          services.NewRepoSecretsService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		HelmRepositories: services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Consumers:        services.NewForceService(client, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(client)),
+		HelmRepositories: internalobj.NewHelmRepositories(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Consumers:        internalobj.NewConsumers(client, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(client)),
 		Catalogs:         services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewAddonCatalog(client)),
 		Status:           status.NewManager(client),
 	})

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -35,7 +35,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-func newOCIRepoService(t *testing.T, objects ...client.Object) (*OCIRepoService, client.Client) {
+func newOCIRepositories(t *testing.T, objects ...client.Object) (*OCIRepositories, client.Client) {
 	t.Helper()
 
 	scheme := testScheme(t)
@@ -53,7 +53,7 @@ func newOCIRepoService(t *testing.T, objects ...client.Object) (*OCIRepoService,
 		}).
 		Build()
 
-	return NewOCIRepoService(c, scheme, testNamespace, nil), c
+	return NewOCIRepositories(c, scheme, testNamespace, nil), c
 }
 
 // countingResolver records how many times the registry was asked, which is the whole
@@ -72,14 +72,14 @@ func (r *countingResolver) ResolveChartArtifact(_ context.Context, ref string, _
 	return r.mediaType, r.err
 }
 
-func newOCIRepoServiceWithResolver(
+func newOCIRepositoriesWithResolver(
 	t *testing.T,
 	resolver repoclient.ChartResolverInterface,
 	objects ...client.Object,
-) (*OCIRepoService, client.Client) {
+) (*OCIRepositories, client.Client) {
 	t.Helper()
 
-	service, c := newOCIRepoService(t, objects...)
+	service, c := newOCIRepositories(t, objects...)
 	service.resolver = resolver
 
 	return service, c
@@ -90,20 +90,6 @@ func internalOCIRepository(addonName string) *sourcev1.OCIRepository {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      utils.GetInternalOCIRepositoryName(addonName),
 			Namespace: testNamespace,
-		},
-	}
-}
-
-func testAddon() *helmv1alpha1.HelmClusterAddon {
-	return &helmv1alpha1.HelmClusterAddon{
-		ObjectMeta: metav1.ObjectMeta{Name: "consumer", Generation: 1},
-		Spec: helmv1alpha1.HelmClusterAddonSpec{
-			Namespace: "app",
-			Chart: helmv1alpha1.HelmClusterAddonChartRef{
-				HelmClusterAddonRepository: "example",
-				HelmClusterAddonChartName:  "podinfo",
-				Version:                    "6.7.1",
-			},
 		},
 	}
 }
@@ -142,9 +128,9 @@ func hybridTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	}
 }
 
-func TestEnsureInternalOCIRepositoryUsesRecordedMediaType(t *testing.T) {
+func TestOCIRepositoriesEnsureUsesRecordedMediaType(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
-	service, c := newOCIRepoService(t, addon, repo)
+	service, c := newOCIRepositories(t, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
@@ -167,9 +153,9 @@ func TestEnsureInternalOCIRepositoryUsesRecordedMediaType(t *testing.T) {
 	}
 }
 
-func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
+func TestOCIRepositoriesEnsureReportsRemovedVersion(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
-	service, _ := newOCIRepoService(t, addon, repo)
+	service, _ := newOCIRepositories(t, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version:           "6.7.1",
@@ -187,19 +173,19 @@ func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
 	}
 }
 
-// TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion covers the
-// complement of TestEnsureInternalOCIRepositoryReportsRemovedVersion: a version can
+// TestOCIRepositoriesEnsureDoesNotRelabelReadyChildOnRemovedVersion covers the
+// complement of TestOCIRepositoriesEnsureReportsRemovedVersion: a version can
 // still carry UnavailableReasonRemovedFromRepository after the tag reappears (the
 // marker is only dropped on the next synchronization), and by then the child
 // OCIRepository may already be healthy again. The override must not fire in that
 // case - a ready addon must not be relabeled with a failure reason.
 //
 // The internal object is seeded with the exact spec and labels applyOCIRepositorySpec
-// writes (same trick as TestEnsureInternalHelmRepositoryStalledPrecedesReady in
+// writes (same trick as TestHelmRepositoriesEnsureStalledPrecedesReady in
 // helm_repo_service_test.go): that makes CreateOrPatch a no-op, so the object's
 // generation stays at 1 and the seeded Ready condition (ObservedGeneration: 1) counts
 // as observed.
-func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *testing.T) {
+func TestOCIRepositoriesEnsureDoesNotRelabelReadyChildOnRemovedVersion(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 
 	version := &helmv1alpha1.ChartVersion{
@@ -241,7 +227,7 @@ func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *
 		},
 	}
 
-	service, _ := newOCIRepoService(t, addon, repo, internal)
+	service, _ := newOCIRepositories(t, addon, repo, internal)
 
 	result := service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
@@ -256,14 +242,14 @@ func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *
 	}
 }
 
-// TestEnsureInternalOCIRepositoryForcesReconcileFromAddon covers the force
+// TestOCIRepositoriesEnsureForcesReconcileFromAddon covers the force
 // reconcile annotation applied to the HelmClusterAddon itself: it must reach the
 // internal OCIRepository, otherwise the source is never re-pulled and only the
 // HelmRelease is nudged.
-func TestEnsureInternalOCIRepositoryForcesReconcileFromAddon(t *testing.T) {
+func TestOCIRepositoriesEnsureForcesReconcileFromAddon(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
-	service, c := newOCIRepoService(t, addon, repo)
+	service, c := newOCIRepositories(t, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
@@ -286,12 +272,12 @@ func TestEnsureInternalOCIRepositoryForcesReconcileFromAddon(t *testing.T) {
 	}
 }
 
-// TestEnsureInternalOCIRepositoryDoesNotForceReconcileWithoutAnnotation is the
+// TestOCIRepositoriesEnsureDoesNotForceReconcileWithoutAnnotation is the
 // complement: an unannotated addon must not stamp a fresh timestamp on every
 // pass, which would make the source controller re-reconcile continuously.
-func TestEnsureInternalOCIRepositoryDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
+func TestOCIRepositoriesEnsureDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
-	service, c := newOCIRepoService(t, addon, repo)
+	service, c := newOCIRepositories(t, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
@@ -311,13 +297,13 @@ func TestEnsureInternalOCIRepositoryDoesNotForceReconcileWithoutAnnotation(t *te
 	}
 }
 
-// TestEnsureInternalOCIRepositoryAddressesTheIndexReference pins that the artifact
+// TestOCIRepositoriesEnsureAddressesTheIndexReference pins that the artifact
 // address comes from the version, not from the repository: for a hybrid version the
 // registry is a different host entirely.
-func TestEnsureInternalOCIRepositoryAddressesTheIndexReference(t *testing.T) {
+func TestOCIRepositoriesEnsureAddressesTheIndexReference(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
-	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+	service, c := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
@@ -354,15 +340,15 @@ func TestEnsureInternalOCIRepositoryAddressesTheIndexReference(t *testing.T) {
 	}
 }
 
-// TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost covers the one case where
+// TestOCIRepositoriesEnsureCarriesTLSOnTheSameHost covers the one case where
 // the repository's transport settings do apply: an internal host serving both the
 // index and the registry. The auth secret still cannot be referenced — a helm
 // repository stores it as an Opaque username/password secret, and OCIRepository
 // accepts only dockerconfigjson.
-func TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost(t *testing.T) {
+func TestOCIRepositoriesEnsureCarriesTLSOnTheSameHost(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
-	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+	service, c := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
@@ -390,15 +376,15 @@ func TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost(t *testing.T) {
 	}
 }
 
-// TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials is the regression
+// TestOCIRepositoriesEnsureKeepsOCIRepositoryCredentials is the regression
 // guard for the existing behaviour: for an oci:// repository the artifact host is the
 // repository host, so its auth and CA still apply.
-func TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials(t *testing.T) {
+func TestOCIRepositoriesEnsureKeepsOCIRepositoryCredentials(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	repo.Spec.Auth = &helmv1alpha1.RepositoryAuth{Username: "u", Password: "p"}
 	repo.Spec.CACertificate = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
 
-	service, c := newOCIRepoService(t, addon, repo)
+	service, c := newOCIRepositories(t, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
@@ -426,10 +412,10 @@ func TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials(t *testing.T) 
 	}
 }
 
-func TestEnsureInternalOCIRepositoryProbesHybridVersion(t *testing.T) {
+func TestOCIRepositoriesEnsureProbesHybridVersion(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
-	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+	service, c := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
@@ -457,13 +443,13 @@ func TestEnsureInternalOCIRepositoryProbesHybridVersion(t *testing.T) {
 	}
 }
 
-// TestEnsureInternalOCIRepositoryReusesTheInternalObjectAsCache is the steady state:
+// TestOCIRepositoriesEnsureReusesTheInternalObjectAsCache is the steady state:
 // the internal object already addresses this artifact and carries the verdict, so the
 // registry must not be asked again on every pass.
-func TestEnsureInternalOCIRepositoryReusesTheInternalObjectAsCache(t *testing.T) {
+func TestOCIRepositoriesEnsureReusesTheInternalObjectAsCache(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
-	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
@@ -479,13 +465,13 @@ func TestEnsureInternalOCIRepositoryReusesTheInternalObjectAsCache(t *testing.T)
 	}
 }
 
-// TestEnsureInternalOCIRepositoryReprobesChangedReference covers a repository that
+// TestOCIRepositoriesEnsureReprobesChangedReference covers a repository that
 // re-published the same version somewhere else: the cached verdict describes a
 // different artifact and must not be reused.
-func TestEnsureInternalOCIRepositoryReprobesChangedReference(t *testing.T) {
+func TestOCIRepositoriesEnsureReprobesChangedReference(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
-	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
 
 	first := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
@@ -504,12 +490,12 @@ func TestEnsureInternalOCIRepositoryReprobesChangedReference(t *testing.T) {
 	}
 }
 
-// TestEnsureInternalOCIRepositoryForceBypassesCache: a force request means
+// TestOCIRepositoriesEnsureForceBypassesCache: a force request means
 // "re-examine", the same thing it means for the repository catalog.
-func TestEnsureInternalOCIRepositoryForceBypassesCache(t *testing.T) {
+func TestOCIRepositoriesEnsureForceBypassesCache(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
-	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
@@ -527,12 +513,12 @@ func TestEnsureInternalOCIRepositoryForceBypassesCache(t *testing.T) {
 	}
 }
 
-// TestEnsureInternalOCIRepositoryNeverProbesRecordedMediaType: an oci:// repository's
+// TestOCIRepositoriesEnsureNeverProbesRecordedMediaType: an oci:// repository's
 // version carries the verdict from the catalog, so the registry is not asked at all.
-func TestEnsureInternalOCIRepositoryNeverProbesRecordedMediaType(t *testing.T) {
+func TestOCIRepositoriesEnsureNeverProbesRecordedMediaType(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	resolver := &countingResolver{mediaType: "should-not-be-used"}
-	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version:   "6.7.1",
@@ -548,13 +534,13 @@ func TestEnsureInternalOCIRepositoryNeverProbesRecordedMediaType(t *testing.T) {
 	}
 }
 
-func TestEnsureInternalOCIRepositoryReportsTerminalProbeFailure(t *testing.T) {
+func TestOCIRepositoriesEnsureReportsTerminalProbeFailure(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{err: &repoclient.TerminalError{
 		Reason:  helmv1alpha1.ReasonUnsupportedChartArtifact,
 		Message: "config media type is not a helm chart config",
 	}}
-	service, c := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+	service, c := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
@@ -585,10 +571,10 @@ func TestEnsureInternalOCIRepositoryReportsTerminalProbeFailure(t *testing.T) {
 	}
 }
 
-func TestEnsureInternalOCIRepositoryRequeuesRetriableProbeFailure(t *testing.T) {
+func TestOCIRepositoriesEnsureRequeuesRetriableProbeFailure(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{err: errors.New("429 Too Many Requests")}
-	service, _ := newOCIRepoServiceWithResolver(t, resolver, addon, repo)
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
 
 	version := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -38,21 +38,21 @@ import (
 
 const InternalRepositoryInterval = 5 * time.Minute
 
-type HelmRepoService struct {
+type HelmRepositories struct {
 	client          client.Client
 	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace string) *HelmRepoService {
-	return &HelmRepoService{client: client, scheme: scheme, targetNamespace: namespace}
+func NewHelmRepositories(client client.Client, scheme *runtime.Scheme, namespace string) *HelmRepositories {
+	return &HelmRepositories{client: client, scheme: scheme, targetNamespace: namespace}
 }
 
 // Ensure reconciles the internal HelmRepository and
 // reports its observed state. The returned error is an API failure that the
 // caller must surface to the work queue; an unhealthy internal object is not an
 // error and is reported through the state instead.
-func (s *HelmRepoService) Ensure(
+func (s *HelmRepositories) Ensure(
 	ctx context.Context,
 	repo contract.Repository,
 ) (InternalRepositoryState, error) {
@@ -105,7 +105,7 @@ func (s *HelmRepoService) Ensure(
 	return state, nil
 }
 
-func (s *HelmRepoService) Remove(ctx context.Context, names contract.InternalNames) error {
+func (s *HelmRepositories) Remove(ctx context.Context, names contract.InternalNames) error {
 	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.targetNamespace}
 	if _, err := utils.DeleteIfPresent(ctx, s.client, nn, &sourcev1.HelmRepository{}); err != nil {
 		return fmt.Errorf("removing helm repository: %w", err)
@@ -118,7 +118,7 @@ func (s *HelmRepoService) Remove(ctx context.Context, names contract.InternalNam
 // returns it while it is still present, so the caller can inspect its conditions
 // and wait for source-controller to finish removing it. It returns nil once
 // the HelmRepository is gone.
-func (s *HelmRepoService) Cleanup(ctx context.Context, names contract.InternalNames) (*sourcev1.HelmRepository, error) {
+func (s *HelmRepositories) Cleanup(ctx context.Context, names contract.InternalNames) (*sourcev1.HelmRepository, error) {
 	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.targetNamespace}
 	helmRepo := &sourcev1.HelmRepository{}
 	exists, err := utils.DeleteIfPresent(ctx, s.client, nn, helmRepo)

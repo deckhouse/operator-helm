@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/services"
 )
 
@@ -152,7 +153,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "healthy repository",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{},
 				Catalog:            &services.CatalogOutcome{},
@@ -164,7 +165,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "awaiting first sync on a fresh object",
 			in: Inputs{
 				Generation: 1, Now: testNow,
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 			},
 			wantReady: metav1.ConditionUnknown, wantReadyReason: helmv1alpha1.ReasonAwaitingInitialSync,
 			wantSynced:      "",
@@ -184,7 +185,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "internal repository not ready",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{
+				InternalRepository: internalobj.InternalRepositoryState{
 					Present: true, Ready: false,
 					Reason: "FetchFailed", Message: "failed to fetch index",
 				},
@@ -200,7 +201,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "internal repository stalled",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{
+				InternalRepository: internalobj.InternalRepositoryState{
 					Present: true, Ready: false, Stalled: true,
 					Reason: "InvalidSecretRef", Message: "secret not found",
 				},
@@ -216,7 +217,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "transient fetch failure keeps Ready latched",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			},
@@ -228,7 +229,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "transient fetch failure without evidence",
 			in: Inputs{
 				Generation: 1, Now: testNow,
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			},
@@ -240,7 +241,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "terminal fetch failure",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch: &services.FetchOutcome{
 					Err: fetchErr, Terminal: true,
@@ -269,7 +270,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "catalog write failure",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{},
 				Catalog:            &services.CatalogOutcome{Err: writeErr},
@@ -282,7 +283,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "generation bump voids the latch",
 			in: Inputs{
 				Generation: 2, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			},
@@ -294,7 +295,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "oci repository has no internal object",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: false},
+				InternalRepository: internalobj.InternalRepositoryState{Present: false},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{},
 				Catalog:            &services.CatalogOutcome{},
@@ -311,7 +312,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "synced carries the evidence when Ready was owned by another rule",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: syncedNotReadyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 			},
 			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
 			wantSynced: metav1.ConditionTrue,
@@ -324,7 +325,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "catalog write failure keeps Reconciling on a pass with no attempt",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: catalogFailedStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 			},
 			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
 			wantSynced:      metav1.ConditionFalse,
@@ -434,7 +435,7 @@ func TestEvaluateDecisionErr(t *testing.T) {
 			name: "chart catalog write failure reaches Decision.Err",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{},
 				Catalog:            &services.CatalogOutcome{Err: catalogWriteErr},
@@ -445,7 +446,7 @@ func TestEvaluateDecisionErr(t *testing.T) {
 			name: "repository read failure never reaches Decision.Err",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			},
@@ -492,7 +493,7 @@ func TestEvaluatePreservesFailuresWhenNoFetchWasAttempted(t *testing.T) {
 			ObservedGeneration:       1,
 			ConsecutiveFetchFailures: 3,
 		},
-		InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
 		Fetch:              nil,
 		Catalog:            &services.CatalogOutcome{Err: catalogErr},

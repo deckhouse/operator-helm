@@ -26,6 +26,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/services"
 )
 
@@ -40,7 +41,7 @@ type Inputs struct {
 
 	SecretsErr            error
 	InternalRepositoryErr error
-	InternalRepository    services.InternalRepositoryState
+	InternalRepository    internalobj.InternalRepositoryState
 	ConfigErr             *services.ConfigOutcome
 
 	// MigrateErr reports a failure to move the catalog objects to their current
@@ -86,7 +87,7 @@ func Evaluate(in Inputs) Decision {
 	if in.InternalRepositoryErr != nil {
 		// A failure to reconcile the internal object is a structural failure:
 		// report it the same way as an unhealthy object so Ready reflects it.
-		internal = services.InternalRepositoryState{
+		internal = internalobj.InternalRepositoryState{
 			Present: true,
 			Reason:  helmv1alpha1.ReasonFailed,
 			Message: in.InternalRepositoryErr.Error(),
@@ -163,7 +164,7 @@ func Evaluate(in Inputs) Decision {
 
 func evaluateReady(
 	in Inputs,
-	internal services.InternalRepositoryState,
+	internal internalobj.InternalRepositoryState,
 	stalled abnormalCondition,
 	fetchSucceeded bool,
 ) metav1.Condition {
@@ -230,7 +231,7 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 
 func evaluateStalled(
 	in Inputs,
-	internal services.InternalRepositoryState,
+	internal internalobj.InternalRepositoryState,
 	failures int32,
 	fetchFailed bool,
 ) abnormalCondition {
@@ -265,7 +266,7 @@ func evaluateStalled(
 
 func evaluateReconciling(
 	in Inputs,
-	internal services.InternalRepositoryState,
+	internal internalobj.InternalRepositoryState,
 	stalled abnormalCondition,
 	ready metav1.Condition,
 	failures int32,

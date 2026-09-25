@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -25,7 +25,7 @@ import (
 
 // InternalObjectState describes the observed state of one internal FluxCD object a
 // release owns — its HelmChart, its OCIRepository, its HelmRelease. It is the
-// release-side counterpart of InternalRepositoryState: the service reads the
+// release-side counterpart of InternalRepositoryState: the gateway reads the
 // object's conditions and reduces them to this, so the knowledge of which FluxCD
 // condition means what stays where the object is written.
 //

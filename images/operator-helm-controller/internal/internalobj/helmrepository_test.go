@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -51,13 +51,13 @@ func sourceScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-func newHelmRepoService(t *testing.T, objects ...client.Object) *HelmRepoService {
+func newHelmRepositories(t *testing.T, objects ...client.Object) *HelmRepositories {
 	t.Helper()
 
 	scheme := sourceScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return NewHelmRepoService(c, scheme, testNamespace)
+	return NewHelmRepositories(c, scheme, testNamespace)
 }
 
 func testRepository() *helmv1alpha1.HelmClusterAddonRepository {
@@ -67,9 +67,9 @@ func testRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	}
 }
 
-func TestEnsureInternalHelmRepositoryReportsNotObservedAsNotReady(t *testing.T) {
+func TestHelmRepositoriesEnsureReportsNotObservedAsNotReady(t *testing.T) {
 	repo := testRepository()
-	service := newHelmRepoService(t, repo)
+	service := newHelmRepositories(t, repo)
 
 	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
@@ -83,7 +83,7 @@ func TestEnsureInternalHelmRepositoryReportsNotObservedAsNotReady(t *testing.T) 
 	}
 }
 
-func TestEnsureInternalHelmRepositoryMirrorsConditions(t *testing.T) {
+func TestHelmRepositoriesEnsureMirrorsConditions(t *testing.T) {
 	repo := testRepository()
 	// The spec and labels must already match what applyHelmRepositorySpec writes:
 	// otherwise CreateOrPatch mutates the object, the fake client bumps its
@@ -114,7 +114,7 @@ func TestEnsureInternalHelmRepositoryMirrorsConditions(t *testing.T) {
 		},
 	}
 
-	service := newHelmRepoService(t, repo, internal)
+	service := newHelmRepositories(t, repo, internal)
 
 	// The fixture is created with generation 0 and the condition observes 0, so
 	// the state must mirror the condition rather than report "not observed yet".
@@ -131,7 +131,7 @@ func TestEnsureInternalHelmRepositoryMirrorsConditions(t *testing.T) {
 	}
 }
 
-func TestEnsureInternalHelmRepositoryReportsStalled(t *testing.T) {
+func TestHelmRepositoriesEnsureReportsStalled(t *testing.T) {
 	repo := testRepository()
 	internal := &sourcev1.HelmRepository{
 		ObjectMeta: metav1.ObjectMeta{
@@ -153,7 +153,7 @@ func TestEnsureInternalHelmRepositoryReportsStalled(t *testing.T) {
 		},
 	}
 
-	service := newHelmRepoService(t, repo, internal)
+	service := newHelmRepositories(t, repo, internal)
 
 	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
@@ -167,13 +167,13 @@ func TestEnsureInternalHelmRepositoryReportsStalled(t *testing.T) {
 	}
 }
 
-// TestEnsureInternalHelmRepositoryStalledPrecedesReady pins the precedence rule:
+// TestHelmRepositoriesEnsureStalledPrecedesReady pins the precedence rule:
 // Stalled=True must win even when a healthy, observed Ready=True condition sits
 // right next to it. The fixture's spec and labels already match what
 // applyHelmRepositorySpec writes (same reason as the mirroring test above), so
 // CreateOrPatch is a no-op and the internal object's generation stays at 1 -
 // which is what lets the Ready condition below count as observed.
-func TestEnsureInternalHelmRepositoryStalledPrecedesReady(t *testing.T) {
+func TestHelmRepositoriesEnsureStalledPrecedesReady(t *testing.T) {
 	repo := testRepository()
 	internal := &sourcev1.HelmRepository{
 		ObjectMeta: metav1.ObjectMeta{
@@ -211,7 +211,7 @@ func TestEnsureInternalHelmRepositoryStalledPrecedesReady(t *testing.T) {
 		},
 	}
 
-	service := newHelmRepoService(t, repo, internal)
+	service := newHelmRepositories(t, repo, internal)
 
 	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
@@ -228,14 +228,14 @@ func TestEnsureInternalHelmRepositoryStalledPrecedesReady(t *testing.T) {
 	}
 }
 
-// TestEnsureInternalHelmRepositoryReturnsAPIError verifies the split this task
+// TestHelmRepositoriesEnsureReturnsAPIError verifies the split this task
 // exists to create: an API failure while reconciling the internal object is the
 // caller's problem and comes back as a non-nil error (still with Present: true,
 // since the internal object does exist as far as the caller is concerned), not
 // swallowed into the state. The failure is injected on Create because the fixture
 // has no pre-existing internal HelmRepository, so CreateOrPatch's Get finds
 // nothing and falls through to Create.
-func TestEnsureInternalHelmRepositoryReturnsAPIError(t *testing.T) {
+func TestHelmRepositoriesEnsureReturnsAPIError(t *testing.T) {
 	repo := testRepository()
 	scheme := sourceScheme(t)
 
@@ -250,7 +250,7 @@ func TestEnsureInternalHelmRepositoryReturnsAPIError(t *testing.T) {
 		}).
 		Build()
 
-	service := NewHelmRepoService(c, scheme, testNamespace)
+	service := NewHelmRepositories(c, scheme, testNamespace)
 
 	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err == nil {

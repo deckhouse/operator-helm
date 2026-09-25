@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -32,7 +32,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-func newReleaseService(t *testing.T, objects ...client.Object) (*ReleaseService, client.Client) {
+func newReleases(t *testing.T, objects ...client.Object) (*Releases, client.Client) {
 	t.Helper()
 
 	scheme := testScheme(t)
@@ -47,10 +47,10 @@ func newReleaseService(t *testing.T, objects ...client.Object) (*ReleaseService,
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return NewReleaseService(c, scheme, testNamespace), c
+	return NewReleases(c, scheme, testNamespace), c
 }
 
-func ensureRelease(t *testing.T, service *ReleaseService, c client.Client, rel contract.Release) *helmv2.HelmRelease {
+func ensureRelease(t *testing.T, service *Releases, c client.Client, rel contract.Release) *helmv2.HelmRelease {
 	t.Helper()
 
 	if res := service.Ensure(context.Background(), rel, chartsource.Helm, ""); res.Err != nil {
@@ -66,13 +66,13 @@ func ensureRelease(t *testing.T, service *ReleaseService, c client.Client, rel c
 	return release
 }
 
-// TestEnsureHelmReleaseAppliesAnApplicationAsItsOwnIdentity pins the two fields
+// TestReleasesEnsureAppliesAnApplicationAsItsOwnIdentity pins the two fields
 // that make an application release run as itself: helm-controller impersonates the
 // named account, and because that account only has rights inside the application's
 // namespace, the release storage has to live there too.
-func TestEnsureHelmReleaseAppliesAnApplicationAsItsOwnIdentity(t *testing.T) {
+func TestReleasesEnsureAppliesAnApplicationAsItsOwnIdentity(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
-	service, c := newReleaseService(t)
+	service, c := newReleases(t)
 
 	release := ensureRelease(t, service, c, rel)
 
@@ -84,13 +84,13 @@ func TestEnsureHelmReleaseAppliesAnApplicationAsItsOwnIdentity(t *testing.T) {
 	}
 }
 
-// TestEnsureHelmReleaseLeavesTheAddonIdentityAlone is the complement: an addon
+// TestReleasesEnsureLeavesTheAddonIdentityAlone is the complement: an addon
 // family names no service account, so helm-controller keeps its own identity and
 // the default storage location. Setting either field for it would change where
 // every existing addon's release history is kept.
-func TestEnsureHelmReleaseLeavesTheAddonIdentityAlone(t *testing.T) {
+func TestReleasesEnsureLeavesTheAddonIdentityAlone(t *testing.T) {
 	rel := adapter.NewAddonRelease(testAddon())
-	service, c := newReleaseService(t)
+	service, c := newReleases(t)
 
 	release := ensureRelease(t, service, c, rel)
 
@@ -102,9 +102,9 @@ func TestEnsureHelmReleaseLeavesTheAddonIdentityAlone(t *testing.T) {
 	}
 }
 
-// TestEnsureHelmReleaseKeepsForeignLabels is the same guarantee on the release:
+// TestReleasesEnsureKeepsForeignLabels is the same guarantee on the release:
 // our labels are merged in, not written over what someone else put there.
-func TestEnsureHelmReleaseKeepsForeignLabels(t *testing.T) {
+func TestReleasesEnsureKeepsForeignLabels(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	existing := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -113,7 +113,7 @@ func TestEnsureHelmReleaseKeepsForeignLabels(t *testing.T) {
 			Labels:    map[string]string{"cost-center": "team-a"},
 		},
 	}
-	service, c := newReleaseService(t, existing)
+	service, c := newReleases(t, existing)
 
 	release := ensureRelease(t, service, c, rel)
 

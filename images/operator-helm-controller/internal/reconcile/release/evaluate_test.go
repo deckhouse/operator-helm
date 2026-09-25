@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 )
 
 func baseInputs() Inputs {
@@ -50,8 +50,8 @@ func condition(t *testing.T, decision Decision, conditionType string) metav1.Con
 	return *cond
 }
 
-func readyInternal() services.InternalObjectState {
-	return services.InternalObjectState{
+func readyInternal() internalobj.InternalObjectState {
+	return internalobj.InternalObjectState{
 		Observed: true,
 		Status:   metav1.ConditionTrue,
 		Reason:   "Succeeded",
@@ -160,7 +160,7 @@ func TestEvaluateRecoverableFailureKeepsTheForceRequest(t *testing.T) {
 // a reader — without it the release looks like one still on its way up.
 func TestEvaluateTerminalProbeVerdictStalls(t *testing.T) {
 	in := baseInputs()
-	in.OCIRepo = &services.OCIRepoOutcome{
+	in.OCIRepo = &internalobj.OCIRepoOutcome{
 		ProbeErr:      errors.New("unauthorized"),
 		ProbeReason:   helmv1alpha1.ReasonAuthenticationFailed,
 		ProbeMessage:  "repository oci://example.com/charts rejected the credentials (HTTP 401)",
@@ -188,7 +188,7 @@ func TestEvaluateTerminalProbeVerdictStalls(t *testing.T) {
 // timer the probe asked for.
 func TestEvaluateRecoverableProbeFailureDoesNotStall(t *testing.T) {
 	in := baseInputs()
-	in.OCIRepo = &services.OCIRepoOutcome{
+	in.OCIRepo = &internalobj.OCIRepoOutcome{
 		ProbeErr:          errors.New("connection refused"),
 		ProbeReason:       helmv1alpha1.ReasonOCIFetchFailed,
 		ProbeMessage:      "Failed to examine the chart artifact: connection refused",
@@ -255,9 +255,9 @@ func TestEvaluateStepFailureOwnsReadyAlone(t *testing.T) {
 // message of its own.
 func TestEvaluateReportsWorkInFlight(t *testing.T) {
 	in := baseInputs()
-	in.Chart = &services.ChartOutcome{
+	in.Chart = &internalobj.ChartOutcome{
 		Artifact: &meta.Artifact{Revision: "6.7.1"},
-		Internal: services.InternalObjectState{
+		Internal: internalobj.InternalObjectState{
 			Status:  metav1.ConditionUnknown,
 			Reason:  helmv1alpha1.ReasonReconciling,
 			Message: "pulling the chart",
@@ -284,10 +284,10 @@ func TestEvaluateReportsWorkInFlight(t *testing.T) {
 // progress beside the failure itself.
 func TestEvaluateReportsARetryAfterAFailedRollout(t *testing.T) {
 	in := baseInputs()
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
-	in.Release = &services.ReleaseOutcome{
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
+	in.Release = &internalobj.ReleaseOutcome{
 		ChartDeployed: true,
-		Internal: services.InternalObjectState{
+		Internal: internalobj.InternalObjectState{
 			Observed: true,
 			Status:   metav1.ConditionFalse,
 			Reason:   helmv1alpha1.ReasonReleaseFailed,
@@ -314,9 +314,9 @@ func TestEvaluateGivenUpReleaseStallsInsteadOfReportingProgress(t *testing.T) {
 	const cause = "Helm upgrade failed for release default/podinfo: .spec.replicas: expected numeric, got string"
 
 	in := baseInputs()
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.15.0"}, Internal: readyInternal()}
-	in.Release = &services.ReleaseOutcome{
-		Internal: services.InternalObjectState{
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.15.0"}, Internal: readyInternal()}
+	in.Release = &internalobj.ReleaseOutcome{
+		Internal: internalobj.InternalObjectState{
 			Observed: true,
 			Stalled:  true,
 			Status:   metav1.ConditionFalse,
@@ -352,9 +352,9 @@ func TestEvaluateGivenUpReleaseStallsInsteadOfReportingProgress(t *testing.T) {
 // object still willing to retry, is progress.
 func TestEvaluateFailingReleaseStillReportsProgress(t *testing.T) {
 	in := baseInputs()
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.15.0"}, Internal: readyInternal()}
-	in.Release = &services.ReleaseOutcome{
-		Internal: services.InternalObjectState{
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.15.0"}, Internal: readyInternal()}
+	in.Release = &internalobj.ReleaseOutcome{
+		Internal: internalobj.InternalObjectState{
 			Observed: true,
 			Status:   metav1.ConditionFalse,
 			Reason:   helmv1alpha1.ReasonReleaseFailed,
@@ -378,8 +378,8 @@ func TestEvaluateFailingReleaseStillReportsProgress(t *testing.T) {
 // release as one that never finishes.
 func TestEvaluateSettledReleaseReportsNoProgress(t *testing.T) {
 	in := baseInputs()
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
-	in.Release = &services.ReleaseOutcome{ChartDeployed: true, Internal: readyInternal()}
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
+	in.Release = &internalobj.ReleaseOutcome{ChartDeployed: true, Internal: readyInternal()}
 
 	decision := Evaluate(in)
 
@@ -396,7 +396,7 @@ func TestEvaluateSettledReleaseReportsNoProgress(t *testing.T) {
 // proceed is not making progress, and reporting both would say two things at once.
 func TestEvaluateStalledReleaseReportsNoProgress(t *testing.T) {
 	in := baseInputs()
-	in.OCIRepo = &services.OCIRepoOutcome{
+	in.OCIRepo = &internalobj.OCIRepoOutcome{
 		ProbeErr:      errors.New("unauthorized"),
 		ProbeReason:   helmv1alpha1.ReasonAuthenticationFailed,
 		ProbeMessage:  "repository oci://example.com/charts rejected the credentials (HTTP 401)",
@@ -437,9 +437,9 @@ func TestEvaluateStepFailureWithoutRetryIsNotReturned(t *testing.T) {
 // condition type the release currently reports on.
 func TestEvaluateProjectsTheFirstFailingStep(t *testing.T) {
 	in := baseInputs()
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
-	in.Release = &services.ReleaseOutcome{
-		Internal: services.InternalObjectState{
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
+	in.Release = &internalobj.ReleaseOutcome{
+		Internal: internalobj.InternalObjectState{
 			Observed: true,
 			Status:   metav1.ConditionFalse,
 			Reason:   helmv1alpha1.ReasonReleaseFailed,
@@ -466,8 +466,8 @@ func TestEvaluateProjectsTheFirstFailingStep(t *testing.T) {
 // spec, so it can go on reporting the previous revision ready.
 func TestEvaluateHoldsAReleaseThatHasNotRolledOut(t *testing.T) {
 	in := baseInputs()
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.2"}, Internal: readyInternal()}
-	in.Release = &services.ReleaseOutcome{Internal: readyInternal(), ChartDeployed: false}
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.2"}, Internal: readyInternal()}
+	in.Release = &internalobj.ReleaseOutcome{Internal: readyInternal(), ChartDeployed: false}
 	in.ChartInfoOutdated = true
 
 	decision := Evaluate(in)
@@ -483,8 +483,8 @@ func TestEvaluateHoldsAReleaseThatHasNotRolledOut(t *testing.T) {
 
 func TestEvaluateRecordsWhatWasApplied(t *testing.T) {
 	in := baseInputs()
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
-	in.Release = &services.ReleaseOutcome{
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
+	in.Release = &internalobj.ReleaseOutcome{
 		Internal:      readyInternal(),
 		ChartDeployed: true,
 		History:       helmv2.Snapshots{{Status: "deployed", ConfigDigest: "sha256:values"}},
@@ -512,8 +512,8 @@ func TestEvaluateRecordsWhatWasApplied(t *testing.T) {
 // healthy again must not be relabelled with it.
 func TestEvaluateNamesARemovedVersion(t *testing.T) {
 	in := baseInputs()
-	in.OCIRepo = &services.OCIRepoOutcome{
-		Internal: services.InternalObjectState{
+	in.OCIRepo = &internalobj.OCIRepoOutcome{
+		Internal: internalobj.InternalObjectState{
 			Observed: true,
 			Status:   metav1.ConditionFalse,
 			Reason:   "ArtifactPullFailed",
@@ -539,7 +539,7 @@ func TestEvaluateNamesARemovedVersion(t *testing.T) {
 func TestEvaluateForcedPassStampsAndConsumesTheRequest(t *testing.T) {
 	in := baseInputs()
 	in.Forced = true
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
 
 	decision := Evaluate(in)
 
@@ -559,7 +559,7 @@ func TestEvaluateForcedPassStampsAndConsumesTheRequest(t *testing.T) {
 // touched the chart, so it has nothing to report about installing it.
 func TestEvaluateMaintenanceReportsItselfAlone(t *testing.T) {
 	in := baseInputs()
-	in.Maintenance = &services.MaintenanceOutcome{Activated: true}
+	in.Maintenance = &internalobj.MaintenanceOutcome{Activated: true}
 
 	decision := Evaluate(in)
 
@@ -601,7 +601,7 @@ func TestEvaluateMaintenanceHoldLeavesTheObservedGenerationBehind(t *testing.T) 
 func TestEvaluateAdvancesTheObservedGeneration(t *testing.T) {
 	in := baseInputs()
 	in.ObservedGeneration = 1
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}
 
 	decision := Evaluate(in)
 
@@ -625,7 +625,7 @@ func TestEvaluateCarriesTheObservedGeneration(t *testing.T) {
 		{
 			name: "a settled release finished with the spec",
 			inputs: func(in *Inputs) {
-				in.Chart = &services.ChartOutcome{
+				in.Chart = &internalobj.ChartOutcome{
 					Artifact: &meta.Artifact{Revision: "6.7.1"},
 					Internal: readyInternal(),
 				}
@@ -659,9 +659,9 @@ func TestEvaluateCarriesTheObservedGeneration(t *testing.T) {
 		{
 			name: "an internal object still working on the spec has not",
 			inputs: func(in *Inputs) {
-				in.Chart = &services.ChartOutcome{
+				in.Chart = &internalobj.ChartOutcome{
 					Artifact: &meta.Artifact{Revision: "6.7.1"},
-					Internal: services.InternalObjectState{
+					Internal: internalobj.InternalObjectState{
 						Observed: true,
 						Status:   metav1.ConditionUnknown,
 						Reason:   helmv1alpha1.ReasonReconciling,
@@ -674,9 +674,9 @@ func TestEvaluateCarriesTheObservedGeneration(t *testing.T) {
 		{
 			name: "an internal object that gave up on the spec has",
 			inputs: func(in *Inputs) {
-				in.Chart = &services.ChartOutcome{
+				in.Chart = &internalobj.ChartOutcome{
 					Artifact: &meta.Artifact{Revision: "6.7.1"},
-					Internal: services.InternalObjectState{
+					Internal: internalobj.InternalObjectState{
 						Observed: true,
 						Status:   metav1.ConditionFalse,
 						Reason:   helmv1alpha1.ReasonFailed,
@@ -739,7 +739,7 @@ func TestEvaluateReportsTheCauseOfEveryVerdict(t *testing.T) {
 		{
 			name: "maintenance write failure",
 			build: func(in Inputs) Inputs {
-				in.Maintenance = &services.MaintenanceOutcome{Err: cause}
+				in.Maintenance = &internalobj.MaintenanceOutcome{Err: cause}
 
 				return in
 			},
@@ -747,7 +747,7 @@ func TestEvaluateReportsTheCauseOfEveryVerdict(t *testing.T) {
 		{
 			name: "chart write failure",
 			build: func(in Inputs) Inputs {
-				in.Chart = &services.ChartOutcome{Err: cause}
+				in.Chart = &internalobj.ChartOutcome{Err: cause}
 
 				return in
 			},
@@ -767,8 +767,8 @@ func TestEvaluateReportsTheCauseOfEveryVerdict(t *testing.T) {
 		{
 			name: "release write failure",
 			build: func(in Inputs) Inputs {
-				in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{}, Internal: readyInternal()}
-				in.Release = &services.ReleaseOutcome{Err: cause}
+				in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{}, Internal: readyInternal()}
+				in.Release = &internalobj.ReleaseOutcome{Err: cause}
 
 				return in
 			},
@@ -776,7 +776,7 @@ func TestEvaluateReportsTheCauseOfEveryVerdict(t *testing.T) {
 		{
 			name: "artifact probe failure",
 			build: func(in Inputs) Inputs {
-				in.OCIRepo = &services.OCIRepoOutcome{
+				in.OCIRepo = &internalobj.OCIRepoOutcome{
 					ProbeErr:     cause,
 					ProbeReason:  helmv1alpha1.ReasonOCIFetchFailed,
 					ProbeMessage: "Failed to examine the chart artifact",
@@ -806,8 +806,8 @@ func TestEvaluateReportsTheCauseOfEveryVerdict(t *testing.T) {
 
 func TestEvaluateReportsNothingWhenNothingFailed(t *testing.T) {
 	in := baseInputs()
-	in.Chart = &services.ChartOutcome{Artifact: &meta.Artifact{}, Internal: readyInternal()}
-	in.Release = &services.ReleaseOutcome{Internal: readyInternal(), ChartDeployed: true}
+	in.Chart = &internalobj.ChartOutcome{Artifact: &meta.Artifact{}, Internal: readyInternal()}
+	in.Release = &internalobj.ReleaseOutcome{Internal: readyInternal(), ChartDeployed: true}
 
 	if decision := Evaluate(in); decision.Reported != nil {
 		t.Fatalf("Reported = %+v, want none on a healthy pass", *decision.Reported)

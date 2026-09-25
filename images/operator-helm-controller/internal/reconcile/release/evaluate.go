@@ -23,7 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 )
 
 // Failure is one way a pass can fail, named the way the release reports it. Reason
@@ -77,7 +77,7 @@ type Inputs struct {
 
 	// Maintenance is set on the pass that moved the release into or out of
 	// maintenance mode. Such a pass reports nothing else: the chart is not touched.
-	Maintenance *services.MaintenanceOutcome
+	Maintenance *internalobj.MaintenanceOutcome
 	// DiscardForce asks for an in-flight force request to be dropped. A release
 	// sitting in maintenance can never act on one, and leaving Reconciling behind
 	// would report work in flight to kstatus forever.
@@ -86,9 +86,9 @@ type Inputs struct {
 	// Chart and OCIRepo are the two internal source kinds, and they are mutually
 	// exclusive: a release is served by an internal HelmChart or by an internal
 	// OCIRepository, never both.
-	Chart   *services.ChartOutcome
-	OCIRepo *services.OCIRepoOutcome
-	Release *services.ReleaseOutcome
+	Chart   *internalobj.ChartOutcome
+	OCIRepo *internalobj.OCIRepoOutcome
+	Release *internalobj.ReleaseOutcome
 
 	// ChartInfoOutdated and ValuesDigest are the two facts the record of what was
 	// last applied turns on. ValuesDigest is the digest of the values the spec asks
@@ -140,7 +140,7 @@ type Decision struct {
 // object's own state is already that verdict, so it is carried whole; Err is what
 // sits behind a verdict the pass produced itself.
 type conditionState struct {
-	services.InternalObjectState
+	internalobj.InternalObjectState
 
 	Err error
 }
@@ -369,7 +369,7 @@ func evaluateChart(in Inputs) conditionState {
 	}
 }
 
-func evaluateOCIRepo(out services.OCIRepoOutcome) conditionState {
+func evaluateOCIRepo(out internalobj.OCIRepoOutcome) conditionState {
 	if out.ProbeErr != nil {
 		return failureState(Failure{Reason: out.ProbeReason, Message: out.ProbeMessage, Err: out.ProbeErr})
 	}
@@ -417,7 +417,7 @@ func evaluateRelease(in Inputs) conditionState {
 		// chart-version change moves the artifact without touching its spec. Hold the
 		// verdict at Reconciling so the record of what was applied, and the conditions
 		// projected from here, do not advance ahead of the rollout.
-		return conditionState{InternalObjectState: services.InternalObjectState{
+		return conditionState{InternalObjectState: internalobj.InternalObjectState{
 			Status: metav1.ConditionUnknown,
 			Reason: helmv1alpha1.ReasonReconciling,
 		}}
@@ -426,7 +426,7 @@ func evaluateRelease(in Inputs) conditionState {
 	return state
 }
 
-func maintenanceState(out services.MaintenanceOutcome) conditionState {
+func maintenanceState(out internalobj.MaintenanceOutcome) conditionState {
 	if out.Err != nil {
 		return failureState(Failure{
 			Reason:  helmv1alpha1.ReasonFailed,
@@ -436,7 +436,7 @@ func maintenanceState(out services.MaintenanceOutcome) conditionState {
 	}
 
 	if out.Activated {
-		return conditionState{InternalObjectState: services.InternalObjectState{
+		return conditionState{InternalObjectState: internalobj.InternalObjectState{
 			Observed: true,
 			Status:   metav1.ConditionFalse,
 			Reason:   helmv1alpha1.ReasonMaintenanceModeActive,
@@ -444,7 +444,7 @@ func maintenanceState(out services.MaintenanceOutcome) conditionState {
 		}}
 	}
 
-	return conditionState{InternalObjectState: services.InternalObjectState{
+	return conditionState{InternalObjectState: internalobj.InternalObjectState{
 		Observed: true,
 		Status:   metav1.ConditionTrue,
 		Reason:   helmv1alpha1.ReasonMaintenanceModeInactive,
@@ -454,7 +454,7 @@ func maintenanceState(out services.MaintenanceOutcome) conditionState {
 
 func failureState(failure Failure) conditionState {
 	return conditionState{
-		InternalObjectState: services.InternalObjectState{
+		InternalObjectState: internalobj.InternalObjectState{
 			Observed: true,
 			Status:   metav1.ConditionFalse,
 			Reason:   failure.Reason,

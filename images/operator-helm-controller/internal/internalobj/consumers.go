@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -28,19 +28,19 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-var _ contract.Consumers = (*ForceService)(nil)
+var _ contract.Consumers = (*Consumers)(nil)
 
-// ForceService pushes a repository's force reconcile request onto the internal
+// Consumers pushes a repository's force reconcile request onto the internal
 // OCIRepository of every release consuming it. Which releases those are is the
 // family's business: the lister is injected.
-type ForceService struct {
+type Consumers struct {
 	client          client.Client
 	targetNamespace string
 	list            contract.ReleaseLister
 }
 
-func NewForceService(c client.Client, targetNamespace string, list contract.ReleaseLister) *ForceService {
-	return &ForceService{client: c, targetNamespace: targetNamespace, list: list}
+func NewConsumers(c client.Client, targetNamespace string, list contract.ReleaseLister) *Consumers {
+	return &Consumers{client: c, targetNamespace: targetNamespace, list: list}
 }
 
 // ForceReconcileConsumers stamps the reconcile request annotations on the internal
@@ -54,7 +54,7 @@ func NewForceService(c client.Client, targetNamespace string, list contract.Rele
 // A release whose internal OCIRepository does not exist yet is skipped: the force
 // request must not be blocked by a release that has not reached the point of
 // building one.
-func (s *ForceService) ForceReconcileConsumers(ctx context.Context, repo contract.Repository) error {
+func (s *Consumers) ForceReconcileConsumers(ctx context.Context, repo contract.Repository) error {
 	releases, err := s.list(ctx, repo, "")
 	if err != nil {
 		return err

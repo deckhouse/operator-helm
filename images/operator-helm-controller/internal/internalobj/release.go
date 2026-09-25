@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -46,17 +46,17 @@ var helmReleaseErrorRules = []ErrorConditionRule{
 	{Type: "Remediated", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonRemediated},
 }
 
-type ReleaseService struct {
+type Releases struct {
 	client          client.Client
 	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewReleaseService(client client.Client, scheme *runtime.Scheme, targetNamespace string) *ReleaseService {
-	return &ReleaseService{client: client, scheme: scheme, targetNamespace: targetNamespace}
+func NewReleases(client client.Client, scheme *runtime.Scheme, targetNamespace string) *Releases {
+	return &Releases{client: client, scheme: scheme, targetNamespace: targetNamespace}
 }
 
-func (s *ReleaseService) Ensure(ctx context.Context, rel contract.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {
+func (s *Releases) Ensure(ctx context.Context, rel contract.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &helmv2.HelmRelease{
@@ -97,7 +97,7 @@ func (s *ReleaseService) Ensure(ctx context.Context, rel contract.Release, sourc
 // while it is still present, so the caller can inspect its conditions and wait
 // for helm-controller to finish uninstalling before proceeding. It returns nil
 // once the HelmRelease is gone.
-func (s *ReleaseService) Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error) {
+func (s *Releases) Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error) {
 	nn := types.NamespacedName{Name: names.HelmRelease, Namespace: s.targetNamespace}
 	release := &helmv2.HelmRelease{}
 	exists, err := utils.DeleteIfPresent(ctx, s.client, nn, release)
@@ -120,7 +120,7 @@ func (s *ReleaseService) Cleanup(ctx context.Context, names contract.ReleaseName
 // failed uninstall may be external (e.g. kube-apiserver issues) and leave the
 // spec unchanged, so helm-controller must be nudged out of its error backoff to
 // retry on every pass regardless.
-func (s *ReleaseService) SyncSpec(ctx context.Context, rel contract.Release, release *helmv2.HelmRelease) error {
+func (s *Releases) SyncSpec(ctx context.Context, rel contract.Release, release *helmv2.HelmRelease) error {
 	base := release.DeepCopy()
 
 	release.Spec.TargetNamespace = rel.TargetNamespace()

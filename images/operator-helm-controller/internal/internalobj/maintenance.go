@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -33,17 +33,17 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-type MaintenanceService struct {
+type Maintenance struct {
 	client          client.Client
 	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewMaintenanceService(client client.Client, scheme *runtime.Scheme, targetNamespace string) *MaintenanceService {
-	return &MaintenanceService{client: client, scheme: scheme, targetNamespace: targetNamespace}
+func NewMaintenance(client client.Client, scheme *runtime.Scheme, targetNamespace string) *Maintenance {
+	return &Maintenance{client: client, scheme: scheme, targetNamespace: targetNamespace}
 }
 
-func (s *MaintenanceService) Ensure(ctx context.Context, rel contract.Release) MaintenanceOutcome {
+func (s *Maintenance) Ensure(ctx context.Context, rel contract.Release) MaintenanceOutcome {
 	logger := log.FromContext(ctx)
 
 	activated := rel.MaintenanceActivated()
@@ -60,7 +60,7 @@ func (s *MaintenanceService) Ensure(ctx context.Context, rel contract.Release) M
 	return MaintenanceOutcome{Activated: activated}
 }
 
-func (s *MaintenanceService) ChangeRequired(rel contract.Release) bool {
+func (s *Maintenance) ChangeRequired(rel contract.Release) bool {
 	if rel.MaintenanceActivated() && !rel.MaintenanceEnabled() {
 		return true
 	}
@@ -73,7 +73,7 @@ func (s *MaintenanceService) ChangeRequired(rel contract.Release) bool {
 	return false
 }
 
-func (s *MaintenanceService) updateHelmReleaseSuspendState(ctx context.Context, names contract.ReleaseNames, suspend bool) error {
+func (s *Maintenance) updateHelmReleaseSuspendState(ctx context.Context, names contract.ReleaseNames, suspend bool) error {
 	helmRelease := &helmv2.HelmRelease{}
 	if err := s.client.Get(ctx, types.NamespacedName{
 		Name:      names.HelmRelease,

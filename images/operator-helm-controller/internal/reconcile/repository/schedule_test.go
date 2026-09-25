@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/services"
 )
 
@@ -53,7 +54,7 @@ func TestBackoffProgression(t *testing.T) {
 					ObservedGeneration:       1,
 					ConsecutiveFetchFailures: tc.failuresIn,
 				},
-				InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
 				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			})
@@ -82,7 +83,7 @@ func TestSuccessResetsCounterAndRecordsSyncTime(t *testing.T) {
 			ObservedGeneration:       1,
 			ConsecutiveFetchFailures: 3,
 		},
-		InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
 		Fetch:              &services.FetchOutcome{},
 		Catalog:            &services.CatalogOutcome{},
@@ -109,7 +110,7 @@ func TestCatalogFailureDoesNotRecordSyncTime(t *testing.T) {
 			ObservedGeneration:     1,
 			LastSuccessfulSyncTime: &previous,
 		},
-		InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
 		Fetch:              &services.FetchOutcome{},
 		Catalog:            &services.CatalogOutcome{Err: errors.New("etcdserver: request timed out")},
@@ -131,7 +132,7 @@ func TestTerminalFetchSaturatesCounter(t *testing.T) {
 		Generation:         1,
 		Now:                testNow,
 		Current:            helmv1alpha1.RepositoryStatus{ObservedGeneration: 1},
-		InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
 		Fetch: &services.FetchOutcome{
 			Err: errors.New("unauthorized"), Terminal: true,
@@ -171,7 +172,7 @@ func TestGenerationBumpResetsCounter(t *testing.T) {
 			ObservedGeneration:       1,
 			ConsecutiveFetchFailures: 4,
 		},
-		InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
 		Fetch:              &services.FetchOutcome{},
 		Catalog:            &services.CatalogOutcome{},
@@ -202,7 +203,7 @@ func TestPassWithoutAttemptKeepsSchedule(t *testing.T) {
 				},
 			},
 		},
-		InternalRepository: services.InternalRepositoryState{Present: true, Ready: true},
+		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 	})
 
 	if !got.Status.NextSyncTime.Time.Equal(next.Time) {

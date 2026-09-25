@@ -27,6 +27,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/release"
 	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/status"
@@ -43,10 +44,10 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	r := reconcile.New(client, reconcile.Deps{
 		NewRelease:      adapter.EmptyAddonRelease,
 		Repositories:    adapter.NewAddonRepositoryResolver(client),
-		Charts:          services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		OCIRepositories: services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
-		Releases:        services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Maintenance:     services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Charts:          internalobj.NewCharts(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		OCIRepositories: internalobj.NewOCIRepositories(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
+		Releases:        internalobj.NewReleases(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Maintenance:     internalobj.NewMaintenance(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		Claims:          services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
 		Namespaces:      services.NewNamespaceService(client, mgr.GetAPIReader()),
 		Identity:        reconcile.NoIdentity{},

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package internalobj
 
 import (
 	"context"
@@ -51,26 +51,26 @@ var ociRepositoryErrorRules = []ErrorConditionRule{
 // unreachable registry recover on its own.
 const chartArtifactProbeRequeueInterval = 2 * time.Minute
 
-type OCIRepoService struct {
+type OCIRepositories struct {
 	client          client.Client
 	scheme          *runtime.Scheme
 	targetNamespace string
 	resolver        repoclient.ChartResolverInterface
 }
 
-// NewOCIRepoService builds the service. A nil resolver selects the default one; tests
+// NewOCIRepositories builds the gateway. A nil resolver selects the default one; tests
 // pass their own so they never reach a registry.
-func NewOCIRepoService(
+func NewOCIRepositories(
 	client client.Client,
 	scheme *runtime.Scheme,
 	namespace string,
 	resolver repoclient.ChartResolverInterface,
-) *OCIRepoService {
+) *OCIRepositories {
 	if resolver == nil {
 		resolver = repoclient.OCIChartResolverDefault
 	}
 
-	return &OCIRepoService{
+	return &OCIRepositories{
 		client:          client,
 		scheme:          scheme,
 		targetNamespace: namespace,
@@ -78,7 +78,7 @@ func NewOCIRepoService(
 	}
 }
 
-func (s *OCIRepoService) Ensure(
+func (s *OCIRepositories) Ensure(
 	ctx context.Context,
 	rel contract.Release,
 	repo contract.Repository,
@@ -134,7 +134,7 @@ func (s *OCIRepoService) Ensure(
 // already records which artifact the verdict is about. The registry is asked only
 // when the object is missing, addresses a different artifact, or carries no selector
 // — or when a force request asks for a re-examination.
-func (s *OCIRepoService) resolveMediaType(
+func (s *OCIRepositories) resolveMediaType(
 	ctx context.Context,
 	rel contract.Release,
 	repo contract.Repository,
@@ -175,7 +175,7 @@ func (s *OCIRepoService) resolveMediaType(
 
 // cachedMediaType returns the verdict recorded on the internal object, but only if it
 // is a verdict about this exact artifact.
-func (s *OCIRepoService) cachedMediaType(
+func (s *OCIRepositories) cachedMediaType(
 	ctx context.Context,
 	names contract.ReleaseNames,
 	src chartsource.Source,
@@ -223,7 +223,7 @@ func artifactRepoConfig(repo contract.Repository, src chartsource.Source) *repoc
 // it while it is still present, so the caller can inspect its conditions and wait
 // for source-controller to finish removing it. It returns nil once the
 // OCIRepository is gone.
-func (s *OCIRepoService) Remove(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error) {
+func (s *OCIRepositories) Remove(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error) {
 	nn := types.NamespacedName{Name: names.OCIRepository, Namespace: s.targetNamespace}
 	ociRepo := &sourcev1.OCIRepository{}
 	exists, err := utils.DeleteIfPresent(ctx, s.client, nn, ociRepo)

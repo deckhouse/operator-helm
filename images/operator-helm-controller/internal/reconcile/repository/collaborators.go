@@ -23,6 +23,7 @@ import (
 
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/services"
 )
 
@@ -39,7 +40,7 @@ type Secrets interface {
 // HelmRepositories owns the internal HelmRepository, which exists only for
 // a repository that hands out packaged archives.
 type HelmRepositories interface {
-	Ensure(ctx context.Context, repo contract.Repository) (services.InternalRepositoryState, error)
+	Ensure(ctx context.Context, repo contract.Repository) (internalobj.InternalRepositoryState, error)
 	// Remove drops the object a repository no longer needs, after its
 	// url moved from helm to oci.
 	Remove(ctx context.Context, names contract.InternalNames) error
