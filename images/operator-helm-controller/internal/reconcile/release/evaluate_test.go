@@ -610,6 +610,103 @@ func TestEvaluateAdvancesTheObservedGeneration(t *testing.T) {
 	}
 }
 
+// TestEvaluateCarriesTheObservedGeneration pins which passes may claim to have
+// finished with the spec they were given. Only a pass that reached a verdict the
+// release will keep may: one that settled on Ready, and one that gave up on the spec
+// for good. A pass still on its way to a verdict leaves the generation behind, so a
+// reader comparing it against metadata.generation sees work in flight rather than a
+// release that reports False about a spec it has not finished applying.
+func TestEvaluateCarriesTheObservedGeneration(t *testing.T) {
+	tests := []struct {
+		name    string
+		inputs  func(*Inputs)
+		advance bool
+	}{
+		{
+			name: "a settled release finished with the spec",
+			inputs: func(in *Inputs) {
+				in.Chart = &services.ChartOutcome{
+					Artifact: &meta.Artifact{Revision: "6.7.1"},
+					Internal: readyInternal(),
+				}
+			},
+			advance: true,
+		},
+		{
+			name: "a step that will be retried has not",
+			inputs: func(in *Inputs) {
+				in.Step = &Failure{
+					Reason:  helmv1alpha1.ReasonRBACSetupFailed,
+					Message: "Failed to set up the release identity",
+					Err:     errors.New("forbidden"),
+					Retry:   true,
+				}
+			},
+			advance: false,
+		},
+		{
+			name: "a step that gave up for good has",
+			inputs: func(in *Inputs) {
+				in.Step = &Failure{
+					Reason:   helmv1alpha1.ReasonForeignRBACObject,
+					Message:  "Refusing to adopt an identity owned by someone else",
+					Err:      errors.New("owned elsewhere"),
+					Terminal: true,
+				}
+			},
+			advance: true,
+		},
+		{
+			name: "an internal object still working on the spec has not",
+			inputs: func(in *Inputs) {
+				in.Chart = &services.ChartOutcome{
+					Artifact: &meta.Artifact{Revision: "6.7.1"},
+					Internal: services.InternalObjectState{
+						Observed: true,
+						Status:   metav1.ConditionUnknown,
+						Reason:   helmv1alpha1.ReasonReconciling,
+						Message:  "Pulling the chart",
+					},
+				}
+			},
+			advance: false,
+		},
+		{
+			name: "an internal object that gave up on the spec has",
+			inputs: func(in *Inputs) {
+				in.Chart = &services.ChartOutcome{
+					Artifact: &meta.Artifact{Revision: "6.7.1"},
+					Internal: services.InternalObjectState{
+						Observed: true,
+						Status:   metav1.ConditionFalse,
+						Reason:   helmv1alpha1.ReasonFailed,
+						Message:  "No chart version matches the constraint",
+						Stalled:  true,
+					},
+				}
+			},
+			advance: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			in := baseInputs()
+			in.ObservedGeneration = 1
+			test.inputs(&in)
+
+			decision := Evaluate(in)
+
+			switch {
+			case test.advance && (decision.ObservedGeneration == nil || *decision.ObservedGeneration != in.Generation):
+				t.Fatalf("ObservedGeneration = %v, want %d", decision.ObservedGeneration, in.Generation)
+			case !test.advance && decision.ObservedGeneration != nil:
+				t.Fatalf("ObservedGeneration = %d, want it left where it was", *decision.ObservedGeneration)
+			}
+		})
+	}
+}
+
 // TestEvaluateReportsTheCauseOfEveryVerdict pins that whichever kind of failure
 // produced the verdict, the pass carries the cause out to be logged. Most release
 // failures never reach the work queue, and several report a fixed message, so a

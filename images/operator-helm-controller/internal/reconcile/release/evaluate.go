@@ -105,10 +105,11 @@ type Decision struct {
 	Conditions       []metav1.Condition
 	RemoveConditions []string
 
-	// ObservedGeneration is nil on a pass that reported nothing about the spec it
-	// was given. A release sitting in maintenance is the case: its spec may have
-	// changed since, and saying the change was observed while nothing was done about
-	// it is what would make kstatus call such a release settled.
+	// ObservedGeneration is nil on a pass that has not finished with the spec it was
+	// given, which is every pass that left something to come back to: a step that will
+	// be retried, an internal object still working, a release sitting in maintenance.
+	// Saying the spec was observed while the release is still on its way to a verdict
+	// about it is what would make kstatus call such a release settled.
 	ObservedGeneration *int64
 
 	// ForceReconcileTime records that a force request was acted on, not that it
@@ -147,10 +148,32 @@ type conditionState struct {
 // Evaluate derives the desired release status from the results of a single
 // reconcile pass.
 func Evaluate(in Inputs) Decision {
+	decision := evaluate(in)
+	decision.ObservedGeneration = observedGeneration(in, decision)
+
+	return decision
+}
+
+// observedGeneration decides whether this pass may claim to have finished with the
+// spec it was given. Only a verdict the release will keep counts: one it settled on,
+// and one it gave up on for good. Anything else — a step to be retried, an internal
+// object still working — has something to come back to, and a reader comparing the
+// generation against metadata.generation is entitled to read the difference as work
+// still in flight rather than as a verdict about the spec in front of it.
+func observedGeneration(in Inputs, decision Decision) *int64 {
+	settled := apimeta.IsStatusConditionTrue(decision.Conditions, helmv1alpha1.ConditionTypeReady) ||
+		apimeta.IsStatusConditionTrue(decision.Conditions, helmv1alpha1.ConditionTypeStalled)
+	if !settled {
+		return nil
+	}
+
 	observed := max(in.Generation, in.ObservedGeneration)
 
+	return &observed
+}
+
+func evaluate(in Inputs) Decision {
 	decision := Decision{
-		ObservedGeneration: &observed,
 		// Stalled and Reconciling are the two kstatus abnormal-true conditions: by
 		// that convention each is present only while it applies, so every pass takes
 		// both away unless it has a reason to write one. A release that recovers must
@@ -200,12 +223,6 @@ func Evaluate(in Inputs) Decision {
 		// goes with it, which the default above already arranges: a release in
 		// maintenance has nothing in flight to report.
 		decision.ConsumeForce = true
-
-		if in.Maintenance == nil {
-			// Nothing ran in this pass: the release was already in maintenance and
-			// stays there, whatever its spec now says.
-			decision.ObservedGeneration = nil
-		}
 
 		return decision
 	}
