@@ -35,8 +35,8 @@ func TestEnsureTargetNamespaceCreatesItOnceAndLeavesItAlone(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
 	service := NewNamespaceService(c, c)
 
-	if err := service.EnsureTargetNamespace(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
-		t.Fatalf("EnsureTargetNamespace returned %v", err)
+	if err := service.EnsureTarget(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("EnsureTarget returned %v", err)
 	}
 
 	ns := &corev1.Namespace{}
@@ -49,8 +49,8 @@ func TestEnsureTargetNamespaceCreatesItOnceAndLeavesItAlone(t *testing.T) {
 		t.Fatalf("labelling namespace: %v", err)
 	}
 
-	if err := service.EnsureTargetNamespace(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
-		t.Fatalf("second EnsureTargetNamespace returned %v", err)
+	if err := service.EnsureTarget(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("second EnsureTarget returned %v", err)
 	}
 
 	again := &corev1.Namespace{}

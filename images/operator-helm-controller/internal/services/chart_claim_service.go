@@ -42,7 +42,7 @@ import (
 // It is addon-only in substance, not just by convention: the Lease name carries
 // neither the release kind nor a namespace, and the holder recorded on it is read
 // back as a HelmClusterAddon. Another family needing uniqueness would have to
-// bring its own implementation of contract.ChartClaim rather than reuse this one.
+// bring its own implementation of the reconciler's Claims rather than reuse this one.
 type ClaimService struct {
 	// reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
 	// controller cache: an acquisition decision must never be made against stale data.
@@ -129,7 +129,7 @@ func (s *ClaimService) OwnedBy(ctx context.Context, rel contract.Release) (bool,
 
 // Release deletes the claim Lease, but only if this addon still owns it, so a
 // duplicate addon that never acquired the pair cannot free the real owner's claim.
-func (s *ClaimService) Release(ctx context.Context, rel contract.Release) error {
+func (s *ClaimService) Drop(ctx context.Context, rel contract.Release) error {
 	nn := s.leaseKey(rel)
 
 	lease := &coordinationv1.Lease{}
@@ -154,14 +154,14 @@ func (s *ClaimService) Release(ctx context.Context, rel contract.Release) error 
 	return nil
 }
 
-// ReleaseStale deletes claim Leases this addon still owns for repository/chart
+// DropStale deletes claim Leases this addon still owns for repository/chart
 // pairs it no longer references — e.g. after the chart ref changed. The Lease name
 // is derived from the current spec, so a chart change makes Acquire claim a new
 // Lease and orphan the old one; the previous pair is not stored anywhere. The
 // orphans are found instead by the source-name label every claim already carries.
 // Only the addon's own claims (by HolderIdentity) other than the current one are
 // removed, so a pair taken over by another addon is left intact.
-func (s *ClaimService) ReleaseStale(ctx context.Context, rel contract.Release) error {
+func (s *ClaimService) DropStale(ctx context.Context, rel contract.Release) error {
 	current := s.leaseKey(rel).Name
 
 	// Direct reader, not the cached client: claim Leases are not watched, so the

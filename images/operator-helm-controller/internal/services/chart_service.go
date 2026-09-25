@@ -54,7 +54,7 @@ func NewChartService(client client.Client, scheme *runtime.Scheme, targetNamespa
 	}
 }
 
-func (s *ChartService) EnsureHelmChart(ctx context.Context, rel contract.Release, repo contract.Repository) ChartOutcome {
+func (s *ChartService) Ensure(ctx context.Context, rel contract.Release, repo contract.Repository) ChartOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &sourcev1.HelmChart{
@@ -91,11 +91,11 @@ func (s *ChartService) EnsureHelmChart(ctx context.Context, rel contract.Release
 	}
 }
 
-// CleanupHelmChart issues a delete for the internal HelmChart and returns it
+// Cleanup issues a delete for the internal HelmChart and returns it
 // while it is still present, so the caller can inspect its conditions and wait
 // for source-controller to finish removing it. It returns nil once the
 // HelmChart is gone.
-func (s *ChartService) CleanupHelmChart(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error) {
+func (s *ChartService) Cleanup(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error) {
 	nn := types.NamespacedName{Name: names.HelmChart, Namespace: s.TargetNamespace}
 	chart := &sourcev1.HelmChart{}
 	exists, err := s.deleteAndCheck(ctx, nn, chart)

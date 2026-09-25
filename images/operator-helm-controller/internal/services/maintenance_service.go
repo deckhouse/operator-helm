@@ -49,7 +49,7 @@ func NewMaintenanceService(client client.Client, scheme *runtime.Scheme, targetN
 	}
 }
 
-func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, rel contract.Release) MaintenanceOutcome {
+func (s *MaintenanceService) Ensure(ctx context.Context, rel contract.Release) MaintenanceOutcome {
 	logger := log.FromContext(ctx)
 
 	activated := rel.MaintenanceActivated()
@@ -66,7 +66,7 @@ func (s *MaintenanceService) EnsureMaintenanceMode(ctx context.Context, rel cont
 	return MaintenanceOutcome{Activated: activated}
 }
 
-func (s *MaintenanceService) IsMaintenanceModeChangeRequired(rel contract.Release) bool {
+func (s *MaintenanceService) ChangeRequired(rel contract.Release) bool {
 	if rel.MaintenanceActivated() && !rel.MaintenanceEnabled() {
 		return true
 	}

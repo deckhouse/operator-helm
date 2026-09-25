@@ -64,14 +64,14 @@ type Repository interface {
 	InternalNames() InternalNames
 }
 
-// ConsumerForcer pushes a force reconcile request onto the internal sources of
+// Consumers pushes a force reconcile request onto the internal sources of
 // the resources that consume a repository. Which resources those are depends on the
 // family, so the reconciler is handed an implementation instead of looking them up.
-type ConsumerForcer interface {
+type Consumers interface {
 	ForceReconcileConsumers(ctx context.Context, repo Repository) error
 }
 
-// NoConsumers is the ConsumerForcer of a family whose consumers do not exist yet.
+// NoConsumers is the Consumers of a family whose consumers do not exist yet.
 // The application family uses it until HelmApplication is reconciled by the
 // controller; that implementation replaces it.
 type NoConsumers struct{}

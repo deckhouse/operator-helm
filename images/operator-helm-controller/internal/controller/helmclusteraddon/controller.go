@@ -41,16 +41,16 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
 	r := reconcile.New(client, reconcile.Deps{
-		NewRelease:   adapter.EmptyAddonRelease,
-		Repositories: adapter.NewAddonRepositoryResolver(client),
-		Chart:        services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		OCI:          services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
-		Release:      services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Maintenance:  services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Claim:        services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
-		Namespaces:   services.NewNamespaceService(client, mgr.GetAPIReader()),
-		RBAC:         reconcile.NoRBAC{},
-		Status:       status.NewManager(client),
+		NewRelease:      adapter.EmptyAddonRelease,
+		Repositories:    adapter.NewAddonRepositoryResolver(client),
+		Charts:          services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		OCIRepositories: services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
+		Releases:        services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Maintenance:     services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Claims:          services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
+		Namespaces:      services.NewNamespaceService(client, mgr.GetAPIReader()),
+		Identity:        reconcile.NoIdentity{},
+		Status:          status.NewManager(client),
 	})
 
 	return ctrl.NewControllerManagedBy(mgr).

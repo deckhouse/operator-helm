@@ -48,16 +48,16 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
 	r := reconcile.New(client, reconcile.Deps{
-		NewRelease:   adapter.EmptyApplicationRelease,
-		Repositories: adapter.NewApplicationRepositoryResolver(client),
-		Chart:        services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		OCI:          services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
-		Release:      services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Maintenance:  services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Claim:        reconcile.NoChartClaim{},
-		Namespaces:   reconcile.ExistingTargetNamespace{},
-		RBAC:         services.NewRBACService(client, helmv1alpha1.TargetNamespace),
-		Status:       status.NewManager(client),
+		NewRelease:      adapter.EmptyApplicationRelease,
+		Repositories:    adapter.NewApplicationRepositoryResolver(client),
+		Charts:          services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		OCIRepositories: services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
+		Releases:        services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Maintenance:     services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Claims:          reconcile.NoClaims{},
+		Namespaces:      reconcile.ExistingTargetNamespace{},
+		Identity:        services.NewRBACService(client, helmv1alpha1.TargetNamespace),
+		Status:          status.NewManager(client),
 	})
 
 	mapInternal := utils.MapNamespacedInternalResources(

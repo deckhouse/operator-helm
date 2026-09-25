@@ -62,7 +62,7 @@ func TestEnsureHelmChartForcesReconcileFromAddon(t *testing.T) {
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
 	service, c := newChartService(t, addon)
 
-	service.EnsureHelmChart(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository()))
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository()))
 
 	chart := &sourcev1.HelmChart{}
 	key := client.ObjectKey{Name: utils.GetInternalHelmChartName(addon.Name), Namespace: testNamespace}
@@ -85,7 +85,7 @@ func TestEnsureHelmChartDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
 	addon := testAddon()
 	service, c := newChartService(t, addon)
 
-	service.EnsureHelmChart(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository()))
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository()))
 
 	chart := &sourcev1.HelmChart{}
 	key := client.ObjectKey{Name: utils.GetInternalHelmChartName(addon.Name), Namespace: testNamespace}
@@ -114,7 +114,7 @@ func TestEnsureHelmChartKeepsForeignLabels(t *testing.T) {
 	service, c := newChartService(t, addon, existing)
 
 	rel := adapter.NewAddonRelease(addon)
-	service.EnsureHelmChart(context.Background(), rel, adapter.NewAddonRepository(chartTestRepository()))
+	service.Ensure(context.Background(), rel, adapter.NewAddonRepository(chartTestRepository()))
 
 	chart := &sourcev1.HelmChart{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(existing), chart); err != nil {

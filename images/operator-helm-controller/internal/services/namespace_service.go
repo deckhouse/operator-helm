@@ -28,7 +28,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-// NamespaceService implements contract.TargetNamespaceEnsurer: it creates a
+// NamespaceService is the release reconciler's Namespaces: it creates a
 // release's target namespace when it does not exist yet, and never modifies an
 // existing one — the namespace belongs to whoever created it. Today only the addon
 // controller wires it in; other families deploy into a namespace that must already
@@ -45,7 +45,7 @@ func NewNamespaceService(c client.Client, reader client.Reader) *NamespaceServic
 	return &NamespaceService{client: c, reader: reader}
 }
 
-func (s *NamespaceService) EnsureTargetNamespace(ctx context.Context, rel contract.Release) error {
+func (s *NamespaceService) EnsureTarget(ctx context.Context, rel contract.Release) error {
 	ns := &corev1.Namespace{}
 
 	err := s.reader.Get(ctx, client.ObjectKey{Name: rel.TargetNamespace()}, ns)

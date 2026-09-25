@@ -54,16 +54,16 @@ const chartClaimConflictRequeueInterval = 30 * time.Second
 // repository/chart pair is claimed (Claim), whether the target namespace is created
 // (Namespaces) and which identity the chart is applied with (RBAC).
 type Deps struct {
-	NewRelease   func() contract.Release
-	Repositories RepositoryResolver
-	Chart        ChartManager
-	OCI          OCIRepoManager
-	Release      ReleaseManager
-	Maintenance  MaintenanceManager
-	Claim        ChartClaim
-	Namespaces   TargetNamespaceEnsurer
-	RBAC         RBACManager
-	Status       *status.Manager
+	NewRelease      func() contract.Release
+	Repositories    Repositories
+	Charts          Charts
+	OCIRepositories OCIRepositories
+	Releases        Releases
+	Maintenance     Maintenance
+	Claims          Claims
+	Namespaces      Namespaces
+	Identity        Identity
+	Status          *status.Manager
 }
 
 func New(c client.Client, deps Deps) *Reconciler {
@@ -103,7 +103,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// because a duplicate that loses the race must not accrue a finalizer it would
 	// otherwise have to clean up: it simply surfaces the conflict on its status and
 	// requeues, recovering on its own once the owner releases the pair.
-	acquired, holder, err := r.deps.Claim.Acquire(ctx, rel)
+	acquired, holder, err := r.deps.Claims.Acquire(ctx, rel)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("acquiring chart claim: %w", err)
 	}
@@ -142,12 +142,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// would not trigger a follow-up reconcile.
 	}
 
-	if err := r.deps.Claim.ReleaseStale(ctx, rel); err != nil {
+	if err := r.deps.Claims.DropStale(ctx, rel); err != nil {
 		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
 	}
 
-	if r.deps.Maintenance.IsMaintenanceModeChangeRequired(rel) {
-		outcome := r.deps.Maintenance.EnsureMaintenanceMode(ctx, rel)
+	if r.deps.Maintenance.ChangeRequired(rel) {
+		outcome := r.deps.Maintenance.Ensure(ctx, rel)
 		in.Maintenance = &outcome
 		// Maintenance being lifted leaves a pending force request in place for the
 		// pass that can honour it; a release settling into maintenance can never act
@@ -190,7 +190,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return r.finish(ctx, rel, in)
 	}
 
-	if err := r.deps.Namespaces.EnsureTargetNamespace(ctx, rel); err != nil {
+	if err := r.deps.Namespaces.EnsureTarget(ctx, rel); err != nil {
 		in.Step = &Failure{
 			Reason:  helmv1alpha1.ReasonFailed,
 			Message: fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
@@ -203,7 +203,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// The identity comes before the internal sources: helm-controller checks that
 	// the account named on the HelmRelease exists before it impersonates it, so a
 	// HelmRelease created ahead of its ServiceAccount would fail its first pass.
-	if rbac := r.deps.RBAC.EnsureRBAC(ctx, rel); rbac.Err != nil {
+	if rbac := r.deps.Identity.Ensure(ctx, rel); rbac.Err != nil {
 		in.Step = &Failure{
 			Reason:   rbac.Reason,
 			Message:  rbac.Message,
@@ -257,7 +257,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// The version may have moved out of a registry — either because the user
 		// repointed the repository, or because the index re-published it as an
 		// archive. Either way the internal OCIRepository is no longer the source.
-		superseded, err := r.deps.OCI.RemoveOCIRepository(ctx, names)
+		superseded, err := r.deps.OCIRepositories.Remove(ctx, names)
 		if err != nil {
 			in.ChartSource = repositoryChangeFailure(err)
 
@@ -266,10 +266,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		r.logSourceKindFlip(ctx, rel, src.Kind, superseded != nil)
 
-		outcome := r.deps.Chart.EnsureHelmChart(ctx, rel, repo)
+		outcome := r.deps.Charts.Ensure(ctx, rel, repo)
 		in.Chart = &outcome
 	case src.Kind == chartsource.OCI:
-		superseded, err := r.deps.Chart.CleanupHelmChart(ctx, names)
+		superseded, err := r.deps.Charts.Cleanup(ctx, names)
 		if err != nil {
 			in.ChartSource = repositoryChangeFailure(err)
 
@@ -278,7 +278,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		r.logSourceKindFlip(ctx, rel, src.Kind, superseded != nil)
 
-		outcome := r.deps.OCI.EnsureInternalOCIRepository(ctx, rel, repo, src, chartVersion)
+		outcome := r.deps.OCIRepositories.Ensure(ctx, rel, repo, src, chartVersion)
 		in.OCIRepo = &outcome
 	default:
 		in.Step = &Failure{
@@ -292,7 +292,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if revision, ok := artifactRevision(in); ok {
-		outcome := r.deps.Release.EnsureHelmRelease(ctx, rel, src.Kind, revision)
+		outcome := r.deps.Releases.Ensure(ctx, rel, src.Kind, revision)
 		in.Release = &outcome
 	}
 
@@ -404,7 +404,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 	// helm-controller uninstalled with. Each step waits for the resource to
 	// actually disappear and surfaces the blocking resource's readiness on the
 	// release object so the reason a deletion stalls is observable.
-	release, err := r.deps.Release.CleanupHelmRelease(ctx, names)
+	release, err := r.deps.Releases.Cleanup(ctx, names)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -413,13 +413,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 		// that blocks helm uninstall is propagated into the release. Keep re-applying
 		// the (possibly corrected) spec to the still-present release so the
 		// uninstall can be fixed via the release object even while it is being deleted.
-		if err := r.deps.Release.SyncReleaseSpec(ctx, rel, release); err != nil {
+		if err := r.deps.Releases.SyncSpec(ctx, rel, release); err != nil {
 			return reconcile.Result{}, err
 		}
 		return pass.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal release", release)
 	}
 
-	chart, err := r.deps.Chart.CleanupHelmChart(ctx, names)
+	chart, err := r.deps.Charts.Cleanup(ctx, names)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -427,7 +427,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 		return pass.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal chart", chart)
 	}
 
-	ociRepo, err := r.deps.OCI.RemoveOCIRepository(ctx, names)
+	ociRepo, err := r.deps.OCIRepositories.Remove(ctx, names)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -437,7 +437,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 
 	// The identity goes last: helm-controller uninstalls as that account, so it
 	// has to outlive the HelmRelease.
-	if err := r.deps.RBAC.CleanupRBAC(ctx, rel); err != nil {
+	if err := r.deps.Identity.Cleanup(ctx, rel); err != nil {
 		// By this point the internal release and sources are already gone, so
 		// nothing else on the object would explain why the finalizer is still
 		// there. The write is best-effort, same as the internal-resource waits
@@ -450,7 +450,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 	// earlier would let another release start reconciling the same chart while this
 	// one's HelmRelease is still being uninstalled — exactly the collision the claim
 	// prevents.
-	if err := r.deps.Claim.Release(ctx, rel); err != nil {
+	if err := r.deps.Claims.Drop(ctx, rel); err != nil {
 		return reconcile.Result{}, fmt.Errorf("releasing chart claim: %w", err)
 	}
 

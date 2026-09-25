@@ -151,7 +151,7 @@ func TestEnsureInternalOCIRepositoryUsesRecordedMediaType(t *testing.T) {
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
@@ -177,7 +177,7 @@ func TestEnsureInternalOCIRepositoryReportsRemovedVersion(t *testing.T) {
 		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
 	}
 
-	result := service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+	result := service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	if !result.VersionRemoved {
 		t.Fatal("the outcome must report that the repository no longer offers the tag")
@@ -243,7 +243,7 @@ func TestEnsureInternalOCIRepositoryDoesNotRelabelReadyChildOnRemovedVersion(t *
 
 	service, _ := newOCIRepoService(t, addon, repo, internal)
 
-	result := service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+	result := service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	if !result.Internal.Ready() {
 		t.Fatalf("expected the ready child to be mirrored as ready, got %+v", result.Internal)
@@ -270,7 +270,7 @@ func TestEnsureInternalOCIRepositoryForcesReconcileFromAddon(t *testing.T) {
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
@@ -298,7 +298,7 @@ func TestEnsureInternalOCIRepositoryDoesNotForceReconcileWithoutAnnotation(t *te
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
 
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
@@ -324,7 +324,7 @@ func TestEnsureInternalOCIRepositoryAddressesTheIndexReference(t *testing.T) {
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 
-	service.EnsureInternalOCIRepository(
+	service.Ensure(
 		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
@@ -369,7 +369,7 @@ func TestEnsureInternalOCIRepositoryCarriesTLSOnTheSameHost(t *testing.T) {
 		OCIRef:  "oci://charts.example.invalid/charts/podinfo:6.7.1",
 	}
 
-	service.EnsureInternalOCIRepository(
+	service.Ensure(
 		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
@@ -405,7 +405,7 @@ func TestEnsureInternalOCIRepositoryKeepsOCIRepositoryCredentials(t *testing.T) 
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(
+	service.Ensure(
 		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
@@ -436,7 +436,7 @@ func TestEnsureInternalOCIRepositoryProbesHybridVersion(t *testing.T) {
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 
-	service.EnsureInternalOCIRepository(
+	service.Ensure(
 		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
@@ -471,8 +471,8 @@ func TestEnsureInternalOCIRepositoryReusesTheInternalObjectAsCache(t *testing.T)
 	}
 	source := ociSource(t, repo, version)
 
-	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
-	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
 
 	if resolver.calls != 1 {
 		t.Fatalf("resolver calls = %d, want 1: the internal object is the cache", resolver.calls)
@@ -491,13 +491,13 @@ func TestEnsureInternalOCIRepositoryReprobesChangedReference(t *testing.T) {
 		Version: "6.7.1",
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
-	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, first), first)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, first), first)
 
 	second := &helmv1alpha1.ChartVersion{
 		Version: "6.7.1",
 		OCIRef:  "oci://mirror.example.com/charts/podinfo:6.7.1",
 	}
-	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, second), second)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, second), second)
 
 	if resolver.calls != 2 {
 		t.Fatalf("resolver calls = %d, want 2: the reference changed", resolver.calls)
@@ -517,10 +517,10 @@ func TestEnsureInternalOCIRepositoryForceBypassesCache(t *testing.T) {
 	}
 	source := ociSource(t, repo, version)
 
-	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
 
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
-	service.EnsureInternalOCIRepository(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
 
 	if resolver.calls != 2 {
 		t.Fatalf("resolver calls = %d, want 2: a force request re-examines the artifact", resolver.calls)
@@ -539,7 +539,7 @@ func TestEnsureInternalOCIRepositoryNeverProbesRecordedMediaType(t *testing.T) {
 		MediaType: "application/tar+gzip",
 	}
 
-	service.EnsureInternalOCIRepository(
+	service.Ensure(
 		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
@@ -561,7 +561,7 @@ func TestEnsureInternalOCIRepositoryReportsTerminalProbeFailure(t *testing.T) {
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 
-	result := service.EnsureInternalOCIRepository(
+	result := service.Ensure(
 		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 
@@ -595,7 +595,7 @@ func TestEnsureInternalOCIRepositoryRequeuesRetriableProbeFailure(t *testing.T) 
 		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
 	}
 
-	result := service.EnsureInternalOCIRepository(
+	result := service.Ensure(
 		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
 	)
 

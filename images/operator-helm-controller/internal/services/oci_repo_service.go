@@ -81,7 +81,7 @@ func NewOCIRepoService(
 	}
 }
 
-func (s *OCIRepoService) EnsureInternalOCIRepository(
+func (s *OCIRepoService) Ensure(
 	ctx context.Context,
 	rel contract.Release,
 	repo contract.Repository,
@@ -222,11 +222,11 @@ func artifactRepoConfig(repo contract.Repository, src chartsource.Source) *repoc
 	}
 }
 
-// RemoveOCIRepository issues a delete for the internal OCIRepository and returns
+// Remove issues a delete for the internal OCIRepository and returns
 // it while it is still present, so the caller can inspect its conditions and wait
 // for source-controller to finish removing it. It returns nil once the
 // OCIRepository is gone.
-func (s *OCIRepoService) RemoveOCIRepository(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error) {
+func (s *OCIRepoService) Remove(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error) {
 	nn := types.NamespacedName{Name: names.OCIRepository, Namespace: s.TargetNamespace}
 	ociRepo := &sourcev1.OCIRepository{}
 	exists, err := s.deleteAndCheck(ctx, nn, ociRepo)

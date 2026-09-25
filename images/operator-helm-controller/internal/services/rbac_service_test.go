@@ -60,8 +60,8 @@ func TestEnsureRBACCreatesTheIdentity(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newRBACService(t)
 
-	if out := service.EnsureRBAC(context.Background(), rel); out.Err != nil {
-		t.Fatalf("EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), rel); out.Err != nil {
+		t.Fatalf("Ensure returned %v", out.Err)
 	}
 
 	names := rel.InternalNames()
@@ -130,8 +130,8 @@ func TestEnsureRBACRewritesAnEditedRole(t *testing.T) {
 	}
 	service, c := newRBACService(t, edited)
 
-	if out := service.EnsureRBAC(context.Background(), rel); out.Err != nil {
-		t.Fatalf("EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), rel); out.Err != nil {
+		t.Fatalf("Ensure returned %v", out.Err)
 	}
 
 	role := &rbacv1.Role{}
@@ -167,7 +167,7 @@ func TestEnsureRBACRefusesARoleThatIsNotOurs(t *testing.T) {
 	}
 	service, c := newRBACService(t, foreign)
 
-	out := service.EnsureRBAC(context.Background(), rel)
+	out := service.Ensure(context.Background(), rel)
 	if out.Err == nil {
 		t.Fatal("a role that is not ours must be reported, not seized")
 	}
@@ -207,7 +207,7 @@ func TestEnsureRBACRefusesABindingThatIsNotOurs(t *testing.T) {
 	}
 	service, c := newRBACService(t, foreign)
 
-	out := service.EnsureRBAC(context.Background(), rel)
+	out := service.Ensure(context.Background(), rel)
 	if out.Err == nil {
 		t.Fatal("a binding that is not ours must be reported, not adopted")
 	}
@@ -254,8 +254,8 @@ func TestEnsureRBACReplacesOurBindingThatNamesAnotherRole(t *testing.T) {
 	}
 	service, c := newRBACService(t, misbound)
 
-	if out := service.EnsureRBAC(context.Background(), rel); out.Err != nil {
-		t.Fatalf("EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), rel); out.Err != nil {
+		t.Fatalf("Ensure returned %v", out.Err)
 	}
 
 	stored := &rbacv1.RoleBinding{}
@@ -308,8 +308,8 @@ func TestEnsureRBACSurvivesLosingTheRoleCreateRace(t *testing.T) {
 		Build()
 	service := NewRBACService(c, testNamespace)
 
-	if out := service.EnsureRBAC(context.Background(), rel); out.Err != nil {
-		t.Fatalf("EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), rel); out.Err != nil {
+		t.Fatalf("Ensure returned %v", out.Err)
 	}
 	if !refused {
 		t.Fatal("the test did not exercise the refused create")
@@ -328,14 +328,14 @@ func TestEnsureRBACRecreatesADeletedRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newRBACService(t)
 
-	if out := service.EnsureRBAC(context.Background(), rel); out.Err != nil {
-		t.Fatalf("first EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), rel); out.Err != nil {
+		t.Fatalf("first Ensure returned %v", out.Err)
 	}
 	if err := c.Delete(context.Background(), &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: "team-a"}}); err != nil {
 		t.Fatalf("deleting role: %v", err)
 	}
-	if out := service.EnsureRBAC(context.Background(), rel); out.Err != nil {
-		t.Fatalf("second EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), rel); out.Err != nil {
+		t.Fatalf("second Ensure returned %v", out.Err)
 	}
 
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: ApplicationRoleName}, &rbacv1.Role{}); err != nil {
@@ -352,8 +352,8 @@ func TestEnsureRBACKeepsForeignLabelsOnTheServiceAccountAndBinding(t *testing.T)
 	names := rel.InternalNames()
 	service, c := newRBACService(t)
 
-	if out := service.EnsureRBAC(context.Background(), rel); out.Err != nil {
-		t.Fatalf("first EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), rel); out.Err != nil {
+		t.Fatalf("first Ensure returned %v", out.Err)
 	}
 
 	sa := &corev1.ServiceAccount{}
@@ -374,8 +374,8 @@ func TestEnsureRBACKeepsForeignLabelsOnTheServiceAccountAndBinding(t *testing.T)
 		t.Fatalf("labelling role binding: %v", err)
 	}
 
-	if out := service.EnsureRBAC(context.Background(), rel); out.Err != nil {
-		t.Fatalf("second EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), rel); out.Err != nil {
+		t.Fatalf("second Ensure returned %v", out.Err)
 	}
 
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: names.ServiceAccount}, sa); err != nil {
@@ -396,8 +396,8 @@ func TestEnsureRBACKeepsForeignLabelsOnTheServiceAccountAndBinding(t *testing.T)
 func TestEnsureRBACIsANoopForAFamilyWithoutAServiceAccount(t *testing.T) {
 	service, c := newRBACService(t)
 
-	if out := service.EnsureRBAC(context.Background(), adapter.NewAddonRelease(testAddon())); out.Err != nil {
-		t.Fatalf("EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), adapter.NewAddonRelease(testAddon())); out.Err != nil {
+		t.Fatalf("Ensure returned %v", out.Err)
 	}
 
 	var accounts corev1.ServiceAccountList
@@ -416,11 +416,11 @@ func TestCleanupRBACRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newRBACService(t)
 
-	if out := service.EnsureRBAC(context.Background(), rel); out.Err != nil {
-		t.Fatalf("EnsureRBAC returned %v", out.Err)
+	if out := service.Ensure(context.Background(), rel); out.Err != nil {
+		t.Fatalf("Ensure returned %v", out.Err)
 	}
-	if err := service.CleanupRBAC(context.Background(), rel); err != nil {
-		t.Fatalf("CleanupRBAC returned %v", err)
+	if err := service.Cleanup(context.Background(), rel); err != nil {
+		t.Fatalf("Cleanup returned %v", err)
 	}
 
 	names := rel.InternalNames()
@@ -434,8 +434,8 @@ func TestCleanupRBACRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T) {
 		t.Fatalf("the role must survive the application: %v", err)
 	}
 
-	if err := service.CleanupRBAC(context.Background(), rel); err != nil {
-		t.Fatalf("second CleanupRBAC returned %v", err)
+	if err := service.Cleanup(context.Background(), rel); err != nil {
+		t.Fatalf("second Cleanup returned %v", err)
 	}
 }
 
@@ -453,8 +453,8 @@ func TestCleanupRBACLeavesAForeignRoleBindingAlone(t *testing.T) {
 	}
 	service, c := newRBACService(t, foreign)
 
-	if err := service.CleanupRBAC(context.Background(), rel); err != nil {
-		t.Fatalf("CleanupRBAC returned %v", err)
+	if err := service.Cleanup(context.Background(), rel); err != nil {
+		t.Fatalf("Cleanup returned %v", err)
 	}
 
 	stored := &rbacv1.RoleBinding{}

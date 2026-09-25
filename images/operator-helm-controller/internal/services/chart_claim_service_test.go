@@ -91,7 +91,7 @@ func claimHolder(t *testing.T, c client.Client, repo, chart string) string {
 
 // TestAcquireClaimsAFreePair pins what a first acquisition writes: the Lease is
 // named after the pair, lives in the operator namespace, records the addon as its
-// holder and carries the source labels ReleaseStale later finds orphans by.
+// holder and carries the source labels DropStale later finds orphans by.
 func TestAcquireClaimsAFreePair(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 	rel := adapter.NewAddonRelease(addon)
@@ -115,7 +115,7 @@ func TestAcquireClaimsAFreePair(t *testing.T) {
 	}
 	for name, want := range rel.SourceLabels() {
 		if lease.Labels[name] != want {
-			t.Fatalf("label %s = %q, want %q: ReleaseStale finds orphans by these", name, lease.Labels[name], want)
+			t.Fatalf("label %s = %q, want %q: DropStale finds orphans by these", name, lease.Labels[name], want)
 		}
 	}
 }
@@ -327,15 +327,15 @@ func TestReleaseFreesOnlyTheCallerOwnClaim(t *testing.T) {
 	duplicate := claimingAddon("metrics-copy", "podinfo")
 	service, c := newClaimService(t, owner, duplicate, claimFor("stable", "podinfo", "metrics", "metrics"))
 
-	if err := service.Release(context.Background(), adapter.NewAddonRelease(duplicate)); err != nil {
-		t.Fatalf("Release returned %v", err)
+	if err := service.Drop(context.Background(), adapter.NewAddonRelease(duplicate)); err != nil {
+		t.Fatalf("Drop returned %v", err)
 	}
 	if got := claimHolder(t, c, "stable", "podinfo"); got != "metrics" {
 		t.Fatalf("holder = %q, want the owner's claim left intact", got)
 	}
 
-	if err := service.Release(context.Background(), adapter.NewAddonRelease(owner)); err != nil {
-		t.Fatalf("Release returned %v", err)
+	if err := service.Drop(context.Background(), adapter.NewAddonRelease(owner)); err != nil {
+		t.Fatalf("Drop returned %v", err)
 	}
 
 	lease := &coordinationv1.Lease{}
@@ -352,8 +352,8 @@ func TestReleaseToleratesAMissingClaim(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 	service, _ := newClaimService(t, addon)
 
-	if err := service.Release(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
-		t.Fatalf("Release returned %v, want a missing claim to be no failure", err)
+	if err := service.Drop(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("Drop returned %v, want a missing claim to be no failure", err)
 	}
 }
 
@@ -376,8 +376,8 @@ func TestReleaseLeavesAClaimTakenOverInBetween(t *testing.T) {
 		Build()
 	service := NewClaimService(c, c, testNamespace)
 
-	if err := service.Release(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
-		t.Fatalf("Release returned %v, want the rejected delete to be no failure", err)
+	if err := service.Drop(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("Drop returned %v, want the rejected delete to be no failure", err)
 	}
 	if got := claimHolder(t, c, "stable", "podinfo"); got != "metrics" {
 		t.Fatalf("holder = %q, want the lease left where the conflict found it", got)
@@ -397,8 +397,8 @@ func TestReleaseStaleDropsTheClaimsTheSpecMovedAwayFrom(t *testing.T) {
 		claimFor("other-repo", "podinfo", "someone-else", "metrics"),
 	)
 
-	if err := service.ReleaseStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
-		t.Fatalf("ReleaseStale returned %v", err)
+	if err := service.DropStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("DropStale returned %v", err)
 	}
 
 	if got := claimHolder(t, c, "stable", "podinfo"); got != "metrics" {
@@ -426,8 +426,8 @@ func TestReleaseStaleIgnoresClaimsOfOtherAddons(t *testing.T) {
 		claimFor("other-repo", "other-chart", "another-addon", "another-addon"),
 	)
 
-	if err := service.ReleaseStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
-		t.Fatalf("ReleaseStale returned %v", err)
+	if err := service.DropStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("DropStale returned %v", err)
 	}
 
 	if got := claimHolder(t, c, "other-repo", "other-chart"); got != "another-addon" {

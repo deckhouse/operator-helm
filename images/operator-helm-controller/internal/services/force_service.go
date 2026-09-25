@@ -28,7 +28,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-var _ contract.ConsumerForcer = (*ForceService)(nil)
+var _ contract.Consumers = (*ForceService)(nil)
 
 // ForceService pushes a repository's force reconcile request onto the internal
 // OCIRepository of every release consuming it. Which releases those are is the

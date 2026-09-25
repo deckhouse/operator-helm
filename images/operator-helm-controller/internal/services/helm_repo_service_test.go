@@ -71,9 +71,9 @@ func TestEnsureInternalHelmRepositoryReportsNotObservedAsNotReady(t *testing.T) 
 	repo := testRepository()
 	service := newHelmRepoService(t, repo)
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
+	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
-		t.Fatalf("EnsureInternalHelmRepository returned %v", err)
+		t.Fatalf("Ensure returned %v", err)
 	}
 	if !state.Present {
 		t.Fatal("helm repositories must report an internal object")
@@ -119,9 +119,9 @@ func TestEnsureInternalHelmRepositoryMirrorsConditions(t *testing.T) {
 	// The fixture is created with generation 0 and the condition observes 0, so
 	// the state must mirror the condition rather than report "not observed yet".
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
+	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
-		t.Fatalf("EnsureInternalHelmRepository returned %v", err)
+		t.Fatalf("Ensure returned %v", err)
 	}
 	if state.Ready {
 		t.Fatal("state must mirror Ready=False from the internal object")
@@ -155,9 +155,9 @@ func TestEnsureInternalHelmRepositoryReportsStalled(t *testing.T) {
 
 	service := newHelmRepoService(t, repo, internal)
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
+	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
-		t.Fatalf("EnsureInternalHelmRepository returned %v", err)
+		t.Fatalf("Ensure returned %v", err)
 	}
 	if !state.Stalled {
 		t.Fatal("state must report Stalled from the internal object")
@@ -213,9 +213,9 @@ func TestEnsureInternalHelmRepositoryStalledPrecedesReady(t *testing.T) {
 
 	service := newHelmRepoService(t, repo, internal)
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
+	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
-		t.Fatalf("EnsureInternalHelmRepository returned %v", err)
+		t.Fatalf("Ensure returned %v", err)
 	}
 	if !state.Stalled {
 		t.Fatal("Stalled=True must take precedence even when an observed Ready=True is also present")
@@ -252,9 +252,9 @@ func TestEnsureInternalHelmRepositoryReturnsAPIError(t *testing.T) {
 
 	service := NewHelmRepoService(c, scheme, testNamespace)
 
-	state, err := service.EnsureInternalHelmRepository(context.Background(), adapter.NewAddonRepository(repo))
+	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err == nil {
-		t.Fatal("EnsureInternalHelmRepository must return an error when the API call fails")
+		t.Fatal("Ensure must return an error when the API call fails")
 	}
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("returned error must wrap the underlying API failure, got %v", err)

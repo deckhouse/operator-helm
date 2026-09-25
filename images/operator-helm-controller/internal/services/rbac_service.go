@@ -70,10 +70,10 @@ func NewRBACService(c client.Client, targetNamespace string) *RBACService {
 	}
 }
 
-// EnsureRBAC reconciles the account, the Role and the binding. A release without a
+// Ensure reconciles the account, the Role and the binding. A release without a
 // service account name belongs to a family that does not impersonate; nothing is
 // created for it.
-func (s *RBACService) EnsureRBAC(ctx context.Context, rel contract.Release) RBACOutcome {
+func (s *RBACService) Ensure(ctx context.Context, rel contract.Release) RBACOutcome {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
 		return RBACOutcome{}
@@ -135,10 +135,10 @@ func managedByOperator(labels map[string]string) bool {
 	return labels[helmv1alpha1.LabelManagedBy] == helmv1alpha1.LabelManagedByValue
 }
 
-// CleanupRBAC removes the account and the binding. The Role stays: it is shared by
+// Cleanup removes the account and the binding. The Role stays: it is shared by
 // every application of the namespace, and on its own — with no binding left naming
 // it — it grants nothing.
-func (s *RBACService) CleanupRBAC(ctx context.Context, rel contract.Release) error {
+func (s *RBACService) Cleanup(ctx context.Context, rel contract.Release) error {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
 		return nil

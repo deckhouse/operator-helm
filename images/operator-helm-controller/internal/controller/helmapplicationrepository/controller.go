@@ -46,12 +46,12 @@ func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
 	r := reconcile.New(client, reconcile.Deps{
-		NewRepository: adapter.EmptyApplicationRepository,
-		Secrets:       services.NewRepoSecretsService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Internal:      services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		Consumers:     services.NewForceService(client, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(client)),
-		Catalog:       services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewApplicationCatalog(client)),
-		Status:        status.NewManager(client),
+		NewRepository:    adapter.EmptyApplicationRepository,
+		Secrets:          services.NewRepoSecretsService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		HelmRepositories: services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Consumers:        services.NewForceService(client, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(client)),
+		Catalogs:         services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewApplicationCatalog(client)),
+		Status:           status.NewManager(client),
 	})
 
 	mapInternal := utils.MapNamespacedInternalResources(

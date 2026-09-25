@@ -61,7 +61,7 @@ func NewReleaseService(client client.Client, scheme *runtime.Scheme, targetNames
 	}
 }
 
-func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, rel contract.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {
+func (s *ReleaseService) Ensure(ctx context.Context, rel contract.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &helmv2.HelmRelease{
@@ -98,11 +98,11 @@ func (s *ReleaseService) EnsureHelmRelease(ctx context.Context, rel contract.Rel
 	}
 }
 
-// CleanupHelmRelease issues a delete for the internal HelmRelease and returns it
+// Cleanup issues a delete for the internal HelmRelease and returns it
 // while it is still present, so the caller can inspect its conditions and wait
 // for helm-controller to finish uninstalling before proceeding. It returns nil
 // once the HelmRelease is gone.
-func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error) {
+func (s *ReleaseService) Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error) {
 	nn := types.NamespacedName{Name: names.HelmRelease, Namespace: s.TargetNamespace}
 	release := &helmv2.HelmRelease{}
 	exists, err := s.deleteAndCheck(ctx, nn, release)
@@ -116,7 +116,7 @@ func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, names contract.
 	return release, nil
 }
 
-// SyncReleaseSpec re-applies the addon-derived fields onto an existing HelmRelease
+// SyncSpec re-applies the addon-derived fields onto an existing HelmRelease
 // while the addon is being deleted, without ever creating it, and always requests
 // a reconcile. A spec error propagated into the HelmRelease can make helm
 // uninstall fail, and helm-controller re-reads the spec on every deletion
@@ -125,7 +125,7 @@ func (s *ReleaseService) CleanupHelmRelease(ctx context.Context, names contract.
 // failed uninstall may be external (e.g. kube-apiserver issues) and leave the
 // spec unchanged, so helm-controller must be nudged out of its error backoff to
 // retry on every pass regardless.
-func (s *ReleaseService) SyncReleaseSpec(ctx context.Context, rel contract.Release, release *helmv2.HelmRelease) error {
+func (s *ReleaseService) SyncSpec(ctx context.Context, rel contract.Release, release *helmv2.HelmRelease) error {
 	base := release.DeepCopy()
 
 	release.Spec.TargetNamespace = rel.TargetNamespace()

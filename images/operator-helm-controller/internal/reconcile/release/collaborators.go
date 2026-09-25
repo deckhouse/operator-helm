@@ -33,108 +33,108 @@ import (
 // that offers it fits. That is what lets a family opt out of a step with a null
 // implementation, and a test replace one step without standing up the rest.
 
-// RepositoryResolver loads the repository a release references and the catalog of
+// Repositories loads the repository a release references and the catalog of
 // that repository's kind. The application family picks between two repository
 // kinds; the addon family has one.
-type RepositoryResolver interface {
+type Repositories interface {
 	Resolve(ctx context.Context, ref contract.RepositoryRef) (contract.Repository, contract.Catalog, error)
 }
 
-// ChartClaim guards the uniqueness of a repository/chart pair across the releases
+// Claims guards the uniqueness of a repository/chart pair across the releases
 // of one family. The addon family enforces it with a Lease; the application family
 // does not enforce it at all.
-type ChartClaim interface {
+type Claims interface {
 	// Acquire reports whether the release holds the claim on its pair; when it does
 	// not, holder names the release that does.
 	Acquire(ctx context.Context, rel contract.Release) (acquired bool, holder string, err error)
-	// ReleaseStale frees claims this release still holds on pairs it no longer
+	// DropStale frees claims this release still holds on pairs it no longer
 	// references.
-	ReleaseStale(ctx context.Context, rel contract.Release) error
-	// Release frees the claim on the release's current pair.
-	Release(ctx context.Context, rel contract.Release) error
+	DropStale(ctx context.Context, rel contract.Release) error
+	// Drop frees the claim on the release's current pair.
+	Drop(ctx context.Context, rel contract.Release) error
 }
 
-// TargetNamespaceEnsurer makes sure the namespace a release deploys into exists.
-type TargetNamespaceEnsurer interface {
-	EnsureTargetNamespace(ctx context.Context, rel contract.Release) error
+// Namespaces makes sure the namespace a release deploys into exists.
+type Namespaces interface {
+	EnsureTarget(ctx context.Context, rel contract.Release) error
 }
 
-// RBACManager provides the identity a release is applied with. The application
+// Identity provides the identity a release is applied with. The application
 // family creates a ServiceAccount, a Role and a RoleBinding and names the account
 // on the HelmRelease; the addon family applies charts as helm-controller itself.
-type RBACManager interface {
-	EnsureRBAC(ctx context.Context, rel contract.Release) services.RBACOutcome
-	CleanupRBAC(ctx context.Context, rel contract.Release) error
+type Identity interface {
+	Ensure(ctx context.Context, rel contract.Release) services.RBACOutcome
+	Cleanup(ctx context.Context, rel contract.Release) error
 }
 
-// ChartManager owns the internal HelmChart of a release, the source object of a
+// Charts owns the internal HelmChart of a release, the source object of a
 // repository that hands out packaged archives.
-type ChartManager interface {
-	EnsureHelmChart(ctx context.Context, rel contract.Release, repo contract.Repository) services.ChartOutcome
-	// CleanupHelmChart returns the object while it is still present, so the caller
+type Charts interface {
+	Ensure(ctx context.Context, rel contract.Release, repo contract.Repository) services.ChartOutcome
+	// Cleanup returns the object while it is still present, so the caller
 	// can wait for it to actually go away.
-	CleanupHelmChart(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error)
+	Cleanup(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error)
 }
 
-// OCIRepoManager owns the internal OCIRepository of a release, the source object of
+// OCIRepositories owns the internal OCIRepository of a release, the source object of
 // a repository that hands out registry artifacts.
-type OCIRepoManager interface {
-	EnsureInternalOCIRepository(
+type OCIRepositories interface {
+	Ensure(
 		ctx context.Context,
 		rel contract.Release,
 		repo contract.Repository,
 		src chartsource.Source,
 		version *helmv1alpha1.ChartVersion,
 	) services.OCIRepoOutcome
-	RemoveOCIRepository(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error)
+	Remove(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error)
 }
 
-// ReleaseManager owns the internal HelmRelease: the object helm-controller acts on.
-type ReleaseManager interface {
-	EnsureHelmRelease(
+// Releases owns the internal HelmRelease: the object helm-controller acts on.
+type Releases interface {
+	Ensure(
 		ctx context.Context,
 		rel contract.Release,
 		sourceKind chartsource.Kind,
 		artifactRevision string,
 	) services.ReleaseOutcome
-	CleanupHelmRelease(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error)
-	// SyncReleaseSpec keeps a release that is being deleted in step with its spec, so
+	Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error)
+	// SyncSpec keeps a release that is being deleted in step with its spec, so
 	// an uninstall blocked by a bad parameter can be unblocked by correcting it.
-	SyncReleaseSpec(ctx context.Context, rel contract.Release, existing *helmv2.HelmRelease) error
+	SyncSpec(ctx context.Context, rel contract.Release, existing *helmv2.HelmRelease) error
 }
 
-// MaintenanceManager suspends and resumes the internal HelmRelease.
-type MaintenanceManager interface {
-	IsMaintenanceModeChangeRequired(rel contract.Release) bool
-	EnsureMaintenanceMode(ctx context.Context, rel contract.Release) services.MaintenanceOutcome
+// Maintenance suspends and resumes the internal HelmRelease.
+type Maintenance interface {
+	ChangeRequired(rel contract.Release) bool
+	Ensure(ctx context.Context, rel contract.Release) services.MaintenanceOutcome
 }
 
-// NoChartClaim is the ChartClaim of a family without a uniqueness rule: every
+// NoClaims is the Claims of a family without a uniqueness rule: every
 // release holds its own pair, and the conflict branch of the reconciler is never
 // taken.
-type NoChartClaim struct{}
+type NoClaims struct{}
 
-func (NoChartClaim) Acquire(_ context.Context, rel contract.Release) (bool, string, error) {
+func (NoClaims) Acquire(_ context.Context, rel contract.Release) (bool, string, error) {
 	return true, rel.Name(), nil
 }
 
-func (NoChartClaim) ReleaseStale(context.Context, contract.Release) error { return nil }
+func (NoClaims) DropStale(context.Context, contract.Release) error { return nil }
 
-func (NoChartClaim) Release(context.Context, contract.Release) error { return nil }
+func (NoClaims) Drop(context.Context, contract.Release) error { return nil }
 
 // ExistingTargetNamespace is the ensurer of a family whose target namespace is the
 // release's own: it exists by definition, or the release could not.
 type ExistingTargetNamespace struct{}
 
-func (ExistingTargetNamespace) EnsureTargetNamespace(context.Context, contract.Release) error {
+func (ExistingTargetNamespace) EnsureTarget(context.Context, contract.Release) error {
 	return nil
 }
 
-// NoRBAC is the RBACManager of a family that does not impersonate.
-type NoRBAC struct{}
+// NoIdentity is the Identity of a family that does not impersonate.
+type NoIdentity struct{}
 
-func (NoRBAC) EnsureRBAC(context.Context, contract.Release) services.RBACOutcome {
+func (NoIdentity) Ensure(context.Context, contract.Release) services.RBACOutcome {
 	return services.RBACOutcome{}
 }
 
-func (NoRBAC) CleanupRBAC(context.Context, contract.Release) error { return nil }
+func (NoIdentity) Cleanup(context.Context, contract.Release) error { return nil }

@@ -53,8 +53,8 @@ func newReleaseService(t *testing.T, objects ...client.Object) (*ReleaseService,
 func ensureRelease(t *testing.T, service *ReleaseService, c client.Client, rel contract.Release) *helmv2.HelmRelease {
 	t.Helper()
 
-	if res := service.EnsureHelmRelease(context.Background(), rel, chartsource.Helm, ""); res.Err != nil {
-		t.Fatalf("EnsureHelmRelease returned %v", res.Err)
+	if res := service.Ensure(context.Background(), rel, chartsource.Helm, ""); res.Err != nil {
+		t.Fatalf("Ensure returned %v", res.Err)
 	}
 
 	release := &helmv2.HelmRelease{}

@@ -339,16 +339,16 @@ func newFullReconciler(
 		Build()
 
 	return New(c, Deps{
-		NewRelease:   adapter.EmptyAddonRelease,
-		Repositories: adapter.NewAddonRepositoryResolver(c),
-		Chart:        services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
-		OCI:          services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, resolver),
-		Release:      services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
-		Maintenance:  services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
-		Claim:        services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
-		Namespaces:   services.NewNamespaceService(c, c),
-		RBAC:         NoRBAC{},
-		Status:       status.NewManager(c),
+		NewRelease:      adapter.EmptyAddonRelease,
+		Repositories:    adapter.NewAddonRepositoryResolver(c),
+		Charts:          services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
+		OCIRepositories: services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, resolver),
+		Releases:        services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
+		Maintenance:     services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
+		Claims:          services.NewClaimService(c, c, helmv1alpha1.TargetNamespace),
+		Namespaces:      services.NewNamespaceService(c, c),
+		Identity:        NoIdentity{},
+		Status:          status.NewManager(c),
 	}), c
 }
 
@@ -358,7 +358,7 @@ func newFullReconciler(
 // identity manager; nil selects the real one over the same fake client.
 func newApplicationFullReconciler(
 	t *testing.T,
-	rbac RBACManager,
+	rbac Identity,
 	objects ...client.Object,
 ) (*Reconciler, client.Client) {
 	t.Helper()
@@ -388,16 +388,16 @@ func newApplicationFullReconciler(
 	}
 
 	return New(c, Deps{
-		NewRelease:   adapter.EmptyApplicationRelease,
-		Repositories: adapter.NewApplicationRepositoryResolver(c),
-		Chart:        services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
-		OCI:          services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
-		Release:      services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
-		Maintenance:  services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
-		Claim:        NoChartClaim{},
-		Namespaces:   ExistingTargetNamespace{},
-		RBAC:         rbac,
-		Status:       status.NewManager(c),
+		NewRelease:      adapter.EmptyApplicationRelease,
+		Repositories:    adapter.NewApplicationRepositoryResolver(c),
+		Charts:          services.NewChartService(c, scheme, helmv1alpha1.TargetNamespace),
+		OCIRepositories: services.NewOCIRepoService(c, scheme, helmv1alpha1.TargetNamespace, nil),
+		Releases:        services.NewReleaseService(c, scheme, helmv1alpha1.TargetNamespace),
+		Maintenance:     services.NewMaintenanceService(c, scheme, helmv1alpha1.TargetNamespace),
+		Claims:          NoClaims{},
+		Namespaces:      ExistingTargetNamespace{},
+		Identity:        rbac,
+		Status:          status.NewManager(c),
 	}), c
 }
 
@@ -719,7 +719,7 @@ func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *test
 
 type failingRBAC struct{}
 
-func (failingRBAC) EnsureRBAC(context.Context, contract.Release) services.RBACOutcome {
+func (failingRBAC) Ensure(context.Context, contract.Release) services.RBACOutcome {
 	return services.RBACOutcome{
 		Err:     errors.New("service account is forbidden"),
 		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
@@ -727,7 +727,7 @@ func (failingRBAC) EnsureRBAC(context.Context, contract.Release) services.RBACOu
 	}
 }
 
-func (failingRBAC) CleanupRBAC(context.Context, contract.Release) error { return nil }
+func (failingRBAC) Cleanup(context.Context, contract.Release) error { return nil }
 
 // TestReconcileApplicationReportsRBACSetupFailure pins that the pass stops at the
 // identity. A release applied without one would run as helm-controller itself,
@@ -765,16 +765,16 @@ func TestReconcileApplicationReportsRBACSetupFailure(t *testing.T) {
 	}
 }
 
-// intermittentRBAC fails the first call to EnsureRBAC and delegates to a real
-// RBACManager afterwards, standing in for a transient failure (an API hiccup, a
+// intermittentRBAC fails the first call to Ensure and delegates to a real
+// Identity afterwards, standing in for a transient failure (an API hiccup, a
 // momentary admission rejection) that clears on its own by the next pass. real is
 // set after construction, once the reconciler's own client exists.
 type intermittentRBAC struct {
-	real  RBACManager
+	real  Identity
 	calls int
 }
 
-func (a *intermittentRBAC) EnsureRBAC(ctx context.Context, rel contract.Release) services.RBACOutcome {
+func (a *intermittentRBAC) Ensure(ctx context.Context, rel contract.Release) services.RBACOutcome {
 	a.calls++
 	if a.calls == 1 {
 		return services.RBACOutcome{
@@ -783,16 +783,16 @@ func (a *intermittentRBAC) EnsureRBAC(ctx context.Context, rel contract.Release)
 			Message: "Failed to set up the release identity",
 		}
 	}
-	return a.real.EnsureRBAC(ctx, rel)
+	return a.real.Ensure(ctx, rel)
 }
 
-func (a *intermittentRBAC) CleanupRBAC(ctx context.Context, rel contract.Release) error {
-	return a.real.CleanupRBAC(ctx, rel)
+func (a *intermittentRBAC) Cleanup(ctx context.Context, rel contract.Release) error {
+	return a.real.Cleanup(ctx, rel)
 }
 
 // TestReconcileApplicationRecoversAfterTransientRBACSetupFailure pins the fix for
 // the gap in TestReconcileApplicationReportsRBACSetupFailure: a failed
-// EnsureRBAC must not just be reported, it must get the application requeued, so
+// Ensure must not just be reported, it must get the application requeued, so
 // a transient failure recovers on its own once the cause is gone.
 func TestReconcileApplicationRecoversAfterTransientRBACSetupFailure(t *testing.T) {
 	app := testApplication()
@@ -824,7 +824,7 @@ func TestReconcileApplicationRecoversAfterTransientRBACSetupFailure(t *testing.T
 	account := &corev1.ServiceAccount{}
 	accountKey := client.ObjectKey{Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace}
 	if err := c.Get(context.Background(), accountKey, account); err != nil {
-		t.Fatalf("the identity must be created once EnsureRBAC stops failing: %v", err)
+		t.Fatalf("the identity must be created once Ensure stops failing: %v", err)
 	}
 
 	if err := c.Get(context.Background(), key, settled); err != nil {
@@ -933,15 +933,15 @@ func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
 
 type accessCleanupFails struct{}
 
-func (accessCleanupFails) EnsureRBAC(context.Context, contract.Release) services.RBACOutcome {
+func (accessCleanupFails) Ensure(context.Context, contract.Release) services.RBACOutcome {
 	return services.RBACOutcome{}
 }
 
-func (accessCleanupFails) CleanupRBAC(context.Context, contract.Release) error {
+func (accessCleanupFails) Cleanup(context.Context, contract.Release) error {
 	return errors.New("role binding deletion forbidden")
 }
 
-// TestReconcileDeleteReportsRBACCleanupFailure pins that a failed CleanupRBAC
+// TestReconcileDeleteReportsRBACCleanupFailure pins that a failed Cleanup
 // leaves the status saying so. By the time this step runs the internal release and
 // sources are already gone, so nothing else on the object would otherwise explain
 // why the finalizer is still there.
@@ -1456,7 +1456,7 @@ func TestReconcileSittingInMaintenanceDiscardsForceReconcile(t *testing.T) {
 
 	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
 
-	if !addon.MaintenanceModeEnabled() || r.deps.Maintenance.IsMaintenanceModeChangeRequired(adapter.NewAddonRelease(addon)) {
+	if !addon.MaintenanceModeEnabled() || r.deps.Maintenance.ChangeRequired(adapter.NewAddonRelease(addon)) {
 		t.Fatal("the fixture must already be in maintenance, otherwise the test takes the wrong branch")
 	}
 
@@ -1491,7 +1491,7 @@ func TestReconcileLeavingMaintenanceKeepsForceReconcile(t *testing.T) {
 
 	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
 
-	if addon.MaintenanceModeActivated() || !r.deps.Maintenance.IsMaintenanceModeChangeRequired(adapter.NewAddonRelease(addon)) {
+	if addon.MaintenanceModeActivated() || !r.deps.Maintenance.ChangeRequired(adapter.NewAddonRelease(addon)) {
 		t.Fatal("the fixture must be leaving maintenance, otherwise the test proves nothing")
 	}
 

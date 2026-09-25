@@ -43,12 +43,12 @@ import (
 // the API object to be read into; Consumers pushes a force request onto the internal
 // sources of whatever consumes the repository in that family.
 type Deps struct {
-	NewRepository func() contract.Repository
-	Secrets       SecretManager
-	Internal      InternalRepositoryManager
-	Consumers     contract.ConsumerForcer
-	Catalog       CatalogSynchronizer
-	Status        *status.Manager
+	NewRepository    func() contract.Repository
+	Secrets          Secrets
+	HelmRepositories HelmRepositories
+	Consumers        contract.Consumers
+	Catalogs         Catalogs
+	Status           *status.Manager
 }
 
 func New(c client.Client, deps Deps) *Reconciler {
@@ -102,7 +102,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// due for a sync yet, or whose remote is gone for good, still gets its objects
 	// moved. A failure travels to finish() rather than out of Reconcile, or the
 	// repository would report nothing at all while its consumers cannot resolve.
-	in.MigrateErr = r.deps.Catalog.MigrateNames(ctx, repo)
+	in.MigrateErr = r.deps.Catalogs.MigrateNames(ctx, repo)
 
 	if repoTypeErr != nil {
 		in.ConfigErr = &services.ConfigOutcome{
@@ -119,11 +119,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if in.SecretsErr == nil {
 		switch repoType {
 		case chartsource.Helm:
-			in.InternalRepository, in.InternalRepositoryErr = r.deps.Internal.EnsureInternalHelmRepository(ctx, repo)
+			in.InternalRepository, in.InternalRepositoryErr = r.deps.HelmRepositories.Ensure(ctx, repo)
 		case chartsource.OCI:
 			// The url may have changed from helm to oci: drop the internal object
 			// that is no longer used. OCI repositories have none of their own.
-			in.InternalRepositoryErr = r.deps.Internal.RemoveHelmRepository(ctx, repo.InternalNames())
+			in.InternalRepositoryErr = r.deps.HelmRepositories.Remove(ctx, repo.InternalNames())
 		}
 	}
 
@@ -139,7 +139,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, err
 		}
 
-		outcome := r.deps.Catalog.Sync(ctx, repo, repoType)
+		outcome := r.deps.Catalogs.Sync(ctx, repo, repoType)
 
 		in.Attempted = true
 		if outcome.FetchAttempted {
@@ -228,7 +228,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo contract.Reposito
 	// deleted. Cleaning up the helm way tolerates a missing internal repository, and
 	// leaving it out would orphan one.
 	if repoType != chartsource.OCI {
-		helmRepo, err := r.deps.Internal.CleanupHelmRepository(ctx, names)
+		helmRepo, err := r.deps.HelmRepositories.Cleanup(ctx, names)
 		if err != nil && !apierrors.IsNotFound(err) {
 			_ = r.deps.Status.MarkDeletionFailed(ctx, repo.Object(), "internal repository", err)
 			return reconcile.Result{}, err

@@ -123,12 +123,12 @@ func newReconcilerWithInterceptor(
 	}
 
 	r := New(c, Deps{
-		NewRepository: adapter.EmptyAddonRepository,
-		Secrets:       services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
-		Internal:      services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
-		Consumers:     services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(c)),
-		Catalog:       services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
-		Status:        status.NewManager(c),
+		NewRepository:    adapter.EmptyAddonRepository,
+		Secrets:          services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
+		HelmRepositories: services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		Consumers:        services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(c)),
+		Catalogs:         services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
+		Status:           status.NewManager(c),
 	})
 
 	return r, c
@@ -167,12 +167,12 @@ func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...cli
 	}
 
 	r := New(c, Deps{
-		NewRepository: adapter.EmptyApplicationRepository,
-		Secrets:       services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
-		Internal:      services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
-		Consumers:     services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(c)),
-		Catalog:       services.NewRepoSyncService(c, scheme, factory, adapter.NewApplicationCatalog(c)),
-		Status:        status.NewManager(c),
+		NewRepository:    adapter.EmptyApplicationRepository,
+		Secrets:          services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
+		HelmRepositories: services.NewHelmRepoService(c, scheme, helmv1alpha1.TargetNamespace),
+		Consumers:        services.NewForceService(c, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(c)),
+		Catalogs:         services.NewRepoSyncService(c, scheme, factory, adapter.NewApplicationCatalog(c)),
+		Status:           status.NewManager(c),
 	})
 
 	return r, c

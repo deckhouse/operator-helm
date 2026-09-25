@@ -53,11 +53,11 @@ func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace 
 	}
 }
 
-// EnsureInternalHelmRepository reconciles the internal HelmRepository and
+// Ensure reconciles the internal HelmRepository and
 // reports its observed state. The returned error is an API failure that the
 // caller must surface to the work queue; an unhealthy internal object is not an
 // error and is reported through the state instead.
-func (s *HelmRepoService) EnsureInternalHelmRepository(
+func (s *HelmRepoService) Ensure(
 	ctx context.Context,
 	repo contract.Repository,
 ) (InternalRepositoryState, error) {
@@ -110,7 +110,7 @@ func (s *HelmRepoService) EnsureInternalHelmRepository(
 	return state, nil
 }
 
-func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, names contract.InternalNames) error {
+func (s *HelmRepoService) Remove(ctx context.Context, names contract.InternalNames) error {
 	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.TargetNamespace}
 	if err := s.ensureResourceDeleted(ctx, nn, &sourcev1.HelmRepository{}); err != nil {
 		return fmt.Errorf("removing helm repository: %w", err)
@@ -119,11 +119,11 @@ func (s *HelmRepoService) RemoveHelmRepository(ctx context.Context, names contra
 	return nil
 }
 
-// CleanupHelmRepository issues a delete for the internal HelmRepository and
+// Cleanup issues a delete for the internal HelmRepository and
 // returns it while it is still present, so the caller can inspect its conditions
 // and wait for source-controller to finish removing it. It returns nil once
 // the HelmRepository is gone.
-func (s *HelmRepoService) CleanupHelmRepository(ctx context.Context, names contract.InternalNames) (*sourcev1.HelmRepository, error) {
+func (s *HelmRepoService) Cleanup(ctx context.Context, names contract.InternalNames) (*sourcev1.HelmRepository, error) {
 	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.TargetNamespace}
 	helmRepo := &sourcev1.HelmRepository{}
 	exists, err := s.deleteAndCheck(ctx, nn, helmRepo)
