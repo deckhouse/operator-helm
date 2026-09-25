@@ -53,8 +53,9 @@ func claimingAddon(name, chart string) *helmv1alpha1.HelmClusterAddon {
 }
 
 // claimFor builds the Lease the package would find for the pair, held by holder.
-// The name is derived the same way the package derives it, so a change to the
-// derivation cannot pass this suite by rewriting both sides.
+// It derives the name through the same helper the package uses, so this suite pins
+// what happens around the name rather than the derivation itself; the derivation is
+// frozen by TestAddonInternalNamesAreFrozen, where the live object names are kept.
 func claimFor(repo, chart, holder, labelSource string) *coordinationv1.Lease {
 	return &coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -319,7 +320,7 @@ func TestOwnedByAnswersFromTheLeaseHolder(t *testing.T) {
 	}
 }
 
-// TestDropFreesOnlyTheCallerOwnClaim pins the guard that makes Release safe to
+// TestDropFreesOnlyTheCallerOwnClaim pins the guard that makes Drop safe to
 // call from any addon's deletion path: a duplicate that never acquired the pair
 // must not free the claim of the addon that did.
 func TestDropFreesOnlyTheCallerOwnClaim(t *testing.T) {
@@ -345,7 +346,7 @@ func TestDropFreesOnlyTheCallerOwnClaim(t *testing.T) {
 	}
 }
 
-// TestReleaseTolerAtesAMissingClaim pins that a deletion path which runs twice, or
+// TestDropToleratesAMissingClaim pins that a deletion path which runs twice, or
 // one whose claim was never created, reports no failure: the finalizer must not be
 // held by a claim that is already gone.
 func TestDropToleratesAMissingClaim(t *testing.T) {
@@ -359,15 +360,32 @@ func TestDropToleratesAMissingClaim(t *testing.T) {
 
 // TestDropLeavesAClaimTakenOverInBetween pins the precondition on the delete:
 // between the read and the delete another addon may take the pair over, and the
-// rejected delete must leave the new owner's claim standing.
+// delete must name the revision that was read so the API server rejects it. The
+// fake client does not enforce preconditions, so the interceptor stands in for the
+// API server: it fails the test if the revision is missing, and answers the way the
+// server answers a revision that no longer matches.
 func TestDropLeavesAClaimTakenOverInBetween(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
+	held := claimFor("stable", "podinfo", "metrics", "metrics")
+
+	var checked bool
 
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithObjects(addon, claimFor("stable", "podinfo", "metrics", "metrics")).
+		WithObjects(addon, held).
 		WithInterceptorFuncs(interceptor.Funcs{
-			Delete: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.DeleteOption) error {
+			Delete: func(_ context.Context, _ client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				options := &client.DeleteOptions{}
+				for _, opt := range opts {
+					opt.ApplyToDelete(options)
+				}
+
+				if options.Preconditions == nil || options.Preconditions.ResourceVersion == nil {
+					t.Fatal("the delete must name the revision that was read")
+				}
+
+				checked = true
+
 				return apierrors.NewConflict(
 					coordinationv1.Resource("leases"), obj.GetName(), errors.New("taken over first"),
 				)
@@ -378,6 +396,9 @@ func TestDropLeavesAClaimTakenOverInBetween(t *testing.T) {
 
 	if err := claims.Drop(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
 		t.Fatalf("Drop returned %v, want the rejected delete to be no failure", err)
+	}
+	if !checked {
+		t.Fatal("the delete was never issued")
 	}
 	if got := claimHolder(t, c, "stable", "podinfo"); got != "metrics" {
 		t.Fatalf("holder = %q, want the lease left where the conflict found it", got)

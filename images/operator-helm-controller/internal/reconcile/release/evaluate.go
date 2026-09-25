@@ -538,8 +538,10 @@ func retryErr(failure Failure) error {
 }
 
 // artifactRevision is the revision the release would be installed from, and whether
-// there is one at all. A failed pass leaves no artifact behind to be mistaken for
-// one, which is what the Observed check stands for.
+// there is one at all. An artifact only counts once the object that produced it has
+// reported on the spec it was given: until then the revision on it is the previous
+// one, and installing from it would roll the release back to the chart it is
+// already running.
 func artifactRevision(src InternalSource) (string, bool) {
 	switch source := src.(type) {
 	case ServedByHelmChart:

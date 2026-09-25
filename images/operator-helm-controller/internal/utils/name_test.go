@@ -47,6 +47,12 @@ func TestAddonInternalNamesAreFrozen(t *testing.T) {
 		{"helm release long", GetInternalHelmReleaseName, long, "hca-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrs-e5ded5e7c79d"},
 		{"helm chart equals release", GetInternalHelmChartName, long, GetInternalHelmReleaseName(long)},
 		{"oci repository equals release", GetInternalOCIRepositoryName, long, GetInternalHelmReleaseName(long)},
+		{
+			"chart claim lease",
+			func(chart string) string { return GetChartClaimLeaseName("example", chart) },
+			"podinfo",
+			"hca-claim-eb0e2bd49680",
+		},
 	}
 
 	for _, tc := range cases {

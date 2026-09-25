@@ -22,9 +22,10 @@ limitations under the License.
 // repository family. The implementations live in internal/adapter and
 // internal/catalog.
 //
-// Two rules keep this package a leaf. It depends only on the API types and the
-// status manager, so the adapters, the catalogs and every collaborator package
-// (internalobj, rbac, claim, namespace, reposync) can import it without a cycle.
+// Two rules keep this package a leaf. It depends on nothing that depends on it —
+// the API types, the status manager and the repository client — so the adapters,
+// the catalogs and every collaborator package (internalobj, rbac, claim, namespace,
+// reposync) can import it without a cycle.
 // And a contract lives here rather than next to the package that consumes it
 // whenever the consumer's own tests build an adapter for it: the adapters would
 // then import the consumer to reach the interface, while the consumer's tests

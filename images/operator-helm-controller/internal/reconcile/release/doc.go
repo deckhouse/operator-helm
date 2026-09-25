@@ -36,5 +36,7 @@ limitations under the License.
 // cannot describe a state it was never in. No step writes a condition of its own,
 // so what the release reports can be read in one place and tested without a
 // cluster. The collaborators this reconciler drives return outcomes rather than
-// conditions for the same reason.
+// conditions for the same reason. The one condition written outside Evaluate is the
+// progress a force request publishes before the work it asked for begins, and the
+// status update that ends the pass takes it away again.
 package release

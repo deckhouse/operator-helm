@@ -22,8 +22,9 @@ limitations under the License.
 //
 // Every write to a flux type goes through here. A reconciler asks for an object to
 // be brought to a state and is handed an outcome describing what the object then
-// reported; it never constructs a sourcev1 or helmv2 object itself, and the types
-// of those APIs stay out of its vocabulary.
+// reported; it never constructs or fills in a sourcev1 or helmv2 object itself. The
+// few flux types that do reach a reconciler's vocabulary are the objects a cleanup
+// hands back, which it only checks for presence and passes to the deletion wait.
 //
 // The outcome types live here rather than with the reconciler that reads them
 // because they are what this package produces: the reconciler's Evaluate turns them

@@ -85,7 +85,7 @@ func main() {
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "operator-helm-controller.helm.deckhouse.io",
 		Client: client.Options{
-			// RBACService reads these three kinds only to reconcile the objects its
+			// The rbac package reads these three kinds only to reconcile the objects its
 			// own release names. The Roles and RoleBindings it manages are watched, but
 			// through an informer that selects on the managed-by label — an object
 			// stripped of the label is missing from it, and reading through it would

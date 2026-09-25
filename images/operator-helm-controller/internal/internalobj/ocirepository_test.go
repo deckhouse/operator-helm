@@ -182,7 +182,7 @@ func TestOCIRepositoriesEnsureReportsRemovedVersion(t *testing.T) {
 //
 // The internal object is seeded with the exact spec and labels applyOCIRepositorySpec
 // writes (same trick as TestHelmRepositoriesEnsureStalledPrecedesReady in
-// helm_repo_service_test.go): that makes CreateOrPatch a no-op, so the object's
+// helmrepository_test.go): that makes CreateOrPatch a no-op, so the object's
 // generation stays at 1 and the seeded Ready condition (ObservedGeneration: 1) counts
 // as observed.
 func TestOCIRepositoriesEnsureDoesNotRelabelReadyChildOnRemovedVersion(t *testing.T) {
