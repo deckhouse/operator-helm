@@ -40,7 +40,7 @@ func newSecrets(t *testing.T, objects ...client.Object) (*Secrets, client.Client
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return NewSecrets(c, scheme, testNamespace), c
+	return NewSecrets(c, testNamespace), c
 }
 
 func TestSecretsEnsureCreatesAuthAndTLS(t *testing.T) {

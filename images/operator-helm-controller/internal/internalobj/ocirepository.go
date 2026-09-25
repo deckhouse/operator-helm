@@ -24,7 +24,6 @@ import (
 	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -53,7 +52,6 @@ const chartArtifactProbeRequeueInterval = 2 * time.Minute
 
 type OCIRepositories struct {
 	client          client.Client
-	scheme          *runtime.Scheme
 	targetNamespace string
 	resolver        repoclient.ChartResolverInterface
 }
@@ -62,7 +60,6 @@ type OCIRepositories struct {
 // pass their own so they never reach a registry.
 func NewOCIRepositories(
 	client client.Client,
-	scheme *runtime.Scheme,
 	namespace string,
 	resolver repoclient.ChartResolverInterface,
 ) *OCIRepositories {
@@ -72,7 +69,6 @@ func NewOCIRepositories(
 
 	return &OCIRepositories{
 		client:          client,
-		scheme:          scheme,
 		targetNamespace: namespace,
 		resolver:        resolver,
 	}

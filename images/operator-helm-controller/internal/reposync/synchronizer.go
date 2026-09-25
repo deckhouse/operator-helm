@@ -19,7 +19,6 @@ package reposync
 import (
 	"context"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -30,7 +29,6 @@ import (
 
 type Synchronizer struct {
 	client        client.Client
-	scheme        *runtime.Scheme
 	clientFactory RepoClientFactory
 	catalog       contract.Catalog
 }
@@ -41,14 +39,13 @@ type RepoClientFactory func(repoType chartsource.Kind) (repoclient.ClientInterfa
 
 // NewSynchronizer builds the synchronization for one repository kind: the
 // catalog decides which chart catalog kind the fetched charts are mirrored into.
-func NewSynchronizer(client client.Client, scheme *runtime.Scheme, factory RepoClientFactory, catalog contract.Catalog) *Synchronizer {
+func NewSynchronizer(client client.Client, factory RepoClientFactory, catalog contract.Catalog) *Synchronizer {
 	if factory == nil {
 		factory = repoclient.NewClient
 	}
 
 	return &Synchronizer{
 		client:        client,
-		scheme:        scheme,
 		clientFactory: factory,
 		catalog:       catalog,
 	}

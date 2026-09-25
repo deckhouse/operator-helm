@@ -23,7 +23,6 @@ import (
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -41,12 +40,11 @@ var helmChartErrorRules = []ErrorConditionRule{
 
 type Charts struct {
 	client          client.Client
-	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewCharts(client client.Client, scheme *runtime.Scheme, targetNamespace string) *Charts {
-	return &Charts{client: client, scheme: scheme, targetNamespace: targetNamespace}
+func NewCharts(client client.Client, targetNamespace string) *Charts {
+	return &Charts{client: client, targetNamespace: targetNamespace}
 }
 
 func (s *Charts) Ensure(ctx context.Context, rel contract.Release, repo contract.Repository) ChartOutcome {

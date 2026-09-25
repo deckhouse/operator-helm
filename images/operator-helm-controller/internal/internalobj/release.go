@@ -26,7 +26,6 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -48,12 +47,11 @@ var helmReleaseErrorRules = []ErrorConditionRule{
 
 type Releases struct {
 	client          client.Client
-	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewReleases(client client.Client, scheme *runtime.Scheme, targetNamespace string) *Releases {
-	return &Releases{client: client, scheme: scheme, targetNamespace: targetNamespace}
+func NewReleases(client client.Client, targetNamespace string) *Releases {
+	return &Releases{client: client, targetNamespace: targetNamespace}
 }
 
 func (s *Releases) Ensure(ctx context.Context, rel contract.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {

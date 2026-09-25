@@ -47,7 +47,7 @@ func newReleases(t *testing.T, objects ...client.Object) (*Releases, client.Clie
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return NewReleases(c, scheme, testNamespace), c
+	return NewReleases(c, testNamespace), c
 }
 
 func ensureRelease(t *testing.T, service *Releases, c client.Client, rel contract.Release) *helmv2.HelmRelease {

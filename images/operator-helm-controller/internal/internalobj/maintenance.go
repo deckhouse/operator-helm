@@ -24,7 +24,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -35,12 +34,11 @@ import (
 
 type Maintenance struct {
 	client          client.Client
-	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewMaintenance(client client.Client, scheme *runtime.Scheme, targetNamespace string) *Maintenance {
-	return &Maintenance{client: client, scheme: scheme, targetNamespace: targetNamespace}
+func NewMaintenance(client client.Client, targetNamespace string) *Maintenance {
+	return &Maintenance{client: client, targetNamespace: targetNamespace}
 }
 
 func (s *Maintenance) Ensure(ctx context.Context, rel contract.Release) MaintenanceOutcome {

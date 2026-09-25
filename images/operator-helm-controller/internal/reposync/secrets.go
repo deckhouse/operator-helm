@@ -23,7 +23,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -40,12 +39,11 @@ import (
 // removes them, and the repository services are left with the objects they own.
 type Secrets struct {
 	client          client.Client
-	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewSecrets(client client.Client, scheme *runtime.Scheme, namespace string) *Secrets {
-	return &Secrets{client: client, scheme: scheme, targetNamespace: namespace}
+func NewSecrets(client client.Client, namespace string) *Secrets {
+	return &Secrets{client: client, targetNamespace: namespace}
 }
 
 // Ensure reconciles every auxiliary secret the repository needs. Its success is

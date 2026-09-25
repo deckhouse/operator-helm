@@ -53,7 +53,7 @@ func newOCIRepositories(t *testing.T, objects ...client.Object) (*OCIRepositorie
 		}).
 		Build()
 
-	return NewOCIRepositories(c, scheme, testNamespace, nil), c
+	return NewOCIRepositories(c, testNamespace, nil), c
 }
 
 // countingResolver records how many times the registry was asked, which is the whole

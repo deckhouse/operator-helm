@@ -57,7 +57,7 @@ func newHelmRepositories(t *testing.T, objects ...client.Object) *HelmRepositori
 	scheme := sourceScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return NewHelmRepositories(c, scheme, testNamespace)
+	return NewHelmRepositories(c, testNamespace)
 }
 
 func testRepository() *helmv1alpha1.HelmClusterAddonRepository {
@@ -250,7 +250,7 @@ func TestHelmRepositoriesEnsureReturnsAPIError(t *testing.T) {
 		}).
 		Build()
 
-	service := NewHelmRepositories(c, scheme, testNamespace)
+	service := NewHelmRepositories(c, testNamespace)
 
 	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err == nil {

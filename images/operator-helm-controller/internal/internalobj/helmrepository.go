@@ -25,7 +25,6 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -40,12 +39,11 @@ const InternalRepositoryInterval = 5 * time.Minute
 
 type HelmRepositories struct {
 	client          client.Client
-	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewHelmRepositories(client client.Client, scheme *runtime.Scheme, namespace string) *HelmRepositories {
-	return &HelmRepositories{client: client, scheme: scheme, targetNamespace: namespace}
+func NewHelmRepositories(client client.Client, namespace string) *HelmRepositories {
+	return &HelmRepositories{client: client, targetNamespace: namespace}
 }
 
 // Ensure reconciles the internal HelmRepository and

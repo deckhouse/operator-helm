@@ -41,7 +41,7 @@ func newCharts(t *testing.T, objects ...client.Object) (*Charts, client.Client) 
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return NewCharts(c, scheme, testNamespace), c
+	return NewCharts(c, testNamespace), c
 }
 
 // chartTestRepository is the repository the test addon references; the chart

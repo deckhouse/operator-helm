@@ -77,7 +77,7 @@ func newSynchronizer(t *testing.T, stub stubRepoClient, objects ...client.Object
 		return stub, nil
 	}
 
-	return NewSynchronizer(c, scheme, factory, adapter.NewAddonCatalog(c)), c
+	return NewSynchronizer(c, factory, adapter.NewAddonCatalog(c)), c
 }
 
 func ociVersion(version, mediaType string) repoclient.ChartVersion { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
@@ -479,7 +479,7 @@ func TestSynchronizerSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T)
 	factory := func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stubRepoClient{}, nil
 	}
-	service := NewSynchronizer(c, scheme, factory, adapter.NewAddonCatalog(c))
+	service := NewSynchronizer(c, factory, adapter.NewAddonCatalog(c))
 
 	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 
