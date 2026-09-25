@@ -52,9 +52,10 @@ var ociRepositoryErrorRules = []ErrorConditionRule{
 const chartArtifactProbeRequeueInterval = 2 * time.Minute
 
 type OCIRepoService struct {
-	BaseRepoService
-
-	resolver repoclient.ChartResolverInterface
+	client          client.Client
+	scheme          *runtime.Scheme
+	targetNamespace string
+	resolver        repoclient.ChartResolverInterface
 }
 
 // NewOCIRepoService builds the service. A nil resolver selects the default one; tests
@@ -70,14 +71,10 @@ func NewOCIRepoService(
 	}
 
 	return &OCIRepoService{
-		BaseRepoService: BaseRepoService{
-			BaseService: BaseService{
-				Client: client,
-				Scheme: scheme,
-			},
-			TargetNamespace: namespace,
-		},
-		resolver: resolver,
+		client:          client,
+		scheme:          scheme,
+		targetNamespace: namespace,
+		resolver:        resolver,
 	}
 }
 
@@ -98,11 +95,11 @@ func (s *OCIRepoService) Ensure(
 	existing := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      rel.InternalNames().OCIRepository,
-			Namespace: s.TargetNamespace,
+			Namespace: s.targetNamespace,
 		},
 	}
 
-	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
+	op, err := controllerutil.CreateOrPatch(ctx, s.client, existing, func() error {
 		applyOCIRepositorySpec(rel, repo, src, mediaType, existing)
 
 		return nil
@@ -185,11 +182,11 @@ func (s *OCIRepoService) cachedMediaType(
 ) string {
 	nn := types.NamespacedName{
 		Name:      names.OCIRepository,
-		Namespace: s.TargetNamespace,
+		Namespace: s.targetNamespace,
 	}
 
 	existing := &sourcev1.OCIRepository{}
-	if err := s.Client.Get(ctx, nn, existing); err != nil {
+	if err := s.client.Get(ctx, nn, existing); err != nil {
 		return ""
 	}
 
@@ -227,9 +224,9 @@ func artifactRepoConfig(repo contract.Repository, src chartsource.Source) *repoc
 // for source-controller to finish removing it. It returns nil once the
 // OCIRepository is gone.
 func (s *OCIRepoService) Remove(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error) {
-	nn := types.NamespacedName{Name: names.OCIRepository, Namespace: s.TargetNamespace}
+	nn := types.NamespacedName{Name: names.OCIRepository, Namespace: s.targetNamespace}
 	ociRepo := &sourcev1.OCIRepository{}
-	exists, err := s.deleteAndCheck(ctx, nn, ociRepo)
+	exists, err := utils.DeleteIfPresent(ctx, s.client, nn, ociRepo)
 	if err != nil {
 		return nil, fmt.Errorf("removing oci repository: %w", err)
 	}

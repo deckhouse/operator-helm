@@ -34,19 +34,13 @@ import (
 )
 
 type MaintenanceService struct {
-	BaseService
-
-	TargetNamespace string
+	client          client.Client
+	scheme          *runtime.Scheme
+	targetNamespace string
 }
 
 func NewMaintenanceService(client client.Client, scheme *runtime.Scheme, targetNamespace string) *MaintenanceService {
-	return &MaintenanceService{
-		BaseService: BaseService{
-			Client: client,
-			Scheme: scheme,
-		},
-		TargetNamespace: targetNamespace,
-	}
+	return &MaintenanceService{client: client, scheme: scheme, targetNamespace: targetNamespace}
 }
 
 func (s *MaintenanceService) Ensure(ctx context.Context, rel contract.Release) MaintenanceOutcome {
@@ -81,9 +75,9 @@ func (s *MaintenanceService) ChangeRequired(rel contract.Release) bool {
 
 func (s *MaintenanceService) updateHelmReleaseSuspendState(ctx context.Context, names contract.ReleaseNames, suspend bool) error {
 	helmRelease := &helmv2.HelmRelease{}
-	if err := s.Client.Get(ctx, types.NamespacedName{
+	if err := s.client.Get(ctx, types.NamespacedName{
 		Name:      names.HelmRelease,
-		Namespace: s.TargetNamespace,
+		Namespace: s.targetNamespace,
 	}, helmRelease); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -98,7 +92,7 @@ func (s *MaintenanceService) updateHelmReleaseSuspendState(ctx context.Context, 
 	base := helmRelease.DeepCopy()
 	helmRelease.Spec.Suspend = suspend
 
-	if err := s.Client.Patch(ctx, helmRelease, client.MergeFrom(base)); err != nil {
+	if err := s.client.Patch(ctx, helmRelease, client.MergeFrom(base)); err != nil {
 		return fmt.Errorf("setting helm release suspend state: %w", err)
 	}
 

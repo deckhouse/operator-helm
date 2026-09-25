@@ -33,6 +33,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 // ApplicationRoleName is the Role every application release of a namespace is bound
@@ -58,16 +59,12 @@ const ApplicationRoleName = "operator-helm-application"
 // to the API server and never depend on the label-scoped informers those watches
 // run on.
 type RBACService struct {
-	BaseService
-
-	TargetNamespace string
+	client          client.Client
+	targetNamespace string
 }
 
 func NewRBACService(c client.Client, targetNamespace string) *RBACService {
-	return &RBACService{
-		BaseService:     BaseService{Client: c},
-		TargetNamespace: targetNamespace,
-	}
+	return &RBACService{client: c, targetNamespace: targetNamespace}
 }
 
 // Ensure reconciles the account, the Role and the binding. A release without a
@@ -150,12 +147,12 @@ func (s *RBACService) Cleanup(ctx context.Context, rel contract.Release) error {
 	}
 
 	// Deleted by name alone, unlike the binding above: the account lives in
-	// s.TargetNamespace (the operator's own namespace), where a namespace owner
+	// s.targetNamespace (the operator's own namespace), where a namespace owner
 	// has no access to pre-create anything under our name. There is no foreign
 	// object to protect here, so the ownership check the binding needs does not
 	// apply.
-	account := types.NamespacedName{Namespace: s.TargetNamespace, Name: name}
-	if err := s.ensureResourceDeleted(ctx, account, &corev1.ServiceAccount{}); err != nil {
+	account := types.NamespacedName{Namespace: s.targetNamespace, Name: name}
+	if _, err := utils.DeleteIfPresent(ctx, s.client, account, &corev1.ServiceAccount{}); err != nil {
 		return fmt.Errorf("deleting service account: %w", err)
 	}
 
@@ -167,10 +164,10 @@ func (s *RBACService) Cleanup(ctx context.Context, rel contract.Release) error {
 // its own identity — so no token is ever mounted for it.
 func (s *RBACService) ensureServiceAccount(ctx context.Context, rel contract.Release, name string) error {
 	account := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.TargetNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.targetNamespace},
 	}
 
-	_, err := controllerutil.CreateOrPatch(ctx, s.Client, account, func() error {
+	_, err := controllerutil.CreateOrPatch(ctx, s.client, account, func() error {
 		// Merge rather than replace: the account may carry labels put there by
 		// someone else (a policy engine, a cost allocator), and dropping them on
 		// every pass would fight whoever set them.
@@ -213,7 +210,7 @@ func (s *RBACService) applyRole(ctx context.Context, namespace string) error {
 		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: namespace},
 	}
 
-	_, err := controllerutil.CreateOrPatch(ctx, s.Client, role, func() error {
+	_, err := controllerutil.CreateOrPatch(ctx, s.client, role, func() error {
 		// A resource version is set only on an object that was read back, so it is
 		// what tells a Role that is already there from one about to be created.
 		if role.ResourceVersion != "" && !managedByOperator(role.Labels) {
@@ -276,7 +273,7 @@ func (s *RBACService) ensureRoleBinding(ctx context.Context, rel contract.Releas
 	desiredRef := applicationRoleRef()
 
 	existing := &rbacv1.RoleBinding{}
-	switch err := s.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); {
+	switch err := s.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); {
 	case apierrors.IsNotFound(err):
 	case err != nil:
 		return err
@@ -289,7 +286,7 @@ func (s *RBACService) ensureRoleBinding(ctx context.Context, rel contract.Releas
 		// the read and here: that one has to be judged on its own labels, and the
 		// conflict brings this pass back to do it. A binding that is simply gone by
 		// now needs no deleting — the create below is what it was heading for.
-		err := s.Client.Delete(ctx, existing, client.Preconditions{UID: &existing.UID})
+		err := s.client.Delete(ctx, existing, client.Preconditions{UID: &existing.UID})
 		if client.IgnoreNotFound(err) != nil {
 			return err
 		}
@@ -299,7 +296,7 @@ func (s *RBACService) ensureRoleBinding(ctx context.Context, rel contract.Releas
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 	}
 
-	_, err := controllerutil.CreateOrPatch(ctx, s.Client, binding, func() error {
+	_, err := controllerutil.CreateOrPatch(ctx, s.client, binding, func() error {
 		// CreateOrPatch reads the object again, so the ownership test is repeated on
 		// what it found: between the read above and this one a binding of someone
 		// else's may have taken the name, and merging our labels onto it is the
@@ -323,7 +320,7 @@ func (s *RBACService) ensureRoleBinding(ctx context.Context, rel contract.Releas
 		binding.Subjects = []rbacv1.Subject{{
 			Kind:      rbacv1.ServiceAccountKind,
 			Name:      name,
-			Namespace: s.TargetNamespace,
+			Namespace: s.targetNamespace,
 		}}
 
 		return nil
@@ -339,7 +336,7 @@ func (s *RBACService) ensureRoleBinding(ctx context.Context, rel contract.Releas
 // is not an error and must not block the rest of the cleanup.
 func (s *RBACService) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.NamespacedName) error {
 	binding := &rbacv1.RoleBinding{}
-	if err := s.Client.Get(ctx, nn, binding); err != nil {
+	if err := s.client.Get(ctx, nn, binding); err != nil {
 		return client.IgnoreNotFound(err)
 	}
 
@@ -347,5 +344,5 @@ func (s *RBACService) ensureOwnedRoleBindingDeleted(ctx context.Context, nn type
 		return nil
 	}
 
-	return client.IgnoreNotFound(s.Client.Delete(ctx, binding))
+	return client.IgnoreNotFound(s.client.Delete(ctx, binding))
 }

@@ -33,24 +33,19 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 const InternalRepositoryInterval = 5 * time.Minute
 
 type HelmRepoService struct {
-	BaseRepoService
+	client          client.Client
+	scheme          *runtime.Scheme
+	targetNamespace string
 }
 
 func NewHelmRepoService(client client.Client, scheme *runtime.Scheme, namespace string) *HelmRepoService {
-	return &HelmRepoService{
-		BaseRepoService: BaseRepoService{
-			BaseService: BaseService{
-				Client: client,
-				Scheme: scheme,
-			},
-			TargetNamespace: namespace,
-		},
-	}
+	return &HelmRepoService{client: client, scheme: scheme, targetNamespace: namespace}
 }
 
 // Ensure reconciles the internal HelmRepository and
@@ -66,11 +61,11 @@ func (s *HelmRepoService) Ensure(
 	existing := &sourcev1.HelmRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      repo.InternalNames().HelmRepository,
-			Namespace: s.TargetNamespace,
+			Namespace: s.targetNamespace,
 		},
 	}
 
-	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
+	op, err := controllerutil.CreateOrPatch(ctx, s.client, existing, func() error {
 		applyHelmRepositorySpec(repo, existing)
 
 		return nil
@@ -111,8 +106,8 @@ func (s *HelmRepoService) Ensure(
 }
 
 func (s *HelmRepoService) Remove(ctx context.Context, names contract.InternalNames) error {
-	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.TargetNamespace}
-	if err := s.ensureResourceDeleted(ctx, nn, &sourcev1.HelmRepository{}); err != nil {
+	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.targetNamespace}
+	if _, err := utils.DeleteIfPresent(ctx, s.client, nn, &sourcev1.HelmRepository{}); err != nil {
 		return fmt.Errorf("removing helm repository: %w", err)
 	}
 
@@ -124,9 +119,9 @@ func (s *HelmRepoService) Remove(ctx context.Context, names contract.InternalNam
 // and wait for source-controller to finish removing it. It returns nil once
 // the HelmRepository is gone.
 func (s *HelmRepoService) Cleanup(ctx context.Context, names contract.InternalNames) (*sourcev1.HelmRepository, error) {
-	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.TargetNamespace}
+	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.targetNamespace}
 	helmRepo := &sourcev1.HelmRepository{}
-	exists, err := s.deleteAndCheck(ctx, nn, helmRepo)
+	exists, err := utils.DeleteIfPresent(ctx, s.client, nn, helmRepo)
 	if err != nil {
 		return nil, fmt.Errorf("cleaning up helm repository: %w", err)
 	}

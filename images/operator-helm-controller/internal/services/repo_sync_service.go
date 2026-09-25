@@ -29,8 +29,8 @@ import (
 )
 
 type RepoSyncService struct {
-	BaseService
-
+	client        client.Client
+	scheme        *runtime.Scheme
 	clientFactory RepoClientFactory
 	catalog       contract.Catalog
 }
@@ -47,10 +47,8 @@ func NewRepoSyncService(client client.Client, scheme *runtime.Scheme, factory Re
 	}
 
 	return &RepoSyncService{
-		BaseService: BaseService{
-			Client: client,
-			Scheme: scheme,
-		},
+		client:        client,
+		scheme:        scheme,
 		clientFactory: factory,
 		catalog:       catalog,
 	}

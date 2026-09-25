@@ -39,19 +39,13 @@ import (
 // repository nor its internal source object, so the service that writes them also
 // removes them, and the repository services are left with the objects they own.
 type RepoSecretsService struct {
-	BaseRepoService
+	client          client.Client
+	scheme          *runtime.Scheme
+	targetNamespace string
 }
 
 func NewRepoSecretsService(client client.Client, scheme *runtime.Scheme, namespace string) *RepoSecretsService {
-	return &RepoSecretsService{
-		BaseRepoService: BaseRepoService{
-			BaseService: BaseService{
-				Client: client,
-				Scheme: scheme,
-			},
-			TargetNamespace: namespace,
-		},
-	}
+	return &RepoSecretsService{client: client, scheme: scheme, targetNamespace: namespace}
 }
 
 // Ensure reconciles every auxiliary secret the repository needs. Its success is
@@ -126,10 +120,10 @@ func (s *RepoSecretsService) reconcileAuthSecret(
 	buildData func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error),
 ) error {
 	secretName := repo.InternalNames().AuthSecret
-	nn := types.NamespacedName{Name: secretName, Namespace: s.TargetNamespace}
+	nn := types.NamespacedName{Name: secretName, Namespace: s.targetNamespace}
 
 	if repo.Auth() == nil {
-		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {
+		if _, err := utils.DeleteIfPresent(ctx, s.client, nn, &corev1.Secret{}); err != nil {
 			return fmt.Errorf("deleting obsolete auth secret: %w", err)
 		}
 		return nil
@@ -150,7 +144,7 @@ func (s *RepoSecretsService) reconcileAuthSecret(
 	authSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
-			Namespace: s.TargetNamespace,
+			Namespace: s.targetNamespace,
 			Labels:    labels,
 		},
 		Type:       secretType,
@@ -161,14 +155,14 @@ func (s *RepoSecretsService) reconcileAuthSecret(
 		// The informer cache can still serve the secret that was just deleted, which
 		// would turn CreateOrPatch into a patch of a missing object, so create the
 		// replacement outright.
-		if err := s.Client.Create(ctx, authSecret); client.IgnoreAlreadyExists(err) != nil {
+		if err := s.client.Create(ctx, authSecret); client.IgnoreAlreadyExists(err) != nil {
 			return fmt.Errorf("creating auth secret: %w", err)
 		}
 
 		return nil
 	}
 
-	if _, err := controllerutil.CreateOrPatch(ctx, s.Client, authSecret, func() error {
+	if _, err := controllerutil.CreateOrPatch(ctx, s.client, authSecret, func() error {
 		authSecret.Labels = labels
 		authSecret.Type = secretType
 		// Drop the keys already stored so that credentials removed from the desired
@@ -192,7 +186,7 @@ func (s *RepoSecretsService) removeAuthSecretOfOtherType(
 	ctx context.Context, nn types.NamespacedName, secretType corev1.SecretType,
 ) (bool, error) {
 	existing := &corev1.Secret{}
-	if err := s.Client.Get(ctx, nn, existing); err != nil {
+	if err := s.client.Get(ctx, nn, existing); err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
@@ -209,7 +203,7 @@ func (s *RepoSecretsService) removeAuthSecretOfOtherType(
 		return false, nil
 	}
 
-	if err := s.Client.Delete(ctx, existing); client.IgnoreNotFound(err) != nil {
+	if err := s.client.Delete(ctx, existing); client.IgnoreNotFound(err) != nil {
 		return false, fmt.Errorf("deleting auth secret of type %q: %w", existingType, err)
 	}
 
@@ -220,8 +214,8 @@ func (s *RepoSecretsService) reconcileTLSSecret(ctx context.Context, repo contra
 	secretName := repo.InternalNames().TLSSecret
 
 	if repo.CACertificate() == "" {
-		nn := types.NamespacedName{Name: secretName, Namespace: s.TargetNamespace}
-		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {
+		nn := types.NamespacedName{Name: secretName, Namespace: s.targetNamespace}
+		if _, err := utils.DeleteIfPresent(ctx, s.client, nn, &corev1.Secret{}); err != nil {
 			return fmt.Errorf("deleting obsolete tls secret: %w", err)
 		}
 		return nil
@@ -232,11 +226,11 @@ func (s *RepoSecretsService) reconcileTLSSecret(ctx context.Context, repo contra
 	tlsSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
-			Namespace: s.TargetNamespace,
+			Namespace: s.targetNamespace,
 		},
 	}
 
-	if _, err := controllerutil.CreateOrPatch(ctx, s.Client, tlsSecret, func() error {
+	if _, err := controllerutil.CreateOrPatch(ctx, s.client, tlsSecret, func() error {
 		tlsSecret.Labels = repo.SourceLabels()
 
 		tlsSecret.StringData = map[string]string{
@@ -255,8 +249,8 @@ func (s *RepoSecretsService) reconcileTLSSecret(ctx context.Context, repo contra
 // once and the caller need not wait for them.
 func (s *RepoSecretsService) Cleanup(ctx context.Context, names contract.InternalNames) error {
 	for _, name := range []string{names.AuthSecret, names.TLSSecret} {
-		nn := types.NamespacedName{Name: name, Namespace: s.TargetNamespace}
-		if err := s.ensureResourceDeleted(ctx, nn, &corev1.Secret{}); err != nil {
+		nn := types.NamespacedName{Name: name, Namespace: s.targetNamespace}
+		if _, err := utils.DeleteIfPresent(ctx, s.client, nn, &corev1.Secret{}); err != nil {
 			return fmt.Errorf("cleaning up secret %s: %w", name, err)
 		}
 	}

@@ -31,6 +31,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 var helmChartErrorRules = []ErrorConditionRule{
@@ -39,19 +40,13 @@ var helmChartErrorRules = []ErrorConditionRule{
 }
 
 type ChartService struct {
-	BaseService
-
-	TargetNamespace string
+	client          client.Client
+	scheme          *runtime.Scheme
+	targetNamespace string
 }
 
 func NewChartService(client client.Client, scheme *runtime.Scheme, targetNamespace string) *ChartService {
-	return &ChartService{
-		BaseService: BaseService{
-			Client: client,
-			Scheme: scheme,
-		},
-		TargetNamespace: targetNamespace,
-	}
+	return &ChartService{client: client, scheme: scheme, targetNamespace: targetNamespace}
 }
 
 func (s *ChartService) Ensure(ctx context.Context, rel contract.Release, repo contract.Repository) ChartOutcome {
@@ -60,11 +55,11 @@ func (s *ChartService) Ensure(ctx context.Context, rel contract.Release, repo co
 	existing := &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      rel.InternalNames().HelmChart,
-			Namespace: s.TargetNamespace,
+			Namespace: s.targetNamespace,
 		},
 	}
 
-	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
+	op, err := controllerutil.CreateOrPatch(ctx, s.client, existing, func() error {
 		applyHelmChartSpec(rel, repo, existing)
 
 		return nil
@@ -96,9 +91,9 @@ func (s *ChartService) Ensure(ctx context.Context, rel contract.Release, repo co
 // for source-controller to finish removing it. It returns nil once the
 // HelmChart is gone.
 func (s *ChartService) Cleanup(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error) {
-	nn := types.NamespacedName{Name: names.HelmChart, Namespace: s.TargetNamespace}
+	nn := types.NamespacedName{Name: names.HelmChart, Namespace: s.targetNamespace}
 	chart := &sourcev1.HelmChart{}
-	exists, err := s.deleteAndCheck(ctx, nn, chart)
+	exists, err := utils.DeleteIfPresent(ctx, s.client, nn, chart)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete helm chart: %w", err)
 	}

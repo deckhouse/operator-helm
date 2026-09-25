@@ -35,6 +35,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 const releaseDriftDetectionInterval = 5 * time.Minute
@@ -46,19 +47,13 @@ var helmReleaseErrorRules = []ErrorConditionRule{
 }
 
 type ReleaseService struct {
-	BaseService
-
-	TargetNamespace string
+	client          client.Client
+	scheme          *runtime.Scheme
+	targetNamespace string
 }
 
 func NewReleaseService(client client.Client, scheme *runtime.Scheme, targetNamespace string) *ReleaseService {
-	return &ReleaseService{
-		BaseService: BaseService{
-			Client: client,
-			Scheme: scheme,
-		},
-		TargetNamespace: targetNamespace,
-	}
+	return &ReleaseService{client: client, scheme: scheme, targetNamespace: targetNamespace}
 }
 
 func (s *ReleaseService) Ensure(ctx context.Context, rel contract.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {
@@ -67,12 +62,12 @@ func (s *ReleaseService) Ensure(ctx context.Context, rel contract.Release, sourc
 	existing := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      rel.InternalNames().HelmRelease,
-			Namespace: s.TargetNamespace,
+			Namespace: s.targetNamespace,
 		},
 	}
 
-	op, err := controllerutil.CreateOrPatch(ctx, s.Client, existing, func() error {
-		return applyHelmReleaseSpec(rel, existing, sourceKind, s.TargetNamespace)
+	op, err := controllerutil.CreateOrPatch(ctx, s.client, existing, func() error {
+		return applyHelmReleaseSpec(rel, existing, sourceKind, s.targetNamespace)
 	})
 	if err != nil {
 		return ReleaseOutcome{Err: fmt.Errorf("reconciling helm release: %w", err)}
@@ -103,9 +98,9 @@ func (s *ReleaseService) Ensure(ctx context.Context, rel contract.Release, sourc
 // for helm-controller to finish uninstalling before proceeding. It returns nil
 // once the HelmRelease is gone.
 func (s *ReleaseService) Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error) {
-	nn := types.NamespacedName{Name: names.HelmRelease, Namespace: s.TargetNamespace}
+	nn := types.NamespacedName{Name: names.HelmRelease, Namespace: s.targetNamespace}
 	release := &helmv2.HelmRelease{}
-	exists, err := s.deleteAndCheck(ctx, nn, release)
+	exists, err := utils.DeleteIfPresent(ctx, s.client, nn, release)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete helm release: %w", err)
 	}
@@ -137,7 +132,7 @@ func (s *ReleaseService) SyncSpec(ctx context.Context, rel contract.Release, rel
 	// The release may finish deleting between the caller's get and this patch;
 	// a NotFound then simply means the uninstall completed, so there is nothing
 	// left to sync.
-	if err := s.Client.Patch(ctx, release, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
+	if err := s.client.Patch(ctx, release, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("syncing helm release spec during deletion: %w", err)
 	}
 
