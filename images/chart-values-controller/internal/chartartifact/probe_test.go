@@ -152,8 +152,6 @@ func TestProbeContextKeepsAnEarlierCallerDeadline(t *testing.T) {
 	}
 }
 
-// spyTransport counts how many times its idle connections are closed, so a test
-// can pin that a single-use transport is drained exactly once per probe.
 type spyTransport struct {
 	http.RoundTripper
 	closed int
@@ -186,8 +184,6 @@ func TestChartLayerMediaTypeClosesTheTransportItWasGiven(t *testing.T) {
 	}
 }
 
-// pushTestChart writes a single-layer chart artifact to host/podinfo:1.0.0 using
-// a transport that trusts the test registry's certificate.
 func pushTestChart(t *testing.T, host string, rt http.RoundTripper) {
 	t.Helper()
 

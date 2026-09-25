@@ -61,8 +61,6 @@ func (r *ApplicationRelease) Name() string                        { return r.obj
 func (r *ApplicationRelease) Namespace() string                   { return r.obj.Namespace }
 func (r *ApplicationRelease) Generation() int64                   { return r.obj.Generation }
 
-// repositoryRef resolves the XOR of the spec into one reference. A namespaced
-// repository lives in the application's own namespace.
 func (r *ApplicationRelease) repositoryRef(kind, name string) source.RepositoryRef {
 	ref := source.RepositoryRef{Kind: kind, Name: name}
 	if kind == helmv1alpha1.HelmApplicationRepositoryKind {
@@ -178,8 +176,6 @@ func (r *ApplicationRelease) SetLastForceReconcileTime(t metav1.Time) {
 	r.obj.Status.LastForceReconcileTime = &t
 }
 
-// applicationRepositoryResolver loads whichever of the two repository kinds an
-// application references, with the catalog of that kind.
 type applicationRepositoryResolver struct {
 	client         client.Client
 	namespaced     source.Catalog

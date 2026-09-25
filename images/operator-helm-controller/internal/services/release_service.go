@@ -202,8 +202,6 @@ func applyHelmReleaseSpec(rel source.Release, existing *helmv2.HelmRelease, sour
 	return nil
 }
 
-// isDesiredChartDeployed reports whether the latest release revision in history
-// is actually deployed and corresponds to the chart requested by the release spec.
 func isDesiredChartDeployed(rel source.Release, latest *helmv2.Snapshot, artifactRevision string) bool {
 	if latest == nil || latest.Status != "deployed" {
 		return false

@@ -281,8 +281,6 @@ func TestGetHelmClusterAddonChartMissingChart(t *testing.T) {
 	}
 }
 
-// stubChartResolver stands in for the registry so a reconcile never leaves the
-// process.
 type stubChartResolver struct {
 	mediaType string
 	err       error
@@ -416,8 +414,6 @@ func testApplication() *helmv1alpha1.HelmApplication {
 	}
 }
 
-// applicationFixtures builds the objects an application needs to reconcile: the
-// namespaced repository it points at and the catalog entry offering its version.
 func applicationFixtures() []client.Object {
 	return []client.Object{
 		&helmv1alpha1.HelmApplicationRepository{
@@ -721,7 +717,6 @@ func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *test
 	}
 }
 
-// failingRBAC is an RBACManager whose identity setup never succeeds.
 type failingRBAC struct{}
 
 func (failingRBAC) EnsureRBAC(context.Context, source.Release) services.RBACOutcome {
@@ -936,8 +931,6 @@ func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
 	}
 }
 
-// accessCleanupFails is an RBACManager whose teardown never succeeds, standing in
-// for an API failure while removing the release's ServiceAccount or RoleBinding.
 type accessCleanupFails struct{}
 
 func (accessCleanupFails) EnsureRBAC(context.Context, source.Release) services.RBACOutcome {
@@ -1335,7 +1328,6 @@ func TestReconcileForcedAddonReportsProgressBeforeWorking(t *testing.T) {
 	}
 }
 
-// TestReconcileForcedAddonRecordsCompletion covers the other end of the same pass.
 func TestReconcileForcedAddonRecordsCompletion(t *testing.T) {
 	addon := testAddon()
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}

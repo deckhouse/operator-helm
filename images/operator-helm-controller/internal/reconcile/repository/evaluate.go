@@ -69,7 +69,6 @@ type Decision struct {
 	Err          error
 }
 
-// abnormalCondition is an optional abnormal-true condition.
 type abnormalCondition struct {
 	set     bool
 	reason  string

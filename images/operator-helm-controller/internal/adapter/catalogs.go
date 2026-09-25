@@ -75,8 +75,6 @@ func NewClusterApplicationCatalog(c client.Client) source.Catalog {
 	})
 }
 
-// pointers returns a pointer to every element of items, so a caller can mutate the
-// listed objects in place.
 func pointers[T any](items []T) []*T {
 	out := make([]*T, len(items))
 	for i := range items {

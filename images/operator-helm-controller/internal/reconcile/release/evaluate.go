@@ -447,7 +447,6 @@ func failureState(failure Failure) conditionState {
 	}
 }
 
-// reported turns the verdict into the failure the pass logs, if it failed at all.
 func reported(state conditionState) *Failure {
 	if state.Err == nil {
 		return nil
@@ -479,8 +478,6 @@ func artifactRevision(in Inputs) (string, bool) {
 	}
 }
 
-// valuesDeployed reports whether the revision the release currently has deployed was
-// installed with the values the spec asks for.
 func valuesDeployed(in Inputs) bool {
 	if in.Release == nil {
 		return false

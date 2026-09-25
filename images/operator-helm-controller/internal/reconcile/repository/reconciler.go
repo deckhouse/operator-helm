@@ -246,7 +246,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo source.Repository
 
 		if controllerutil.RemoveFinalizer(latest.Object(), helmv1alpha1.FinalizerName) {
 			if err := r.Update(ctx, latest.Object()); err != nil {
-				return err // This will trigger a retry if it's a conflict
+				return err
 			}
 		}
 		return nil

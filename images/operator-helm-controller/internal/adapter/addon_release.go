@@ -135,7 +135,6 @@ func (r *AddonRelease) SetLastForceReconcileTime(t metav1.Time) {
 	r.obj.Status.LastForceReconcileTime = &t
 }
 
-// addonRepositoryResolver loads the one repository kind an addon can reference.
 type addonRepositoryResolver struct {
 	client  client.Client
 	catalog source.Catalog

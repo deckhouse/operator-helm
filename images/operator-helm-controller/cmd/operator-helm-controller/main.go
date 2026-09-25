@@ -48,8 +48,6 @@ import (
 
 var scheme = runtime.NewScheme()
 
-// managedByOperatorHelm selects the RBAC objects this module manages in the users'
-// namespaces.
 var managedByOperatorHelm = labels.SelectorFromSet(labels.Set{
 	helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue,
 })

@@ -135,7 +135,6 @@ func (s *RepoSyncService) fetchCharts(
 	}
 }
 
-// countPending counts the versions that were listed but not examined in this pass.
 func countPending(charts []repoclient.Chart) int {
 	pending := 0
 	for _, chart := range charts {

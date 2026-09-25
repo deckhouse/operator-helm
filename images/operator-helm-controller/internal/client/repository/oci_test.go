@@ -192,8 +192,6 @@ func (f *fakeRegistry) reset() {
 	f.gets = map[string]int{}
 }
 
-// pushChart writes a single-layer artifact with the given config and layer media
-// types under host/podinfo:tag.
 func pushChart(t *testing.T, host, tag string, configType types.MediaType, layerTypes ...types.MediaType) {
 	t.Helper()
 

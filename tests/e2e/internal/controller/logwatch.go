@@ -45,7 +45,6 @@ func (e LogError) String() string {
 	return fmt.Sprintf("[%s] %s/%s: %s", e.Controller, e.Pod, e.Container, e.Line)
 }
 
-// controllerWatcher monitors logs for a single controller.
 type controllerWatcher struct {
 	config         framework.ControllerConfig
 	errors         []LogError

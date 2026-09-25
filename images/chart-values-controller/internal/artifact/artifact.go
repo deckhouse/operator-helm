@@ -59,7 +59,6 @@ func FetchValues(ctx context.Context, httpClient *http.Client, url, digest strin
 		return nil, fmt.Errorf("downloading artifact: unexpected status %s", resp.Status)
 	}
 
-	// Fast reject when the server advertises a size over the limit.
 	if resp.ContentLength > maxBytes {
 		return nil, fmt.Errorf("%w (%d bytes > %d bytes)", ErrArtifactTooLarge, resp.ContentLength, maxBytes)
 	}

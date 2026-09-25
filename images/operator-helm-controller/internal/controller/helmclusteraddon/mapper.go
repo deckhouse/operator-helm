@@ -29,7 +29,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/index"
 )
 
-// MapRepositoryToAddons enqueues the addons referencing a repository object.
 func mapRepositoryToAddons(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		addonList := &helmv1alpha1.HelmClusterAddonList{}

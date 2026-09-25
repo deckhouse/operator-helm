@@ -91,9 +91,6 @@ func ApplicationChartValue(kind, namespace, name, chart string) string {
 	return ApplicationRepositoryValue(kind, namespace, name) + "/" + chart
 }
 
-// applicationRepositoryRef resolves the two mutually exclusive reference fields of an
-// application into the repository kind, namespace and name the index values use. A
-// namespaced repository lives in the application's own namespace.
 func applicationRepositoryRef(app *helmv1alpha1.HelmApplication) (kind, namespace, name string) {
 	kind = app.RepositoryKind()
 	if kind == helmv1alpha1.HelmApplicationRepositoryKind {

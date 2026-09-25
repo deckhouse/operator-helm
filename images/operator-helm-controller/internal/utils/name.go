@@ -22,7 +22,6 @@ import (
 	"strings"
 )
 
-// hashLength is how much of the digest every derived name carries.
 const hashLength = 12
 
 func GetHash(s string) string {
@@ -179,8 +178,6 @@ func truncatePart(part string) string {
 // helmReleaseNameLimit is the longest release name Helm accepts.
 const helmReleaseNameLimit = 53
 
-// releaseReadableLimit is what is left for the readable part once the hash and its
-// separator are taken out of helmReleaseNameLimit.
 const releaseReadableLimit = helmReleaseNameLimit - len("-") - hashLength
 
 // HelmReleaseName bounds a release name to what Helm accepts. A name within the

@@ -102,8 +102,6 @@ func addonRepo() source.Repository {
 	return adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "example"}})
 }
 
-// addonConsumer builds a HelmClusterAddon referencing one repository/chart/version,
-// so InUseVersions reports that version as in use.
 func addonConsumer(name, repoName, chartName, version string) *helmv1alpha1.HelmClusterAddon { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
 	return &helmv1alpha1.HelmClusterAddon{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -220,7 +218,6 @@ func TestSameNamedRepositoriesKeepSeparateCatalogs(t *testing.T) {
 		t.Fatalf("Known(team-a) = %v, want only podinfo", known)
 	}
 
-	// Re-reconciling team-a with an empty list prunes its own catalog only.
 	if err := cat.Reconcile(context.Background(), teamA, nil); err != nil {
 		t.Fatalf("Reconcile(team-a, empty) returned %v", err)
 	}
@@ -481,8 +478,6 @@ func TestMigrationIsANoOpOnASecondReconcile(t *testing.T) {
 	}
 }
 
-// interceptedClient wraps c so onDelete is called for every delete it forwards,
-// while every other call still reaches c unchanged.
 func interceptedClient(t *testing.T, c client.WithWatch, onDelete func()) client.WithWatch {
 	t.Helper()
 

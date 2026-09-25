@@ -70,7 +70,6 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	obj := r.newObject()
 	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
 		if apierrors.IsNotFound(err) {
-			// Resource gone (external or TTL deletion): drop its cache entry.
 			_ = r.cache.Delete(req.Name)
 			r.forgetDigest(req.Name)
 			return reconcile.Result{}, nil

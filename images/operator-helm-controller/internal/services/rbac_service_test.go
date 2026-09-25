@@ -434,7 +434,6 @@ func TestCleanupRBACRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T) {
 		t.Fatalf("the role must survive the application: %v", err)
 	}
 
-	// Cleaning up twice is fine: nothing is left to delete.
 	if err := service.CleanupRBAC(context.Background(), rel); err != nil {
 		t.Fatalf("second CleanupRBAC returned %v", err)
 	}

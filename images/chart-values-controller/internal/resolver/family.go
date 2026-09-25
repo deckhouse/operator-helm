@@ -26,8 +26,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// repositorySpec is what resolving a chart needs from a repository, whichever kind
-// it is: where the charts come from and how to reach them.
 type repositorySpec struct {
 	URL                string
 	Auth               *helmv1alpha1.RepositoryAuth
@@ -58,7 +56,6 @@ type repositoryFamily struct {
 	InternalLabels func(namespace, repository string) map[string]string
 }
 
-// families is the registry every supported repository kind is looked up in.
 var families = map[RepositoryKind]repositoryFamily{
 	RepositoryKindHelmClusterAddon: {
 		Kind:       RepositoryKindHelmClusterAddon,

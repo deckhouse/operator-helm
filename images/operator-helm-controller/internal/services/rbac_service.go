@@ -253,7 +253,6 @@ func applicationRBACLabels() map[string]string {
 	}
 }
 
-// applicationRoleRef is the roleRef every role binding we own carries.
 func applicationRoleRef() rbacv1.RoleRef {
 	return rbacv1.RoleRef{
 		APIGroup: rbacv1.GroupName,

@@ -70,7 +70,6 @@ func (f *recordingResolver) Resolve(_ context.Context, req resolver.Request) (re
 	return f.result, f.err
 }
 
-// authorized is the default reviewer for tests unconcerned with authorization.
 var authorized = fakeReviewer{result: auth.Result{Authenticated: true, Authorized: true}}
 
 func do(t *testing.T, res chartValuesResolver, body string) *httptest.ResponseRecorder {
@@ -296,8 +295,6 @@ func TestHandleAuthorizesPerFamily(t *testing.T) {
 	}
 }
 
-// TestHandlePassesTheNamespaceToTheResolver makes sure the namespace is not merely
-// validated and dropped.
 func TestHandlePassesTheNamespaceToTheResolver(t *testing.T) {
 	res := &recordingResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}}
 	rec := doAuth(t, res, authorized, `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`)
@@ -310,7 +307,6 @@ func TestHandlePassesTheNamespaceToTheResolver(t *testing.T) {
 	}
 }
 
-// TestHandleInvalidRequestOutcome maps the resolver's request-shape refusal.
 func TestHandleInvalidRequestOutcome(t *testing.T) {
 	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeInvalidRequest, Message: "detail"}}, validBody)
 

@@ -28,9 +28,7 @@ const (
 	// testKind is lower case because Resolve lower-cases the kind before it ever
 	// reaches AuxResourceName, so that is the only casing production hashes.
 	testKind = "helmclusteraddonrepository"
-	// nsKind is a namespaced repository kind; its names must additionally depend
-	// on the namespace.
-	nsKind = "helmapplicationrepository"
+	nsKind   = "helmapplicationrepository"
 )
 
 func TestAuxResourceNameReadableHints(t *testing.T) {

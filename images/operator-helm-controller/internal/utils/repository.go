@@ -86,7 +86,6 @@ func BuildDockerConfigJSON(repositoryURL, username, password string) (string, er
 // up under.
 const dockerHubAuthKey = "https://index.docker.io/v1/"
 
-// dockerHubHosts lists the spellings of the Docker Hub registry.
 var dockerHubHosts = map[string]struct{}{
 	"docker.io":            {},
 	"index.docker.io":      {},

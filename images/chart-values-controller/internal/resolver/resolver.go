@@ -228,7 +228,6 @@ func ociMediaType(req Request, version *helmv1alpha1.ChartVersion) (string, *Res
 	}
 }
 
-// versionDetail renders why a catalog entry is unusable.
 func versionDetail(version *helmv1alpha1.ChartVersion) string {
 	detail := version.UnavailableReason
 	if version.UnavailableMessage != "" {

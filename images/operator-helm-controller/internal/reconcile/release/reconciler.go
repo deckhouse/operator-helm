@@ -551,7 +551,6 @@ func (r *Reconciler) getChartVersion(
 	return nil, nil, fmt.Errorf("chart catalog does not have version %q", ref.Version)
 }
 
-// versionUnavailableDetail explains why a catalog entry is not deployable.
 func versionUnavailableDetail(version helmv1alpha1.ChartVersion) string {
 	switch {
 	case version.UnavailableReason == "":

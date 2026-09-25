@@ -850,8 +850,6 @@ func TestReconcileUnforcedOCIRepositoryLeavesAddonSources(t *testing.T) {
 	}
 }
 
-// forcedRepository drives a repository to a stable state and then puts a force
-// request on the stored object, so a test can run the single pass that consumes it.
 func forcedRepository(t *testing.T, r *Reconciler, c client.Client, repo *helmv1alpha1.HelmClusterAddonRepository) {
 	t.Helper()
 

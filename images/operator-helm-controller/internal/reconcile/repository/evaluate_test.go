@@ -30,7 +30,6 @@ import (
 
 var testNow = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
-// readyStatus builds a status that already carries proven Ready for the given generation.
 func readyStatus(generation int64) helmv1alpha1.RepositoryStatus {
 	return helmv1alpha1.RepositoryStatus{
 		ObservedGeneration: generation,

@@ -68,8 +68,6 @@ func AuxResourceName(kind, namespace, repository, chart, version string) string 
 	)
 }
 
-// sanitize lowercases s, replaces characters invalid in a DNS-1123 label
-// with '-', truncates to limit, and trims leading/trailing '-'.
 func sanitize(s string, limit int) string {
 	s = strings.ToLower(s)
 

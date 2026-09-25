@@ -40,8 +40,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// artifactDownloadTimeout bounds a single artifact download from the in-cluster
-// source-controller.
 const artifactDownloadTimeout = 60 * time.Second
 
 var scheme = runtime.NewScheme()

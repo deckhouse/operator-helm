@@ -72,8 +72,6 @@ func namespaceFixture(name string, terminating bool) *corev1.Namespace {
 	return ns
 }
 
-// systemNamespaceCases pins validateNotSystemNamespace's boundary: a deckhouse
-// namespace and kube-system are refused, an ordinary namespace is allowed.
 func systemNamespaceCases() []struct {
 	name      string
 	namespace string
@@ -110,8 +108,6 @@ func TestValidateCreateRejectsASystemNamespace(t *testing.T) {
 	}
 }
 
-// TestValidateUpdateRejectsASystemNamespace mirrors TestValidateCreateRejectsASystemNamespace
-// for UPDATE, which validates the new object's namespace.
 func TestValidateUpdateRejectsASystemNamespace(t *testing.T) {
 	for _, tt := range systemNamespaceCases() {
 		t.Run(tt.name, func(t *testing.T) {

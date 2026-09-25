@@ -44,7 +44,7 @@ const (
 	// repositoryName, chart, version); 4 KiB is generous headroom over that and
 	// still small enough that an unauthenticated caller cannot use the body to
 	// hold the handler on an oversized read.
-	maxRequestBodyBytes = 4 << 10 // 4 KiB
+	maxRequestBodyBytes = 4 << 10
 
 	// readTimeout and writeTimeout bound how long a connection may take to send
 	// its request body or receive its response, closing the gap
@@ -318,8 +318,6 @@ func repositoryNameMinLen(kind string) int {
 	}
 }
 
-// validateChartValuesFields checks repositoryName, chart and version beyond the
-// mere non-emptiness already checked by the caller.
 func validateChartValuesFields(req chartValuesRequest) error {
 	if errs := validation.IsDNS1123Subdomain(req.RepositoryName); len(errs) > 0 {
 		return fmt.Errorf("repositoryName must be a valid object name: %s", strings.Join(errs, "; "))

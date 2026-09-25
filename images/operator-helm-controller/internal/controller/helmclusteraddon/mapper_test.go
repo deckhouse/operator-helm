@@ -103,8 +103,6 @@ func TestMapChartToAddonsEnqueuesTheClaimingAddon(t *testing.T) {
 	}
 }
 
-// TestmapChartToAddonsNoAddonClaimsTheChart covers the case where nothing references
-// the chart yet: no request should be produced.
 func TestMapChartToAddonsNoAddonClaimsTheChart(t *testing.T) {
 	chart := chartObject("repo-a", "podinfo")
 

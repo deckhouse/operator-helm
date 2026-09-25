@@ -129,7 +129,6 @@ func TestOCIMediaType(t *testing.T) {
 	})
 }
 
-// TestChartVersion covers finding the entry, which is all this lookup decides now.
 func TestChartVersion(t *testing.T) {
 	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
 
@@ -215,8 +214,6 @@ func TestChartVersion(t *testing.T) {
 	})
 }
 
-// stubProber stands in for the registry: the hybrid path probes the artifact, and a
-// unit test must not leave the process to do it.
 type stubProber struct {
 	mediaType string
 	err       error
@@ -231,8 +228,6 @@ func (p *stubProber) ChartLayerMediaType(_ context.Context, ref string, _ http.R
 	return p.mediaType, p.err
 }
 
-// newHybridResolver builds a resolver able to create auxiliary source objects, which
-// the media-type-only tests above do not need.
 func newHybridResolver(t *testing.T, prober chartartifact.Prober, objects ...client.Object) (*Resolver, client.Client) {
 	t.Helper()
 
@@ -468,8 +463,6 @@ func TestClusterScopedRequestsIgnoreAStrayNamespace(t *testing.T) {
 	}
 }
 
-// mustFamily resolves the family of a request's kind, failing the test if the kind
-// is unknown.
 func mustFamily(t *testing.T, kind RepositoryKind) repositoryFamily {
 	t.Helper()
 
