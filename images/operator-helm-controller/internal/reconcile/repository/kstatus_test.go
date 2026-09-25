@@ -26,7 +26,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/reposync"
 )
 
 // computeStatus renders the decision as the repository object would look in the
@@ -65,8 +65,8 @@ func TestKstatusVerdicts(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{},
-				Catalog:            &services.CatalogOutcome{},
+				Fetch:              &reposync.FetchOutcome{},
+				Catalog:            &reposync.CatalogOutcome{},
 			},
 			want: status.CurrentStatus,
 		},
@@ -76,7 +76,7 @@ func TestKstatusVerdicts(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{Err: errors.New("connection refused"), Message: "cannot read index.yaml"},
+				Fetch:              &reposync.FetchOutcome{Err: errors.New("connection refused"), Message: "cannot read index.yaml"},
 			},
 			want: status.InProgressStatus,
 		},
@@ -86,7 +86,7 @@ func TestKstatusVerdicts(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch: &services.FetchOutcome{
+				Fetch: &reposync.FetchOutcome{
 					Err: errors.New("unauthorized"), Terminal: true,
 					Reason: helmv1alpha1.ReasonAuthenticationFailed, Message: "rejected the credentials",
 				},
@@ -111,7 +111,7 @@ func TestKstatusVerdicts(t *testing.T) {
 				Generation: 3, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch: &services.FetchOutcome{
+				Fetch: &reposync.FetchOutcome{
 					Err: errors.New("not found"), Terminal: true,
 					Reason: helmv1alpha1.ReasonSourceNotFound, Message: "repository not found",
 				},

@@ -34,7 +34,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/reconcile/pass"
-	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
@@ -105,7 +104,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	in.MigrateErr = r.deps.Catalogs.MigrateNames(ctx, repo)
 
 	if repoTypeErr != nil {
-		in.ConfigErr = &services.ConfigOutcome{
+		in.ConfigErr = &ConfigFailure{
 			Reason:  helmv1alpha1.ReasonUnsupportedRepositoryType,
 			Message: repoTypeErr.Error(),
 			Err:     repoTypeErr,
@@ -143,7 +142,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		in.Attempted = true
 		if outcome.FetchAttempted {
-			// A cluster-side failure before the fetch (see RepoSyncService.Sync)
+			// A cluster-side failure before the fetch (see Synchronizer.Sync)
 			// leaves outcome.FetchAttempted false; in.Fetch must stay nil then, or
 			// its zero-value Err == nil would be read as a successful fetch and
 			// reset ConsecutiveFetchFailures / mark Ready=True off nothing.

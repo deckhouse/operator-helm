@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package contract declares the contracts through which the services and the
+// Package contract declares the contracts through which the collaborators and the
 // reconcilers see a user-facing resource without knowing its kind.
 //
 // A Release is any of the release kinds of the module; a Repository is any of the
@@ -23,11 +23,12 @@ limitations under the License.
 // internal/catalog.
 //
 // Two rules keep this package a leaf. It depends only on the API types and the
-// status manager, so adapters, catalogs and every service package can import it
-// without a cycle. And a contract lives here rather than next to the package that
-// consumes it whenever the consumer's own tests build an adapter for it: the
-// adapters would then import the consumer to reach the interface, while the
-// consumer's tests import the adapters.
+// status manager, so the adapters, the catalogs and every collaborator package
+// (internalobj, rbac, claim, namespace, reposync) can import it without a cycle.
+// And a contract lives here rather than next to the package that consumes it
+// whenever the consumer's own tests build an adapter for it: the adapters would
+// then import the consumer to reach the interface, while the consumer's tests
+// import the adapters.
 //
 // A collaborator only the reconcilers call is not such a case, and is declared
 // where it is consumed — in the collaborators.go of each reconciler package.

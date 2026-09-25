@@ -19,7 +19,7 @@ limitations under the License.
 // or by an internal OCIRepository, when it hands out registry artifacts — and which
 // of the two applies is a property of the version, not of the repository alone. The
 // vocabulary lives in its own package because every layer speaks it: the repository
-// client picks an implementation by Kind, the services write the internal object it
+// client picks an implementation by Kind, internalobj writes the internal object it
 // names, and both reconcilers branch on it.
 package chartsource
 

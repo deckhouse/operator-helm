@@ -32,7 +32,7 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/repository"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/reposync"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -46,10 +46,10 @@ func SetupWithManager(mgr ctrl.Manager) error {
 
 	r := reconcile.New(client, reconcile.Deps{
 		NewRepository:    adapter.EmptyClusterApplicationRepository,
-		Secrets:          services.NewRepoSecretsService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
+		Secrets:          reposync.NewSecrets(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		HelmRepositories: internalobj.NewHelmRepositories(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
 		Consumers:        internalobj.NewConsumers(client, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(client)),
-		Catalogs:         services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewClusterApplicationCatalog(client)),
+		Catalogs:         reposync.NewSynchronizer(client, mgr.GetScheme(), repoclient.NewClient, adapter.NewClusterApplicationCatalog(client)),
 		Status:           status.NewManager(client),
 	})
 

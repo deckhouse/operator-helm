@@ -36,7 +36,7 @@ type InternalNames struct {
 	TLSSecret      string
 }
 
-// Repository is a repository resource of any kind as the services see it. Object
+// Repository is a repository resource of any kind as its collaborators see it. Object
 // returns the API object itself, which is what the client reads, updates and
 // patches: the adapter is not registered in the scheme and must never be handed to
 // the client directly.

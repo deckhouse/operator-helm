@@ -26,7 +26,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/reposync"
 )
 
 var testNow = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
@@ -155,8 +155,8 @@ func TestEvaluateConditions(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{},
-				Catalog:            &services.CatalogOutcome{},
+				Fetch:              &reposync.FetchOutcome{},
+				Catalog:            &reposync.CatalogOutcome{},
 			},
 			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
 			wantSynced: metav1.ConditionTrue,
@@ -190,8 +190,8 @@ func TestEvaluateConditions(t *testing.T) {
 					Reason: "FetchFailed", Message: "failed to fetch index",
 				},
 				Attempted: true,
-				Fetch:     &services.FetchOutcome{},
-				Catalog:   &services.CatalogOutcome{},
+				Fetch:     &reposync.FetchOutcome{},
+				Catalog:   &reposync.CatalogOutcome{},
 			},
 			wantReady: metav1.ConditionFalse, wantReadyReason: "FetchFailed",
 			wantSynced:      metav1.ConditionTrue,
@@ -206,8 +206,8 @@ func TestEvaluateConditions(t *testing.T) {
 					Reason: "InvalidSecretRef", Message: "secret not found",
 				},
 				Attempted: true,
-				Fetch:     &services.FetchOutcome{},
-				Catalog:   &services.CatalogOutcome{},
+				Fetch:     &reposync.FetchOutcome{},
+				Catalog:   &reposync.CatalogOutcome{},
 			},
 			wantReady: metav1.ConditionFalse, wantReadyReason: "InvalidSecretRef",
 			wantSynced:  metav1.ConditionTrue,
@@ -219,7 +219,7 @@ func TestEvaluateConditions(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
+				Fetch:              &reposync.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			},
 			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
 			wantSynced:      metav1.ConditionFalse,
@@ -231,7 +231,7 @@ func TestEvaluateConditions(t *testing.T) {
 				Generation: 1, Now: testNow,
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
+				Fetch:              &reposync.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			},
 			wantReady: metav1.ConditionUnknown, wantReadyReason: helmv1alpha1.ReasonAwaitingInitialSync,
 			wantSynced:      metav1.ConditionFalse,
@@ -243,7 +243,7 @@ func TestEvaluateConditions(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch: &services.FetchOutcome{
+				Fetch: &reposync.FetchOutcome{
 					Err: fetchErr, Terminal: true,
 					Reason:  helmv1alpha1.ReasonAuthenticationFailed,
 					Message: "repository rejected the credentials (HTTP 401)",
@@ -257,7 +257,7 @@ func TestEvaluateConditions(t *testing.T) {
 			name: "unsupported repository type",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				ConfigErr: &services.ConfigOutcome{
+				ConfigErr: &ConfigFailure{
 					Reason:  helmv1alpha1.ReasonUnsupportedRepositoryType,
 					Message: "unsupported repository schema in use: ftp",
 				},
@@ -272,8 +272,8 @@ func TestEvaluateConditions(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{},
-				Catalog:            &services.CatalogOutcome{Err: writeErr},
+				Fetch:              &reposync.FetchOutcome{},
+				Catalog:            &reposync.CatalogOutcome{Err: writeErr},
 			},
 			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
 			wantSynced:      metav1.ConditionFalse,
@@ -285,7 +285,7 @@ func TestEvaluateConditions(t *testing.T) {
 				Generation: 2, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
+				Fetch:              &reposync.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			},
 			wantReady: metav1.ConditionUnknown, wantReadyReason: helmv1alpha1.ReasonAwaitingInitialSync,
 			wantSynced:      metav1.ConditionFalse,
@@ -297,8 +297,8 @@ func TestEvaluateConditions(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: false},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{},
-				Catalog:            &services.CatalogOutcome{},
+				Fetch:              &reposync.FetchOutcome{},
+				Catalog:            &reposync.CatalogOutcome{},
 			},
 			wantReady: metav1.ConditionTrue, wantReadyReason: helmv1alpha1.ReasonSuccess,
 			wantSynced: metav1.ConditionTrue,
@@ -437,8 +437,8 @@ func TestEvaluateDecisionErr(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{},
-				Catalog:            &services.CatalogOutcome{Err: catalogWriteErr},
+				Fetch:              &reposync.FetchOutcome{},
+				Catalog:            &reposync.CatalogOutcome{Err: catalogWriteErr},
 			},
 			wantErr: catalogWriteErr,
 		},
@@ -448,7 +448,7 @@ func TestEvaluateDecisionErr(t *testing.T) {
 				Generation: 1, Now: testNow, Current: readyStatus(1),
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
+				Fetch:              &reposync.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			},
 			wantErr: nil,
 		},
@@ -456,7 +456,7 @@ func TestEvaluateDecisionErr(t *testing.T) {
 			name: "configuration failure never reaches Decision.Err",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
-				ConfigErr: &services.ConfigOutcome{
+				ConfigErr: &ConfigFailure{
 					Reason:  helmv1alpha1.ReasonUnsupportedRepositoryType,
 					Message: "unsupported repository schema in use: ftp",
 				},
@@ -496,7 +496,7 @@ func TestEvaluatePreservesFailuresWhenNoFetchWasAttempted(t *testing.T) {
 		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
 		Fetch:              nil,
-		Catalog:            &services.CatalogOutcome{Err: catalogErr},
+		Catalog:            &reposync.CatalogOutcome{Err: catalogErr},
 	}
 
 	got := Evaluate(in)
@@ -531,8 +531,8 @@ func TestEvaluatePartialFirstSyncIsNotSynced(t *testing.T) {
 		Generation: 1,
 		Now:        time.Now().UTC(),
 		Attempted:  true,
-		Fetch:      &services.FetchOutcome{Pending: 2},
-		Catalog:    &services.CatalogOutcome{},
+		Fetch:      &reposync.FetchOutcome{Pending: 2},
+		Catalog:    &reposync.CatalogOutcome{},
 	}
 
 	decision := Evaluate(in)
@@ -566,8 +566,8 @@ func TestEvaluatePartialSyncAfterFullOneStaysSynced(t *testing.T) {
 		Generation: 1,
 		Now:        time.Now().UTC(),
 		Attempted:  true,
-		Fetch:      &services.FetchOutcome{Pending: 1},
-		Catalog:    &services.CatalogOutcome{},
+		Fetch:      &reposync.FetchOutcome{Pending: 1},
+		Catalog:    &reposync.CatalogOutcome{},
 		Current: helmv1alpha1.RepositoryStatus{
 			ObservedGeneration:     1,
 			LastSuccessfulSyncTime: &earlier,
@@ -593,8 +593,8 @@ func TestEvaluatePartialSyncNeverStalls(t *testing.T) {
 			Generation: 1,
 			Now:        time.Now().UTC(),
 			Attempted:  true,
-			Fetch:      &services.FetchOutcome{Pending: 1},
-			Catalog:    &services.CatalogOutcome{},
+			Fetch:      &reposync.FetchOutcome{Pending: 1},
+			Catalog:    &reposync.CatalogOutcome{},
 			Current:    current,
 		})
 		current = decision.Status
@@ -614,8 +614,8 @@ func TestEvaluateFullSyncAdvancesLastSuccessfulSyncTime(t *testing.T) {
 		Generation: 1,
 		Now:        now,
 		Attempted:  true,
-		Fetch:      &services.FetchOutcome{},
-		Catalog:    &services.CatalogOutcome{},
+		Fetch:      &reposync.FetchOutcome{},
+		Catalog:    &reposync.CatalogOutcome{},
 	})
 
 	if decision.Status.LastSuccessfulSyncTime == nil || !decision.Status.LastSuccessfulSyncTime.Time.Equal(now) {
@@ -636,8 +636,8 @@ func TestEvaluateChartCount(t *testing.T) {
 	read := Evaluate(Inputs{
 		Generation: 1, Now: testNow,
 		Attempted: true,
-		Fetch:     &services.FetchOutcome{Charts: 3},
-		Catalog:   &services.CatalogOutcome{},
+		Fetch:     &reposync.FetchOutcome{Charts: 3},
+		Catalog:   &reposync.CatalogOutcome{},
 	})
 	if read.Status.ChartCount == nil || *read.Status.ChartCount != 3 {
 		t.Fatalf("chartCount is %v, want 3", read.Status.ChartCount)
@@ -646,8 +646,8 @@ func TestEvaluateChartCount(t *testing.T) {
 	empty := Evaluate(Inputs{
 		Generation: 1, Now: testNow,
 		Attempted: true,
-		Fetch:     &services.FetchOutcome{},
-		Catalog:   &services.CatalogOutcome{},
+		Fetch:     &reposync.FetchOutcome{},
+		Catalog:   &reposync.CatalogOutcome{},
 	})
 	if empty.Status.ChartCount == nil || *empty.Status.ChartCount != 0 {
 		t.Fatalf("chartCount is %v for a repository offering nothing, want 0", empty.Status.ChartCount)
@@ -657,7 +657,7 @@ func TestEvaluateChartCount(t *testing.T) {
 		Generation: 1, Now: testNow,
 		Current:   read.Status,
 		Attempted: true,
-		Fetch:     &services.FetchOutcome{Err: errors.New("connection refused"), Reason: helmv1alpha1.ReasonSyncFailed},
+		Fetch:     &reposync.FetchOutcome{Err: errors.New("connection refused"), Reason: helmv1alpha1.ReasonSyncFailed},
 	})
 	if failed.Status.ChartCount == nil || *failed.Status.ChartCount != 3 {
 		t.Fatalf("chartCount is %v after a failed read, want the last successful 3", failed.Status.ChartCount)
@@ -697,8 +697,8 @@ func TestEvaluateForcedAttemptStampsLastForceReconcileTime(t *testing.T) {
 		Now:        now,
 		Forced:     true,
 		Attempted:  true,
-		Fetch:      &services.FetchOutcome{},
-		Catalog:    &services.CatalogOutcome{},
+		Fetch:      &reposync.FetchOutcome{},
+		Catalog:    &reposync.CatalogOutcome{},
 	})
 
 	if decision.Status.LastForceReconcileTime == nil || !decision.Status.LastForceReconcileTime.Time.Equal(now) {
@@ -717,7 +717,7 @@ func TestEvaluateFailedForcedAttemptStampsLastForceReconcileTime(t *testing.T) {
 		Now:        now,
 		Forced:     true,
 		Attempted:  true,
-		Fetch: &services.FetchOutcome{
+		Fetch: &reposync.FetchOutcome{
 			Err:     errors.New("dial tcp: connection refused"),
 			Reason:  helmv1alpha1.ReasonSyncFailed,
 			Message: "failed to read the repository",
@@ -765,8 +765,8 @@ func TestEvaluateScheduledSyncKeepsLastForceReconcileTime(t *testing.T) {
 		Now:        testNow,
 		Current:    current,
 		Attempted:  true,
-		Fetch:      &services.FetchOutcome{},
-		Catalog:    &services.CatalogOutcome{},
+		Fetch:      &reposync.FetchOutcome{},
+		Catalog:    &reposync.CatalogOutcome{},
 	})
 
 	if decision.Status.LastForceReconcileTime == nil ||

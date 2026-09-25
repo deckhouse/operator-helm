@@ -47,7 +47,7 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/reposync"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -125,10 +125,10 @@ func newReconcilerWithInterceptor(
 
 	r := New(c, Deps{
 		NewRepository:    adapter.EmptyAddonRepository,
-		Secrets:          services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
+		Secrets:          reposync.NewSecrets(c, scheme, helmv1alpha1.TargetNamespace),
 		HelmRepositories: internalobj.NewHelmRepositories(c, scheme, helmv1alpha1.TargetNamespace),
 		Consumers:        internalobj.NewConsumers(c, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(c)),
-		Catalogs:         services.NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)),
+		Catalogs:         reposync.NewSynchronizer(c, scheme, factory, adapter.NewAddonCatalog(c)),
 		Status:           status.NewManager(c),
 	})
 
@@ -169,10 +169,10 @@ func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...cli
 
 	r := New(c, Deps{
 		NewRepository:    adapter.EmptyApplicationRepository,
-		Secrets:          services.NewRepoSecretsService(c, scheme, helmv1alpha1.TargetNamespace),
+		Secrets:          reposync.NewSecrets(c, scheme, helmv1alpha1.TargetNamespace),
 		HelmRepositories: internalobj.NewHelmRepositories(c, scheme, helmv1alpha1.TargetNamespace),
 		Consumers:        internalobj.NewConsumers(c, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(c)),
-		Catalogs:         services.NewRepoSyncService(c, scheme, factory, adapter.NewApplicationCatalog(c)),
+		Catalogs:         reposync.NewSynchronizer(c, scheme, factory, adapter.NewApplicationCatalog(c)),
 		Status:           status.NewManager(c),
 	})
 

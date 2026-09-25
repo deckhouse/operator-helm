@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package reposync
 
 // FetchOutcome is the result of reading the chart catalog from the remote
 // repository. Terminal marks a failure that will not resolve by retrying. Pending
@@ -35,14 +35,6 @@ type FetchOutcome struct {
 // CatalogOutcome is the result of writing the chart catalog into the cluster.
 type CatalogOutcome struct {
 	Err error
-}
-
-// ConfigOutcome is a terminal configuration failure detected before any attempt
-// to reach the repository, such as an unsupported url scheme.
-type ConfigOutcome struct {
-	Reason  string
-	Message string
-	Err     error
 }
 
 // SyncOutcome carries both phases of a synchronization attempt. FetchAttempted is

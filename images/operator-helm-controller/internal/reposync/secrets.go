@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package reposync
 
 import (
 	"context"
@@ -34,18 +34,18 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// RepoSecretsService owns the auth and TLS secrets a repository needs in the
+// Secrets owns the auth and TLS secrets a repository needs in the
 // target namespace, for either repository kind. The secrets outlive neither the
 // repository nor its internal source object, so the service that writes them also
 // removes them, and the repository services are left with the objects they own.
-type RepoSecretsService struct {
+type Secrets struct {
 	client          client.Client
 	scheme          *runtime.Scheme
 	targetNamespace string
 }
 
-func NewRepoSecretsService(client client.Client, scheme *runtime.Scheme, namespace string) *RepoSecretsService {
-	return &RepoSecretsService{client: client, scheme: scheme, targetNamespace: namespace}
+func NewSecrets(client client.Client, scheme *runtime.Scheme, namespace string) *Secrets {
+	return &Secrets{client: client, scheme: scheme, targetNamespace: namespace}
 }
 
 // Ensure reconciles every auxiliary secret the repository needs. Its success is
@@ -58,7 +58,7 @@ func NewRepoSecretsService(client client.Client, scheme *runtime.Scheme, namespa
 // one. An unknown type is treated as helm, mirroring the deletion path — it is
 // unreachable here anyway, because an unparsable url is reported before any
 // secret is touched.
-func (s *RepoSecretsService) Ensure(
+func (s *Secrets) Ensure(
 	ctx context.Context,
 	repo contract.Repository,
 	repoType chartsource.Kind,
@@ -86,7 +86,7 @@ func (s *RepoSecretsService) Ensure(
 // reconcileBasicAuthSecret reconciles the internal auth secret as an Opaque secret
 // holding username/password keys, the shape HelmRepository expects for HTTP basic
 // auth.
-func (s *RepoSecretsService) reconcileBasicAuthSecret(ctx context.Context, repo contract.Repository) error {
+func (s *Secrets) reconcileBasicAuthSecret(ctx context.Context, repo contract.Repository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeOpaque,
 		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
 			return map[string]string{
@@ -100,7 +100,7 @@ func (s *RepoSecretsService) reconcileBasicAuthSecret(ctx context.Context, repo 
 // reconcileDockerConfigAuthSecret reconciles the internal auth secret as a
 // kubernetes.io/dockerconfigjson secret, the only shape OCIRepository accepts in
 // its spec.secretRef.
-func (s *RepoSecretsService) reconcileDockerConfigAuthSecret(ctx context.Context, repo contract.Repository) error {
+func (s *Secrets) reconcileDockerConfigAuthSecret(ctx context.Context, repo contract.Repository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeDockerConfigJson,
 		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
 			config, err := utils.BuildDockerConfigJSON(repo.URL(), auth.Username, auth.Password)
@@ -113,7 +113,7 @@ func (s *RepoSecretsService) reconcileDockerConfigAuthSecret(ctx context.Context
 	)
 }
 
-func (s *RepoSecretsService) reconcileAuthSecret(
+func (s *Secrets) reconcileAuthSecret(
 	ctx context.Context,
 	repo contract.Repository,
 	secretType corev1.SecretType,
@@ -182,7 +182,7 @@ func (s *RepoSecretsService) reconcileAuthSecret(
 // other than the wanted one and reports whether it did. A secret type is immutable,
 // so a secret written with the wrong type (an Opaque one left by a version that fed
 // plain credentials to OCIRepository, say) can only be replaced, not patched.
-func (s *RepoSecretsService) removeAuthSecretOfOtherType(
+func (s *Secrets) removeAuthSecretOfOtherType(
 	ctx context.Context, nn types.NamespacedName, secretType corev1.SecretType,
 ) (bool, error) {
 	existing := &corev1.Secret{}
@@ -210,7 +210,7 @@ func (s *RepoSecretsService) removeAuthSecretOfOtherType(
 	return true, nil
 }
 
-func (s *RepoSecretsService) reconcileTLSSecret(ctx context.Context, repo contract.Repository) error {
+func (s *Secrets) reconcileTLSSecret(ctx context.Context, repo contract.Repository) error {
 	secretName := repo.InternalNames().TLSSecret
 
 	if repo.CACertificate() == "" {
@@ -247,7 +247,7 @@ func (s *RepoSecretsService) reconcileTLSSecret(ctx context.Context, repo contra
 
 // Cleanup removes both secrets. They carry no finalizers, so they disappear at
 // once and the caller need not wait for them.
-func (s *RepoSecretsService) Cleanup(ctx context.Context, names contract.InternalNames) error {
+func (s *Secrets) Cleanup(ctx context.Context, names contract.InternalNames) error {
 	for _, name := range []string{names.AuthSecret, names.TLSSecret} {
 		nn := types.NamespacedName{Name: name, Namespace: s.targetNamespace}
 		if _, err := utils.DeleteIfPresent(ctx, s.client, nn, &corev1.Secret{}); err != nil {

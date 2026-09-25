@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package reposync
 
 import (
 	"context"
@@ -34,16 +34,16 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-func newRepoSecretsService(t *testing.T, objects ...client.Object) (*RepoSecretsService, client.Client) {
+func newSecrets(t *testing.T, objects ...client.Object) (*Secrets, client.Client) {
 	t.Helper()
 
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return NewRepoSecretsService(c, scheme, testNamespace), c
+	return NewSecrets(c, scheme, testNamespace), c
 }
 
-func TestEnsureCreatesAuthAndTLS(t *testing.T) {
+func TestSecretsEnsureCreatesAuthAndTLS(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
 		Spec: helmv1alpha1.RepositorySpec{
@@ -53,7 +53,7 @@ func TestEnsureCreatesAuthAndTLS(t *testing.T) {
 		},
 	}
 
-	service, c := newRepoSecretsService(t, repo)
+	service, c := newSecrets(t, repo)
 
 	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm); err != nil {
 		t.Fatalf("Ensure returned %v", err)
@@ -77,7 +77,7 @@ func TestEnsureCreatesAuthAndTLS(t *testing.T) {
 	}
 }
 
-func TestEnsureRemovesObsoleteSecrets(t *testing.T) {
+func TestSecretsEnsureRemovesObsoleteSecrets(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
 		Spec:       helmv1alpha1.RepositorySpec{URL: "https://example.invalid/charts"},
@@ -89,7 +89,7 @@ func TestEnsureRemovesObsoleteSecrets(t *testing.T) {
 		},
 	}
 
-	service, c := newRepoSecretsService(t, repo, obsolete)
+	service, c := newSecrets(t, repo, obsolete)
 
 	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm); err != nil {
 		t.Fatalf("Ensure returned %v", err)
@@ -101,7 +101,7 @@ func TestEnsureRemovesObsoleteSecrets(t *testing.T) {
 	}
 }
 
-func TestEnsureUsesDockerConfigForOCIRepositories(t *testing.T) {
+func TestSecretsEnsureUsesDockerConfigForOCIRepositories(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
 		Spec: helmv1alpha1.RepositorySpec{
@@ -110,7 +110,7 @@ func TestEnsureUsesDockerConfigForOCIRepositories(t *testing.T) {
 		},
 	}
 
-	service, c := newRepoSecretsService(t, repo)
+	service, c := newSecrets(t, repo)
 
 	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); err != nil {
 		t.Fatalf("Ensure returned %v", err)
@@ -137,7 +137,7 @@ func TestEnsureUsesDockerConfigForOCIRepositories(t *testing.T) {
 	}
 }
 
-func TestCleanupRemovesBothSecrets(t *testing.T) {
+func TestSecretsCleanupRemovesBothSecrets(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
 		Spec: helmv1alpha1.RepositorySpec{
@@ -147,7 +147,7 @@ func TestCleanupRemovesBothSecrets(t *testing.T) {
 		},
 	}
 
-	service, c := newRepoSecretsService(t, repo)
+	service, c := newSecrets(t, repo)
 	names := adapter.NewAddonRepository(repo).InternalNames()
 
 	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm); err != nil {

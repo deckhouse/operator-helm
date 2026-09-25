@@ -33,6 +33,6 @@ limitations under the License.
 // deterministic function — Evaluate — turns that into the whole desired status,
 // what to requeue and what to hand back to the work queue. No step writes a
 // condition of its own, so what the release reports can be read in one place and
-// tested without a cluster. The services this reconciler drives return outcomes
+// tested without a cluster. The collaborators this reconciler drives return outcomes
 // rather than conditions for the same reason.
 package release

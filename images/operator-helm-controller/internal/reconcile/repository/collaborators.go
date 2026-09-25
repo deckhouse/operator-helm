@@ -24,7 +24,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/reposync"
 )
 
 // The collaborators of one reconcile pass, declared where they are used rather than
@@ -52,7 +52,7 @@ type HelmRepositories interface {
 // Catalogs reads the remote and writes the chart catalog of one
 // repository.
 type Catalogs interface {
-	Sync(ctx context.Context, repo contract.Repository, repoType chartsource.Kind) services.SyncOutcome
+	Sync(ctx context.Context, repo contract.Repository, repoType chartsource.Kind) reposync.SyncOutcome
 	// MigrateNames moves the catalog objects to their current names.
 	//
 	// TRANSITIONAL: remove together with the catalog's own migration.

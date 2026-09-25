@@ -53,7 +53,7 @@ type ReleaseNames struct {
 	ServiceAccount string
 }
 
-// Release is a release resource of any kind as the services see it. Object returns
+// Release is a release resource of any kind as its collaborators see it. Object returns
 // the API object itself — the only thing ever handed to the client; the adapter is
 // not registered in the scheme. Values and the status setters point into that
 // object, so a write through them lands on it.

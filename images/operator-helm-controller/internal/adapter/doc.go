@@ -17,7 +17,7 @@ limitations under the License.
 // Package adapter binds each user-facing kind to the contracts of
 // internal/contract. Everything that differs between two kinds of the same role —
 // labels, internal object names, the catalog kind, who consumes the charts —
-// lives here and nowhere else; the services and the reconcilers stay kind-agnostic.
+// lives here and nowhere else; the collaborators and the reconcilers stay kind-agnostic.
 //
 // An adapter wraps the API object rather than embedding it: the wrapper is not
 // registered in the scheme, so it must never reach the client, and an explicit

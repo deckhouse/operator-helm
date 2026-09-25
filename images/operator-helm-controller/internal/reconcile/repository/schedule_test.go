@@ -25,7 +25,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/reposync"
 )
 
 func TestBackoffProgression(t *testing.T) {
@@ -56,7 +56,7 @@ func TestBackoffProgression(t *testing.T) {
 				},
 				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 				Attempted:          true,
-				Fetch:              &services.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
+				Fetch:              &reposync.FetchOutcome{Err: fetchErr, Message: "cannot read index.yaml"},
 			})
 
 			if got.Status.ConsecutiveFetchFailures != tc.wantFailures {
@@ -85,8 +85,8 @@ func TestSuccessResetsCounterAndRecordsSyncTime(t *testing.T) {
 		},
 		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
-		Fetch:              &services.FetchOutcome{},
-		Catalog:            &services.CatalogOutcome{},
+		Fetch:              &reposync.FetchOutcome{},
+		Catalog:            &reposync.CatalogOutcome{},
 	})
 
 	if got.Status.ConsecutiveFetchFailures != 0 {
@@ -112,8 +112,8 @@ func TestCatalogFailureDoesNotRecordSyncTime(t *testing.T) {
 		},
 		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
-		Fetch:              &services.FetchOutcome{},
-		Catalog:            &services.CatalogOutcome{Err: errors.New("etcdserver: request timed out")},
+		Fetch:              &reposync.FetchOutcome{},
+		Catalog:            &reposync.CatalogOutcome{Err: errors.New("etcdserver: request timed out")},
 	})
 
 	if !got.Status.LastSuccessfulSyncTime.Time.Equal(previous.Time) {
@@ -134,7 +134,7 @@ func TestTerminalFetchSaturatesCounter(t *testing.T) {
 		Current:            helmv1alpha1.RepositoryStatus{ObservedGeneration: 1},
 		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
-		Fetch: &services.FetchOutcome{
+		Fetch: &reposync.FetchOutcome{
 			Err: errors.New("unauthorized"), Terminal: true,
 			Reason: helmv1alpha1.ReasonAuthenticationFailed, Message: "rejected the credentials",
 		},
@@ -153,7 +153,7 @@ func TestConfigErrorDoesNotRequeue(t *testing.T) {
 		Generation: 1,
 		Now:        testNow,
 		Current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 1},
-		ConfigErr: &services.ConfigOutcome{
+		ConfigErr: &ConfigFailure{
 			Reason:  helmv1alpha1.ReasonUnsupportedRepositoryType,
 			Message: "unsupported repository schema in use: ftp",
 		},
@@ -174,8 +174,8 @@ func TestGenerationBumpResetsCounter(t *testing.T) {
 		},
 		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
 		Attempted:          true,
-		Fetch:              &services.FetchOutcome{},
-		Catalog:            &services.CatalogOutcome{},
+		Fetch:              &reposync.FetchOutcome{},
+		Catalog:            &reposync.CatalogOutcome{},
 	})
 
 	if got.Status.ConsecutiveFetchFailures != 0 {

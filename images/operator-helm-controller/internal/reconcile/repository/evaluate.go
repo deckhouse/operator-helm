@@ -27,7 +27,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/reposync"
 )
 
 // Inputs carries everything Evaluate needs. It holds no clients and no clock:
@@ -42,7 +42,7 @@ type Inputs struct {
 	SecretsErr            error
 	InternalRepositoryErr error
 	InternalRepository    internalobj.InternalRepositoryState
-	ConfigErr             *services.ConfigOutcome
+	ConfigErr             *ConfigFailure
 
 	// MigrateErr reports a failure to move the catalog objects to their current
 	// names. It is not tied to a synchronization attempt: the rename runs on every
@@ -58,8 +58,8 @@ type Inputs struct {
 	// Attempted reports whether a synchronization attempt ran in this pass.
 	// Fetch and Catalog are nil when it did not.
 	Attempted bool
-	Fetch     *services.FetchOutcome
-	Catalog   *services.CatalogOutcome
+	Fetch     *reposync.FetchOutcome
+	Catalog   *reposync.CatalogOutcome
 }
 
 // Decision is the full desired status plus the scheduling verdict. Removing a
@@ -466,7 +466,7 @@ func withJitter(delay time.Duration, jitter float64) time.Duration {
 	return delay + time.Duration(float64(delay)*jitter)
 }
 
-func nextFailureCount(failures int32, attempted, fetchFailed bool, fetch *services.FetchOutcome) int32 {
+func nextFailureCount(failures int32, attempted, fetchFailed bool, fetch *reposync.FetchOutcome) int32 {
 	if !attempted {
 		return failures
 	}

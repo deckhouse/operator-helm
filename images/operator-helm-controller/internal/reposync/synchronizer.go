@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package reposync
 
 import (
 	"context"
@@ -28,7 +28,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-type RepoSyncService struct {
+type Synchronizer struct {
 	client        client.Client
 	scheme        *runtime.Scheme
 	clientFactory RepoClientFactory
@@ -39,14 +39,14 @@ type RepoSyncService struct {
 // injected so the synchronization can be tested without a live repository.
 type RepoClientFactory func(repoType chartsource.Kind) (repoclient.ClientInterface, error)
 
-// NewRepoSyncService builds the synchronization for one repository kind: the
+// NewSynchronizer builds the synchronization for one repository kind: the
 // catalog decides which chart catalog kind the fetched charts are mirrored into.
-func NewRepoSyncService(client client.Client, scheme *runtime.Scheme, factory RepoClientFactory, catalog contract.Catalog) *RepoSyncService {
+func NewSynchronizer(client client.Client, scheme *runtime.Scheme, factory RepoClientFactory, catalog contract.Catalog) *Synchronizer {
 	if factory == nil {
 		factory = repoclient.NewClient
 	}
 
-	return &RepoSyncService{
+	return &Synchronizer{
 		client:        client,
 		scheme:        scheme,
 		clientFactory: factory,
@@ -61,14 +61,14 @@ func NewRepoSyncService(client client.Client, scheme *runtime.Scheme, factory Re
 // succeed again.
 //
 // TRANSITIONAL: remove together with the catalog's own migration.
-func (s *RepoSyncService) MigrateNames(ctx context.Context, repo contract.Repository) error {
+func (s *Synchronizer) MigrateNames(ctx context.Context, repo contract.Repository) error {
 	return s.catalog.MigrateNames(ctx, repo)
 }
 
 // Sync reads the repository catalog and reconciles the chart catalog objects that
 // mirror it. The two phases are reported separately: a fetch failure is about the
 // remote, a catalog failure is about this cluster.
-func (s *RepoSyncService) Sync(
+func (s *Synchronizer) Sync(
 	ctx context.Context,
 	repo contract.Repository,
 	repoType chartsource.Kind,
@@ -96,7 +96,7 @@ func (s *RepoSyncService) Sync(
 	}
 }
 
-func (s *RepoSyncService) fetchCharts(
+func (s *Synchronizer) fetchCharts(
 	ctx context.Context,
 	repo contract.Repository,
 	repoType chartsource.Kind,

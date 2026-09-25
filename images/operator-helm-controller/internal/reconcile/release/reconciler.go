@@ -48,7 +48,7 @@ import (
 // recover once the conflicting release is deleted or repointed at another chart.
 const chartClaimConflictRequeueInterval = 30 * time.Second
 
-// Deps are the collaborators of one release kind. The services are shared by every
+// Deps are the collaborators of one release kind. Their implementations are shared by every
 // kind; the rest is what tells the families apart: how the API object is read
 // (NewRelease), how its repository and catalog are found (Repositories), whether a
 // repository/chart pair is claimed (Claim), whether the target namespace is created

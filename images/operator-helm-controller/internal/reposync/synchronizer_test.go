@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package services
+package reposync
 
 import (
 	"context"
@@ -55,7 +55,7 @@ func (s *recordingRepoClient) FetchCharts(_ context.Context, _ string, _ *repocl
 	return s.charts, nil
 }
 
-func newRepoSyncService(t *testing.T, stub stubRepoClient, objects ...client.Object) (*RepoSyncService, client.Client) {
+func newSynchronizer(t *testing.T, stub stubRepoClient, objects ...client.Object) (*Synchronizer, client.Client) {
 	t.Helper()
 
 	scheme := testScheme(t)
@@ -77,7 +77,7 @@ func newRepoSyncService(t *testing.T, stub stubRepoClient, objects ...client.Obj
 		return stub, nil
 	}
 
-	return NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c)), c
+	return NewSynchronizer(c, scheme, factory, adapter.NewAddonCatalog(c)), c
 }
 
 func ociVersion(version, mediaType string) repoclient.ChartVersion { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
@@ -127,9 +127,9 @@ func chartFixture(name, version string) repoclient.Chart {
 	}
 }
 
-func TestSyncCreatesChartsAndRecordsVersions(t *testing.T) {
+func TestSynchronizerSyncCreatesChartsAndRecordsVersions(t *testing.T) {
 	repo := testRepository()
-	service, c := newRepoSyncService(t, stubRepoClient{charts: []repoclient.Chart{chartFixture("podinfo", "6.7.1")}}, repo)
+	service, c := newSynchronizer(t, stubRepoClient{charts: []repoclient.Chart{chartFixture("podinfo", "6.7.1")}}, repo)
 
 	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm)
 	if outcome.Fetch.Err != nil {
@@ -149,7 +149,7 @@ func TestSyncCreatesChartsAndRecordsVersions(t *testing.T) {
 	}
 }
 
-func TestSyncPrunesStaleCharts(t *testing.T) {
+func TestSynchronizerSyncPrunesStaleCharts(t *testing.T) {
 	repo := testRepository()
 	stale := &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
@@ -158,7 +158,7 @@ func TestSyncPrunesStaleCharts(t *testing.T) {
 		},
 	}
 
-	service, c := newRepoSyncService(t, stubRepoClient{charts: []repoclient.Chart{chartFixture("podinfo", "6.7.1")}}, repo, stale)
+	service, c := newSynchronizer(t, stubRepoClient{charts: []repoclient.Chart{chartFixture("podinfo", "6.7.1")}}, repo, stale)
 
 	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm)
 	if outcome.Catalog.Err != nil {
@@ -171,14 +171,14 @@ func TestSyncPrunesStaleCharts(t *testing.T) {
 	}
 }
 
-func TestSyncReportsTerminalFetchFailure(t *testing.T) {
+func TestSynchronizerSyncReportsTerminalFetchFailure(t *testing.T) {
 	repo := testRepository()
 	terminal := &repoclient.TerminalError{
 		Reason:  helmv1alpha1.ReasonAuthenticationFailed,
 		Message: "repository rejected the credentials (HTTP 401)",
 	}
 
-	service, _ := newRepoSyncService(t, stubRepoClient{err: terminal}, repo)
+	service, _ := newSynchronizer(t, stubRepoClient{err: terminal}, repo)
 
 	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm)
 	if outcome.Fetch.Err == nil {
@@ -192,9 +192,9 @@ func TestSyncReportsTerminalFetchFailure(t *testing.T) {
 	}
 }
 
-func TestSyncReportsTransientFetchFailure(t *testing.T) {
+func TestSynchronizerSyncReportsTransientFetchFailure(t *testing.T) {
 	repo := testRepository()
-	service, _ := newRepoSyncService(t, stubRepoClient{err: errors.New("connection refused")}, repo)
+	service, _ := newSynchronizer(t, stubRepoClient{err: errors.New("connection refused")}, repo)
 
 	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm)
 	if outcome.Fetch.Err == nil {
@@ -208,7 +208,7 @@ func TestSyncReportsTransientFetchFailure(t *testing.T) {
 	}
 }
 
-func TestSyncPassesKnownVersionsToTheClient(t *testing.T) {
+func TestSynchronizerSyncPassesKnownVersionsToTheClient(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",
 		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
@@ -224,7 +224,7 @@ func TestSyncPassesKnownVersionsToTheClient(t *testing.T) {
 		Versions: []repoclient.ChartVersion{ociVersion("6.7.1", "application/tar+gzip")},
 	}}}
 
-	service, _ := newRepoSyncService(t, stubRepoClient{}, repo, chart)
+	service, _ := newSynchronizer(t, stubRepoClient{}, repo, chart)
 	service.clientFactory = func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stub, nil
 	}
@@ -248,7 +248,7 @@ func TestSyncPassesKnownVersionsToTheClient(t *testing.T) {
 	}
 }
 
-func TestSyncRequestsFullPassOnForceReconcile(t *testing.T) {
+func TestSynchronizerSyncRequestsFullPassOnForceReconcile(t *testing.T) {
 	repo := testRepository()
 	repo.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
 
@@ -257,7 +257,7 @@ func TestSyncRequestsFullPassOnForceReconcile(t *testing.T) {
 		Versions: []repoclient.ChartVersion{ociVersion("6.7.1", "application/tar+gzip")},
 	}}}
 
-	service, _ := newRepoSyncService(t, stubRepoClient{}, repo)
+	service, _ := newSynchronizer(t, stubRepoClient{}, repo)
 	service.clientFactory = func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stub, nil
 	}
@@ -269,7 +269,7 @@ func TestSyncRequestsFullPassOnForceReconcile(t *testing.T) {
 	}
 }
 
-func TestSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
+func TestSynchronizerSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",
 		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
@@ -282,7 +282,7 @@ func TestSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
 		Versions: []repoclient.ChartVersion{ociVersion("6.8.0", "application/tar+gzip")},
 	}}}
 
-	service, c := newRepoSyncService(t, stub, repo, chart, addon)
+	service, c := newSynchronizer(t, stub, repo, chart, addon)
 	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); outcome.Catalog.Err != nil {
 		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
 	}
@@ -313,13 +313,13 @@ func TestSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
 	}
 }
 
-// TestSyncRetainsMediaTypeForReferencedUnsupportedVersion covers D4's fourth row: a
+// TestSynchronizerSyncRetainsMediaTypeForReferencedUnsupportedVersion covers D4's fourth row: a
 // version whose tag was re-pushed as a non-chart artifact must keep its previously
 // recorded media type as long as an addon still references it, so the addon's internal
 // OCIRepository can still be built and the pull failure surfaces from the source
 // controller instead of the deploy gate. The same version, unreferenced, must not carry
 // the old media type forward: retention is scoped to in-use versions only.
-func TestSyncRetainsMediaTypeForReferencedUnsupportedVersion(t *testing.T) {
+func TestSynchronizerSyncRetainsMediaTypeForReferencedUnsupportedVersion(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",
 		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
@@ -343,7 +343,7 @@ func TestSyncRetainsMediaTypeForReferencedUnsupportedVersion(t *testing.T) {
 		},
 	}}}
 
-	service, c := newRepoSyncService(t, stub, repo, chart, addon)
+	service, c := newSynchronizer(t, stub, repo, chart, addon)
 	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); outcome.Catalog.Err != nil {
 		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
 	}
@@ -380,7 +380,7 @@ func TestSyncRetainsMediaTypeForReferencedUnsupportedVersion(t *testing.T) {
 	}
 }
 
-func TestSyncOrdersVersionsBySemverDescending(t *testing.T) {
+func TestSynchronizerSyncOrdersVersionsBySemverDescending(t *testing.T) {
 	repo := testRepository()
 	stub := stubRepoClient{charts: []repoclient.Chart{{
 		Name: "podinfo",
@@ -391,7 +391,7 @@ func TestSyncOrdersVersionsBySemverDescending(t *testing.T) {
 		},
 	}}}
 
-	service, c := newRepoSyncService(t, stub, repo)
+	service, c := newSynchronizer(t, stub, repo)
 	service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 
 	got := chartStatus(t, c, repo.Name, "podinfo").Versions
@@ -406,7 +406,7 @@ func TestSyncOrdersVersionsBySemverDescending(t *testing.T) {
 	}
 }
 
-func TestSyncCreatesChartWithNoUsableVersions(t *testing.T) {
+func TestSynchronizerSyncCreatesChartWithNoUsableVersions(t *testing.T) {
 	repo := testRepository()
 	stub := stubRepoClient{charts: []repoclient.Chart{{
 		Name: "podinfo",
@@ -417,7 +417,7 @@ func TestSyncCreatesChartWithNoUsableVersions(t *testing.T) {
 		}},
 	}}}
 
-	service, c := newRepoSyncService(t, stub, repo)
+	service, c := newSynchronizer(t, stub, repo)
 	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 
 	if outcome.Catalog.Err != nil {
@@ -433,14 +433,14 @@ func TestSyncCreatesChartWithNoUsableVersions(t *testing.T) {
 	}
 }
 
-func TestSyncKeepsChartReferencedByAddon(t *testing.T) {
+func TestSynchronizerSyncKeepsChartReferencedByAddon(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",
 		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"},
 	)
 	addon := addonUsing(repo.Name, "podinfo", "6.7.1")
 
-	service, c := newRepoSyncService(t, stubRepoClient{charts: nil}, repo, chart, addon)
+	service, c := newSynchronizer(t, stubRepoClient{charts: nil}, repo, chart, addon)
 	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); outcome.Catalog.Err != nil {
 		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
 	}
@@ -451,12 +451,12 @@ func TestSyncKeepsChartReferencedByAddon(t *testing.T) {
 	}
 }
 
-// TestSyncReportsNoFetchAttemptOnClusterReadFailure covers the knownCharts failure
+// TestSynchronizerSyncReportsNoFetchAttemptOnClusterReadFailure covers the knownCharts failure
 // path: the registry is never contacted, so the outcome must say so. Reporting
 // FetchAttempted: true here (or a zero-value Fetch with Err == nil) would make a
 // cluster-side read failure look like a successful repository fetch to a caller
 // that only checks Fetch.Err.
-func TestSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T) {
+func TestSynchronizerSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T) {
 	repo := testRepository()
 	scheme := testScheme(t)
 
@@ -479,7 +479,7 @@ func TestSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T) {
 	factory := func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stubRepoClient{}, nil
 	}
-	service := NewRepoSyncService(c, scheme, factory, adapter.NewAddonCatalog(c))
+	service := NewSynchronizer(c, scheme, factory, adapter.NewAddonCatalog(c))
 
 	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 
