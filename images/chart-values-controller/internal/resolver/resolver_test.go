@@ -698,6 +698,38 @@ func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
 	}
 }
 
+// TestATransportTimeoutIsAnsweredAsPendingWhoeverHitIt covers the failure that
+// reads as a deadline without any context having expired: an http.Client timeout
+// is a context.DeadlineExceeded (Go 1.23 onwards), and source-controller being
+// slow says nothing about the chart. The caller that ran the download and the
+// callers that waited on it have to be told the same thing, or the same slow
+// response is a failed fetch for one console and a retry for the next.
+func TestATransportTimeoutIsAnsweredAsPendingWhoeverHitIt(t *testing.T) {
+	// The handler outlives the request on purpose and is released at the end, since
+	// httptest waits for its handlers before it closes.
+	hang := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-hang
+	}))
+	t.Cleanup(func() {
+		close(hang)
+		srv.Close()
+	})
+
+	c := srv.Client()
+	c.Timeout = 50 * time.Millisecond
+
+	r := &Resolver{cache: cache.New(t.TempDir()), httpClient: c, maxArtifactBytes: 1 << 20}
+
+	result, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL})
+	if err != nil {
+		t.Fatalf("readValues returned an error: %v", err)
+	}
+	if result.Outcome != OutcomePending {
+		t.Fatalf("outcome = %q (%s), want %q", result.Outcome, result.Message, OutcomePending)
+	}
+}
+
 // TestConcurrentMissesFetchTheArtifactOnce is the request-level statement of what
 // the in-flight group buys: /v1/chart-values is polled, so a chart the console is
 // waiting on is asked for repeatedly and concurrently. Every one of those requests

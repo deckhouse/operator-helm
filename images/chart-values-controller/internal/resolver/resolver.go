@@ -336,8 +336,14 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 // extraction run once per key however many requests miss the cache together: the
 // artifact a key names is one artifact, so the rest are handed the same bytes
 // instead of fetching and unpacking their own copy of it.
+//
+// A caller that joins a running call is answered from the artifact that call
+// started on, which may be a revision behind the one this request read if the
+// repository was re-synchronized in between. The window closes by itself: the
+// entry is keyed on the tuple, and the controller replaces what is cached under it
+// when the revision moves.
 func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact) (Result, error) {
-	values, shared, err := r.downloads.do(ctx, name, func() ([]byte, error) {
+	values, _, err := r.downloads.do(ctx, name, func() ([]byte, error) {
 		values, err := artifact.FetchValues(ctx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
 		if err != nil {
 			return nil, err
@@ -354,11 +360,16 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 			return Result{Outcome: OutcomeValuesNotFound, Message: "chart has no values.yaml"}, nil
 		}
 
-		// A shared call that ended on a clock — its leader's or this waiter's own —
-		// says nothing about the chart, so the client is told to retry rather than
-		// that the artifact could not be fetched. Its own budget is consulted by the
-		// handler, which answers a timed-out request itself.
-		if shared && isTransient(err) {
+		// A call that ended on a clock says nothing about the chart, so the client is
+		// told to retry rather than that the artifact could not be fetched — whether
+		// this caller ran the call or waited on somebody else's. One failure has one
+		// answer: an http.Client timeout reads as a deadline too (since Go 1.23), and
+		// asking who ran the call would report the same timeout as pending to the
+		// waiters and as a failed fetch to the one that hit it.
+		//
+		// A request that ran out of its own budget never reaches this: the handler
+		// answers that one itself.
+		if isTransient(err) {
 			return Result{Outcome: OutcomePending}, nil
 		}
 
