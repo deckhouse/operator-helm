@@ -70,12 +70,3 @@ type Repository interface {
 type Consumers interface {
 	ForceReconcileConsumers(ctx context.Context, repo Repository) error
 }
-
-// NoConsumers is the Consumers of a family whose consumers do not exist yet.
-// The application family uses it until HelmApplication is reconciled by the
-// controller; that implementation replaces it.
-type NoConsumers struct{}
-
-func (NoConsumers) ForceReconcileConsumers(context.Context, Repository) error {
-	return nil
-}
