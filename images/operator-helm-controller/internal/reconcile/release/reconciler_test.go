@@ -1479,10 +1479,10 @@ func TestReconcileSittingInMaintenanceDiscardsForceReconcile(t *testing.T) {
 	}
 }
 
-// TestReconcileLeavingMaintenanceKeepsForceReconcile is the complement. Lifting
-// maintenance also returns early, but reconciliation is resuming, so the request is
-// about to become actionable and must survive to the pass that can honour it.
-func TestReconcileLeavingMaintenanceKeepsForceReconcile(t *testing.T) {
+// TestReconcileLeavingMaintenanceHonoursForceReconcile is the complement. Lifting
+// maintenance does not end the pass: reconciliation resumes in it, so the request
+// becomes actionable here and this very pass is the one that honours it.
+func TestReconcileLeavingMaintenanceHonoursForceReconcile(t *testing.T) {
 	addon := testAddon()
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
 	addon.Status.Conditions = []metav1.Condition{{
@@ -1506,8 +1506,11 @@ func TestReconcileLeavingMaintenanceKeepsForceReconcile(t *testing.T) {
 		t.Fatalf("getting addon: %v", err)
 	}
 
-	if _, found := settled.Annotations[helmv1alpha1.AnnotationForceReconcile]; !found {
-		t.Fatal("the force annotation must survive the pass that lifts maintenance")
+	if _, found := settled.Annotations[helmv1alpha1.AnnotationForceReconcile]; found {
+		t.Fatal("the pass that lifts maintenance resumes the work, so it consumes the request")
+	}
+	if settled.Status.LastForceReconcileTime == nil {
+		t.Fatal("the request was acted on by the resumed pass and must be stamped")
 	}
 }
 
@@ -1544,5 +1547,273 @@ func TestReconcileLogsAFailureItDoesNotHandBack(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("the failure was not logged, got %q", logged)
+	}
+}
+
+// internalReleaseFixture is the internal HelmRelease of an installed addon, in the
+// suspend state maintenance mode leaves it in. It is what the maintenance switch
+// acts on: with no such object there is nothing to suspend and the switch cannot
+// fail.
+func internalReleaseFixture(addon *helmv1alpha1.HelmClusterAddon, suspended bool) *helmv2.HelmRelease {
+	return &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      adapter.NewAddonRelease(addon).InternalNames().HelmRelease,
+			Namespace: helmv1alpha1.TargetNamespace,
+		},
+		Spec: helmv2.HelmReleaseSpec{Suspend: suspended},
+	}
+}
+
+// maintainedAddonInStatus is an addon resting in maintenance: the switch was made
+// and confirmed, which is the only thing that writes Managed=False.
+func maintainedAddonInStatus() *helmv1alpha1.HelmClusterAddon {
+	addon := testAddon()
+	addon.Status.Conditions = []metav1.Condition{{
+		Type:               helmv1alpha1.ConditionTypeManaged,
+		Status:             metav1.ConditionFalse,
+		Reason:             helmv1alpha1.ReasonMaintenanceModeActive,
+		Message:            "Maintenance mode enabled",
+		LastTransitionTime: metav1.Now(),
+	}}
+
+	return addon
+}
+
+// failHelmReleasePatch makes the write behind the maintenance switch fail the way a
+// busy API server does: the suspend flag is read, the patch is refused.
+func failHelmReleasePatch() interceptor.Funcs {
+	return interceptor.Funcs{
+		Patch: func(
+			ctx context.Context,
+			inner client.WithWatch,
+			obj client.Object,
+			patch client.Patch,
+			opts ...client.PatchOption,
+		) error {
+			if _, isRelease := obj.(*helmv2.HelmRelease); isRelease {
+				return errors.New("conflict: the object has been modified")
+			}
+
+			return inner.Patch(ctx, obj, patch, opts...)
+		},
+	}
+}
+
+// TestReconcileLeavingMaintenanceResumesTheChartInTheSamePass pins that lifting
+// maintenance does not end the pass. Nothing wakes a release that is managed again —
+// the spec change was already consumed by this pass — so a pass that stopped at the
+// switch would leave an addon reported as managed and ready with no chart deployed.
+func TestReconcileLeavingMaintenanceResumesTheChartInTheSamePass(t *testing.T) {
+	addon := maintainedAddonInStatus()
+
+	fixtures := append(forceTestFixtures(), addon, internalReleaseFixture(addon, true))
+	r, c := newForceTestReconciler(t, interceptor.Funcs{}, fixtures...)
+
+	reconcileAddon(t, r, addon.Name)
+
+	names := adapter.NewAddonRelease(addon).InternalNames()
+
+	internal := &helmv2.HelmRelease{}
+	releaseKey := client.ObjectKey{Name: names.HelmRelease, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), releaseKey, internal); err != nil {
+		t.Fatalf("getting internal release: %v", err)
+	}
+	if internal.Spec.Suspend {
+		t.Fatal("the internal release must be resumed before Managed may say the addon is managed")
+	}
+
+	sourceKey := client.ObjectKey{Name: names.OCIRepository, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), sourceKey, &sourcev1.OCIRepository{}); err != nil {
+		t.Fatalf("the pass must go on to the chart after lifting maintenance: %v", err)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	managed := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeManaged)
+	if managed == nil || managed.Status != metav1.ConditionTrue {
+		t.Fatalf("Managed = %+v, want True once the release is resumed", managed)
+	}
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status == metav1.ConditionTrue {
+		t.Fatalf("Ready = %+v, want the verdict of the resumed work, which has not deployed yet", ready)
+	}
+}
+
+// TestReconcileFailedMaintenanceEntryIsRetried pins that a switch that did not land
+// leaves Managed where it was. Managed=False is read as "resting in maintenance" by
+// everything that asks, including the check that decides whether a switch is still
+// required, so writing it from a failed attempt would end the retries for good.
+func TestReconcileFailedMaintenanceEntryIsRetried(t *testing.T) {
+	addon := testAddon()
+	addon.Spec.Maintenance = string(helmv1alpha1.NoResourceReconciliation)
+
+	fixtures := append(forceTestFixtures(), addon, internalReleaseFixture(addon, false))
+	r, c := newForceTestReconciler(t, failHelmReleasePatch(), fixtures...)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: addon.Name},
+	}); err == nil {
+		t.Fatal("a switch that failed must be handed to the work queue: nothing else brings it back")
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	if settled.MaintenanceModeEnabled() {
+		t.Fatalf("a failed entry must not look like maintenance, conditions: %v", settled.Status.Conditions)
+	}
+	if !r.deps.Maintenance.ChangeRequired(adapter.NewAddonRelease(settled)) {
+		t.Fatal("the switch must still be required after a failed attempt")
+	}
+
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonFailed {
+		t.Fatalf("Ready = %+v, want False/%s", ready, helmv1alpha1.ReasonFailed)
+	}
+	progress := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
+	if progress == nil || progress.Status != metav1.ConditionTrue {
+		t.Fatalf("Reconciling = %+v, want True while the switch is being retried", progress)
+	}
+}
+
+// TestReconcileFailedMaintenanceExitIsRetriedAndStaysUnready is the same guarantee
+// the other way round: the addon is still suspended, so it is still unmanaged and
+// still not ready, and the attempt is retried rather than reported as a resumption.
+func TestReconcileFailedMaintenanceExitIsRetriedAndStaysUnready(t *testing.T) {
+	addon := maintainedAddonInStatus()
+
+	fixtures := append(forceTestFixtures(), addon, internalReleaseFixture(addon, true))
+	r, c := newForceTestReconciler(t, failHelmReleasePatch(), fixtures...)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: addon.Name},
+	}); err == nil {
+		t.Fatal("a switch that failed must be handed to the work queue")
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	managed := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeManaged)
+	if managed == nil || managed.Status != metav1.ConditionFalse ||
+		managed.Reason != helmv1alpha1.ReasonMaintenanceModeActive {
+		t.Fatalf("Managed = %+v, want the confirmed maintenance verdict it already carried", managed)
+	}
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready = %+v, want False while the addon is unmanaged", ready)
+	}
+
+	internal := &helmv2.HelmRelease{}
+	releaseKey := client.ObjectKey{
+		Name:      adapter.NewAddonRelease(addon).InternalNames().HelmRelease,
+		Namespace: helmv1alpha1.TargetNamespace,
+	}
+	if err := c.Get(context.Background(), releaseKey, internal); err != nil {
+		t.Fatalf("getting internal release: %v", err)
+	}
+	if !internal.Spec.Suspend {
+		t.Fatal("the internal release must still be suspended: the patch was refused")
+	}
+}
+
+// maintenanceProbe watches the addon at the moment the switch is attempted. The
+// condition published before the write is the only thing that says the switch is
+// being made, and it cannot be observed afterwards: the pass that lands it takes it
+// away again.
+type maintenanceProbe struct {
+	inner   Maintenance
+	observe func(ctx context.Context)
+}
+
+func (p maintenanceProbe) ChangeRequired(rel contract.Release) bool {
+	return p.inner.ChangeRequired(rel)
+}
+
+func (p maintenanceProbe) Ensure(ctx context.Context, rel contract.Release) internalobj.MaintenanceOutcome {
+	p.observe(ctx)
+
+	return p.inner.Ensure(ctx, rel)
+}
+
+// TestReconcileMaintenanceSwitchReportsProgressBeforeItIsMade pins that an attempted
+// switch says so. Whoever edited spec.maintenance is watching the object, and
+// between the edit and the write on the internal release the addon is neither in
+// maintenance nor out of it.
+func TestReconcileMaintenanceSwitchReportsProgressBeforeItIsMade(t *testing.T) {
+	addon := testAddon()
+	addon.Spec.Maintenance = string(helmv1alpha1.NoResourceReconciliation)
+
+	fixtures := append(forceTestFixtures(), addon, internalReleaseFixture(addon, false))
+	r, c := newForceTestReconciler(t, interceptor.Funcs{}, fixtures...)
+
+	var inFlight *metav1.Condition
+	r.deps.Maintenance = maintenanceProbe{
+		inner: r.deps.Maintenance,
+		observe: func(ctx context.Context) {
+			observed := &helmv1alpha1.HelmClusterAddon{}
+			if err := c.Get(ctx, types.NamespacedName{Name: addon.Name}, observed); err == nil {
+				inFlight = apimeta.FindStatusCondition(
+					observed.Status.Conditions, helmv1alpha1.ConditionTypeReconciling,
+				)
+			}
+		},
+	}
+
+	reconcileAddon(t, r, addon.Name)
+
+	if inFlight == nil || inFlight.Status != metav1.ConditionTrue {
+		t.Fatalf("Reconciling = %+v at the moment of the switch, want True", inFlight)
+	}
+}
+
+// TestReconcileTransientNamespaceFailureIsRetried pins the scheduling behind a
+// cluster step that failed on its way to a write. The namespace was not created, so
+// there is nothing for a watch to fire on; without the work queue the addon would
+// sit in its failed status until something else touched it.
+func TestReconcileTransientNamespaceFailureIsRetried(t *testing.T) {
+	addon := testAddon()
+
+	refuseNamespace := interceptor.Funcs{
+		Create: func(
+			ctx context.Context,
+			inner client.WithWatch,
+			obj client.Object,
+			opts ...client.CreateOption,
+		) error {
+			if _, isNamespace := obj.(*corev1.Namespace); isNamespace {
+				return errors.New("etcdserver: request timed out")
+			}
+
+			return inner.Create(ctx, obj, opts...)
+		},
+	}
+
+	r, c := newForceTestReconciler(t, refuseNamespace, append(forceTestFixtures(), addon)...)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: addon.Name},
+	}); err == nil {
+		t.Fatal("a transient cluster-step failure must be handed to the work queue")
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonFailed {
+		t.Fatalf("Ready = %+v, want False/%s", ready, helmv1alpha1.ReasonFailed)
+	}
+	if apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeStalled) != nil {
+		t.Fatal("a transient failure is not a stalled one")
 	}
 }

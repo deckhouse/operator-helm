@@ -17,6 +17,7 @@ limitations under the License.
 package release
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -28,8 +29,8 @@ import (
 )
 
 // Failure is one way a pass can fail, named the way the release reports it. Reason
-// and Message are what the condition carries; Err is logged and, when Retry is set,
-// handed to the work queue's rate limiter.
+// and Message are what the condition carries; Err is logged and, unless the failure
+// is terminal, handed to the work queue's rate limiter.
 type Failure struct {
 	Reason  string
 	Message string
@@ -41,9 +42,13 @@ type Failure struct {
 	// it excludes Retry — handing such a failure to the work queue would burn the
 	// rate limiter on an attempt whose outcome is already known.
 	Terminal bool
-	// Retry hands Err to the work queue when the pass ends. Without it the failure
-	// is reported and the release waits for a watch to wake it.
-	Retry bool
+	// AwaitsWatch marks a failure something else already brings the release back
+	// from: a watch on the object the step needed fires when it appears. It keeps Err
+	// away from the work queue, because retrying on a rate limiter would only
+	// rediscover an absence until the watch reports it gone. Everything else is
+	// retried — a step that failed on the way to a write left nothing for a watch to
+	// fire on.
+	AwaitsWatch bool
 	// RequeueAfter schedules another pass on a timer, for a cause no watch covers.
 	RequeueAfter time.Duration
 }
@@ -64,6 +69,12 @@ type Inputs struct {
 	// Outcome is how the pass ended. Exactly one of the four is what happened, and
 	// each carries only what that ending can say anything about.
 	Outcome Outcome
+
+	// MaintenanceLifted reports that this pass took the release out of maintenance
+	// mode and went on with the work maintenance was holding back. It is not an
+	// outcome: the pass does not end there, it ends wherever the resumed work ends,
+	// and Managed is the one thing the lift itself has to say.
+	MaintenanceLifted bool
 }
 
 // Outcome is how one reconcile pass ended. The interface is sealed: the four
@@ -77,8 +88,11 @@ type Outcome interface{ outcome() }
 // carried by the Failure itself and adds Stalled.
 type StepFailed struct{ Failure Failure }
 
-// MaintenanceChanged is the pass that moved the release into or out of maintenance
-// mode. Such a pass reports nothing else: the chart is not touched.
+// MaintenanceChanged is the pass that moved the release into maintenance mode, or
+// failed to move it either way. Such a pass reports nothing else: the chart is not
+// touched. Lifting maintenance successfully is not one of these endings — the
+// release is managed again, so that pass carries on to the chart and says so
+// through Inputs.MaintenanceLifted.
 type MaintenanceChanged struct {
 	Result internalobj.MaintenanceOutcome
 }
@@ -181,6 +195,15 @@ type conditionState struct {
 // reconcile pass.
 func Evaluate(in Inputs) Decision {
 	decision := evaluate(in)
+
+	if in.MaintenanceLifted {
+		// The suspend flag came off the internal HelmRelease, which is the only thing
+		// that makes the release managed again, so Managed is written whatever the
+		// resumed work went on to end in. Ready is left to that work: the release is
+		// managed long before it is ready.
+		decision.set(in, helmv1alpha1.ConditionTypeManaged, maintenanceLiftedState())
+	}
+
 	decision.ObservedGeneration = observedGeneration(in, decision)
 
 	return decision
@@ -229,6 +252,11 @@ func evaluate(in Inputs) Decision {
 		// lifted it. Reconciling goes with it, which RemoveConditions already
 		// arranges: a release in maintenance has nothing in flight to report.
 		decision.ConsumeForce = true
+		// The verdict is restated rather than left where the pass that entered
+		// maintenance put it: a release the controller has stopped reconciling is not a
+		// ready release, and Ready is what a reader goes by.
+		decision.set(in, helmv1alpha1.ConditionTypeManaged, maintenanceActiveState())
+		decision.set(in, helmv1alpha1.ConditionTypeReady, maintenanceActiveState())
 
 		return decision
 	case ChartReached:
@@ -271,18 +299,34 @@ func evaluateStepFailed(in Inputs, decision Decision, outcome StepFailed) Decisi
 }
 
 func evaluateMaintenanceChanged(in Inputs, decision Decision, outcome MaintenanceChanged) Decision {
-	state := maintenanceState(outcome.Result)
-	decision.set(in, helmv1alpha1.ConditionTypeManaged, state)
-	decision.set(in, helmv1alpha1.ConditionTypeReady, state)
-	decision.Reported = reported(state)
-
-	if outcome.Result.Activated {
-		// Settling into maintenance drops an in-flight force request for the same
-		// reason a release already in it does: the release will not act on the request
-		// while it is held, and leaving Reconciling behind would report work in flight
-		// to kstatus forever.
-		decision.ConsumeForce = true
+	if outcome.Result.Err != nil {
+		// Managed is left exactly where it was. It reports whether the internal
+		// HelmRelease is suspended, and this attempt did not change that; a Managed
+		// written from a failed attempt would be read as a release resting in
+		// maintenance, which is the one state the controller never comes back to on its
+		// own. Reported as any other step that failed: not ready, retried.
+		return evaluateStepFailed(in, decision, StepFailed{Failure{
+			Reason:  helmv1alpha1.ReasonFailed,
+			Message: "Failed to change maintenance mode",
+			Err:     outcome.Result.Err,
+		}})
 	}
+
+	if !outcome.Result.Activated {
+		// Unreachable: a pass that lifted maintenance resumes the work instead of
+		// ending here, and it reports the lift through Inputs.MaintenanceLifted. Writing
+		// a status for it here is what must not happen — "managed again" with nothing
+		// else said reads as a settled release whose chart was never deployed.
+		return Decision{Err: errors.New("reconcile pass ended on lifted maintenance")}
+	}
+
+	decision.set(in, helmv1alpha1.ConditionTypeManaged, maintenanceActiveState())
+	decision.set(in, helmv1alpha1.ConditionTypeReady, maintenanceActiveState())
+	// Settling into maintenance drops an in-flight force request for the same reason
+	// a release already in it does: the release will not act on the request while it
+	// is held, and leaving Reconciling behind would report work in flight to kstatus
+	// forever.
+	decision.ConsumeForce = true
 
 	return decision
 }
@@ -483,24 +527,21 @@ func evaluateRelease(out *internalobj.ReleaseOutcome) conditionState {
 	return state
 }
 
-func maintenanceState(out internalobj.MaintenanceOutcome) conditionState {
-	if out.Err != nil {
-		return failureState(Failure{
-			Reason:  helmv1alpha1.ReasonFailed,
-			Message: "Failed to change maintenance mode",
-			Err:     out.Err,
-		})
-	}
+// maintenanceActiveState is the verdict of a release the controller has stopped
+// reconciling. It is written to Managed and to Ready alike: a release whose deployed
+// resources are left alone is not one whose spec is being kept true.
+func maintenanceActiveState() conditionState {
+	return conditionState{InternalObjectState: internalobj.InternalObjectState{
+		Observed: true,
+		Status:   metav1.ConditionFalse,
+		Reason:   helmv1alpha1.ReasonMaintenanceModeActive,
+		Message:  "Maintenance mode enabled",
+	}}
+}
 
-	if out.Activated {
-		return conditionState{InternalObjectState: internalobj.InternalObjectState{
-			Observed: true,
-			Status:   metav1.ConditionFalse,
-			Reason:   helmv1alpha1.ReasonMaintenanceModeActive,
-			Message:  "Maintenance mode enabled",
-		}}
-	}
-
+// maintenanceLiftedState is the verdict of a release that is managed again. It
+// reaches Managed alone; what the resumed pass makes of the chart is Ready's answer.
+func maintenanceLiftedState() conditionState {
 	return conditionState{InternalObjectState: internalobj.InternalObjectState{
 		Observed: true,
 		Status:   metav1.ConditionTrue,
@@ -529,8 +570,15 @@ func reported(state conditionState) *Failure {
 	return &Failure{Reason: state.Reason, Message: state.Message, Err: state.Err}
 }
 
+// retryErr hands the cause of a step failure to the work queue. A step before the
+// chart is a cluster read or a cluster write, and a transient failure of one leaves
+// nothing behind for a watch to fire on — the object it would have written was not
+// written — so the rate limiter is what brings the release back. The two exceptions
+// say so themselves: a terminal failure retrying cannot change, and one the release
+// is woken from by a watch. A failure carrying no error of its own rides the timer
+// the step asked for instead.
 func retryErr(failure Failure) error {
-	if !failure.Retry || failure.Terminal {
+	if failure.Terminal || failure.AwaitsWatch {
 		return nil
 	}
 

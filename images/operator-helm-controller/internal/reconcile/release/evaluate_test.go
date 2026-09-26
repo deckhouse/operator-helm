@@ -91,9 +91,9 @@ func TestEvaluateTerminalFailureStalls(t *testing.T) {
 	}
 }
 
-// TestEvaluateTerminalFailureIsNeverRetried pins that Terminal overrides a Retry the
-// caller left set. The two contradict each other, and burning the work queue's rate
-// limiter on an attempt whose outcome is already known is the worse reading.
+// TestEvaluateTerminalFailureIsNeverRetried pins that Terminal overrides the retry
+// every other step failure gets. Burning the work queue's rate limiter on an attempt
+// whose outcome is already known is the worse reading.
 func TestEvaluateTerminalFailureIsNeverRetried(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = StepFailed{Failure{
@@ -101,7 +101,6 @@ func TestEvaluateTerminalFailureIsNeverRetried(t *testing.T) {
 		Message:  "role team-a/operator-helm-application already exists and is not managed by the operator",
 		Err:      errors.New("foreign role"),
 		Terminal: true,
-		Retry:    true,
 	}}
 
 	decision := Evaluate(in)
@@ -147,7 +146,6 @@ func TestEvaluateRecoverableFailureKeepsTheForceRequest(t *testing.T) {
 		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 		Message: "Failed to set up the release identity",
 		Err:     errors.New("forbidden"),
-		Retry:   true,
 	}}
 
 	if decision := Evaluate(in); decision.ConsumeForce {
@@ -220,7 +218,6 @@ func TestEvaluateStepFailureOwnsReadyAlone(t *testing.T) {
 		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 		Message: "Failed to set up the release identity",
 		Err:     errors.New("forbidden"),
-		Retry:   true,
 	}
 	in.Outcome = StepFailed{failure}
 
@@ -430,7 +427,11 @@ func TestEvaluateStalledReleaseReportsNoProgress(t *testing.T) {
 	}
 }
 
-func TestEvaluateStepFailureWithoutRetryIsNotReturned(t *testing.T) {
+// TestEvaluateStepFailureOnATimerIsNotHandedToTheWorkQueue is the one step failure
+// that does not ride the rate limiter: the claim conflict carries no error of its
+// own, because nothing failed — another release holds the pair — and the timer the
+// step asked for is what re-checks whether it still does.
+func TestEvaluateStepFailureOnATimerIsNotHandedToTheWorkQueue(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = StepFailed{Failure{
 		Reason:       helmv1alpha1.ReasonChartClaimConflict,
@@ -677,7 +678,6 @@ func TestEvaluateCarriesTheObservedGeneration(t *testing.T) {
 					Reason:  helmv1alpha1.ReasonRBACSetupFailed,
 					Message: "Failed to set up the release identity",
 					Err:     errors.New("forbidden"),
-					Retry:   true,
 				}}
 			},
 			advance: false,
@@ -882,5 +882,179 @@ func TestEvaluateRefusesAPassWithNoOutcome(t *testing.T) {
 	}
 	if decision.ObservedGeneration != nil {
 		t.Fatal("a pass that said nothing must not claim to have observed the spec")
+	}
+}
+
+// TestEvaluateTransientStepFailureIsHandedToTheWorkQueue pins what brings a release
+// back after a cluster step failed on its way to a write. Nothing was written, so no
+// watch fires and no timer is running: the rate limiter is the only thing left. The
+// two failures that opt out say why — one cannot be changed by retrying, the other
+// is woken by a watch on the object that was missing.
+func TestEvaluateTransientStepFailureIsHandedToTheWorkQueue(t *testing.T) {
+	cause := errors.New("etcdserver: request timed out")
+
+	tests := []struct {
+		name    string
+		failure Failure
+		retried bool
+	}{
+		{
+			name: "a transient namespace failure",
+			failure: Failure{
+				Reason:  helmv1alpha1.ReasonFailed,
+				Message: "Failed to reconcile target namespace",
+				Err:     cause,
+			},
+			retried: true,
+		},
+		{
+			name: "a transient identity failure",
+			failure: Failure{
+				Reason:  helmv1alpha1.ReasonRBACSetupFailed,
+				Message: "Failed to set up the release identity",
+				Err:     cause,
+			},
+			retried: true,
+		},
+		{
+			name: "a foreign object under the derived name",
+			failure: Failure{
+				Reason:   helmv1alpha1.ReasonForeignRBACObject,
+				Message:  "Refusing to adopt an identity owned by someone else",
+				Err:      errors.New("owned elsewhere"),
+				Terminal: true,
+			},
+			retried: false,
+		},
+		{
+			name: "a repository that does not exist yet",
+			failure: Failure{
+				Reason:      helmv1alpha1.ReasonFailed,
+				Message:     "Failed to get internal repository",
+				Err:         cause,
+				AwaitsWatch: true,
+			},
+			retried: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := baseInputs()
+			in.Outcome = StepFailed{tt.failure}
+
+			decision := Evaluate(in)
+
+			if retried := decision.Err != nil; retried != tt.retried {
+				t.Fatalf("Err = %v, want retried = %v", decision.Err, tt.retried)
+			}
+		})
+	}
+}
+
+// TestEvaluateFailedMaintenanceSwitchLeavesManagedAlone pins the first half of the
+// maintenance contract: Managed reports whether the internal HelmRelease is
+// suspended, so only a switch that landed may move it. A Managed written from a
+// failed attempt is indistinguishable from a release resting in maintenance, which
+// is the one state the controller never comes back to on its own.
+func TestEvaluateFailedMaintenanceSwitchLeavesManagedAlone(t *testing.T) {
+	cause := errors.New("conflict")
+
+	in := baseInputs()
+	in.Outcome = MaintenanceChanged{Result: internalobj.MaintenanceOutcome{Activated: true, Err: cause}}
+
+	decision := Evaluate(in)
+
+	if apimeta.FindStatusCondition(decision.Conditions, helmv1alpha1.ConditionTypeManaged) != nil {
+		t.Fatal("a failed switch must not write Managed: the suspend flag did not move")
+	}
+
+	ready := condition(t, decision, helmv1alpha1.ConditionTypeReady)
+	if ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonFailed {
+		t.Fatalf("Ready = %s/%s, want False/%s", ready.Status, ready.Reason, helmv1alpha1.ReasonFailed)
+	}
+
+	progress := condition(t, decision, helmv1alpha1.ConditionTypeReconciling)
+	if progress.Status != metav1.ConditionTrue {
+		t.Fatalf("Reconciling = %s, want True while the switch is being retried", progress.Status)
+	}
+	if !errors.Is(decision.Err, cause) {
+		t.Fatalf("Err = %v, want the cause handed to the work queue", decision.Err)
+	}
+	if decision.ObservedGeneration != nil {
+		t.Fatal("a switch that will be retried has not finished with the spec")
+	}
+}
+
+// TestEvaluateMaintenanceHoldIsNotReady pins the rest of that contract on the pass
+// that finds the release already in maintenance: while Managed is False the release
+// is not ready, because the controller has stopped keeping its spec true.
+func TestEvaluateMaintenanceHoldIsNotReady(t *testing.T) {
+	in := baseInputs()
+	in.Outcome = InMaintenance{}
+
+	decision := Evaluate(in)
+
+	for _, conditionType := range []string{
+		helmv1alpha1.ConditionTypeManaged,
+		helmv1alpha1.ConditionTypeReady,
+	} {
+		cond := condition(t, decision, conditionType)
+		if cond.Status != metav1.ConditionFalse || cond.Reason != helmv1alpha1.ReasonMaintenanceModeActive {
+			t.Fatalf("%s = %s/%s, want False/%s",
+				conditionType, cond.Status, cond.Reason, helmv1alpha1.ReasonMaintenanceModeActive)
+		}
+	}
+}
+
+// TestEvaluateLiftedMaintenanceReportsManagedAndKeepsGoing pins the other half:
+// lifting maintenance moves Managed and nothing else. Ready belongs to the work the
+// lift resumed, which in this pass has only just reached the internal source — a
+// release reported as ready here would be one whose chart is not deployed.
+func TestEvaluateLiftedMaintenanceReportsManagedAndKeepsGoing(t *testing.T) {
+	in := baseInputs()
+	in.MaintenanceLifted = true
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{
+			Internal: internalobj.InternalObjectState{
+				Status:  metav1.ConditionUnknown,
+				Reason:  helmv1alpha1.ReasonReconciling,
+				Message: "pulling chart",
+			},
+		}},
+	}
+
+	decision := Evaluate(in)
+
+	managed := condition(t, decision, helmv1alpha1.ConditionTypeManaged)
+	if managed.Status != metav1.ConditionTrue || managed.Reason != helmv1alpha1.ReasonMaintenanceModeInactive {
+		t.Fatalf("Managed = %s/%s, want True/%s",
+			managed.Status, managed.Reason, helmv1alpha1.ReasonMaintenanceModeInactive)
+	}
+
+	ready := condition(t, decision, helmv1alpha1.ConditionTypeReady)
+	if ready.Status != metav1.ConditionUnknown || ready.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("Ready = %s/%s, want the verdict of the resumed work", ready.Status, ready.Reason)
+	}
+	if decision.ObservedGeneration != nil {
+		t.Fatal("the resumed work has not finished with the spec yet")
+	}
+}
+
+// TestEvaluateRefusesAPassThatEndedOnLiftedMaintenance guards the shape of the
+// outcome: lifting maintenance is not an ending, it is a pass that goes on. Writing
+// a status for it here would say the release is managed and nothing else, which
+// reads as a settled release whose chart was never deployed.
+func TestEvaluateRefusesAPassThatEndedOnLiftedMaintenance(t *testing.T) {
+	in := baseInputs()
+	in.Outcome = MaintenanceChanged{Result: internalobj.MaintenanceOutcome{Activated: false}}
+
+	decision := Evaluate(in)
+
+	if decision.Err == nil {
+		t.Fatal("a pass that ended on lifted maintenance must be handed to the work queue")
+	}
+	if decision.Conditions != nil {
+		t.Fatalf("Conditions = %+v, want no status written", decision.Conditions)
 	}
 }

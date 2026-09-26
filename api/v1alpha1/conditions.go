@@ -24,6 +24,10 @@ package v1alpha1
 const (
 	// ConditionTypeManaged is False while the release is in maintenance mode, which
 	// is the one state in which the controller leaves the deployed resources alone.
+	// It reports the state the internal HelmRelease is actually in, so it moves only
+	// when the switch between the two landed: an attempt that failed leaves it where
+	// it was and is reported on Ready instead. A release that is not managed is never
+	// Ready — its spec is not being kept true.
 	ConditionTypeManaged = "Managed"
 	// ConditionTypeInstalled reports the first deployment of a release. It is the
 	// only condition a release that has never been installed carries besides Ready.

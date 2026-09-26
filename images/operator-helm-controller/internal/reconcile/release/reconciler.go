@@ -143,7 +143,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if r.deps.Maintenance.ChangeRequired(rel) {
-		return r.finish(ctx, rel, in, MaintenanceChanged{Result: r.deps.Maintenance.Ensure(ctx, rel)})
+		if err := r.markMaintenanceChangeInProgress(ctx, rel); err != nil {
+			return reconcile.Result{}, err
+		}
+
+		result := r.deps.Maintenance.Ensure(ctx, rel)
+		if result.Err != nil || result.Activated {
+			return r.finish(ctx, rel, in, MaintenanceChanged{Result: result})
+		}
+
+		// Maintenance was lifted, so the release is managed again and this pass is the
+		// one that has to make that true: ending here would leave a release reported as
+		// managed with no chart deployed and nothing scheduled to deploy it. The lift
+		// itself is carried to Evaluate, which owns the Managed verdict.
+		in.MaintenanceLifted = true
 	}
 
 	if rel.MaintenanceActivated() {
@@ -156,6 +169,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			Reason:  helmv1alpha1.ReasonFailed,
 			Message: "Failed to get internal repository",
 			Err:     fmt.Errorf("getting internal repository: %w", err),
+			// A repository that is not there yet is the one failure of this step the
+			// release is woken from: the repository kinds are watched, so the pass runs
+			// again the moment one is created. Anything else — a rejected or failed read —
+			// is a passing fault of the API server with nothing to wake the release, so it
+			// goes to the work queue.
+			AwaitsWatch: apierrors.IsNotFound(err),
 		}})
 	}
 
@@ -184,19 +203,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// The identity comes before the internal sources: helm-controller checks that
 	// the account named on the HelmRelease exists before it impersonates it, so a
 	// HelmRelease created ahead of its ServiceAccount would fail its first pass.
+	// The watches on the Role and the RoleBinding only fire on a write that landed,
+	// so a step that failed before writing anything comes back through the work
+	// queue's rate limiter and nothing else. A terminal failure is the exception: the
+	// object in the way carries no managed-by label, so those watches never see it go
+	// either — only a force request or an edit to the release gets this pass run again.
 	if identity := r.deps.Identity.Ensure(ctx, rel); identity.Err != nil {
 		return r.finish(ctx, rel, in, StepFailed{Failure{
 			Reason:   identity.Reason,
 			Message:  identity.Message,
 			Err:      identity.Err,
 			Terminal: identity.Terminal,
-			// The watches on the Role and the RoleBinding only fire on a write that
-			// landed, so a step that failed before writing anything comes back through
-			// the work queue's rate limiter and nothing else. A terminal failure is the
-			// exception: the object in the way carries no managed-by label, so those
-			// watches never see it go either — only a force request or an edit to the
-			// release gets this pass run again.
-			Retry: !identity.Terminal,
 		}})
 	}
 
@@ -503,6 +520,29 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 	logger.Info("Cleanup complete")
 
 	return reconcile.Result{}, nil
+}
+
+// markMaintenanceChangeInProgress publishes Reconciling before the maintenance
+// switch is attempted. Whoever edited spec.maintenance is watching the object, and
+// between the request and the write on the internal HelmRelease the release is
+// neither in maintenance nor out of it: the condition is what says the switch is
+// being made. The pass that lands it takes the condition away again, and the one
+// that fails to keeps it with the reason of the retry.
+func (r *Reconciler) markMaintenanceChangeInProgress(ctx context.Context, rel contract.Release) error {
+	err := r.deps.Status.PatchStatus(ctx, rel.Object(), func() {
+		apimeta.SetStatusCondition(rel.Object().GetConditions(), metav1.Condition{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             helmv1alpha1.ReasonReconciling,
+			Message:            "Changing maintenance mode",
+			ObservedGeneration: rel.Generation(),
+		})
+	})
+	if client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("publishing maintenance change progress: %w", err)
+	}
+
+	return nil
 }
 
 // markForceReconcileInProgress publishes Reconciling before the work a force
