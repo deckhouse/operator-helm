@@ -332,6 +332,34 @@ func TestTheBudgetReachesEveryStep(t *testing.T) {
 	}
 }
 
+// TestTheServerServesUnderItsOwnBudget pins the wiring the tests above stand on.
+// They assemble the middleware themselves to choose a budget, which would keep
+// passing if the server ever stopped putting one on at all.
+func TestTheServerServesUnderItsOwnBudget(t *testing.T) {
+	var (
+		resolved  time.Time
+		reviewed  time.Time
+		hasReview bool
+	)
+
+	srv := New("", &deadlineResolver{at: &resolved}, deadlineReviewer{at: &reviewed, ok: &hasReview}, NewOptions{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chart-values", strings.NewReader(validBody))
+	req.Header.Set("Authorization", "Bearer test-token")
+	srv.handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if resolved.IsZero() {
+		t.Fatal("the server served a request with no budget on it")
+	}
+	if remaining := time.Until(resolved); remaining <= 0 || remaining > requestTimeout {
+		t.Fatalf("deadline is %s from now, want within (0, %s]", remaining, requestTimeout)
+	}
+}
+
 type deadlineReviewer struct {
 	at *time.Time
 	ok *bool
