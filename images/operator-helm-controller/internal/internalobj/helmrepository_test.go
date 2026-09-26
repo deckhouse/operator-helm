@@ -167,6 +167,56 @@ func TestHelmRepositoriesEnsureReportsStalled(t *testing.T) {
 	}
 }
 
+// TestHelmRepositoriesEnsureIgnoresAStallFromAnOlderGeneration covers a repository
+// whose secret reference has just been fixed. source-controller drops Stalled only
+// on a pass that reaches a verdict, so the condition of the rejected spec is still
+// there at generation 2; reading it would report the repository as abandoned while
+// it is being fetched. The fixture matches what applyHelmRepositorySpec writes, so
+// CreateOrPatch is a no-op and the generation stays where it is put.
+func TestHelmRepositoriesEnsureIgnoresAStallFromAnOlderGeneration(t *testing.T) {
+	repo := testRepository()
+	internal := &sourcev1.HelmRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       utils.GetInternalHelmRepositoryName(repo.Name),
+			Namespace:  testNamespace,
+			Generation: 2,
+			Labels: map[string]string{
+				helmv1alpha1.LabelManagedBy:                            helmv1alpha1.LabelManagedByValue,
+				helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: repo.Name,
+			},
+		},
+		Spec: sourcev1.HelmRepositorySpec{
+			URL:      repo.Spec.URL,
+			Interval: metav1.Duration{Duration: InternalRepositoryInterval},
+		},
+		Status: sourcev1.HelmRepositoryStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               helmv1alpha1.ConditionTypeStalled,
+					Status:             metav1.ConditionTrue,
+					Reason:             "InvalidSecretRef",
+					Message:            "secret not found",
+					ObservedGeneration: 1,
+					LastTransitionTime: metav1.Now(),
+				},
+			},
+		},
+	}
+
+	service := newHelmRepositories(t, repo, internal)
+
+	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
+	if err != nil {
+		t.Fatalf("Ensure returned %v", err)
+	}
+	if state.Stalled {
+		t.Fatal("a Stalled condition of an older generation must not be read as the current verdict")
+	}
+	if state.Ready || state.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("state = %+v, want it waiting for the internal repository", state)
+	}
+}
+
 // TestHelmRepositoriesEnsureStalledPrecedesReady pins the precedence rule:
 // Stalled=True must win even when a healthy, observed Ready=True condition sits
 // right next to it. The fixture's spec and labels already match what

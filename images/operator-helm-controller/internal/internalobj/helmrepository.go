@@ -23,7 +23,6 @@ import (
 
 	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -79,7 +78,11 @@ func (s *HelmRepositories) Ensure(
 
 	state := InternalRepositoryState{Present: true}
 
-	if stalled := apimeta.FindStatusCondition(existing.Status.Conditions, helmv1alpha1.ConditionTypeStalled); stalled != nil &&
+	// The Stalled condition is read only while it speaks about the generation the
+	// object now has: source-controller removes it at the end of a pass that reaches a
+	// verdict, not when it picks up a new spec, so a repository just corrected would
+	// otherwise go on being reported as abandoned.
+	if stalled := currentCondition(existing.Status.Conditions, helmv1alpha1.ConditionTypeStalled, existing.Generation); stalled != nil &&
 		stalled.Status == metav1.ConditionTrue {
 		state.Stalled = true
 		state.Reason = stalled.Reason

@@ -65,16 +65,20 @@ type ErrorConditionRule struct {
 }
 
 // reduceInternalConditions collapses the conditions of an internal object into the
-// state the release evaluation works from. Having given up outranks everything: an
-// object that will not act on the spec it was given is not going to reach a verdict
-// about it either, so its Reconciling condition — left behind by the attempt that
-// gave up — must not be read as work in flight. Otherwise a running reconciliation
-// comes first: whatever the object still says about the previous spec is stale until
-// it settles, and ProgressingWithRetry is excluded there because it is not a
-// reconciliation in flight but a failure that has scheduled one, and the failure is
-// what the release has to report. After that the error rules speak, and only then
-// the object's own Ready — which counts only once observed for the generation that
-// was written.
+// state the release evaluation works from. Only conditions that speak about the
+// generation the object currently has are read at all (see currentCondition):
+// neither controller clears its conditions when it picks up a new spec, so every one
+// of them may still be the verdict about the previous spec.
+//
+// Having given up outranks everything: an object that will not act on the spec it
+// was given is not going to reach a verdict about it either, so its Reconciling
+// condition — left behind by the attempt that gave up — must not be read as work in
+// flight. Otherwise a running reconciliation comes first: whatever the object still
+// says about the previous spec is stale until it settles, and ProgressingWithRetry
+// is excluded there because it is not a reconciliation in flight but a failure that
+// has scheduled one, and the failure is what the release has to report. After that
+// the error rules speak, and only then the object's own Ready — which counts only
+// once observed for the generation that was written.
 //
 // Whether the object gave up is carried alongside the verdict rather than replacing
 // it: the error rules name the actual fault ("server-side apply failed …"), which is
@@ -86,7 +90,7 @@ func reduceInternalConditions(
 	generation int64,
 	errorRules []ErrorConditionRule,
 ) InternalObjectState {
-	stalled := apimeta.FindStatusCondition(conditions, helmv1alpha1.ConditionTypeStalled)
+	stalled := currentCondition(conditions, helmv1alpha1.ConditionTypeStalled, generation)
 	gaveUp := stalled != nil && stalled.Status == metav1.ConditionTrue
 
 	reconciling := InternalObjectState{
@@ -95,14 +99,14 @@ func reduceInternalConditions(
 	}
 
 	if !gaveUp {
-		cond := apimeta.FindStatusCondition(conditions, helmv1alpha1.ConditionTypeReconciling)
+		cond := currentCondition(conditions, helmv1alpha1.ConditionTypeReconciling, generation)
 		if cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason != helmv1alpha1.ReasonProgressingWithRetry {
 			return reconciling
 		}
 	}
 
 	for _, rule := range errorRules {
-		if cond := apimeta.FindStatusCondition(conditions, rule.Type); cond != nil && cond.Status == rule.TriggerStatus {
+		if cond := currentCondition(conditions, rule.Type, generation); cond != nil && cond.Status == rule.TriggerStatus {
 			return InternalObjectState{
 				Observed: true,
 				Stalled:  gaveUp,
@@ -141,7 +145,9 @@ func reduceInternalConditions(
 
 // conditionObserved returns the named condition only when it was set for the
 // generation given, so a verdict about a spec that has since changed is not read as
-// one about the current spec.
+// one about the current spec. It is deliberately stricter than currentCondition: a
+// condition carrying no observedGeneration is no proof that the object has looked at
+// the spec that was written, and Ready is the one condition read as such proof.
 func conditionObserved(conditions []metav1.Condition, conditionType string, generation int64) (*metav1.Condition, bool) {
 	cond := apimeta.FindStatusCondition(conditions, conditionType)
 	if cond == nil || cond.ObservedGeneration != generation {
@@ -149,4 +155,24 @@ func conditionObserved(conditions []metav1.Condition, conditionType string, gene
 	}
 
 	return cond, true
+}
+
+// currentCondition returns the named condition unless it is the verdict of an older
+// generation. Neither helm-controller nor source-controller clears conditions when a
+// new spec arrives — Stalled, for one, is removed only at the end of a pass that
+// succeeds — so after a spec change the object keeps reporting what happened to the
+// previous one. Read as if it were about the current spec, such a leftover Stalled
+// tells the user the work has been abandoned while it is in fact under way.
+//
+// A condition with no observedGeneration is taken as current. Both controllers stamp
+// every condition they write through their patch helper, so an unstamped one is not
+// a stale verdict but a verdict with no generation recorded, and dropping it would
+// hide a real fault — including a terminal one, which nothing would then bring back.
+func currentCondition(conditions []metav1.Condition, conditionType string, generation int64) *metav1.Condition {
+	cond := apimeta.FindStatusCondition(conditions, conditionType)
+	if cond == nil || (cond.ObservedGeneration != 0 && cond.ObservedGeneration != generation) {
+		return nil
+	}
+
+	return cond
 }

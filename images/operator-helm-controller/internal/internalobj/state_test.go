@@ -133,6 +133,103 @@ func TestReduceInternalConditionsFallsBackToTheStallReason(t *testing.T) {
 	}
 }
 
+// TestReduceInternalConditionsIgnoresAStallFromAnOlderGeneration covers the moment
+// right after a broken spec is corrected. Neither controller clears Stalled when it
+// picks up a new generation — helm-controller removes it only at the end of a pass
+// that succeeds — so the condition of the attempt that gave up on the previous spec
+// is still there while the new one is being reconciled. Read as a verdict about the
+// current spec it would suppress Reconciling and tell the user that nothing is
+// happening, for as long as the work actually takes.
+func TestReduceInternalConditionsIgnoresAStallFromAnOlderGeneration(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeStalled,
+			Status:             metav1.ConditionTrue,
+			Reason:             helmv1alpha1.ReasonRetriesExceeded,
+			Message:            "Failed to upgrade after 1 attempt(s)",
+			ObservedGeneration: 4,
+		},
+		{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             helmv1alpha1.ReasonReconciling,
+			Message:            "Running 'upgrade' action",
+			ObservedGeneration: 5,
+		},
+		{
+			Type:               "Released",
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 4,
+		},
+	}, 5, helmReleaseErrorRules)
+
+	if state.Stalled {
+		t.Fatalf("state = %+v, want the stall of the previous generation ignored", state)
+	}
+	if state.Observed || state.Status != metav1.ConditionUnknown || state.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("state = %+v, want work in flight", state)
+	}
+}
+
+// TestReduceInternalConditionsIgnoresAFailureFromAnOlderGeneration extends the same
+// rule to the error conditions. An object that has been given a new spec and has not
+// started on it yet carries only the fault of the previous one; reporting that fault
+// as the verdict about the new spec would blame it for something it never caused.
+func TestReduceInternalConditionsIgnoresAFailureFromAnOlderGeneration(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 2,
+		},
+		{
+			Type:               "Released",
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 2,
+		},
+	}, 3, helmReleaseErrorRules)
+
+	if state.Observed || state.Status != metav1.ConditionUnknown || state.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("state = %+v, want no verdict yet for the current spec", state)
+	}
+}
+
+// TestReduceInternalConditionsTrustsAStallWithoutAnObservedGeneration pins how an
+// unstamped condition is read. Both controllers stamp every condition they write, so
+// a missing observedGeneration is not evidence of a stale verdict — and discarding
+// it would leave a terminal failure reported as work in flight forever, since
+// nothing on this side ever revisits it.
+func TestReduceInternalConditionsTrustsAStallWithoutAnObservedGeneration(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:    helmv1alpha1.ConditionTypeStalled,
+			Status:  metav1.ConditionTrue,
+			Reason:  helmv1alpha1.ReasonRetriesExceeded,
+			Message: "Failed to install after 3 attempt(s)",
+		},
+		{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             helmv1alpha1.ReasonReconciling,
+			Message:            "Running 'install' action",
+			ObservedGeneration: 9,
+		},
+	}, 9, helmReleaseErrorRules)
+
+	if !state.Observed || !state.Stalled || state.Status != metav1.ConditionFalse {
+		t.Fatalf("state = %+v, want an observed, stalled failure", state)
+	}
+	if state.Reason != helmv1alpha1.ReasonRetriesExceeded {
+		t.Fatalf("reason = %q, want %q", state.Reason, helmv1alpha1.ReasonRetriesExceeded)
+	}
+}
+
 // TestReduceInternalConditionsLeavesAnOrdinaryFailureRetriable is the counterpart:
 // the same failure without a Stalled condition is one the object still means to
 // retry, and the release must go on reporting progress for it.
