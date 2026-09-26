@@ -29,10 +29,12 @@ import (
 // verdict: turning it into conditions is the reconciler's job.
 type CatalogResult struct {
 	// SkippedCharts names the charts the repository offers that the catalog cannot
-	// hold, in the order the repository listed them. They are not failures — the
-	// pass completes without them — but they are exactly the difference between what
-	// the repository offers and what the cluster shows, so a caller that reports
-	// either number has to know about them.
+	// hold. They are not failures — the pass completes without them — but they are
+	// exactly the difference between the charts the repository offers and the charts
+	// this pass published, so a caller that reports either number has to know about
+	// them. The order is whatever order the charts were handed to Reconcile in, which
+	// for a Helm index is map iteration order and therefore differs from pass to
+	// pass; a caller that puts these names anywhere durable has to sort them.
 	SkippedCharts []string
 }
 

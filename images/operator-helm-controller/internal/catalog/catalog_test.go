@@ -739,9 +739,11 @@ func TestReconcileReportsEveryChartItCannotPublish(t *testing.T) {
 			wantSkip: []string{"my chart", "_internal", "chart/with/slashes"},
 		},
 		{
-			// The order is the repository's own, so the names in the status message
-			// line up with the index a user is reading.
-			name:     "publishable and unpublishable names are separated in listing order",
+			// The two groups are separated, not reordered: the skipped names come back
+			// in the order they were handed over. That order carries no meaning of its
+			// own — a Helm index is a map, so the caller sees a different one each read
+			// — which is why the status message sorts before naming anything.
+			name:     "publishable and unpublishable names are separated",
 			charts:   []string{"my chart", "podinfo", tooLong, "nginx"},
 			wantKept: []string{"podinfo", "nginx"},
 			wantSkip: []string{"my chart", tooLong},

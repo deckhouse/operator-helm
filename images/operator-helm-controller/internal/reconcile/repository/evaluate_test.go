@@ -18,6 +18,7 @@ package repository
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -805,6 +806,86 @@ func TestEvaluateReportsSkippedChartsAndUnresolvedVersionsTogether(t *testing.T)
 		if !strings.Contains(synced.Message, want) {
 			t.Errorf("Synced message is %q, want it to contain %q", synced.Message, want)
 		}
+	}
+}
+
+// TestEvaluateDescribesTheSameSkippedChartsTheSameWay pins that the message depends
+// on the set of skipped charts and not on the order they arrive in. A Helm index is
+// a map on the wire, so two passes over an unchanged repository hand the same names
+// over in different orders; if that reached the message, every pass would rewrite
+// the condition, move its transition time and patch the repository over a state that
+// never changed.
+func TestEvaluateDescribesTheSameSkippedChartsTheSameWay(t *testing.T) {
+	messageFor := func(skipped []string) string {
+		decision := Evaluate(Inputs{
+			Generation: 1, Now: testNow,
+			Attempted: true,
+			Fetch:     &reposync.FetchOutcome{Charts: 4},
+			Catalog:   &reposync.CatalogOutcome{SkippedCharts: skipped},
+		})
+
+		synced := conditionOf(t, decision.Status, helmv1alpha1.ConditionTypeSynced)
+		if synced == nil || synced.Reason != helmv1alpha1.ReasonPartialSync {
+			t.Fatalf("Synced is %+v, want %s", synced, helmv1alpha1.ReasonPartialSync)
+		}
+
+		return synced.Message
+	}
+
+	cases := []struct {
+		name  string
+		order []string
+	}{
+		{name: "two skipped charts in one order", order: []string{"my chart", "_internal"}},
+		{name: "the same two in the other order", order: []string{"_internal", "my chart"}},
+	}
+
+	var want string
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := messageFor(tt.order)
+			if want == "" {
+				want = got
+			}
+			if got != want {
+				t.Fatalf("Synced message is %q, want %q whatever order the names arrive in", got, want)
+			}
+			for _, name := range tt.order {
+				if !strings.Contains(got, strconv.Quote(name)) {
+					t.Errorf("Synced message is %q, want it to name %q", got, name)
+				}
+			}
+		})
+	}
+}
+
+// TestEvaluateBoundsTheLengthOfANamedChart pins the other half of the message
+// bound. Limiting how many names are shown is not enough: an index may publish
+// names far longer than anything a condition can hold, and a message the API server
+// rejects would cost the repository every other verdict in the same status write.
+func TestEvaluateBoundsTheLengthOfANamedChart(t *testing.T) {
+	// Not a label value, so it is skipped for its grammar as well as its length,
+	// and long enough that three of them would blow past the 32768-byte limit.
+	huge := strings.Repeat("a b", 20000)
+
+	decision := Evaluate(Inputs{
+		Generation: 1, Now: testNow,
+		Attempted: true,
+		Fetch:     &reposync.FetchOutcome{Charts: 3},
+		Catalog:   &reposync.CatalogOutcome{SkippedCharts: []string{huge, huge + "c", huge + "d"}},
+	})
+
+	synced := conditionOf(t, decision.Status, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Reason != helmv1alpha1.ReasonPartialSync {
+		t.Fatalf("Synced is %+v, want %s", synced, helmv1alpha1.ReasonPartialSync)
+	}
+	// The limit the API server enforces on a condition message.
+	if len(synced.Message) > 32768 {
+		t.Fatalf("Synced message is %d bytes, want at most 32768", len(synced.Message))
+	}
+	if !strings.Contains(synced.Message, "leaves out 3 charts whose") {
+		t.Fatalf("Synced message is %q, want it to still count every skipped chart", synced.Message)
 	}
 }
 

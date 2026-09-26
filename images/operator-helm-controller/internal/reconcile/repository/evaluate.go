@@ -19,6 +19,7 @@ package repository
 import (
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -243,7 +244,9 @@ func partialSyncMessage(in Inputs) string {
 		// as long as the repository offers it, and the status is the only place a user
 		// can learn why chartCount is lower than the repository's own index. Repeating
 		// the same reason and message writes nothing — the condition, including its
-		// transition time, stays as it is — so saying it every pass is not noise.
+		// transition time, stays as it is — so saying it every pass is not noise. That
+		// holds only because describeCharts sorts: the same set of names has to spell
+		// the same message, whatever order the pass collected them in.
 		noun := "charts"
 		if len(skipped) == 1 {
 			noun = "chart"
@@ -282,28 +285,64 @@ func skippedCharts(in Inputs) []string {
 	return in.Catalog.SkippedCharts
 }
 
-// describeCharts lists chart names for a condition message. Only a few are named:
-// a message is limited to 32768 bytes by the API server, and an index whose naming
-// convention the API rejects wholesale would otherwise make the status unwritable
-// and cost the repository its every other verdict too. The names are quoted because
-// a name that got here is not a label value and may well be empty or hold spaces.
+// describeCharts lists chart names for a condition message.
+//
+// The names are sorted, and on a copy so the outcome the caller holds is left
+// alone. Order is not a property of the input: a Helm index is a map on the wire,
+// so the same repository yields its charts in a different order every read. Without
+// sorting, the same set of skipped charts would produce a different message on each
+// pass, every pass would rewrite the condition and move its transition time, and the
+// repository would be patched forever over a state that never changed.
+//
+// Only a few names are shown and each is cut short. A message is limited to 32768
+// bytes by the API server, and an index whose naming convention the API rejects
+// wholesale — with names as long as an index may legally publish — would otherwise
+// make the status unwritable and cost the repository its every other verdict too.
+// Both bounds are needed: a count alone does not bound the length.
+//
+// The names are quoted because a name that got here is not a label value and may
+// well be empty or hold spaces.
 func describeCharts(names []string) string {
-	shown, suffix := names, ""
-	if len(names) > maxNamedCharts {
-		shown = names[:maxNamedCharts]
-		suffix = fmt.Sprintf(" and %d more", len(names)-maxNamedCharts)
+	shown := slices.Clone(names)
+	slices.Sort(shown)
+
+	suffix := ""
+	if len(shown) > maxNamedCharts {
+		suffix = fmt.Sprintf(" and %d more", len(shown)-maxNamedCharts)
+		shown = shown[:maxNamedCharts]
 	}
 
 	quoted := make([]string, 0, len(shown))
 	for _, name := range shown {
-		quoted = append(quoted, strconv.Quote(name))
+		quoted = append(quoted, strconv.Quote(truncateChartName(name)))
 	}
 
 	return strings.Join(quoted, ", ") + suffix
 }
 
-// maxNamedCharts bounds describeCharts.
-const maxNamedCharts = 3
+// truncateChartName cuts one name down to the part worth showing. It counts runes,
+// not bytes, so the cut never lands inside a character. Quoting can still multiply
+// what is left — an unprintable byte becomes an escape of up to ten bytes — which is
+// why the bound is stated in the small: maxNamedCharts names of at most
+// maxChartNameRunes runes cannot approach the 32768 bytes a message may hold, even
+// when every rune has to be escaped.
+func truncateChartName(name string) string {
+	runes := []rune(name)
+	if len(runes) <= maxChartNameRunes {
+		return name
+	}
+
+	return string(runes[:maxChartNameRunes]) + "..."
+}
+
+const (
+	// maxNamedCharts bounds how many names describeCharts shows.
+	maxNamedCharts = 3
+	// maxChartNameRunes bounds how much of one name it shows. A chart name this long
+	// is already past anything a user reads at a glance, and the point of the message
+	// is to identify the chart in the index, not to reproduce it.
+	maxChartNameRunes = 128
+)
 
 func evaluateStalled(
 	in Inputs,
