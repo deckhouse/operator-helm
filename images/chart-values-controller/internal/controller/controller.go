@@ -47,6 +47,12 @@ type (
 	conditionsFunc func(client.Object) []metav1.Condition
 )
 
+// conflictRetryDelay is how long a pass waits before judging an auxiliary resource
+// again after its delete was refused. The write that refused it may well have been
+// filtered out by the predicate (a status change that moved neither the artifact
+// digest nor expires-at), so waiting for an event instead could wait forever.
+const conflictRetryDelay = 10 * time.Second
+
 // reconciler keeps the values cache in sync with an auxiliary source resource
 // (HelmChart or OCIRepository) and deletes the resource once its expires-at
 // annotation has passed. It downloads and re-caches values.yaml whenever the
@@ -85,19 +91,47 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	expiresAt, hasExpiry := parseExpiry(obj, logger)
 	if hasExpiry && !time.Now().Before(expiresAt) {
-		_ = r.cache.Delete(name)
-		r.forgetDigest(name)
-		if err := r.client.Delete(ctx, obj); err != nil {
-			return reconcile.Result{}, client.IgnoreNotFound(err)
-		}
-		logger.Info("deleted expired auxiliary resource", "name", name)
-		return reconcile.Result{}, nil
+		return r.deleteExpired(ctx, obj, name)
 	}
 
 	r.refreshCache(ctx, obj, name)
 
 	if hasExpiry {
 		return reconcile.Result{RequeueAfter: time.Until(expiresAt)}, nil
+	}
+
+	return reconcile.Result{}, nil
+}
+
+// deleteExpired removes the exact auxiliary resource this pass read and judged
+// expired. Between that read and here the resolver may have extended the annotation
+// or recreated the object under the same name for a new request, so the delete
+// carries the read's identity as a precondition: the API server then refuses to take
+// away an object somebody is already waiting on. A refusal is an ordinary outcome of
+// the pass, not a failure — the next pass reads the object again and judges it anew.
+//
+// The cache entry and the remembered digest are dropped only once the object is
+// really gone. Dropping them first would leave a live object without its values and
+// every request for it answered with a retry until they are downloaded again.
+func (r *reconciler) deleteExpired(ctx context.Context, obj client.Object, name string) (reconcile.Result, error) {
+	uid, resourceVersion := obj.GetUID(), obj.GetResourceVersion()
+
+	err := r.client.Delete(ctx, obj, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion})
+	switch {
+	case apierrors.IsConflict(err):
+		return reconcile.Result{RequeueAfter: conflictRetryDelay}, nil
+	case apierrors.IsNotFound(err):
+		// Already gone, by another pass or by a deleted namespace: nothing is waiting
+		// on it, so its cache entry goes too.
+	case err != nil:
+		return reconcile.Result{}, fmt.Errorf("deleting %s: %w", name, err)
+	}
+
+	_ = r.cache.Delete(name)
+	r.forgetDigest(name)
+
+	if err == nil {
+		log.FromContext(ctx).Info("deleted expired auxiliary resource", "name", name)
 	}
 
 	return reconcile.Result{}, nil
