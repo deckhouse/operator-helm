@@ -86,10 +86,12 @@ func (s *Synchronizer) Sync(
 		return SyncOutcome{FetchAttempted: true, Fetch: fetch}
 	}
 
+	result, err := s.catalog.Reconcile(ctx, repo, charts)
+
 	return SyncOutcome{
 		FetchAttempted: true,
 		Fetch:          fetch,
-		Catalog:        CatalogOutcome{Err: s.catalog.Reconcile(ctx, repo, charts)},
+		Catalog:        CatalogOutcome{Err: err, SkippedCharts: result.SkippedCharts},
 	}
 }
 

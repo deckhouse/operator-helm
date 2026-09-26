@@ -81,9 +81,12 @@ type RepositoryStatus struct {
 	// It drives the retry backoff and resets on the first success.
 	// +optional
 	ConsecutiveFetchFailures int32 `json:"consecutiveFetchFailures,omitempty"`
-	// ChartCount is the number of charts the repository offered when it was last read
-	// successfully. It is absent until the first successful read, so a repository that
-	// has never been read is distinguishable from one that offers no charts.
+	// ChartCount is the number of charts the catalog holds for the repository as of the
+	// last successful read, so it can be compared with the chart objects in the cluster.
+	// Charts the repository offers under a name the API cannot record are not counted;
+	// the Synced condition names them. The field is absent until the first successful
+	// read, so a repository that has never been read is distinguishable from one that
+	// offers no charts.
 	// +optional
 	ChartCount *int32 `json:"chartCount,omitempty"`
 }

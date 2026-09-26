@@ -121,8 +121,14 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (rep
 	return known, nil
 }
 
-func (t *typed[C, CL]) Reconcile(ctx context.Context, repo contract.Repository, charts []repoclient.Chart) error {
+func (t *typed[C, CL]) Reconcile(
+	ctx context.Context,
+	repo contract.Repository,
+	charts []repoclient.Chart,
+) (contract.CatalogResult, error) {
 	logger := log.FromContext(ctx)
+
+	var result contract.CatalogResult
 
 	desired := make(map[string]struct{}, len(charts))
 
@@ -134,8 +140,16 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo contract.Repository, 
 			// from every such query while leaving it in the catalog. Neither is
 			// better than not offering a chart whose name the API cannot hold — and
 			// an index may legally publish one, so this must not cost the pass.
-			logger.Info("Skipping a chart whose name cannot be recorded on a catalog object",
+			//
+			// The skip is reported to the caller because it is otherwise invisible: the
+			// repository status would count a chart that has no object. The log line is
+			// only the detail behind that report — which rule the name broke — and it is
+			// logged at V(1) because the verdict never changes while the repository keeps
+			// offering the name, and the catalog is re-read every few minutes.
+			logger.V(1).Info("Skipping a chart whose name cannot be recorded on a catalog object",
 				"kind", t.cfg.Kind, "chart", chart.Name, "reason", strings.Join(errs, "; "))
+
+			result.SkippedCharts = append(result.SkippedCharts, chart.Name)
 
 			continue
 		}
@@ -163,7 +177,7 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo contract.Repository, 
 			return nil
 		})
 		if err != nil {
-			return fmt.Errorf("creating or updating chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
+			return result, fmt.Errorf("creating or updating chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
 		}
 
 		if op != controllerutil.OperationResultNone {
@@ -173,7 +187,7 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo contract.Repository, 
 
 		inUse, err := t.InUseVersions(ctx, repo, chart.Name)
 		if err != nil {
-			return err
+			return result, err
 		}
 
 		base := existing.DeepCopyObject().(C)
@@ -185,13 +199,13 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo contract.Repository, 
 		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse)
 
 		if err := t.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
-			return fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
+			return result, fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
 		}
 	}
 
 	existingCharts, err := t.list(ctx, repo)
 	if err != nil {
-		return fmt.Errorf("listing charts for pruning: %w", err)
+		return result, fmt.Errorf("listing charts for pruning: %w", err)
 	}
 
 	for _, chart := range existingCharts {
@@ -212,7 +226,7 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo contract.Repository, 
 
 		inUse, err := t.InUseVersions(ctx, repo, chartName)
 		if err != nil {
-			return err
+			return result, err
 		}
 		if len(inUse) > 0 {
 			// A consumer still references this chart: deleting the object would make
@@ -225,11 +239,11 @@ func (t *typed[C, CL]) Reconcile(ctx context.Context, repo contract.Repository, 
 		}
 
 		if err := client.IgnoreNotFound(t.client.Delete(ctx, chart)); err != nil {
-			return fmt.Errorf("deleting stale charts: %w", err)
+			return result, fmt.Errorf("deleting stale charts: %w", err)
 		}
 	}
 
-	return nil
+	return result, nil
 }
 
 // MigrateNames moves a repository's catalog objects to the names the current scheme

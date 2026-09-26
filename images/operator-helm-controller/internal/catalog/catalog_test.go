@@ -19,6 +19,7 @@ package catalog_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -145,7 +146,9 @@ func syncCatalog(cat contract.Catalog, repo contract.Repository, charts ...repoc
 		return err
 	}
 
-	return cat.Reconcile(context.Background(), repo, charts)
+	_, err := cat.Reconcile(context.Background(), repo, charts)
+
+	return err
 }
 
 func chart(name, version string) repoclient.Chart {
@@ -160,7 +163,7 @@ func TestReconcileWritesNamespacedCatalogNextToTheRepository(t *testing.T) {
 	cat := adapter.NewApplicationCatalog(c)
 	repo := applicationRepo("team-a", "stable")
 
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -203,10 +206,10 @@ func TestSameNamedRepositoriesKeepSeparateCatalogs(t *testing.T) {
 	teamA := applicationRepo("team-a", "stable")
 	teamB := applicationRepo("team-b", "stable")
 
-	if err := cat.Reconcile(context.Background(), teamA, []repoclient.Chart{chart("podinfo", "1.0.0")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), teamA, []repoclient.Chart{chart("podinfo", "1.0.0")}); err != nil {
 		t.Fatalf("Reconcile(team-a) returned %v", err)
 	}
-	if err := cat.Reconcile(context.Background(), teamB, []repoclient.Chart{chart("nginx", "2.0.0")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), teamB, []repoclient.Chart{chart("nginx", "2.0.0")}); err != nil {
 		t.Fatalf("Reconcile(team-b) returned %v", err)
 	}
 
@@ -218,7 +221,7 @@ func TestSameNamedRepositoriesKeepSeparateCatalogs(t *testing.T) {
 		t.Fatalf("Known(team-a) = %v, want only podinfo", known)
 	}
 
-	if err := cat.Reconcile(context.Background(), teamA, nil); err != nil {
+	if _, err := cat.Reconcile(context.Background(), teamA, nil); err != nil {
 		t.Fatalf("Reconcile(team-a, empty) returned %v", err)
 	}
 
@@ -239,7 +242,7 @@ func TestClusterCatalogObjectsHaveNoNamespace(t *testing.T) {
 		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://ghcr.io/example/charts"},
 	})
 
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -262,7 +265,7 @@ func TestUnreferencedVersionsArePruned(t *testing.T) {
 	cat := adapter.NewApplicationCatalog(c)
 	repo := applicationRepo("team-a", "stable")
 
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0"), chart("nginx", "1.0.0")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0"), chart("nginx", "1.0.0")}); err != nil {
 		t.Fatalf("first Reconcile returned %v", err)
 	}
 	if err := syncCatalog(cat, repo, chart("podinfo", "1.0.0")); err != nil {
@@ -291,7 +294,7 @@ func TestLookupReturnsTheCatalogObjectAndItsStatus(t *testing.T) {
 	cat := adapter.NewApplicationCatalog(c)
 	repo := applicationRepo("team-a", "stable")
 
-	if err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -330,7 +333,7 @@ func TestListErrorNamesAClusterScopedRepositoryWithoutALeadingSlash(t *testing.T
 		}).
 		Build()
 
-	err := adapter.NewClusterApplicationCatalog(c).
+	_, err := adapter.NewClusterApplicationCatalog(c).
 		Reconcile(context.Background(), adapter.NewClusterApplicationRepository(
 			&helmv1alpha1.HelmClusterApplicationRepository{
 				ObjectMeta: metav1.ObjectMeta{Name: "shared", UID: types.UID("shared")},
@@ -673,12 +676,15 @@ func TestReconcileSkipsAChartWhoseNameCannotBeALabel(t *testing.T) {
 
 	// The unwritable chart comes first, so a pass that stopped on it would also be
 	// missing the one after it.
-	err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{
+	result, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{
 		chart("my chart", "1.0.0"),
 		chart("podinfo", "6.7.1"),
 	})
 	if err != nil {
 		t.Fatalf("Reconcile returned %v, want the pass to complete", err)
+	}
+	if !slices.Equal(result.SkippedCharts, []string{"my chart"}) {
+		t.Fatalf("skipped charts are %q, want the pass to report the chart it left out", result.SkippedCharts)
 	}
 
 	good := &helmv1alpha1.HelmClusterAddonChart{}
@@ -696,5 +702,90 @@ func TestReconcileSkipsAChartWhoseNameCannotBeALabel(t *testing.T) {
 	err = c.Get(context.Background(), client.ObjectKey{Name: stale.Name}, pruned)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("the stale chart was not pruned (%v), so the pass never reached the pruning loop", err)
+	}
+}
+
+// TestReconcileReportsEveryChartItCannotPublish pins which chart names cost an
+// object and that each one is handed back to the caller. The repository status is
+// derived from this list: it counts the charts the cluster actually shows and names
+// the rest, so a chart dropped here without being reported would leave a user with a
+// count that does not match the objects and nothing to explain the difference.
+func TestReconcileReportsEveryChartItCannotPublish(t *testing.T) {
+	// A label value is limited to 63 characters. The object name is not: it is
+	// truncated and hashed, so length alone never decides. The pair below is what
+	// pins that the cut-off is the label rule and nothing else.
+	longEnough := strings.Repeat("a", 63)
+	tooLong := strings.Repeat("a", 64)
+
+	cases := []struct {
+		name     string
+		charts   []string
+		wantKept []string
+		wantSkip []string
+	}{
+		{
+			name:     "a name a label value can hold is published",
+			charts:   []string{"podinfo", longEnough},
+			wantKept: []string{"podinfo", longEnough},
+		},
+		{
+			name:     "a name longer than a label value is reported, not dropped",
+			charts:   []string{tooLong},
+			wantSkip: []string{tooLong},
+		},
+		{
+			name:     "a name outside the label grammar is reported, not dropped",
+			charts:   []string{"my chart", "_internal", "chart/with/slashes"},
+			wantSkip: []string{"my chart", "_internal", "chart/with/slashes"},
+		},
+		{
+			// The order is the repository's own, so the names in the status message
+			// line up with the index a user is reading.
+			name:     "publishable and unpublishable names are separated in listing order",
+			charts:   []string{"my chart", "podinfo", tooLong, "nginx"},
+			wantKept: []string{"podinfo", "nginx"},
+			wantSkip: []string{"my chart", tooLong},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newAddonClientWithInterceptor(t, rejectInvalidLabels())
+			repo := addonRepo()
+
+			charts := make([]repoclient.Chart, 0, len(tt.charts))
+			for _, name := range tt.charts {
+				charts = append(charts, chart(name, "1.0.0"))
+			}
+
+			result, err := adapter.NewAddonCatalog(c).Reconcile(context.Background(), repo, charts)
+			if err != nil {
+				t.Fatalf("Reconcile returned %v, want the pass to complete", err)
+			}
+
+			if !slices.Equal(result.SkippedCharts, tt.wantSkip) {
+				t.Fatalf("skipped charts are %q, want %q", result.SkippedCharts, tt.wantSkip)
+			}
+
+			for _, name := range tt.wantKept {
+				objectName := naming.HelmClusterAddonChartName("example", name)
+				if errs := validation.IsDNS1123Subdomain(objectName); len(errs) > 0 {
+					t.Fatalf("the name derived for chart %q is not a valid object name: %s", name, strings.Join(errs, "; "))
+				}
+				if err := c.Get(context.Background(), client.ObjectKey{Name: objectName}, &helmv1alpha1.HelmClusterAddonChart{}); err != nil {
+					t.Fatalf("chart %q was not published: %v", name, err)
+				}
+			}
+
+			published := &helmv1alpha1.HelmClusterAddonChartList{}
+			if err := c.List(context.Background(), published); err != nil {
+				t.Fatalf("listing published charts: %v", err)
+			}
+			// The count the repository status reports is len(charts) minus the skipped
+			// ones, so it is only checkable if that is exactly what the catalog holds.
+			if len(published.Items) != len(tt.charts)-len(tt.wantSkip) {
+				t.Fatalf("catalog holds %d objects, want %d", len(published.Items), len(tt.charts)-len(tt.wantSkip))
+			}
+		})
 	}
 }

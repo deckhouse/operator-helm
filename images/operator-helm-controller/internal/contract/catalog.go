@@ -25,6 +25,17 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 )
 
+// CatalogResult reports what one catalog write left out. It is an outcome, not a
+// verdict: turning it into conditions is the reconciler's job.
+type CatalogResult struct {
+	// SkippedCharts names the charts the repository offers that the catalog cannot
+	// hold, in the order the repository listed them. They are not failures — the
+	// pass completes without them — but they are exactly the difference between what
+	// the repository offers and what the cluster shows, so a caller that reports
+	// either number has to know about them.
+	SkippedCharts []string
+}
+
 // Catalog mirrors the chart list of a repository into the chart catalog kind of
 // its family. One Catalog serves every repository of one kind; the repository is
 // passed to each call because the objects it writes are owned by, labelled with
@@ -42,7 +53,9 @@ type Catalog interface {
 	MigrateNames(ctx context.Context, repo Repository) error
 	// Reconcile writes the fetched charts into the catalog and prunes objects the
 	// repository no longer lists, keeping any version a consumer still references.
-	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart) error
+	// The result names the charts it could not publish; it is filled in as far as
+	// the pass got, so it is meaningful next to an error too.
+	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart) (CatalogResult, error)
 	// InUseVersions reports the versions of one chart still referenced by the
 	// consumers of this family. An empty chart name yields no versions.
 	InUseVersions(ctx context.Context, repo Repository, chartName string) (map[string]struct{}, error)

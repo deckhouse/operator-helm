@@ -35,6 +35,11 @@ type FetchOutcome struct {
 // CatalogOutcome is the result of writing the chart catalog into the cluster.
 type CatalogOutcome struct {
 	Err error
+	// SkippedCharts names the charts that were listed by the remote but have no
+	// catalog object, because the API cannot hold their names. They are not
+	// failures, and they are also not part of the catalog: a caller reporting how
+	// many charts the cluster shows has to subtract them.
+	SkippedCharts []string
 }
 
 // SyncOutcome carries both phases of a synchronization attempt. FetchAttempted is

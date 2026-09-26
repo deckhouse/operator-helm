@@ -18,6 +18,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -623,10 +624,11 @@ func TestEvaluateFullSyncAdvancesLastSuccessfulSyncTime(t *testing.T) {
 	}
 }
 
-// TestEvaluateChartCount pins what the field means: how many charts the repository
-// offered when it was last read successfully. A pointer, so that a repository never
-// read apart from one offering nothing is not reported as offering nothing, and a
-// failed read leaves the last known answer rather than replacing it with zero.
+// TestEvaluateChartCount pins what the field means: how many charts the catalog
+// holds for the repository as of the last successful read. A pointer, so that a
+// repository never read apart from one offering nothing is not reported as offering
+// nothing, and a failed read leaves the last known answer rather than replacing it
+// with zero.
 func TestEvaluateChartCount(t *testing.T) {
 	never := Evaluate(Inputs{Generation: 1, Now: testNow})
 	if never.Status.ChartCount != nil {
@@ -661,6 +663,148 @@ func TestEvaluateChartCount(t *testing.T) {
 	})
 	if failed.Status.ChartCount == nil || *failed.Status.ChartCount != 3 {
 		t.Fatalf("chartCount is %v after a failed read, want the last successful 3", failed.Status.ChartCount)
+	}
+}
+
+// TestEvaluateAccountsForTheChartsTheCatalogCannotPublish pins the one thing that
+// makes chartCount checkable: it is the number of chart objects the user can find in
+// the cluster, not the length of the repository's index. A chart whose name the API
+// cannot record never becomes an object, so counting it would leave a difference
+// nothing in the status explains — and Synced is where the explanation goes.
+func TestEvaluateAccountsForTheChartsTheCatalogCannotPublish(t *testing.T) {
+	cases := []struct {
+		name        string
+		charts      int
+		skipped     []string
+		wantCount   int32
+		wantSynced  metav1.ConditionStatus
+		wantReason  string
+		wantMessage []string
+	}{
+		{
+			name:       "a catalog that holds every chart reports the whole index and is synced",
+			charts:     3,
+			wantCount:  3,
+			wantSynced: metav1.ConditionTrue,
+			wantReason: helmv1alpha1.ReasonSuccess,
+		},
+		{
+			name:        "a skipped chart is subtracted and named",
+			charts:      3,
+			skipped:     []string{"my chart"},
+			wantCount:   2,
+			wantSynced:  metav1.ConditionFalse,
+			wantReason:  helmv1alpha1.ReasonPartialSync,
+			wantMessage: []string{"leaves out 1 chart whose", `"my chart"`},
+		},
+		{
+			// A message is capped at 32768 bytes by the API server, so an index that
+			// names nothing the API accepts must not make the status unwritable.
+			name:        "more skipped charts than fit in a message are counted in full and named in part",
+			charts:      5,
+			skipped:     []string{"a b", "c d", "e f", "g h", "i j"},
+			wantCount:   0,
+			wantSynced:  metav1.ConditionFalse,
+			wantReason:  helmv1alpha1.ReasonPartialSync,
+			wantMessage: []string{"leaves out 5 charts whose", `"a b", "c d", "e f" and 2 more`},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			decision := Evaluate(Inputs{
+				Generation: 1, Now: testNow,
+				Attempted: true,
+				Fetch:     &reposync.FetchOutcome{Charts: tt.charts},
+				Catalog:   &reposync.CatalogOutcome{SkippedCharts: tt.skipped},
+			})
+
+			if decision.Status.ChartCount == nil {
+				t.Fatalf("chartCount is nil after a successful read, want %d", tt.wantCount)
+			}
+			if *decision.Status.ChartCount != tt.wantCount {
+				t.Fatalf("chartCount is %d, want %d", *decision.Status.ChartCount, tt.wantCount)
+			}
+
+			synced := conditionOf(t, decision.Status, helmv1alpha1.ConditionTypeSynced)
+			if synced == nil || synced.Status != tt.wantSynced || synced.Reason != tt.wantReason {
+				t.Fatalf("Synced is %+v, want %s/%s", synced, tt.wantSynced, tt.wantReason)
+			}
+			for _, want := range tt.wantMessage {
+				if !strings.Contains(synced.Message, want) {
+					t.Errorf("Synced message is %q, want it to contain %q", synced.Message, want)
+				}
+			}
+
+			// A skipped chart is not a failure: the pass read the repository and wrote
+			// everything it could, so nothing about it may escalate.
+			if ready := conditionOf(t, decision.Status, helmv1alpha1.ConditionTypeReady); ready == nil ||
+				ready.Status != metav1.ConditionTrue {
+				t.Fatalf("Ready is %+v, want True", ready)
+			}
+			assertAbnormal(t, decision.Status, helmv1alpha1.ConditionTypeStalled, "")
+			assertAbnormal(t, decision.Status, helmv1alpha1.ConditionTypeReconciling, "")
+			if decision.Status.LastSuccessfulSyncTime == nil {
+				t.Fatal("a pass that published everything it could must advance lastSuccessfulSyncTime")
+			}
+			if decision.Err != nil {
+				t.Fatalf("decision error is %v, want none", decision.Err)
+			}
+		})
+	}
+}
+
+// TestEvaluateSkippedChartsAreReportedWithoutChurn pins that saying it on every pass
+// is free. The catalog is re-read every few minutes and the verdict on a name the API
+// cannot hold never changes, so the report would be noise if each pass rewrote the
+// condition; an unchanged reason and message leave the transition time alone.
+func TestEvaluateSkippedChartsAreReportedWithoutChurn(t *testing.T) {
+	in := Inputs{
+		Generation: 1, Now: testNow,
+		Attempted: true,
+		Fetch:     &reposync.FetchOutcome{Charts: 2},
+		Catalog:   &reposync.CatalogOutcome{SkippedCharts: []string{"my chart"}},
+	}
+
+	first := Evaluate(in)
+
+	in.Current = first.Status
+	in.Now = testNow.Add(SyncInterval)
+	second := Evaluate(in)
+
+	before := conditionOf(t, first.Status, helmv1alpha1.ConditionTypeSynced)
+	after := conditionOf(t, second.Status, helmv1alpha1.ConditionTypeSynced)
+	if before == nil || after == nil {
+		t.Fatalf("Synced is missing: %+v, %+v", before, after)
+	}
+	if !after.LastTransitionTime.Equal(&before.LastTransitionTime) {
+		t.Fatalf("Synced transition time moved from %v to %v on an unchanged verdict",
+			before.LastTransitionTime, after.LastTransitionTime)
+	}
+	if after.Message != before.Message {
+		t.Fatalf("Synced message changed from %q to %q", before.Message, after.Message)
+	}
+}
+
+// TestEvaluateReportsSkippedChartsAndUnresolvedVersionsTogether pins that the two
+// ways a catalog can fall short of the repository do not hide each other: they share
+// one condition, and a user fixing one must still see the other.
+func TestEvaluateReportsSkippedChartsAndUnresolvedVersionsTogether(t *testing.T) {
+	decision := Evaluate(Inputs{
+		Generation: 1, Now: testNow,
+		Attempted: true,
+		Fetch:     &reposync.FetchOutcome{Charts: 4, Pending: 2},
+		Catalog:   &reposync.CatalogOutcome{SkippedCharts: []string{"my chart"}},
+	})
+
+	synced := conditionOf(t, decision.Status, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Reason != helmv1alpha1.ReasonPartialSync {
+		t.Fatalf("Synced is %+v, want %s", synced, helmv1alpha1.ReasonPartialSync)
+	}
+	for _, want := range []string{`"my chart"`, "left 2 chart versions unresolved"} {
+		if !strings.Contains(synced.Message, want) {
+			t.Errorf("Synced message is %q, want it to contain %q", synced.Message, want)
+		}
 	}
 }
 

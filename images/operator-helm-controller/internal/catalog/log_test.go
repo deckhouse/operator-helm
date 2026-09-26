@@ -51,7 +51,7 @@ func TestCatalogLogsDoNotShadowTheReconciledObject(t *testing.T) {
 	ctx := log.IntoContext(context.Background(), logger)
 
 	cat := adapter.NewApplicationCatalog(newClient(t))
-	if err := cat.Reconcile(ctx, applicationRepo("team-a", "stable"), []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
+	if _, err := cat.Reconcile(ctx, applicationRepo("team-a", "stable"), []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 

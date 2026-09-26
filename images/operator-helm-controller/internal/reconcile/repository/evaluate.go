@@ -19,6 +19,8 @@ package repository
 import (
 	"fmt"
 	"math/rand/v2"
+	"strconv"
+	"strings"
 	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -136,7 +138,15 @@ func Evaluate(in Inputs) Decision {
 			// Written on every successful read, not only on a complete pass: it
 			// describes what the repository offers, and a pass left incomplete by a
 			// pending tag still read the full list of charts.
-			status.ChartCount = ptr.To(int32(in.Fetch.Charts))
+			//
+			// The charts the catalog could not publish are subtracted, because this
+			// number is what a user compares against the chart objects in the cluster:
+			// counting a chart that has no object would make the comparison come out
+			// wrong with nothing in the status to explain it. Synced names them
+			// instead. A catalog write that failed part way reports only the charts it
+			// reached, so the count can be too high until the retry succeeds — which
+			// the failing Synced condition already says.
+			status.ChartCount = ptr.To(int32(in.Fetch.Charts - len(skippedCharts(in))))
 		}
 
 		if fetchSucceeded && !catalogFailed && in.Fetch.Pending == 0 {
@@ -212,7 +222,40 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 
 		return metav1.ConditionFalse, helmv1alpha1.ReasonCatalogUpdateFailed,
 			"Failed to update the chart catalog: " + err.Error()
-	case in.Fetch != nil && in.Fetch.Pending > 0 && in.Current.LastSuccessfulSyncTime == nil:
+	default:
+		if message := partialSyncMessage(in); message != "" {
+			return metav1.ConditionFalse, helmv1alpha1.ReasonPartialSync, message
+		}
+
+		return metav1.ConditionTrue, helmv1alpha1.ReasonSuccess, ""
+	}
+}
+
+// partialSyncMessage describes every way the catalog of a pass that read the
+// repository and wrote what it could still does not mirror it. An empty string
+// means it does mirror it.
+func partialSyncMessage(in Inputs) string {
+	var parts []string
+
+	if skipped := skippedCharts(in); len(skipped) > 0 {
+		// Reported on every pass, not only the first one: a name the API cannot hold
+		// does not become valid on its own, so the chart stays out of the catalog for
+		// as long as the repository offers it, and the status is the only place a user
+		// can learn why chartCount is lower than the repository's own index. Repeating
+		// the same reason and message writes nothing — the condition, including its
+		// transition time, stays as it is — so saying it every pass is not noise.
+		noun := "charts"
+		if len(skipped) == 1 {
+			noun = "chart"
+		}
+
+		parts = append(parts, fmt.Sprintf(
+			"The catalog leaves out %d %s whose name cannot be recorded on a catalog object: %s",
+			len(skipped), noun, describeCharts(skipped),
+		))
+	}
+
+	if in.Fetch != nil && in.Fetch.Pending > 0 && in.Current.LastSuccessfulSyncTime == nil {
 		// On the very first pass there is no other signal that the read was incomplete:
 		// lastSuccessfulSyncTime is empty either way, so a user who just created the
 		// repository would see Synced=True over a partial catalog. Once a full pass has
@@ -221,13 +264,46 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 		// the failure counter is untouched and Stalled is never reached. The nil guard on
 		// in.Fetch protects against a pre-fetch cluster failure, which leaves Fetch nil
 		// while still setting Attempted; that case is matched by fetchFailed/catalogFailed
-		// above today, but the invariant lives elsewhere and must not be relied on here.
-		return metav1.ConditionFalse, helmv1alpha1.ReasonPartialSync,
-			fmt.Sprintf("The first repository read left %d chart versions unresolved", in.Fetch.Pending)
-	default:
-		return metav1.ConditionTrue, helmv1alpha1.ReasonSuccess, ""
+		// in evaluateSynced today, but the invariant lives elsewhere and must not be
+		// relied on here.
+		parts = append(parts, fmt.Sprintf("The first repository read left %d chart versions unresolved", in.Fetch.Pending))
 	}
+
+	return strings.Join(parts, ". ")
 }
+
+// skippedCharts names the charts this pass could not publish. Catalog is nil on a
+// pass that attempted nothing, and on one whose fetch never returned.
+func skippedCharts(in Inputs) []string {
+	if in.Catalog == nil {
+		return nil
+	}
+
+	return in.Catalog.SkippedCharts
+}
+
+// describeCharts lists chart names for a condition message. Only a few are named:
+// a message is limited to 32768 bytes by the API server, and an index whose naming
+// convention the API rejects wholesale would otherwise make the status unwritable
+// and cost the repository its every other verdict too. The names are quoted because
+// a name that got here is not a label value and may well be empty or hold spaces.
+func describeCharts(names []string) string {
+	shown, suffix := names, ""
+	if len(names) > maxNamedCharts {
+		shown = names[:maxNamedCharts]
+		suffix = fmt.Sprintf(" and %d more", len(names)-maxNamedCharts)
+	}
+
+	quoted := make([]string, 0, len(shown))
+	for _, name := range shown {
+		quoted = append(quoted, strconv.Quote(name))
+	}
+
+	return strings.Join(quoted, ", ") + suffix
+}
+
+// maxNamedCharts bounds describeCharts.
+const maxNamedCharts = 3
 
 func evaluateStalled(
 	in Inputs,

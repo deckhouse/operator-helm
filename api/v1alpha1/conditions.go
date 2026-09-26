@@ -68,8 +68,9 @@ const (
 	// ReasonChartVersionRemoved marks an addon whose chart version is still recorded in
 	// the catalog but is no longer offered by the repository.
 	ReasonChartVersionRemoved = "ChartVersionRemoved"
-	// ReasonPartialSync marks a repository whose first catalog read left some chart
-	// versions unresolved.
+	// ReasonPartialSync marks a repository whose catalog does not mirror everything
+	// the repository offers: a first read that left some chart versions unresolved,
+	// or a chart left out because its name cannot be recorded on a catalog object.
 	ReasonPartialSync = "PartialSync"
 
 	// HelmRelease error reasons
