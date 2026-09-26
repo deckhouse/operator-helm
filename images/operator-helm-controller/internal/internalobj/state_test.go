@@ -231,11 +231,11 @@ func TestReduceInternalConditionsTrustsAStallWithoutAnObservedGeneration(t *test
 }
 
 // TestReduceInternalConditionsIgnoresAVerdictFromANewerGeneration covers the other
-// end of the same gap. flux patches a status the instant it starts a pass, and that
-// status can reach this cache before the spec it was written for: the conditions
-// then carry a generation ahead of the one read here. They are no more about the
-// spec in hand than an older verdict is, so nothing is reported as observed until
-// the two line up.
+// end of the same test. A generation ahead of the object's is not known to occur —
+// the spec and the status of one object travel together in a single snapshot — but
+// a verdict about a generation this pass is not holding says nothing about the one
+// it is, whichever side it falls on, so nothing is reported as observed until the
+// two line up.
 func TestReduceInternalConditionsIgnoresAVerdictFromANewerGeneration(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{

@@ -160,20 +160,17 @@ func conditionObserved(conditions []metav1.Condition, conditionType string, gene
 // currentCondition returns the named condition unless it belongs to a generation
 // other than the one the object has. Conditions are rewritten by the controller that
 // owns the object, not by the write that changes its spec: helm-controller clears
-// Stalled and raises Reconciling at the start of a pass
-// (conditions.MarkReconciling, fluxcd/pkg/runtime@v0.110.3
-// conditions/setter.go:146, called from helm-controller@v1.6.4
-// internal/controller/helmrelease_controller.go:236; source-controller reaches the
-// same through reconcile.ProgressiveStatus, pkg/runtime@v0.110.3
-// reconcile/result.go:192). The stale window is therefore not the length of the next
-// pass but the gap before it starts — from the patch that bumps the generation until
-// flux picks the object up and patches its status. Every spec change opens it, and a
-// leftover Stalled read inside it tells the user the work has been abandoned while
-// it is in fact about to begin.
+// Stalled and raises Reconciling at the start of a pass (conditions.MarkReconciling),
+// and source-controller reaches the same through reconcile.ProgressiveStatus. The
+// stale window is therefore not the length of the next pass but the gap before it
+// starts — from the patch that bumps the generation until flux picks the object up
+// and patches its status. Every spec change opens it, and a leftover Stalled read
+// inside it tells the user the work has been abandoned while it is in fact about to
+// begin.
 //
-// Conditions of a generation newer than the object's are dropped by the same test: a
-// status written by flux can reach this cache before the spec that provoked it, and
-// that verdict is no more about the spec in hand than an older one is.
+// A generation newer than the object's fails the same test. Nothing is known to
+// produce one — spec and status travel together in one snapshot — but a verdict
+// about a generation this pass is not holding is not a verdict about it either way.
 //
 // A condition with no observedGeneration is taken as current. Both controllers stamp
 // every condition they write through their patch helper, so an unstamped one is not
