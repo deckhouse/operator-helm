@@ -52,19 +52,23 @@ var ErrNotAChart = errors.New("artifact is not a packaged helm chart")
 // Also a verdict rather than a transient failure.
 var ErrTagNotFound = errors.New("registry has no such tag")
 
-// probeTimeout bounds one probe end to end: the TLS handshake, the couple of
+// ProbeTimeout bounds one probe end to end: the TLS handshake, the couple of
 // retries remote.WithRetryBackoff attempts internally, and reading the manifest
 // body. It applies even when the caller's context carries no deadline of its own,
 // so a slow or unresponsive registry cannot hold the probe open indefinitely. The
 // probe reads only a small manifest, so this is well under the timeout used to
 // download a full chart artifact.
-const probeTimeout = 20 * time.Second
+//
+// It is exported so the HTTP API can pin that its per-request budget outlasts it:
+// the retry answer a client gets while an artifact is still being prepared has to
+// arrive well before that budget runs out.
+const ProbeTimeout = 20 * time.Second
 
-// probeContext bounds ctx by probeTimeout. context.WithTimeout keeps whichever
+// probeContext bounds ctx by ProbeTimeout. context.WithTimeout keeps whichever
 // deadline is sooner, so a caller's own shorter deadline still wins; only a
-// caller with none at all falls back to probeTimeout.
+// caller with none at all falls back to ProbeTimeout.
 func probeContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, probeTimeout)
+	return context.WithTimeout(ctx, ProbeTimeout)
 }
 
 // Prober finds the chart layer of one OCI artifact.

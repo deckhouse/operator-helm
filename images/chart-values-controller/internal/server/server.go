@@ -46,19 +46,33 @@ const (
 	// hold the handler on an oversized read.
 	maxRequestBodyBytes = 4 << 10
 
+	// requestTimeout is the budget for one request from end to end. Answering runs
+	// a chain of steps — the token and access reviews, the auxiliary source object,
+	// the registry probe, the download and the extraction of the artifact — and each
+	// bounds only itself, so their sum is bounded by nothing. The budget is put on
+	// the request's context, which every one of those steps already takes, so they
+	// all inherit it and the chain as a whole ends on time.
+	//
+	// It is set well above the slowest answer the resolver can legitimately
+	// produce (a probe followed by the download of a whole chart artifact) so that
+	// it ends only a request that has actually stopped making progress.
+	requestTimeout = 90 * time.Second
+
 	// readTimeout and writeTimeout bound how long a connection may take to send
 	// its request body or receive its response, closing the gap
 	// ReadHeaderTimeout alone leaves open: an unauthenticated client could
 	// otherwise hold either half of the exchange open indefinitely.
 	//
 	// WriteTimeout runs from the moment the headers are read, so it covers the
-	// handler's own work as well as the write. It therefore has to outlast the
-	// slowest answer the resolver can legitimately produce — a registry probe
-	// followed by the download of a whole chart artifact — or a client that should
-	// have been told to retry, or handed the values, gets a reset connection
-	// instead.
-	readTimeout  = 10 * time.Second
-	writeTimeout = 2 * time.Minute
+	// handler's own work as well as the write, and it ends a request by dropping
+	// the connection. It is therefore derived from the request budget plus
+	// writeResponseMargin rather than chosen on its own: the budget has to expire
+	// first, leaving the handler room to write its answer (and covering the body
+	// read that happens on the same clock), or a client that should have been told
+	// why it got nothing gets a reset connection instead.
+	readTimeout         = 10 * time.Second
+	writeResponseMargin = 30 * time.Second
+	writeTimeout        = requestTimeout + writeResponseMargin
 
 	// maxChartLen bounds the chart field. Chart names are not restricted to a
 	// naming grammar — an index entry may legally contain a space — so only a
@@ -120,10 +134,7 @@ func (s *Server) NeedLeaderElection() bool {
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/chart-values", s.handleChartValues)
-
-	srv := newHTTPServer(s.addr, mux)
+	srv := newHTTPServer(s.addr, s.handler())
 
 	go func() {
 		<-ctx.Done()
@@ -155,6 +166,34 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// handler builds the API's routes under the request budget. The deadline sits in
+// a middleware over the mux rather than inside the handler, because it bounds
+// every request the API serves — including the ones a later route adds — and
+// because it then wraps the whole handler, routing and response writing included,
+// instead of only the part of it that runs after the handler took over.
+func (s *Server) handler() http.Handler {
+	return withRequestDeadline(requestTimeout, s.routes())
+}
+
+func (s *Server) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/chart-values", s.handleChartValues)
+
+	return mux
+}
+
+// withRequestDeadline gives every request one deadline that all of its steps
+// inherit through the context. It only narrows: a client that sent its own
+// shorter deadline, or a shutting-down server, still ends the request sooner.
+func withRequestDeadline(timeout time.Duration, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // newHTTPServer builds the http.Server the API is served through, with every
@@ -249,8 +288,21 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 		Version:        req.Version,
 	})
 	if err != nil {
+		if budgetExhausted(w, r) {
+			return
+		}
+
 		logger.Error(err, "failed to resolve chart values")
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal server error")
+		return
+	}
+
+	// A step that ran out of budget reports it as its own kind of failure — an
+	// aborted download reads as a fetch failure, an aborted probe as pending — so
+	// the budget is consulted before the outcome is mapped, or the client would be
+	// told the chart is unreachable when it was the clock. A ready result is not
+	// second-guessed: the values are in hand and correct however late it is.
+	if result.Outcome != resolver.OutcomeReady && budgetExhausted(w, r) {
 		return
 	}
 
@@ -367,6 +419,10 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, token string,
 
 	result, err := s.reviewer.Review(r.Context(), token, access)
 	if err != nil {
+		if budgetExhausted(w, r) {
+			return false
+		}
+
 		logger.Error(err, "failed to review request token")
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "internal server error")
 		return false
@@ -379,6 +435,26 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, token string,
 		writeError(w, http.StatusForbidden, "FORBIDDEN", fmt.Sprintf("not allowed to create %s", displayKind))
 		return false
 	}
+
+	return true
+}
+
+// budgetExhausted reports whether the request's own budget is what ended the step
+// that just failed, answering the client itself when it is. The answer is a 504
+// rather than a dropped connection, and it is the same shape as the 502 a failing
+// upstream already gets: what ran out was the time to reach source-controller and
+// the API server, not anything the caller can fix in its request.
+//
+// Only the request's context is consulted, so a deadline that came from somewhere
+// else — a client that gave up, an upstream timeout of its own — keeps being
+// reported the way it already was.
+func budgetExhausted(w http.ResponseWriter, r *http.Request) bool {
+	if !errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+		return false
+	}
+
+	writeError(w, http.StatusGatewayTimeout, "REQUEST_TIMEOUT",
+		"request exceeded its time budget")
 
 	return true
 }

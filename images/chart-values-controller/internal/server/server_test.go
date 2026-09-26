@@ -23,8 +23,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/deckhouse/chart-values-controller/internal/auth"
+	"github.com/deckhouse/chart-values-controller/internal/chartartifact"
 	"github.com/deckhouse/chart-values-controller/internal/resolver"
 )
 
@@ -204,6 +206,184 @@ func TestHandleReviewError(t *testing.T) {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 	assertCode(t, rec.Body.Bytes(), "code", "INTERNAL")
+}
+
+// blockingResolver stands for a step that keeps going until something ends it:
+// an access review against an unresponsive API server, a download that never
+// finishes. What it returns afterwards is how that step reports having been cut
+// short.
+type blockingResolver struct {
+	result resolver.Result
+	err    error
+}
+
+func (b blockingResolver) Resolve(ctx context.Context, _ resolver.Request) (resolver.Result, error) {
+	<-ctx.Done()
+
+	return b.result, b.err
+}
+
+type blockingReviewer struct{}
+
+func (blockingReviewer) Review(ctx context.Context, _ string, _ auth.Access) (auth.Result, error) {
+	<-ctx.Done()
+
+	return auth.Result{}, ctx.Err()
+}
+
+// doBudgeted sends a valid request through the assembled handler with timeout as
+// the whole request's budget, which is where the deadline is applied in
+// production.
+func doBudgeted(t *testing.T, res chartValuesResolver, rev tokenReviewer, timeout time.Duration) *httptest.ResponseRecorder {
+	t.Helper()
+
+	srv := New("", res, rev, NewOptions{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chart-values", strings.NewReader(validBody))
+	req.Header.Set("Authorization", "Bearer test-token")
+	withRequestDeadline(timeout, srv.routes()).ServeHTTP(rec, req)
+
+	return rec
+}
+
+// TestARequestOutOfBudgetIsAnswered covers the request-wide deadline: a chain of
+// steps that each bound only themselves used to add up to an unbounded request,
+// which only WriteTimeout ended — by dropping the connection. Whatever the step
+// that ran out reports afterwards, the client gets a 504 naming the budget rather
+// than that step's own verdict.
+func TestARequestOutOfBudgetIsAnswered(t *testing.T) {
+	cases := []struct {
+		name string
+		res  chartValuesResolver
+	}{
+		{
+			name: "the step reports the cancellation as an error",
+			res:  blockingResolver{err: context.DeadlineExceeded},
+		},
+		{
+			// This is the download: artifact.FetchValues reports a read the context
+			// ended as a fetch failure, which would otherwise read as 502 — an
+			// unreachable chart rather than an exhausted budget.
+			name: "the step reports the cancellation as a fetch failure",
+			res:  blockingResolver{result: resolver.Result{Outcome: resolver.OutcomeFetchFailed, Message: "context deadline exceeded"}},
+		},
+		{
+			// And this is the probe: it treats any transport failure as pending, so a
+			// request that spent its whole budget would answer "retry later".
+			name: "the step reports the cancellation as pending",
+			res:  blockingResolver{result: resolver.Result{Outcome: resolver.OutcomePending}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doBudgeted(t, tc.res, authorized, 20*time.Millisecond)
+
+			if rec.Code != http.StatusGatewayTimeout {
+				t.Fatalf("status = %d, want 504 (body %s)", rec.Code, rec.Body.String())
+			}
+			assertCode(t, rec.Body.Bytes(), "code", "REQUEST_TIMEOUT")
+		})
+	}
+}
+
+// TestTheBudgetCoversTheAccessReview pins that the budget starts before the
+// resolver does: the token and access reviews are Kubernetes calls with no timeout
+// of their own, so a request may run out of budget without ever reaching a chart.
+func TestTheBudgetCoversTheAccessReview(t *testing.T) {
+	rec := doBudgeted(t, fakeResolver{}, blockingReviewer{}, 20*time.Millisecond)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want 504 (body %s)", rec.Code, rec.Body.String())
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "REQUEST_TIMEOUT")
+}
+
+// TestTheBudgetReachesEveryStep pins that the deadline travels on the request's
+// own context, which is the context the resolver hands down to the download and,
+// through it, to the extraction of the archive. Nothing on that path may replace
+// it with one of its own.
+func TestTheBudgetReachesEveryStep(t *testing.T) {
+	var (
+		reviewed  time.Time
+		resolved  time.Time
+		hasReview bool
+	)
+
+	rev := deadlineReviewer{at: &reviewed, ok: &hasReview}
+	res := &deadlineResolver{at: &resolved}
+
+	rec := doBudgeted(t, res, rev, time.Minute)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	if !hasReview {
+		t.Fatal("the access review was given a context without a deadline")
+	}
+	if resolved.IsZero() {
+		t.Fatal("the resolver was given a context without a deadline")
+	}
+	if !resolved.Equal(reviewed) {
+		t.Fatalf("the resolver's deadline %s differs from the review's %s: the budget was replaced mid-request", resolved, reviewed)
+	}
+	if remaining := time.Until(resolved); remaining <= 0 || remaining > time.Minute {
+		t.Fatalf("deadline is %s from now, want within (0, 1m]", remaining)
+	}
+}
+
+type deadlineReviewer struct {
+	at *time.Time
+	ok *bool
+}
+
+func (d deadlineReviewer) Review(ctx context.Context, _ string, _ auth.Access) (auth.Result, error) {
+	*d.at, *d.ok = ctx.Deadline()
+
+	return auth.Result{Authenticated: true, Authorized: true}, nil
+}
+
+type deadlineResolver struct {
+	at *time.Time
+}
+
+func (d *deadlineResolver) Resolve(ctx context.Context, _ resolver.Request) (resolver.Result, error) {
+	*d.at, _ = ctx.Deadline()
+
+	return resolver.Result{Outcome: resolver.OutcomeReady, Values: []byte("a: b\n")}, nil
+}
+
+// TestPendingIsStillAnsweredUnderTheBudget pins that the retry protocol survives
+// the deadline: an artifact that is still being prepared is answered with its own
+// 202 and Retry-After, not swallowed by the budget.
+func TestPendingIsStillAnsweredUnderTheBudget(t *testing.T) {
+	rec := doBudgeted(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomePending}}, authorized, time.Minute)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("missing Retry-After header")
+	}
+	assertCode(t, rec.Body.Bytes(), "code", "CHART_PENDING")
+}
+
+// TestTheBudgetOutlastsTheStepsUnderIt pins the two relations that keep the budget
+// from turning into either a dropped connection or a lost retry answer:
+// WriteTimeout, which ends a request without an answer, must expire after it; and
+// the registry probe — the one blocking step on the way to a pending answer — must
+// expire well before it, so a client told to retry is told so on time.
+func TestTheBudgetOutlastsTheStepsUnderIt(t *testing.T) {
+	srv := newHTTPServer("", http.NewServeMux())
+
+	if srv.WriteTimeout <= requestTimeout {
+		t.Fatalf("WriteTimeout %s must outlast the request budget %s, or the connection drops before the handler answers",
+			srv.WriteTimeout, requestTimeout)
+	}
+	if chartartifact.ProbeTimeout >= requestTimeout {
+		t.Fatalf("the probe timeout %s must expire well inside the request budget %s",
+			chartartifact.ProbeTimeout, requestTimeout)
+	}
 }
 
 func assertCode(t *testing.T, body []byte, field, want string) {

@@ -50,7 +50,7 @@ func TestChartLayerMediaTypeGivesUpOnAServerThatNeverAnswers(t *testing.T) {
 
 	host := strings.TrimPrefix(server.URL, "http://")
 
-	// The deadline is set on the caller's context, not read from probeTimeout:
+	// The deadline is set on the caller's context, not read from ProbeTimeout:
 	// the point of this test is that the probe respects whatever bound it is
 	// given, including one shorter than its own floor.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -121,7 +121,7 @@ func TestTransportClonesDefaultTimeouts(t *testing.T) {
 
 // TestProbeContextBoundsAnUnboundedCaller is the fast, deterministic half of the
 // deadline test: a caller that supplies no deadline at all (context.Background(),
-// exactly what a reconcile loop passes) must still get one from probeTimeout,
+// exactly what a reconcile loop passes) must still get one from ProbeTimeout,
 // without this test having to wait for a real hang.
 func TestProbeContextBoundsAnUnboundedCaller(t *testing.T) {
 	ctx, cancel := probeContext(context.Background())
@@ -129,15 +129,15 @@ func TestProbeContextBoundsAnUnboundedCaller(t *testing.T) {
 
 	deadline, ok := ctx.Deadline()
 	if !ok {
-		t.Fatal("a probe given no deadline must still be bounded by probeTimeout")
+		t.Fatal("a probe given no deadline must still be bounded by ProbeTimeout")
 	}
-	if remaining := time.Until(deadline); remaining <= 0 || remaining > probeTimeout {
-		t.Fatalf("deadline is %s from now, want within (0, %s]", remaining, probeTimeout)
+	if remaining := time.Until(deadline); remaining <= 0 || remaining > ProbeTimeout {
+		t.Fatalf("deadline is %s from now, want within (0, %s]", remaining, ProbeTimeout)
 	}
 }
 
 // TestProbeContextKeepsAnEarlierCallerDeadline pins that probeContext narrows
-// but never widens: a caller deadline sooner than probeTimeout must still win.
+// but never widens: a caller deadline sooner than ProbeTimeout must still win.
 func TestProbeContextKeepsAnEarlierCallerDeadline(t *testing.T) {
 	parent, cancelParent := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancelParent()
