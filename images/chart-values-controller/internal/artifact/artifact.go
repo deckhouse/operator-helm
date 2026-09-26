@@ -72,20 +72,21 @@ const (
 	maxDecompressedBytes = 512 << 20
 )
 
-// budget is what the whole extraction is allowed to cost. It is shared by every
-// reader in the chain rather than held by one of them, because no single point in
-// that chain sees all the bytes: tar fabricates the holes of a sparse entry out of
-// nothing (archive/tar zeroReader), so counting only what leaves gzip misses them,
-// while counting only what leaves tar misses the entries the walk skips over —
-// skipping still decompresses them.
+// budget is what the whole extraction is allowed to cost. Its counter follows one
+// place only — what leaves gzip — because that is where every byte the archive
+// actually carries passes, entries the walk skips over included: skipping still
+// decompresses them. The one cost it cannot see there is the sparse entry, whose
+// holes tar fabricates out of nothing (archive/tar zeroReader); that one is weighed
+// by afford, against the counter rather than into it.
 type budget struct {
 	ctx   context.Context
 	limit int64
 	read  int64
 }
 
-// reader returns r bounded by this budget and by ctx. Every Read consults both, so
-// a cancelled request stops mid-copy rather than at the next entry header.
+// reader returns r bounded by this budget and by ctx, and is what keeps the
+// counter. Every Read consults both, so a cancelled request stops mid-copy rather
+// than at the next entry header.
 func (b *budget) reader(r io.Reader) io.Reader {
 	return &boundedReader{budget: b, r: r}
 }
