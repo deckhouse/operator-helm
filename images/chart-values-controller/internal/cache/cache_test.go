@@ -343,3 +343,49 @@ func dirBytes(t *testing.T, dir string) int64 {
 
 	return total
 }
+
+// TestPutAndDeleteOfOneKeyLeaveTheAccountingMatchingTheDisk is the regression for
+// the window between publishing an entry and recording it. A delete landing in
+// that window used to subtract a file that was about to exist, leaving the entry
+// on the volume with nothing charged for it — or charged for one that is gone.
+// Neither is visible to the race detector: both interleavings are properly
+// synchronized, they just disagreed about the world.
+func TestPutAndDeleteOfOneKeyLeaveTheAccountingMatchingTheDisk(t *testing.T) {
+	content := bytes.Repeat([]byte("r"), 1024)
+
+	for range 200 {
+		dir := t.TempDir()
+		c := New(dir, 64*blockSize)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			_ = c.Put("cv-contended", content)
+		}()
+		go func() {
+			defer wg.Done()
+			_ = c.Delete("cv-contended")
+		}()
+
+		wg.Wait()
+
+		_, onDisk := c.Get("cv-contended")
+
+		c.mu.Lock()
+		charged := c.used
+		reserved := c.reserved
+		c.mu.Unlock()
+
+		if reserved != 0 {
+			t.Fatalf("reserved = %d after both finished, want 0", reserved)
+		}
+		if onDisk && charged == 0 {
+			t.Fatal("the entry is on the volume and nothing is charged for it")
+		}
+		if !onDisk && charged != 0 {
+			t.Fatalf("no entry on the volume but %d bytes are charged for one", charged)
+		}
+	}
+}

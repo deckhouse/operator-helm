@@ -299,12 +299,12 @@ func TestReconcileTreatsAnAlreadyDeletedObjectAsCollected(t *testing.T) {
 	}
 }
 
-// TestRefreshDropsAStaleEntryWhenTheNewOneDoesNotFit covers what a refused write
-// leaves behind. The pass runs because the artifact's digest moved, so whatever is
-// under the key is the previous revision's values — serving those under the
-// version that was asked for is worse than serving nothing, and the room they
-// occupy is room the replacement needs.
-func TestRefreshDropsAStaleEntryWhenTheNewOneDoesNotFit(t *testing.T) {
+// TestRefreshDropsAKnownStaleEntryWhenTheNewOneDoesNotFit covers what a refused
+// write leaves behind when the entry is known to be out of date: this controller
+// wrote it for a digest that has since moved, so it holds the previous revision's
+// values. Serving those under the version that was asked for is worse than serving
+// nothing, and the room they occupy is room the replacement needs.
+func TestRefreshDropsAKnownStaleEntryWhenTheNewOneDoesNotFit(t *testing.T) {
 	values := []byte("replicaCount: 2\n")
 	archive := buildValuesArchive(t, values)
 
@@ -329,6 +329,10 @@ func TestRefreshDropsAStaleEntryWhenTheNewOneDoesNotFit(t *testing.T) {
 	}
 	r.cache = cache.New(dir, cacheBlock)
 
+	// What makes the entry stale rather than merely present: this controller put it
+	// there for a digest the artifact has since moved off.
+	r.setLastDigest(testName, "sha256:the-previous-revision")
+
 	if _, err := reconcileOnce(t, r); err != nil {
 		t.Fatalf("a refused cache write is not a failure of the pass, got: %v", err)
 	}
@@ -336,8 +340,55 @@ func TestRefreshDropsAStaleEntryWhenTheNewOneDoesNotFit(t *testing.T) {
 	if got, cached := r.cache.Get(testName); cached {
 		t.Fatalf("stale entry %q survived a refused refresh", got)
 	}
-	if digest := r.lastDigest(testName); digest != "" {
-		t.Fatalf("remembered digest = %q, want empty: a later pass has to try again", digest)
+	if digest := r.lastDigest(testName); digest == fmt.Sprintf("sha256:%x", sha256.Sum256(archive)) {
+		t.Fatal("the refused revision must not be remembered: a later pass has to try again")
+	}
+}
+
+// TestRefreshKeepsAnEntryOfUnknownRevisionWhenTheWriteIsRefused is the other half.
+// An entry this controller did not write — the resolver caches one on every miss
+// and keeps no digests, and a restarted container finds entries on the volume with
+// its map empty — says nothing about which revision it holds, and an unknown digest
+// is the ordinary case, not the exception. Dropping those on a refused write would
+// have the controller throw away everything the resolver caches for as long as the
+// budget is tight, which is the state this budget is designed to sit in.
+func TestRefreshKeepsAnEntryOfUnknownRevisionWhenTheWriteIsRefused(t *testing.T) {
+	values := []byte("replicaCount: 2\n")
+	archive := buildValuesArchive(t, values)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+
+	chart := readyChartWithArtifact(srv.URL, fmt.Sprintf("sha256:%x", sha256.Sum256(archive)))
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(chart).Build()
+
+	r := newTestReconciler(t, c)
+	r.httpClient = srv.Client()
+	r.maxArtifactBytes = 1 << 20
+
+	dir := t.TempDir()
+	r.cache = cache.New(dir, 4*cacheBlock)
+
+	cached := []byte("replicaCount: 1\n")
+	if err := r.cache.Put(testName, cached); err != nil {
+		t.Fatalf("seeding the entry: %v", err)
+	}
+	// Reopened with room for that entry alone, and with no digest remembered for
+	// it — exactly what a restarted container sees.
+	r.cache = cache.New(dir, cacheBlock)
+
+	if _, err := reconcileOnce(t, r); err != nil {
+		t.Fatalf("a refused cache write is not a failure of the pass, got: %v", err)
+	}
+
+	got, ok := r.cache.Get(testName)
+	if !ok {
+		t.Fatal("an entry of unknown revision was thrown away on a refused write")
+	}
+	if !bytes.Equal(got, cached) {
+		t.Fatalf("entry = %q, want the one that was there: %q", got, cached)
 	}
 }
 

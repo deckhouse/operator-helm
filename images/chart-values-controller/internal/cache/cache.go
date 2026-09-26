@@ -183,20 +183,12 @@ func (c *Cache) reserve(name string, n int64) (int64, bool) {
 	return claim, true
 }
 
-// commit releases the reservation and records what the entry now occupies; an
-// overwrite gives back what the previous content took.
-func (c *Cache) commit(name string, n, claim int64, stored bool) {
+// release gives back a claim of a write that never reached the disk.
+func (c *Cache) release(claim int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.reserved -= claim
-	n = onDisk(n)
-	if !stored {
-		return
-	}
-
-	c.used += n - c.sizes[name]
-	c.sizes[name] = n
 }
 
 // Put stores content for a key, writing atomically via a unique temp file +
@@ -216,9 +208,14 @@ func (c *Cache) Put(key string, content []byte) error {
 		return fmt.Errorf("caching %s: %w", key, ErrBudgetExhausted)
 	}
 
+	// Releases the claim on every path that does not reach the rename below; the
+	// one that does records the entry itself, under the lock it renames beneath.
 	stored := false
-	// Runs after the lock below is released, since deferred calls unwind in reverse.
-	defer func() { c.commit(name, size, claim, stored) }()
+	defer func() {
+		if !stored {
+			c.release(claim)
+		}
+	}()
 
 	if err := os.MkdirAll(c.dir, 0o755); err != nil {
 		return fmt.Errorf("creating cache dir: %w", err)
@@ -241,16 +238,22 @@ func (c *Cache) Put(key string, content []byte) error {
 		return fmt.Errorf("closing cache entry: %w", err)
 	}
 
-	// The rename and the bookkeeping it implies happen together. They are two steps
-	// on one entry, and a Delete landing between them would subtract a file that is
-	// about to exist: the entry would stay on the volume, unaccounted, until the pod
-	// restarts. Writing the temp file, which is the slow part, stays outside.
+	// The rename and the bookkeeping it implies happen under one hold of the lock.
+	// They are two statements about one entry, and either order of interleaving with
+	// a Delete leaves them disagreeing: a delete between them subtracts a file that
+	// is about to exist, and the entry then sits on the volume unaccounted for until
+	// the pod restarts. Writing the temp file, which is the slow part, stays outside.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if err := os.Rename(tmpName, c.path(key)); err != nil {
 		return fmt.Errorf("committing cache entry: %w", err)
 	}
+
+	size = onDisk(size)
+	c.reserved -= claim
+	c.used += size - c.sizes[name]
+	c.sizes[name] = size
 	stored = true
 
 	return nil

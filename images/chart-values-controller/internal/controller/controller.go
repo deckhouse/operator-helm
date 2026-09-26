@@ -143,7 +143,8 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 		return
 	}
 
-	if r.lastDigest(name) == art.Digest {
+	known := r.lastDigest(name)
+	if known == art.Digest {
 		return
 	}
 
@@ -165,13 +166,21 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 			log.FromContext(ctx).Error(err, "failed to write cache entry", "name", name)
 		}
 
-		// Whatever is under this key belongs to the revision that was there before,
-		// and this pass ran precisely because that is no longer the current one.
-		// Serving it would answer with the values of an older chart under the
-		// version that was asked for, so it goes — which also gives the budget back
-		// the room the replacement needs.
-		if err := r.cache.Delete(name); err != nil {
-			log.FromContext(ctx).Error(err, "failed to drop a stale cache entry", "name", name)
+		// An entry known to belong to an older revision has to go: serving it would
+		// answer with the values of a chart that has since been republished, under
+		// the version that was asked for. Dropping it also gives the budget back the
+		// room the replacement needs.
+		//
+		// Only a revision this controller itself wrote is known to be older. An
+		// unknown digest — the entry was written by the resolver, which keeps no
+		// digests, or this container restarted and found the entry on the volume —
+		// says nothing about what is stored, and is the ordinary case rather than
+		// the exception. Deleting on that would have the controller throw away every
+		// entry the resolver caches as soon as the budget is tight.
+		if known != "" {
+			if err := r.cache.Delete(name); err != nil {
+				log.FromContext(ctx).Error(err, "failed to drop a stale cache entry", "name", name)
+			}
 		}
 
 		return
