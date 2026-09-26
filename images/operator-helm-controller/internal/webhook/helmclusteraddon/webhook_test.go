@@ -323,6 +323,17 @@ func TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged(t *testin
 			wantErr: true,
 		},
 		{
+			// The other half of the pair: moving the addon to another repository is a
+			// new claim just as much as moving it to another chart, and the annotation
+			// riding along must not excuse it.
+			name: "the annotation changed together with the repository reference",
+			mutate: func(addon *helmv1alpha1.HelmClusterAddon) {
+				addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "now"}
+				addon.Spec.Chart.HelmClusterAddonRepository = "testing"
+			},
+			wantErr: true,
+		},
+		{
 			name: "nothing about the annotation changed",
 			mutate: func(addon *helmv1alpha1.HelmClusterAddon) {
 				addon.Spec.Values = &apiextensionsv1.JSON{Raw: []byte(`{"a":1}`)}
@@ -341,6 +352,7 @@ func TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged(t *testin
 			v := newValidator(t,
 				addonUsing("incumbent", "stable", "redis"),
 				addonUsing("other-incumbent", "stable", "postgres"),
+				addonUsing("third-incumbent", "testing", "redis"),
 				oldAddon,
 			)
 
@@ -373,15 +385,35 @@ func TestUniquenessIsBypassedForTheControllerItself(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := newValidator(t, addonUsing("incumbent", "stable", "redis"))
+			t.Run("on create", func(t *testing.T) {
+				v := newValidator(t, addonUsing("incumbent", "stable", "redis"))
 
-			_, err := v.ValidateCreate(tt.ctx, addonUsing("newcomer", "stable", "redis"))
-			if tt.wantErr && err == nil {
-				t.Fatal("the duplicate must be refused for this user")
-			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("the controller's own write must pass, got %v", err)
-			}
+				_, err := v.ValidateCreate(tt.ctx, addonUsing("newcomer", "stable", "redis"))
+				if tt.wantErr && err == nil {
+					t.Fatal("the duplicate must be refused for this user")
+				}
+				if !tt.wantErr && err != nil {
+					t.Fatalf("the controller's own write must pass, got %v", err)
+				}
+			})
+
+			// UPDATE is the operation the controller actually performs — the status,
+			// the finalizer, the normalized chart reference are all updates — so the
+			// bypass has to hold there too. The reference moves onto the taken pair,
+			// which is what the force-reconcile exemption above does not cover.
+			t.Run("on update", func(t *testing.T) {
+				oldAddon := addonUsing("newcomer", "stable", "postgres")
+				newAddon := addonUsing("newcomer", "stable", "redis")
+				v := newValidator(t, addonUsing("incumbent", "stable", "redis"), oldAddon)
+
+				_, err := v.ValidateUpdate(tt.ctx, oldAddon, newAddon)
+				if tt.wantErr && err == nil {
+					t.Fatal("the duplicate must be refused for this user")
+				}
+				if !tt.wantErr && err != nil {
+					t.Fatalf("the controller's own write must pass, got %v", err)
+				}
+			})
 		})
 	}
 }

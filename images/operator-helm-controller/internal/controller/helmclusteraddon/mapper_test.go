@@ -18,6 +18,8 @@ package helmclusteraddon
 
 import (
 	"context"
+	"reflect"
+	"sort"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -53,6 +55,9 @@ func newChartMapperClient(t *testing.T, objects ...client.Object) client.Client 
 				addon.Spec.Chart.HelmClusterAddonChartName,
 			)}
 		}).
+		// The same function the manager registers, so the repository mapper's lookup
+		// is the one it performs in the cluster.
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonRepository, index.AddonRepositoryIndexer).
 		Build()
 }
 
@@ -100,6 +105,53 @@ func TestMapChartToAddonsEnqueuesTheClaimingAddon(t *testing.T) {
 	}
 	if requests[0].Name != addon.Name {
 		t.Fatalf("request name = %q, want %q", requests[0].Name, addon.Name)
+	}
+}
+
+// TestMapRepositoryToAddonsEnqueuesOnlyItsOwnConsumers pins the other hand-written
+// watch of this controller: a repository write must wake the addons installing from
+// that repository, whatever chart of it they use, and no one else. The addons are
+// cluster-scoped, so the request carries a name and no namespace.
+func TestMapRepositoryToAddonsEnqueuesOnlyItsOwnConsumers(t *testing.T) {
+	consumer := addonUsingChart("repo-a", "podinfo", "6.7.1")
+
+	other := addonUsingChart("repo-a", "redis", "1.0.0")
+	other.Name = "other-chart-same-repo"
+
+	stranger := addonUsingChart("repo-b", "podinfo", "6.7.1")
+	stranger.Name = "another-repo"
+
+	c := newChartMapperClient(t, consumer, other, stranger)
+
+	repository := &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "repo-a"}}
+
+	requests := mapRepositoryToAddons(c)(context.Background(), repository)
+
+	got := make([]string, 0, len(requests))
+	for _, request := range requests {
+		if request.Namespace != "" {
+			t.Fatalf("request %+v carries a namespace, the addons are cluster-scoped", request)
+		}
+		got = append(got, request.Name)
+	}
+	sort.Strings(got)
+
+	want := []string{"consumer", "other-chart-same-repo"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("enqueued %v, want %v", got, want)
+	}
+}
+
+// TestMapRepositoryToAddonsIgnoresAnUnrelatedRepository pins the empty case: a
+// repository nothing installs from must not enqueue the addons of other
+// repositories, which an index value of the wrong shape would do.
+func TestMapRepositoryToAddonsIgnoresAnUnrelatedRepository(t *testing.T) {
+	c := newChartMapperClient(t, addonUsingChart("repo-a", "podinfo", "6.7.1"))
+
+	repository := &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "repo-b"}}
+
+	if requests := mapRepositoryToAddons(c)(context.Background(), repository); len(requests) != 0 {
+		t.Fatalf("requests = %+v, want none", requests)
 	}
 }
 

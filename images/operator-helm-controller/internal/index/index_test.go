@@ -149,12 +149,28 @@ func TestApplicationChartIndexerNarrowsTheRepositoryKeyToOneChart(t *testing.T) 
 		})
 	}
 
-	repoKey := ApplicationRepositoryIndexer(applicationFixture("team-a",
+	// Two charts of one repository must key apart, or a write to one chart's catalog
+	// object would wake the applications of every other chart in that repository.
+	redisKey := ApplicationChartIndexer(applicationFixture("team-a",
 		helmv1alpha1.HelmApplicationChartRef{Repository: "stable", Name: "redis"}))[0]
-	chartKey := ApplicationChartIndexer(applicationFixture("team-a",
-		helmv1alpha1.HelmApplicationChartRef{Repository: "stable", Name: "redis"}))[0]
-	if chartKey == repoKey {
-		t.Fatalf("the chart key must be narrower than the repository key %q", repoKey)
+	postgresKey := ApplicationChartIndexer(applicationFixture("team-a",
+		helmv1alpha1.HelmApplicationChartRef{Repository: "stable", Name: "postgres"}))[0]
+	if redisKey == postgresKey {
+		t.Fatalf("two charts of one repository share the chart key %q", redisKey)
+	}
+
+	// The same cluster repository referenced from two namespaces must key the same.
+	// The lookup side has no namespace to offer: mapChartToApplications keys by the
+	// catalog object's own namespace, which is empty for the cluster-scoped
+	// HelmClusterApplicationChart, and ListApplicationReleases by the repository's,
+	// equally empty. A key carrying the consumer's namespace would therefore match
+	// nothing and a cluster repository could never reach its applications.
+	teamAKey := ApplicationChartIndexer(applicationFixture("team-a",
+		helmv1alpha1.HelmApplicationChartRef{ClusterRepository: "stable", Name: "redis"}))[0]
+	teamBKey := ApplicationChartIndexer(applicationFixture("team-b",
+		helmv1alpha1.HelmApplicationChartRef{ClusterRepository: "stable", Name: "redis"}))[0]
+	if teamAKey != teamBKey {
+		t.Fatalf("one cluster chart reference keys differently per namespace: %q and %q", teamAKey, teamBKey)
 	}
 }
 
