@@ -109,6 +109,12 @@ type Resolver struct {
 	sourceInterval   metav1.Duration
 	maxArtifactBytes int64
 	prober           chartartifact.Prober
+
+	// downloads collapses concurrent cache misses on one key into a single
+	// download and extraction. It is keyed exactly like the cache, so two
+	// repositories that happen to share a name — different identities, different
+	// entries — never wait on each other.
+	downloads inflight
 }
 
 func New(c client.Client, valuesCache *cache.Cache, httpClient *http.Client, namespace string, ttl, sourceInterval time.Duration, maxArtifactBytes int64) *Resolver {
@@ -325,20 +331,49 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 	return r.readValues(ctx, name, art)
 }
 
+// readValues downloads the artifact and returns the chart's values.yaml, caching
+// it under the same key the next request will look it up by. The download and the
+// extraction run once per key however many requests miss the cache together: the
+// artifact a key names is one artifact, so the rest are handed the same bytes
+// instead of fetching and unpacking their own copy of it.
 func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact) (Result, error) {
-	values, err := artifact.FetchValues(ctx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
+	values, shared, err := r.downloads.do(ctx, name, func() ([]byte, error) {
+		values, err := artifact.FetchValues(ctx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := r.cache.Put(name, values); err != nil {
+			log.FromContext(ctx).Error(err, "failed to cache values.yaml")
+		}
+
+		return values, nil
+	})
 	if err != nil {
 		if errors.Is(err, artifact.ErrValuesNotFound) {
 			return Result{Outcome: OutcomeValuesNotFound, Message: "chart has no values.yaml"}, nil
 		}
+
+		// A shared call that ended on a clock — its leader's or this waiter's own —
+		// says nothing about the chart, so the client is told to retry rather than
+		// that the artifact could not be fetched. Its own budget is consulted by the
+		// handler, which answers a timed-out request itself.
+		if shared && isTransient(err) {
+			return Result{Outcome: OutcomePending}, nil
+		}
+
 		return Result{Outcome: OutcomeFetchFailed, Message: err.Error()}, nil
 	}
 
-	if err := r.cache.Put(name, values); err != nil {
-		log.FromContext(ctx).Error(err, "failed to cache values.yaml")
-	}
-
 	return Result{Outcome: OutcomeReady, Values: values}, nil
+}
+
+// isTransient reports whether an error only describes how a call ended, rather
+// than anything about the artifact it was fetching.
+func isTransient(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, errCallAborted)
 }
 
 func (r *Resolver) ensureHelmChart(ctx context.Context, family repositoryFamily, req Request, name, expiresAt string) (*sourcev1.HelmChart, bool, error) {

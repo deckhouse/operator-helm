@@ -27,6 +27,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -694,4 +696,124 @@ func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
 	if got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
 		t.Fatalf("got %+v, want the cached entry: a status write must not cost a re-download", got)
 	}
+}
+
+// TestConcurrentMissesFetchTheArtifactOnce is the request-level statement of what
+// the in-flight group buys: /v1/chart-values is polled, so a chart the console is
+// waiting on is asked for repeatedly and concurrently. Every one of those requests
+// misses the cache until the first of them has written it, and each miss used to
+// mean a full download and a full gzip walk of the identical artifact.
+func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
+	archive := buildValuesArchive(t, "replicaCount: 1\n")
+
+	tests := []struct {
+		name        string
+		key         func(caller int) string
+		wantFetches int64
+	}{
+		{
+			name:        "the same chart of the same repository is downloaded once",
+			key:         func(int) string { return "entry" },
+			wantFetches: 1,
+		},
+		{
+			// The key carries the repository's identity, so charts that differ in
+			// nothing but which repository they came from are separate artifacts and
+			// must not wait on each other.
+			name:        "charts under different keys are downloaded independently",
+			key:         func(caller int) string { return fmt.Sprintf("entry-%d", caller) },
+			wantFetches: 4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const callers = 4
+
+			var fetches atomic.Int64
+			release := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				fetches.Add(1)
+				// Hold the response until every caller has had its chance to join
+				// the download in flight.
+				<-release
+				_, _ = w.Write(archive)
+			}))
+			t.Cleanup(srv.Close)
+
+			art := &meta.Artifact{URL: srv.URL, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archive))}
+
+			r := &Resolver{
+				cache:            cache.New(t.TempDir()),
+				httpClient:       srv.Client(),
+				maxArtifactBytes: 1 << 20,
+			}
+
+			entered := make(chan struct{}, callers)
+			results := make([]Result, callers)
+
+			var wg sync.WaitGroup
+			for i := range callers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+
+					entered <- struct{}{}
+					got, err := r.readValues(context.Background(), tt.key(i), art)
+					if err != nil {
+						t.Errorf("caller %d: readValues returned %v", i, err)
+						return
+					}
+					results[i] = got
+				}()
+			}
+
+			for range callers {
+				<-entered
+			}
+			time.Sleep(entryWindow)
+			close(release)
+			wg.Wait()
+
+			if got := fetches.Load(); got != tt.wantFetches {
+				t.Fatalf("the artifact was downloaded %d times, want %d", got, tt.wantFetches)
+			}
+
+			for i, got := range results {
+				if got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
+					t.Fatalf("caller %d got %+v, want the chart's values", i, got)
+				}
+			}
+		})
+	}
+}
+
+// buildValuesArchive packs a chart archive holding nothing but values.yaml.
+func buildValuesArchive(t *testing.T, values string) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     "podinfo/values.yaml",
+		Mode:     0o644,
+		Size:     int64(len(values)),
+		Typeflag: tar.TypeReg,
+	}); err != nil {
+		t.Fatalf("writing tar header: %v", err)
+	}
+	if _, err := tw.Write([]byte(values)); err != nil {
+		t.Fatalf("writing tar content: %v", err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("closing tar: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("closing gzip: %v", err)
+	}
+
+	return buf.Bytes()
 }
