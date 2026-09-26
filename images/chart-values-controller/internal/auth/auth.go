@@ -19,12 +19,14 @@ package auth
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	authnv1 "k8s.io/api/authentication/v1"
 	authzv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	authnclientv1 "k8s.io/client-go/kubernetes/typed/authentication/v1"
 	authzclientv1 "k8s.io/client-go/kubernetes/typed/authorization/v1"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // Access is the resource permission a request must hold. It maps directly onto a
@@ -48,13 +50,24 @@ type Result struct {
 
 // Reviewer authenticates bearer tokens via TokenReview and authorizes the
 // resulting subject via SubjectAccessReview.
+// audiences, when set, are the audiences a token has to be valid for. They are
+// sent to the API server and re-checked against what it answers with, so a token
+// minted for some other recipient — another service the caller also talks to —
+// cannot be replayed here. Empty means no audience is required and the API
+// server falls back to its own default audience, which accepts any valid token
+// of the cluster.
 type Reviewer struct {
 	tokenReviews  authnclientv1.TokenReviewInterface
 	accessReviews authzclientv1.SubjectAccessReviewInterface
+	audiences     []string
 }
 
-func New(tokenReviews authnclientv1.TokenReviewInterface, accessReviews authzclientv1.SubjectAccessReviewInterface) *Reviewer {
-	return &Reviewer{tokenReviews: tokenReviews, accessReviews: accessReviews}
+func New(tokenReviews authnclientv1.TokenReviewInterface, accessReviews authzclientv1.SubjectAccessReviewInterface, audiences []string) *Reviewer {
+	return &Reviewer{
+		tokenReviews:  tokenReviews,
+		accessReviews: accessReviews,
+		audiences:     slices.Clone(audiences),
+	}
 }
 
 // Review authenticates the token and, if authentication succeeds, checks whether
@@ -62,12 +75,23 @@ func New(tokenReviews authnclientv1.TokenReviewInterface, accessReviews authzcli
 // internal failure; expected states are reported via Result.
 func (r *Reviewer) Review(ctx context.Context, token string, access Access) (Result, error) {
 	reviewed, err := r.tokenReviews.Create(ctx, &authnv1.TokenReview{
-		Spec: authnv1.TokenReviewSpec{Token: token},
+		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: slices.Clone(r.audiences)},
 	}, metav1.CreateOptions{})
 	if err != nil {
 		return Result{}, fmt.Errorf("creating token review: %w", err)
 	}
 	if !reviewed.Status.Authenticated {
+		return Result{Authenticated: false}, nil
+	}
+	// status.Audiences is the intersection of what was asked for and what the
+	// token is actually valid for, so an empty one means the token was minted for
+	// somebody else even though it authenticated.
+	if len(r.audiences) > 0 && !slices.ContainsFunc(r.audiences, func(want string) bool {
+		return slices.Contains(reviewed.Status.Audiences, want)
+	}) {
+		log.FromContext(ctx).Info("token rejected: it is not issued for this service",
+			"want", r.audiences, "got", reviewed.Status.Audiences, "user", reviewed.Status.User.Username)
+
 		return Result{Authenticated: false}, nil
 	}
 

@@ -20,6 +20,7 @@ import (
 	"flag"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
@@ -42,6 +43,20 @@ import (
 
 const artifactDownloadTimeout = 60 * time.Second
 
+// splitAudiences turns the comma-separated flag value into the audience list a
+// TokenReview carries, dropping blanks so a trailing comma or an empty value
+// does not turn into an audience nothing can ever match.
+func splitAudiences(value string) []string {
+	var audiences []string
+	for _, audience := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(audience); trimmed != "" {
+			audiences = append(audiences, trimmed)
+		}
+	}
+
+	return audiences
+}
+
 var scheme = runtime.NewScheme()
 
 func init() {
@@ -61,6 +76,7 @@ func main() {
 		cacheTTL        time.Duration
 		sourceInterval  time.Duration
 		maxChartSizeMB  int
+		tokenAudiences  string
 	)
 
 	// Metrics stay on the loopback interface: the kube-rbac-proxy sidecar is the
@@ -75,6 +91,11 @@ func main() {
 	flag.DurationVar(&cacheTTL, "chart-values-cache-ttl", time.Hour, "Lifetime of auxiliary source resources and their cache entries; refreshed on each request.")
 	flag.DurationVar(&sourceInterval, "source-interval", 10*time.Minute, "Reconcile interval set on auxiliary source resources.")
 	flag.IntVar(&maxChartSizeMB, "max-chart-size-mb", 100, "Maximum accepted chart artifact size in MiB; larger artifacts are rejected.")
+	// Empty by default, which keeps the API server checking the token against its
+	// own default audience — any valid ServiceAccount token of the cluster passes,
+	// including one minted for a different recipient. Set it once every client is
+	// known to project a token for this service, and only such tokens are accepted.
+	flag.StringVar(&tokenAudiences, "api-token-audience", "", "Comma-separated audiences a bearer token of the chart-values HTTP API must be issued for; empty accepts any token the API server authenticates.")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -114,6 +135,7 @@ func main() {
 	reviewer := auth.New(
 		clientset.AuthenticationV1().TokenReviews(),
 		clientset.AuthorizationV1().SubjectAccessReviews(),
+		splitAudiences(tokenAudiences),
 	)
 
 	valuesCache := cache.New(cacheDir)
@@ -150,6 +172,10 @@ func main() {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		logger.Error(err, "unable to set up ready check")
 		os.Exit(1)
+	}
+
+	if audiences := splitAudiences(tokenAudiences); len(audiences) > 0 {
+		logger.Info("requiring an audience on API tokens", "audiences", audiences)
 	}
 
 	logger.Info("starting manager")

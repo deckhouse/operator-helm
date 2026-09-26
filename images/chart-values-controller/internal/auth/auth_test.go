@@ -49,7 +49,7 @@ func TestReviewCarriesTheNamespaceIntoTheAccessReview(t *testing.T) {
 		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
 	})
 
-	reviewer := New(clientset.AuthenticationV1().TokenReviews(), clientset.AuthorizationV1().SubjectAccessReviews())
+	reviewer := New(clientset.AuthenticationV1().TokenReviews(), clientset.AuthorizationV1().SubjectAccessReviews(), nil)
 
 	result, err := reviewer.Review(context.Background(), "token", Access{
 		Group:     "helm.deckhouse.io",
@@ -73,5 +73,104 @@ func TestReviewCarriesTheNamespaceIntoTheAccessReview(t *testing.T) {
 	}
 	if recorded.Spec.User != "alice" || len(recorded.Spec.Groups) != 1 {
 		t.Fatalf("subject = %q groups %v, want the reviewed identity", recorded.Spec.User, recorded.Spec.Groups)
+	}
+}
+
+// reviewerFor wires a Reviewer onto a clientset whose TokenReview answers with
+// status, records the review that was sent, and allows every access review, so a
+// test only has to say what the API server knows about the token.
+func reviewerFor(t *testing.T, audiences []string, status authnv1.TokenReviewStatus) (*Reviewer, **authnv1.TokenReview) {
+	t.Helper()
+
+	clientset := fake.NewClientset()
+	recorded := new(*authnv1.TokenReview)
+
+	clientset.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		*recorded = action.(k8stesting.CreateAction).GetObject().(*authnv1.TokenReview)
+
+		return true, &authnv1.TokenReview{Status: status}, nil
+	})
+	clientset.PrependReactor("create", "subjectaccessreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
+	})
+
+	return New(clientset.AuthenticationV1().TokenReviews(), clientset.AuthorizationV1().SubjectAccessReviews(), audiences), recorded
+}
+
+var testAccess = Access{Group: "helm.deckhouse.io", Resource: "helmclusteraddons", Verb: "create"}
+
+// TestReviewAcceptsATokenIssuedForTheConfiguredAudience pins both halves of the
+// audience check: the audience is asked for in the TokenReview, and a token the
+// API server confirms it for is accepted.
+func TestReviewAcceptsATokenIssuedForTheConfiguredAudience(t *testing.T) {
+	reviewer, recorded := reviewerFor(t, []string{"chart-values-api"}, authnv1.TokenReviewStatus{
+		Authenticated: true,
+		Audiences:     []string{"chart-values-api"},
+		User:          authnv1.UserInfo{Username: "alice"},
+	})
+
+	result, err := reviewer.Review(context.Background(), "token", testAccess)
+	if err != nil {
+		t.Fatalf("Review returned %v", err)
+	}
+	if !result.Authenticated || !result.Authorized {
+		t.Fatalf("result = %+v, want an authenticated and authorized caller", result)
+	}
+	if *recorded == nil {
+		t.Fatal("no TokenReview was created")
+	}
+	if got := (*recorded).Spec.Audiences; len(got) != 1 || got[0] != "chart-values-api" {
+		t.Fatalf("requested audiences = %v, want the configured one", got)
+	}
+}
+
+// TestReviewRejectsATokenIssuedForAnotherAudience is the point of the check: a
+// token the cluster happily authenticates, but which was minted for a different
+// recipient, must not pass as authentication here.
+func TestReviewRejectsATokenIssuedForAnotherAudience(t *testing.T) {
+	for name, status := range map[string]authnv1.TokenReviewStatus{
+		"no audience confirmed": {
+			Authenticated: true,
+			User:          authnv1.UserInfo{Username: "alice"},
+		},
+		"another audience confirmed": {
+			Authenticated: true,
+			Audiences:     []string{"some-other-service"},
+			User:          authnv1.UserInfo{Username: "alice"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reviewer, _ := reviewerFor(t, []string{"chart-values-api"}, status)
+
+			result, err := reviewer.Review(context.Background(), "token", testAccess)
+			if err != nil {
+				t.Fatalf("Review returned %v", err)
+			}
+			if result.Authenticated || result.Authorized {
+				t.Fatalf("result = %+v, want the token rejected as unauthenticated", result)
+			}
+		})
+	}
+}
+
+// TestReviewWithoutAConfiguredAudienceAsksForNone keeps the default behaviour
+// explicit: nothing is required of the token beyond what the API server checks
+// against its own default audience, which is what clients rely on today.
+func TestReviewWithoutAConfiguredAudienceAsksForNone(t *testing.T) {
+	reviewer, recorded := reviewerFor(t, nil, authnv1.TokenReviewStatus{
+		Authenticated: true,
+		Audiences:     []string{"https://kubernetes.default.svc.cluster.local"},
+		User:          authnv1.UserInfo{Username: "alice"},
+	})
+
+	result, err := reviewer.Review(context.Background(), "token", testAccess)
+	if err != nil {
+		t.Fatalf("Review returned %v", err)
+	}
+	if !result.Authenticated || !result.Authorized {
+		t.Fatalf("result = %+v, want the token accepted", result)
+	}
+	if got := (*recorded).Spec.Audiences; len(got) != 0 {
+		t.Fatalf("requested audiences = %v, want none", got)
 	}
 }
