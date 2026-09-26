@@ -10,14 +10,20 @@ metadata:
     ru.meta.deckhouse.io/description: "Доступ только на чтение к конфигурации модуля {{ .Chart.Name }}."
   {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "system-capability.%s.view" .Chart.Name) "rbac.deckhouse.io/scope" "system" "rbac.deckhouse.io/namespace" (printf "d8-%s" .Chart.Name) "rbac.deckhouse.io/aggregate-to-delivery-as" "viewer")) | nindent 2 }}
 rules:
+# Both cluster-scoped repository kinds are deliberately absent, here and in the edit
+# capability, so no capability of this module exposes them at all. A repository keeps
+# its registry credentials in the spec itself (spec.auth.password, there is no
+# secretRef), so reading one is reading the password, and this capability aggregates
+# into a delivery-subsystem role that is not a cluster administrator. The legacy model
+# keeps both reading and writing a cluster-scoped repository at ClusterAdmin; the same
+# split here means a cluster administrator is the only one who sees them. The chart
+# catalogs below stay readable: they are controller-written and carry no credentials.
 - apiGroups:
   - helm.deckhouse.io
   resources:
   - helmclusteraddoncharts
-  - helmclusteraddonrepositories
   - helmclusteraddons
   - helmclusterapplicationcharts
-  - helmclusterapplicationrepositories
   verbs:
   - get
   - list
