@@ -39,10 +39,95 @@ var ErrValuesNotFound = errors.New("values.yaml not found in chart archive")
 // source.
 var ErrArtifactTooLarge = errors.New("chart artifact exceeds the configured size limit")
 
+// ErrArtifactTooManyEntries is returned when a chart archive holds more files
+// than any chart plausibly does. Entry headers cost time rather than memory, so
+// the byte budget alone does not bound them.
+var ErrArtifactTooManyEntries = errors.New("chart archive holds too many entries")
+
+const (
+	// maxArchiveEntries bounds how many tar entries are walked before the archive
+	// is refused. A packaged chart — templates, CRDs and every vendored subchart —
+	// stays in the hundreds, so this is roughly an order of magnitude of headroom
+	// over the largest real chart and still refuses an archive built purely of
+	// headers.
+	maxArchiveEntries = 10_000
+
+	// maxDecompressionRatio bounds the whole decompressed stream at a multiple of
+	// the archive it came from. A chart is text, and text gzips well — a chart of
+	// repetitive templates and CRDs reaches ratios around ten — so this leaves a
+	// legitimate chart room while refusing the bomb, whose ratio runs into the
+	// thousands.
+	maxDecompressionRatio = 50
+
+	// minDecompressedBytes is the floor under that bound: gzip's own framing makes
+	// the ratio of a very small archive meaningless, and every real chart fits
+	// here anyway. It has to clear what maxArchiveEntries entries cost in tar
+	// headers alone (512 bytes each, about 5 MiB), or the byte bound would refuse
+	// an archive of many small files before the entry bound ever judged it.
+	minDecompressedBytes = 8 << 20
+
+	// maxDecompressedBytes is the ceiling over it, so an archive near the
+	// configured artifact size cannot license a multi-gigabyte read on the ratio
+	// alone.
+	maxDecompressedBytes = 512 << 20
+)
+
+// boundedReader is the decompressed side of the archive: it caps how many bytes
+// may be pulled out of the gzip stream in total and aborts as soon as ctx is
+// done. It sits between gzip and tar rather than around a single entry, so the
+// bytes of entries the walk skips over count too — skipping still decompresses
+// them — and a cancelled request stops mid-copy instead of at the next header.
+type boundedReader struct {
+	ctx   context.Context
+	r     io.Reader
+	limit int64
+	read  int64
+}
+
+func (b *boundedReader) Read(p []byte) (int, error) {
+	if err := b.ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	if b.read > b.limit {
+		return 0, b.tooLarge()
+	}
+
+	// Read one byte past the limit, so reaching it exactly is still a complete
+	// archive and only the next byte is a breach.
+	if remaining := b.limit + 1 - b.read; remaining < int64(len(p)) {
+		p = p[:remaining]
+	}
+
+	n, err := b.r.Read(p)
+	b.read += int64(n)
+	if b.read > b.limit {
+		return n, b.tooLarge()
+	}
+
+	return n, err
+}
+
+func (b *boundedReader) tooLarge() error {
+	return fmt.Errorf("%w (decompressed > %d bytes)", ErrArtifactTooLarge, b.limit)
+}
+
+// decompressedLimit is the total the archive of compressed bytes may expand to.
+// The division keeps the multiplication from overflowing on an absurd limit.
+func decompressedLimit(compressed int64) int64 {
+	if compressed > maxDecompressedBytes/maxDecompressionRatio {
+		return maxDecompressedBytes
+	}
+
+	return max(compressed*maxDecompressionRatio, minDecompressedBytes)
+}
+
 // FetchValues downloads the chart artifact from url, verifies its integrity
 // against digest (format "sha256:<hex>"), and returns the raw bytes of the
 // chart's top-level values.yaml. Artifacts larger than maxBytes are rejected
-// with ErrArtifactTooLarge.
+// with ErrArtifactTooLarge, as are archives that decompress past
+// decompressedLimit or hold more than maxArchiveEntries entries. Extraction
+// stops as soon as ctx is done.
 func FetchValues(ctx context.Context, httpClient *http.Client, url, digest string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -77,7 +162,7 @@ func FetchValues(ctx context.Context, httpClient *http.Client, url, digest strin
 		return nil, err
 	}
 
-	return extractValues(data, maxBytes)
+	return extractValues(ctx, data, maxBytes)
 }
 
 func verifyDigest(data []byte, digest string) error {
@@ -94,21 +179,38 @@ func verifyDigest(data []byte, digest string) error {
 	return nil
 }
 
-func extractValues(data []byte, maxBytes int64) ([]byte, error) {
+func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("opening gzip stream: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
 
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(&boundedReader{ctx: ctx, r: gz, limit: decompressedLimit(int64(len(data)))})
 
-	for {
+	for entries := 0; ; entries++ {
+		// The byte budget is only consulted while bytes move; a header-only entry
+		// moves almost none, so cancellation is checked here as well.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		if entries >= maxArchiveEntries {
+			return nil, fmt.Errorf("%w (more than %d)", ErrArtifactTooManyEntries, maxArchiveEntries)
+		}
+
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
+			if errors.Is(err, ErrArtifactTooLarge) || errors.Is(err, context.Canceled) ||
+				errors.Is(err, context.DeadlineExceeded) {
+				// The reader's own verdict, reported as itself: wrapping it as a tar
+				// failure would read as a broken chart rather than a refused one.
+				return nil, err
+			}
+
 			return nil, fmt.Errorf("reading tar stream: %w", err)
 		}
 
@@ -124,6 +226,11 @@ func extractValues(data []byte, maxBytes int64) ([]byte, error) {
 			// into an oversized values.yaml (decompression bomb).
 			content, err := io.ReadAll(io.LimitReader(tr, maxBytes+1))
 			if err != nil {
+				if errors.Is(err, ErrArtifactTooLarge) || errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded) {
+					return nil, err
+				}
+
 				return nil, fmt.Errorf("reading values.yaml: %w", err)
 			}
 			if int64(len(content)) > maxBytes {

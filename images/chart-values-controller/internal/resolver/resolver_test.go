@@ -17,12 +17,20 @@ limitations under the License.
 package resolver
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -461,6 +469,88 @@ func TestClusterScopedRequestsIgnoreAStrayNamespace(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReadValuesCachesNothingFromARefusedArchive pins what a refused extraction
+// must leave behind: nothing. A cache entry is what every later request is served
+// from without any check of its own, so half of an archive that was never accepted
+// reaching the disk would outlive the request that fetched it.
+func TestReadValuesCachesNothingFromARefusedArchive(t *testing.T) {
+	// A few kilobytes on the wire that walk into tens of megabytes: the archive
+	// the total budget exists for.
+	archive := buildBombArchive(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	r := &Resolver{
+		cache:            cache.New(dir),
+		httpClient:       srv.Client(),
+		maxArtifactBytes: 100 << 20,
+	}
+
+	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{
+		URL:    srv.URL,
+		Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archive)),
+	})
+	if err != nil {
+		t.Fatalf("readValues returned %v", err)
+	}
+	if got.Outcome != OutcomeFetchFailed {
+		t.Fatalf("outcome = %q, want fetch_failed (message %q)", got.Outcome, got.Message)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading cache dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cache holds %d entries, want none: a refused archive must not be served to the next request", len(entries))
+	}
+}
+
+// buildBombArchive packs a large, highly compressible file ahead of values.yaml,
+// so reaching the values means walking past the budget.
+func buildBombArchive(t *testing.T) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+
+	files := []struct {
+		name    string
+		content []byte
+	}{
+		{"podinfo/big.bin", make([]byte, 64<<20)},
+		{"podinfo/values.yaml", []byte("replicaCount: 1\n")},
+	}
+
+	for _, file := range files {
+		if err := tw.WriteHeader(&tar.Header{
+			Name:     file.name,
+			Mode:     0o644,
+			Size:     int64(len(file.content)),
+			Typeflag: tar.TypeReg,
+		}); err != nil {
+			t.Fatalf("writing tar header: %v", err)
+		}
+		if _, err := tw.Write(file.content); err != nil {
+			t.Fatalf("writing tar content: %v", err)
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("closing tar: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("closing gzip: %v", err)
+	}
+
+	return buf.Bytes()
 }
 
 func mustFamily(t *testing.T, kind RepositoryKind) repositoryFamily {
