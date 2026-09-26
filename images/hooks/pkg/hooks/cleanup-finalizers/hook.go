@@ -31,76 +31,97 @@ import (
 	"hooks/pkg/settings"
 )
 
-const (
-	internalHelmReleaseSnapshotName    = "internalHelmReleaseSnapshot"
-	internalHelmChartSnapshotName      = "internalHelmChartSnapshot"
-	internalHelmRepositorySnapshotName = "internalHelmRepositorySnapshot"
-	internalOCIRepositorySnapshotName  = "internalOCIRepositorySnapshot"
-)
+// publicAPIVersion carries the module's own kinds; every kind listed below is guarded
+// by the helm.deckhouse.io/cleanup finalizer, which only our controller ever removes.
+// Once the module is gone nothing is left to remove it, so the hook has to.
+const publicAPIVersion = "helm.deckhouse.io/v1alpha1"
 
+// watchedKind is one kind the hook strips finalizers from. A kind is either
+// confined to the module namespace (the internal flux objects, which are always
+// created there) or unconfined: cluster-scoped kinds have no namespace at all and
+// the namespaced public kinds live in arbitrary user namespaces.
+type watchedKind struct {
+	snapshot   string
+	apiVersion string
+	kind       string
+	// moduleNamespaceOnly narrows the binding to settings.ModuleNamespace.
+	moduleNamespaceOnly bool
+}
+
+var watchedKinds = []watchedKind{
+	{
+		snapshot:            "internalHelmReleaseSnapshot",
+		apiVersion:          "helm.internal.operator-helm.deckhouse.io/v2",
+		kind:                "InternalNelmOperatorHelmRelease",
+		moduleNamespaceOnly: true,
+	},
+	{
+		snapshot:            "internalHelmChartSnapshot",
+		apiVersion:          "source.internal.operator-helm.deckhouse.io/v1",
+		kind:                "InternalNelmOperatorHelmChart",
+		moduleNamespaceOnly: true,
+	},
+	{
+		snapshot:            "internalHelmRepositorySnapshot",
+		apiVersion:          "source.internal.operator-helm.deckhouse.io/v1",
+		kind:                "InternalNelmOperatorHelmRepository",
+		moduleNamespaceOnly: true,
+	},
+	{
+		snapshot:            "internalOCIRepositorySnapshot",
+		apiVersion:          "source.internal.operator-helm.deckhouse.io/v1",
+		kind:                "InternalNelmOperatorOCIRepository",
+		moduleNamespaceOnly: true,
+	},
+	{snapshot: "helmApplicationSnapshot", apiVersion: publicAPIVersion, kind: "HelmApplication"},
+	{snapshot: "helmApplicationRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmApplicationRepository"},
+	{snapshot: "helmClusterAddonSnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterAddon"},
+	{snapshot: "helmClusterAddonRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterAddonRepository"},
+	{snapshot: "helmClusterApplicationRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterApplicationRepository"},
+}
+
+// resource is the snapshot projection: enough to address the object in a patch.
+// Namespace is empty for cluster-scoped kinds, which is exactly what the patch
+// collector expects for them.
 type resource struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
 	Name       string `json:"name"`
+	Namespace  string `json:"namespace"`
+}
+
+func kubernetesConfigs() []pkg.KubernetesConfig {
+	configs := make([]pkg.KubernetesConfig, 0, len(watchedKinds))
+
+	for _, watched := range watchedKinds {
+		config := pkg.KubernetesConfig{
+			Name:       watched.snapshot,
+			APIVersion: watched.apiVersion,
+			Kind:       watched.kind,
+			JqFilter:   `{apiVersion: .apiVersion, kind: .kind, name: .metadata.name, namespace: .metadata.namespace}`,
+			// The hook only ever runs on module delete, so tracking events is pointless.
+			ExecuteHookOnEvents:          ptr.To(false),
+			ExecuteHookOnSynchronization: ptr.To(false),
+		}
+
+		if watched.moduleNamespaceOnly {
+			config.NamespaceSelector = &pkg.NamespaceSelector{
+				NameSelector: &pkg.NameSelector{
+					MatchNames: []string{settings.ModuleNamespace},
+				},
+			}
+		}
+
+		configs = append(configs, config)
+	}
+
+	return configs
 }
 
 var _ = registry.RegisterFunc(&pkg.HookConfig{
 	OnAfterDeleteHelm: &pkg.OrderedConfig{Order: 10},
 	AllowFailure:      false,
-	Kubernetes: []pkg.KubernetesConfig{
-		{
-			Name:       internalHelmReleaseSnapshotName,
-			APIVersion: "helm.internal.operator-helm.deckhouse.io/v2",
-			Kind:       "InternalNelmOperatorHelmRelease",
-			JqFilter:   `{apiVersion: .apiVersion, kind: .kind, name: .metadata.name}`,
-			NamespaceSelector: &pkg.NamespaceSelector{
-				NameSelector: &pkg.NameSelector{
-					MatchNames: []string{settings.ModuleNamespace},
-				},
-			},
-			ExecuteHookOnEvents:          ptr.To(false),
-			ExecuteHookOnSynchronization: ptr.To(false),
-		},
-		{
-			Name:       internalHelmChartSnapshotName,
-			APIVersion: "source.internal.operator-helm.deckhouse.io/v1",
-			Kind:       "InternalNelmOperatorHelmChart",
-			JqFilter:   `{apiVersion: .apiVersion, kind: .kind, name: .metadata.name}`,
-			NamespaceSelector: &pkg.NamespaceSelector{
-				NameSelector: &pkg.NameSelector{
-					MatchNames: []string{settings.ModuleNamespace},
-				},
-			},
-			ExecuteHookOnEvents:          ptr.To(false),
-			ExecuteHookOnSynchronization: ptr.To(false),
-		},
-		{
-			Name:       internalHelmRepositorySnapshotName,
-			APIVersion: "source.internal.operator-helm.deckhouse.io/v1",
-			Kind:       "InternalNelmOperatorHelmRepository",
-			JqFilter:   `{apiVersion: .apiVersion, kind: .kind, name: .metadata.name}`,
-			NamespaceSelector: &pkg.NamespaceSelector{
-				NameSelector: &pkg.NameSelector{
-					MatchNames: []string{settings.ModuleNamespace},
-				},
-			},
-			ExecuteHookOnEvents:          ptr.To(false),
-			ExecuteHookOnSynchronization: ptr.To(false),
-		},
-		{
-			Name:       internalOCIRepositorySnapshotName,
-			APIVersion: "source.internal.operator-helm.deckhouse.io/v1",
-			Kind:       "InternalNelmOperatorOCIRepository",
-			JqFilter:   `{apiVersion: .apiVersion, kind: .kind, name: .metadata.name}`,
-			NamespaceSelector: &pkg.NamespaceSelector{
-				NameSelector: &pkg.NameSelector{
-					MatchNames: []string{settings.ModuleNamespace},
-				},
-			},
-			ExecuteHookOnEvents:          ptr.To(false),
-			ExecuteHookOnSynchronization: ptr.To(false),
-		},
-	},
+	Kubernetes:        kubernetesConfigs(),
 }, cleanupFinalizer)
 
 func cleanupFinalizer(ctx context.Context, input *pkg.HookInput) error {
@@ -118,34 +139,31 @@ func cleanupFinalizer(ctx context.Context, input *pkg.HookInput) error {
 		return fmt.Errorf("namespace %s still has running deployments or pods, retrying before removing finalizers", settings.ModuleNamespace)
 	}
 
-	removeFinalizers := func(apiVersion, kind, name string) {
-		input.PatchCollector.PatchWithJSON(
-			[]map[string]any{
-				{"op": "remove", "path": "/metadata/finalizers", "value": nil},
-			},
-			apiVersion,
-			kind,
-			settings.ModuleNamespace,
-			name,
+	// A merge patch (RFC 7396) that nulls the member removes every finalizer and stays
+	// a no-op on an object that has none. A JSON patch "remove" of /metadata/finalizers
+	// would instead fail on such an object, and WithIgnoreMissingObject only forgives a
+	// missing object, not a missing path. The hook may well run twice — a teardown can be
+	// retried after a transient failure, and the first pass leaves objects it patched but
+	// could not observe being deleted — so it has to survive a repeat.
+	removeFinalizers := func(res resource) {
+		input.PatchCollector.PatchWithMerge(
+			map[string]any{"metadata": map[string]any{"finalizers": nil}},
+			res.APIVersion,
+			res.Kind,
+			res.Namespace,
+			res.Name,
 			objectpatch.WithIgnoreMissingObject(true),
 		)
 	}
 
-	snapshots := []string{
-		internalHelmReleaseSnapshotName,
-		internalHelmChartSnapshotName,
-		internalHelmRepositorySnapshotName,
-		internalOCIRepositorySnapshotName,
-	}
-
-	for _, snapshot := range snapshots {
-		resources, err := objectpatch.UnmarshalToStruct[resource](input.Snapshots, snapshot)
+	for _, watched := range watchedKinds {
+		resources, err := objectpatch.UnmarshalToStruct[resource](input.Snapshots, watched.snapshot)
 		if err != nil {
-			return errors.Wrap(err, "failed to get "+snapshot+" snapshot resources")
+			return errors.Wrap(err, "failed to get "+watched.snapshot+" snapshot resources")
 		}
 
 		for _, res := range resources {
-			removeFinalizers(res.APIVersion, res.Kind, res.Name)
+			removeFinalizers(res)
 		}
 	}
 
