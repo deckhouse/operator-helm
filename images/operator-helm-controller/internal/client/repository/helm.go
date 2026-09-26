@@ -18,7 +18,9 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -36,6 +38,34 @@ import (
 var HelmRepositoryDefaultClient ClientInterface = &helmRepositoryClient{}
 
 type helmRepositoryClient struct{}
+
+// The limits below are variables rather than constants for one reason: the tests
+// that pin this behaviour would otherwise have to wait out real minutes or stream
+// real megabytes. Nothing outside this package writes them.
+var (
+	// indexAttemptTimeout bounds one attempt — connect, respond and hand over the
+	// whole index — on its own. A shared deadline for all attempts is what made the
+	// retries decorative: against a slow mirror the first attempt drank the entire
+	// budget and the backoff had nothing left to retry with.
+	indexAttemptTimeout = 30 * time.Second
+	// indexFetchBudget caps the three attempts together with the pauses between
+	// them (3*30s + ~1s + ~2s of backoff, jitter included). It is a read that runs
+	// once per SyncInterval (5 minutes, see reconcile/repository), so spending up
+	// to two minutes on a struggling remote still leaves the next pass on schedule
+	// and keeps one repository from occupying a worker indefinitely.
+	indexFetchBudget = 2 * time.Minute
+	// maxIndexSize bounds the index.yaml held in memory. Large public repositories
+	// publish indexes of a few tens of megabytes (bitnami's is the extreme), so the
+	// limit is set well above them while keeping a repository that streams without
+	// end — or one that simply outgrew what this controller can mirror — from
+	// inflating the controller's heap.
+	maxIndexSize = 64 << 20
+)
+
+// errIndexTooLarge marks the size limit being hit, so the read is reported as
+// oversize instead of being retried or, worse, decoded from a truncated document
+// that YAML would happily accept as a smaller repository.
+var errIndexTooLarge = errors.New("index.yaml is too large")
 
 type HelmRepositoryIndex struct {
 	APIVersion string                                  `json:"apiVersion"`
@@ -73,7 +103,7 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 		Steps:    3,
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, indexFetchBudget)
 	defer cancel()
 
 	// lastErr keeps the cause of the most recent retriable failure. The backoff
@@ -84,6 +114,12 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 	var lastErr error
 
 	err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (done bool, err error) {
+		// Each attempt gets its own deadline, carved out of the overall budget: the
+		// point of retrying is that the next attempt may reach a healthier backend,
+		// which requires it to still have time of its own.
+		ctx, cancelAttempt := context.WithTimeout(ctx, indexAttemptTimeout)
+		defer cancelAttempt()
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return true, fmt.Errorf("creating request: %w", err)
@@ -121,9 +157,29 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 			return true, terminal
 		}
 
-		if err := yaml.NewDecoder(resp.Body).Decode(&indexFile); err != nil {
+		body, err := readIndexBody(resp.Body, url)
+		if err != nil {
+			if errors.Is(err, errIndexTooLarge) {
+				// Another attempt would download the same oversize document again.
+				return true, err
+			}
+
+			// The body stopped mid-transfer — a reset connection or this attempt's
+			// own deadline. That is the same class of failure as a refused
+			// connection, so it is retried rather than reported as a broken index.
+			lastErr = fmt.Errorf("reading the index of %s: %w", url, err)
+
+			return false, nil
+		}
+
+		// Decoded into a fresh value: a retry must not merge its entries into
+		// whatever a previous attempt managed to parse.
+		var decoded HelmRepositoryIndex
+		if err := yaml.Unmarshal(body, &decoded); err != nil {
 			return true, fmt.Errorf("cannot decode response: %w", err)
 		}
+
+		indexFile = decoded
 
 		return true, nil
 	})
@@ -174,6 +230,22 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 	}
 
 	return charts, nil
+}
+
+// readIndexBody reads at most maxIndexSize bytes of the index. One extra byte is
+// requested so that hitting the limit is distinguishable from a document that
+// happens to end exactly at it.
+func readIndexBody(body io.Reader, url string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, int64(maxIndexSize)+1))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(data) > maxIndexSize {
+		return nil, fmt.Errorf("%w: repository %s sent more than %d MiB", errIndexTooLarge, url, maxIndexSize>>20)
+	}
+
+	return data, nil
 }
 
 // classifyChartLocation records where an index entry publishes its version. Only the

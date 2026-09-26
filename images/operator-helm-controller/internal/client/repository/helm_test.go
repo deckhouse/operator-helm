@@ -18,10 +18,13 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
@@ -53,6 +56,117 @@ entries:
         - "oci://BAD_HOST//:::"
     - version: 21.0.0
 `
+
+// shortenIndexLimits shrinks the fetch limits for the duration of one test, so the
+// behaviour they guard can be exercised without waiting out real minutes or
+// streaming real megabytes.
+func shortenIndexLimits(t *testing.T, attempt, budget time.Duration, size int) {
+	t.Helper()
+
+	attemptBefore, budgetBefore, sizeBefore := indexAttemptTimeout, indexFetchBudget, maxIndexSize
+
+	indexAttemptTimeout, indexFetchBudget, maxIndexSize = attempt, budget, size
+
+	t.Cleanup(func() {
+		indexAttemptTimeout, indexFetchBudget, maxIndexSize = attemptBefore, budgetBefore, sizeBefore
+	})
+}
+
+// TestFetchChartsRetriesAfterAnAttemptStalls pins that a stalled attempt costs only
+// its own deadline and not the whole budget. The first request never answers, so
+// with a single deadline shared by all attempts the fetch would end with that one
+// request and report a timeout; the second request proves the retry still had time
+// of its own.
+func TestFetchChartsRetriesAfterAnAttemptStalls(t *testing.T) {
+	shortenIndexLimits(t, 200*time.Millisecond, 10*time.Second, maxIndexSize)
+
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			// Hang until the attempt gives up on its own deadline.
+			<-r.Context().Done()
+
+			return
+		}
+
+		_, _ = w.Write([]byte(testIndex))
+	}))
+	defer srv.Close()
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+	if err != nil {
+		t.Fatalf("expected the second attempt to succeed, got %v", err)
+	}
+	if got := requests.Load(); got < 2 {
+		t.Fatalf("expected the stalled attempt to be retried, got %d request(s)", got)
+	}
+	if len(charts) != 1 {
+		t.Fatalf("expected the index of the second attempt to be decoded, got %d charts", len(charts))
+	}
+}
+
+// TestFetchChartsRejectsAnOversizeIndex pins that the response body is bounded. The
+// served document is valid YAML all the way through, so an unbounded read would
+// either hold all of it in memory or — once cut at a limit — decode the truncated
+// prefix as a smaller but perfectly valid repository and prune the rest of the
+// catalog. The fetch must fail instead, saying why, and must not retry a download
+// whose size will not change.
+func TestFetchChartsRejectsAnOversizeIndex(t *testing.T) {
+	const limit = 1 << 20
+
+	shortenIndexLimits(t, indexAttemptTimeout, indexFetchBudget, limit)
+
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+
+		_, _ = w.Write([]byte("apiVersion: v1\nentries:\n"))
+
+		// Comfortably past the limit, one well-formed entry at a time.
+		for i := range 40000 {
+			_, _ = fmt.Fprintf(w, "  chart-%d:\n    - version: 1.0.0\n", i)
+		}
+	}))
+	defer srv.Close()
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+	if err == nil {
+		t.Fatalf("expected an oversize index to fail, got %d charts", len(charts))
+	}
+	if charts != nil {
+		t.Fatalf("expected no charts alongside the error, got %d", len(charts))
+	}
+	if !strings.Contains(err.Error(), "too large") || !strings.Contains(err.Error(), "1 MiB") {
+		t.Fatalf("expected the error to name the size limit, got %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("an oversize index must not be downloaded again, got %d request(s)", got)
+	}
+}
+
+// TestFetchChartsAcceptsAnIndexAtTheLimit pins the boundary: the limit is on the
+// document, not on what fits under it, so an index of exactly maxIndexSize bytes is
+// still a good index.
+func TestFetchChartsAcceptsAnIndexAtTheLimit(t *testing.T) {
+	index := testIndex + strings.Repeat("# pad\n", 4)
+
+	shortenIndexLimits(t, indexAttemptTimeout, indexFetchBudget, len(index))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(index))
+	}))
+	defer srv.Close()
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+	if err != nil {
+		t.Fatalf("an index of exactly the limit must be accepted, got %v", err)
+	}
+	if len(charts) != 1 {
+		t.Fatalf("expected 1 chart, got %d", len(charts))
+	}
+}
 
 func TestFetchChartsTerminalStatusCodes(t *testing.T) {
 	cases := []struct {
