@@ -74,7 +74,7 @@ spec:
           image: {{ include "helm_lib_module_image" (list . "chartValuesController") }}
           imagePullPolicy: IfNotPresent
           args:
-            - --metrics-bind-address=:8080
+            - --metrics-bind-address=127.0.0.1:8080
             - --health-probe-bind-address=:9440
             - --api-bind-address=:9443
             - --api-tls-cert-file=/etc/chart-values-controller/tls/tls.crt
