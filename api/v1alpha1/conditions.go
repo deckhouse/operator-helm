@@ -70,10 +70,10 @@ const (
 	ReasonChartVersionRemoved = "ChartVersionRemoved"
 	// ReasonPartialSync marks a repository whose catalog does not mirror everything
 	// the repository offers. The two cases it covers need different reactions, so the
-	// message says which one it is: a first read that left some chart versions
-	// unresolved clears itself on a later pass, while a chart left out because its
-	// name cannot be recorded on a catalog object never will — the name has to change
-	// in the repository.
+	// message says which one it is: chart versions an earlier read left unresolved may
+	// resolve on a later pass, with no guarantee that they will, while a chart left out
+	// because its name cannot be recorded on a catalog object never can — the name has
+	// to change in the repository.
 	ReasonPartialSync = "PartialSync"
 
 	// HelmRelease error reasons

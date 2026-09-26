@@ -146,7 +146,8 @@ func Evaluate(in Inputs) Decision {
 			// wrong with nothing in the status to explain it. Synced names them
 			// instead. A catalog write that failed part way reports only the charts it
 			// reached, so the count can be too high until the retry succeeds — which
-			// the failing Synced condition already says.
+			// the failing Synced condition already says. The catalog can fail on its
+			// very first chart, so "too high" reaches as far as the whole index.
 			status.ChartCount = ptr.To(int32(in.Fetch.Charts - len(skippedCharts(in))))
 		}
 
@@ -291,8 +292,10 @@ func skippedCharts(in Inputs) []string {
 // alone. Order is not a property of the input: a Helm index is a map on the wire,
 // so the same repository yields its charts in a different order every read. Without
 // sorting, the same set of skipped charts would produce a different message on each
-// pass, every pass would rewrite the condition and move its transition time, and the
-// repository would be patched forever over a state that never changed.
+// pass, every pass would rewrite the condition, and the repository would be patched
+// forever over a state that never changed. The transition time stays put either way
+// — it follows the status, not the message — so it is the write itself that has to
+// be avoided.
 //
 // Only a few names are shown and each is cut short. A message is limited to 32768
 // bytes by the API server, and an index whose naming convention the API rejects

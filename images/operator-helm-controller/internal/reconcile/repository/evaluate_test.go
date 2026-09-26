@@ -18,10 +18,12 @@ package repository
 
 import (
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -667,6 +669,37 @@ func TestEvaluateChartCount(t *testing.T) {
 	}
 }
 
+// TestEvaluateChartCountDescribesTheReadWhenTheCatalogUpdateFails pins what the
+// field falls back to when the catalog write does not finish. The catalog gives up
+// on the first object it cannot write, so it may have published nothing at all,
+// while chartCount still reports what the read found: the number describes the
+// repository, not the objects in the cluster. Keeping the read's answer is what
+// makes a failed pass readable — the user sees the size of the index the retry has
+// to publish — and the failing Synced condition is what says the catalog is behind
+// it.
+func TestEvaluateChartCountDescribesTheReadWhenTheCatalogUpdateFails(t *testing.T) {
+	decision := Evaluate(Inputs{
+		Generation: 1, Now: testNow,
+		Attempted: true,
+		Fetch:     &reposync.FetchOutcome{Charts: 7},
+		Catalog:   &reposync.CatalogOutcome{Err: errors.New("creating or updating chart d8/nginx: etcdserver: request timed out")},
+	})
+
+	if decision.Status.ChartCount == nil || *decision.Status.ChartCount != 7 {
+		t.Fatalf("chartCount is %v after a failed catalog update, want the 7 charts the read found", decision.Status.ChartCount)
+	}
+
+	synced := conditionOf(t, decision.Status, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Status != metav1.ConditionFalse ||
+		synced.Reason != helmv1alpha1.ReasonCatalogUpdateFailed {
+		t.Fatalf("Synced is %+v, want False/%s to explain the count", synced, helmv1alpha1.ReasonCatalogUpdateFailed)
+	}
+	if decision.Status.LastSuccessfulSyncTime != nil {
+		t.Fatalf("lastSuccessfulSyncTime is %v, want none: the catalog was not brought up to date",
+			decision.Status.LastSuccessfulSyncTime)
+	}
+}
+
 // TestEvaluateAccountsForTheChartsTheCatalogCannotPublish pins the one thing that
 // makes chartCount checkable: it is the number of chart objects the user can find in
 // the cluster, not the length of the repository's index. A chart whose name the API
@@ -813,25 +846,9 @@ func TestEvaluateReportsSkippedChartsAndUnresolvedVersionsTogether(t *testing.T)
 // on the set of skipped charts and not on the order they arrive in. A Helm index is
 // a map on the wire, so two passes over an unchanged repository hand the same names
 // over in different orders; if that reached the message, every pass would rewrite
-// the condition, move its transition time and patch the repository over a state that
-// never changed.
+// the condition and patch the repository over a state that never changed. The
+// transition time would stay put — it follows the status — but the write would not.
 func TestEvaluateDescribesTheSameSkippedChartsTheSameWay(t *testing.T) {
-	messageFor := func(skipped []string) string {
-		decision := Evaluate(Inputs{
-			Generation: 1, Now: testNow,
-			Attempted: true,
-			Fetch:     &reposync.FetchOutcome{Charts: 4},
-			Catalog:   &reposync.CatalogOutcome{SkippedCharts: skipped},
-		})
-
-		synced := conditionOf(t, decision.Status, helmv1alpha1.ConditionTypeSynced)
-		if synced == nil || synced.Reason != helmv1alpha1.ReasonPartialSync {
-			t.Fatalf("Synced is %+v, want %s", synced, helmv1alpha1.ReasonPartialSync)
-		}
-
-		return synced.Message
-	}
-
 	cases := []struct {
 		name  string
 		order []string
@@ -844,7 +861,7 @@ func TestEvaluateDescribesTheSameSkippedChartsTheSameWay(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			got := messageFor(tt.order)
+			got := messageFor(t, tt.order)
 			if want == "" {
 				want = got
 			}
@@ -858,6 +875,124 @@ func TestEvaluateDescribesTheSameSkippedChartsTheSameWay(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEvaluateNamesTheSameSkippedChartsWhateverOrderTheyArriveIn pins the same
+// property where it can actually break: with more names than the message shows, the
+// order decides which ones are left out, not just how they are spelled. Two passes
+// over an unchanged repository must still pick the same three.
+func TestEvaluateNamesTheSameSkippedChartsWhateverOrderTheyArriveIn(t *testing.T) {
+	cases := []struct {
+		name  string
+		order []string
+	}{
+		{name: "five skipped charts as one read returned them", order: []string{"e f", "a b", "d e", "b c", "c d"}},
+		{name: "the same five as the next read returned them", order: []string{"c d", "b c", "e f", "a b", "d e"}},
+		{name: "and once more, reversed", order: []string{"e f", "d e", "c d", "b c", "a b"}},
+	}
+
+	var want string
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := messageFor(t, tt.order)
+			if want == "" {
+				want = got
+			}
+			if got != want {
+				t.Fatalf("Synced message is %q, want %q whatever order the names arrive in", got, want)
+			}
+			if !strings.Contains(got, `"a b", "b c", "c d" and 2 more`) {
+				t.Fatalf("Synced message is %q, want the three names that sort first", got)
+			}
+		})
+	}
+}
+
+// TestEvaluateDoesNotMutateTheSkippedChartsItIsGiven pins that Evaluate is a pure
+// function of its inputs. The outcome it reads belongs to the caller, which logs it
+// and hands it on; sorting the names in place would reorder somebody else's slice as
+// a side effect of writing a status message.
+func TestEvaluateDoesNotMutateTheSkippedChartsItIsGiven(t *testing.T) {
+	skipped := []string{"my chart", "_internal", "z chart", "a chart"}
+	before := slices.Clone(skipped)
+
+	Evaluate(Inputs{
+		Generation: 1, Now: testNow,
+		Attempted: true,
+		Fetch:     &reposync.FetchOutcome{Charts: 4},
+		Catalog:   &reposync.CatalogOutcome{SkippedCharts: skipped},
+	})
+
+	if !slices.Equal(skipped, before) {
+		t.Fatalf("Evaluate reordered the skipped charts it was given: %q, want %q", skipped, before)
+	}
+}
+
+// TestEvaluateNamesChartsThatAreNotPlainASCII pins that a name the API rejects is
+// still safe to put in a message. Such a name is arbitrary text: it may be built
+// from multi-byte runes, which must not be cut in half or mangled, and it may hold
+// bytes that quoting turns into escapes, which must stay escaped so the message
+// remains one readable line.
+func TestEvaluateNamesChartsThatAreNotPlainASCII(t *testing.T) {
+	cases := []struct {
+		name    string
+		skipped string
+		want    string
+	}{
+		{
+			name:    "a name of multi-byte runes is shown whole",
+			skipped: "диаграмма-графики",
+			want:    `"диаграмма-графики"`,
+		},
+		{
+			name: "a long name of multi-byte runes is cut on a rune boundary",
+			// 200 runes, 400 bytes: past maxChartNameRunes either way, so a cut made
+			// in bytes would land inside a character.
+			skipped: strings.Repeat("я", 200),
+			want:    `"` + strings.Repeat("я", maxChartNameRunes) + `..."`,
+		},
+		{
+			name:    "characters that quoting escapes stay escaped",
+			skipped: "chart\n\t\"quoted\"\x00",
+			want:    `"chart\n\t\"quoted\"\x00"`,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := messageFor(t, []string{tt.skipped})
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("Synced message is %q, want it to contain %q", got, tt.want)
+			}
+			if strings.ContainsAny(got, "\n\t\x00") {
+				t.Fatalf("Synced message is %q, want no raw control characters in it", got)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("Synced message %q is not valid UTF-8", got)
+			}
+		})
+	}
+}
+
+// messageFor returns the Synced message of a pass that read the repository and
+// skipped the given charts.
+func messageFor(t *testing.T, skipped []string) string {
+	t.Helper()
+
+	decision := Evaluate(Inputs{
+		Generation: 1, Now: testNow,
+		Attempted: true,
+		Fetch:     &reposync.FetchOutcome{Charts: len(skipped)},
+		Catalog:   &reposync.CatalogOutcome{SkippedCharts: skipped},
+	})
+
+	synced := conditionOf(t, decision.Status, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Reason != helmv1alpha1.ReasonPartialSync {
+		t.Fatalf("Synced is %+v, want %s", synced, helmv1alpha1.ReasonPartialSync)
+	}
+
+	return synced.Message
 }
 
 // TestEvaluateBoundsTheLengthOfANamedChart pins the other half of the message
