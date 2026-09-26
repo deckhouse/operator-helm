@@ -82,6 +82,8 @@ spec:
             - --cache-dir=/cache
             - --chart-values-cache-ttl=1h
             - --max-chart-size-mb=100
+            # Kept in step with the sizeLimit of the cache volume below.
+            - --cache-budget-mb=384
           volumeMounts:
             - mountPath: /cache
               name: cache
@@ -137,9 +139,13 @@ spec:
       volumes:
         - name: cache
           # Emergency cap, not a cleanup mechanism: on overflow the kubelet
-          # evicts the pod. The budget covers the pathological case of entries
-          # at the --max-chart-size-mb=100 ceiling, plus one extra copy while an
-          # atomic write stages its temp file. Real values.yaml are kilobytes.
+          # evicts the pod, which restores the entries and fills the volume
+          # again. What actually bounds the cache is the controller's own
+          # --cache-budget-mb=384, kept below this limit; the gap absorbs
+          # filesystem overhead and files rounded up to whole blocks. Both cover
+          # the pathological case of entries at the --max-chart-size-mb=100
+          # ceiling, plus one extra copy while an atomic write stages its temp
+          # file. Real values.yaml are kilobytes.
           emptyDir:
             sizeLimit: 512Mi
         - name: api-tls

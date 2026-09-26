@@ -349,8 +349,16 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 			return nil, err
 		}
 
+		// Caching is an optimization, never a part of the answer: the values are
+		// already in hand and are returned whether or not they could be kept. A full
+		// cache is an expected state (the budget is deliberately smaller than the
+		// volume), so it is reported as information, not as a failure.
 		if err := r.cache.Put(name, values); err != nil {
-			log.FromContext(ctx).Error(err, "failed to cache values.yaml")
+			if errors.Is(err, cache.ErrBudgetExhausted) {
+				log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
+			} else {
+				log.FromContext(ctx).Error(err, "failed to cache values.yaml")
+			}
 		}
 
 		return values, nil

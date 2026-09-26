@@ -47,6 +47,11 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
+// testCacheBudget is roomy enough that no test here runs into it unless it asks
+// for a smaller cache of its own; the budget itself is exercised in the cache
+// package.
+const testCacheBudget = int64(16 << 20)
+
 func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 	t.Helper()
 
@@ -72,7 +77,7 @@ func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 		).
 		Build()
 
-	return &Resolver{client: c, cache: cache.New(t.TempDir())}
+	return &Resolver{client: c, cache: cache.New(t.TempDir(), testCacheBudget)}
 }
 
 func chartWithVersions(repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
@@ -268,7 +273,7 @@ func newHybridResolver(t *testing.T, prober chartartifact.Prober, objects ...cli
 
 	return &Resolver{
 		client:           c,
-		cache:            cache.New(t.TempDir()),
+		cache:            cache.New(t.TempDir(), testCacheBudget),
 		namespace:        "d8-operator-helm",
 		ttl:              time.Minute,
 		sourceInterval:   metav1.Duration{Duration: time.Minute},
@@ -511,7 +516,7 @@ func TestReadValuesCachesNothingFromARefusedArchive(t *testing.T) {
 
 	dir := t.TempDir()
 	r := &Resolver{
-		cache:            cache.New(dir),
+		cache:            cache.New(dir, testCacheBudget),
 		httpClient:       srv.Client(),
 		maxArtifactBytes: 100 << 20,
 	}
@@ -719,7 +724,7 @@ func TestATransportTimeoutIsAnsweredAsPendingWhoeverHitIt(t *testing.T) {
 	c := srv.Client()
 	c.Timeout = 50 * time.Millisecond
 
-	r := &Resolver{cache: cache.New(t.TempDir()), httpClient: c, maxArtifactBytes: 1 << 20}
+	r := &Resolver{cache: cache.New(t.TempDir(), testCacheBudget), httpClient: c, maxArtifactBytes: 1 << 20}
 
 	result, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL})
 	if err != nil {
@@ -776,7 +781,7 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 			art := &meta.Artifact{URL: srv.URL, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archive))}
 
 			r := &Resolver{
-				cache:            cache.New(t.TempDir()),
+				cache:            cache.New(t.TempDir(), testCacheBudget),
 				httpClient:       srv.Client(),
 				maxArtifactBytes: 1 << 20,
 			}
@@ -848,4 +853,44 @@ func buildValuesArchive(t *testing.T, values string) []byte {
 	}
 
 	return buf.Bytes()
+}
+
+// TestAFullCacheStillAnswersTheRequest states the degradation the cache budget
+// was chosen for: running out of disk budget must cost the next request a
+// download, never this request its answer. The values are extracted and returned
+// whether or not they could be kept.
+func TestAFullCacheStillAnswersTheRequest(t *testing.T) {
+	archive := buildValuesArchive(t, "replicaCount: 1\n")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	r := &Resolver{
+		// A budget of one byte: nothing at all fits.
+		cache:            cache.New(dir, 1),
+		httpClient:       srv.Client(),
+		maxArtifactBytes: 1 << 20,
+	}
+
+	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{
+		URL:    srv.URL,
+		Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archive)),
+	})
+	if err != nil {
+		t.Fatalf("readValues returned %v", err)
+	}
+	if got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
+		t.Fatalf("got %+v, want the values served from the download despite the full cache", got)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading cache dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cache holds %d entries, want none: nothing may be written past the budget", len(entries))
+	}
 }

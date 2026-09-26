@@ -17,27 +17,112 @@ limitations under the License.
 package cache
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// tempPrefix marks a staging file of an atomic write. One process owns the cache
+// directory (single replica, no leader election), so at construction time no temp
+// file can belong to a live writer: whatever is left carries a crash of the
+// previous pod and is swept, otherwise it would occupy the volume forever without
+// ever being readable.
+const tempPrefix = ".tmp-"
+
+// ErrBudgetExhausted is returned by Put when storing an entry would take the
+// directory over its budget. It is not a request failure: the values have already
+// been extracted and are handed to the client regardless, they are simply not kept
+// for the next request. Callers are expected to log it and carry on.
+var ErrBudgetExhausted = errors.New("cache budget exhausted")
 
 // Cache is an on-disk cache for extracted values.yaml files, backed by an
 // emptyDir volume (per-pod, non-persistent). Entries are keyed by the auxiliary
 // resource name (a deterministic hash of the repository/chart/version triple),
 // so both the HTTP handler and the auxiliary-resource controller derive the same
 // key; the controller keeps each entry in sync with the current artifact.
+//
+// The volume carries a sizeLimit, but that limit is an eviction trigger, not a
+// write barrier: filling it makes the kubelet evict the pod, the pod comes back,
+// the controller restores every entry that has not expired yet and the volume
+// fills again — eviction in a loop instead of degradation. So the cache keeps its
+// own budget, sized below the volume's sizeLimit, and refuses to grow past it.
+//
+// Refusing to cache is chosen over evicting other entries for two reasons. The
+// controller only rewrites an entry when the artifact digest moves, so an entry
+// evicted behind its back would stay missing until the chart is republished,
+// while a write that never happened leaves the controller's digest bookkeeping
+// untouched and the next request simply downloads again. And entries expire on
+// their own: the auxiliary object carries a TTL and the controller deletes both it
+// and its entry, which releases the space without anyone guessing which entry was
+// least useful.
 type Cache struct {
 	dir string
+	// budget is the total size of committed entries plus the peak of the writes in
+	// flight that this directory is allowed to reach.
+	budget int64
+
+	mu sync.Mutex
+	// used is the summed size of the files committed under dir, and sizes their
+	// per-file breakdown, so a delete or an overwrite gives the space back exactly.
+	used  int64
+	sizes map[string]int64
+	// reserved covers the writes in flight. Concurrent Puts of different keys stage
+	// their own temp files at the same time (only same-key work is collapsed, see
+	// resolver.inflight), and each of them briefly occupies the volume twice: the
+	// temp file next to the entry the rename is about to replace.
+	reserved int64
 }
 
-func New(dir string) *Cache {
-	return &Cache{dir: dir}
+// New opens a cache directory with a budget in bytes and takes stock of what is
+// already there: a restarted pod keeps its emptyDir only if the pod itself
+// survived, but a container restart leaves every file in place, and a budget that
+// started from zero would then allow a second volume's worth of entries.
+func New(dir string, budgetBytes int64) *Cache {
+	c := &Cache{dir: dir, budget: budgetBytes, sizes: make(map[string]int64)}
+	c.scan()
+
+	return c
+}
+
+// scan accounts for pre-existing entries and sweeps leftover temp files. Errors
+// are deliberately swallowed: a missing or unreadable directory is the empty
+// cache, and refusing to start over a cache directory would trade a degraded
+// cache for a dead API.
+func (c *Cache) scan() {
+	entries, err := os.ReadDir(c.dir)
+	if err != nil {
+		return
+	}
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+
+		if strings.HasPrefix(e.Name(), tempPrefix) {
+			_ = os.Remove(filepath.Join(c.dir, e.Name()))
+			continue
+		}
+
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+
+		c.sizes[e.Name()] = info.Size()
+		c.used += info.Size()
+	}
+}
+
+func (c *Cache) fileName(key string) string {
+	return strings.ReplaceAll(key, ":", "_")
 }
 
 func (c *Cache) path(key string) string {
-	return filepath.Join(c.dir, strings.ReplaceAll(key, ":", "_"))
+	return filepath.Join(c.dir, c.fileName(key))
 }
 
 // Get returns the cached content for a key, or ok=false on a miss.
@@ -50,16 +135,66 @@ func (c *Cache) Get(key string) ([]byte, bool) {
 	return data, true
 }
 
+// reserve admits a write of n bytes and returns what it claimed. A write peaks at
+// the staged temp file next to what the rename is about to replace, so the claim
+// is n for the temp file plus however much the entry grows by — for a new key,
+// 2n; for a refresh of the same chart, close to n, since the bytes of the entry
+// being replaced are already counted in used. Charging the peak keeps the
+// directory below the budget at every instant, not only once the writes settle.
+func (c *Cache) reserve(name string, n int64) (int64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	claim := n + max(0, n-c.sizes[name])
+	if c.used+c.reserved+claim > c.budget {
+		return 0, false
+	}
+
+	c.reserved += claim
+
+	return claim, true
+}
+
+// commit releases the reservation and records what the entry now occupies; an
+// overwrite gives back what the previous content took.
+func (c *Cache) commit(name string, n, claim int64, stored bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.reserved -= claim
+	if !stored {
+		return
+	}
+
+	c.used += n - c.sizes[name]
+	c.sizes[name] = n
+}
+
 // Put stores content for a key, writing atomically via a unique temp file +
 // rename. Concurrent writers of the same key each use their own temp file, so no
 // external locking is needed: the atomic rename publishes a whole file and, for a
 // given key, the content is identical (same artifact digest) regardless of order.
+//
+// Over budget it returns ErrBudgetExhausted without touching the disk. The caller
+// already holds the values it was going to cache, so nothing but the next
+// request's latency is lost.
 func (c *Cache) Put(key string, content []byte) error {
+	size := int64(len(content))
+	name := c.fileName(key)
+
+	claim, ok := c.reserve(name, size)
+	if !ok {
+		return fmt.Errorf("caching %s: %w", key, ErrBudgetExhausted)
+	}
+
+	stored := false
+	defer func() { c.commit(name, size, claim, stored) }()
+
 	if err := os.MkdirAll(c.dir, 0o755); err != nil {
 		return fmt.Errorf("creating cache dir: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(c.dir, ".tmp-*")
+	tmp, err := os.CreateTemp(c.dir, tempPrefix+"*")
 	if err != nil {
 		return fmt.Errorf("creating temp cache file: %w", err)
 	}
@@ -79,15 +214,25 @@ func (c *Cache) Put(key string, content []byte) error {
 	if err := os.Rename(tmpName, c.path(key)); err != nil {
 		return fmt.Errorf("committing cache entry: %w", err)
 	}
+	stored = true
 
 	return nil
 }
 
 // Delete removes the cache entry for a key. A missing entry is not an error.
+// The space it took is given back to the budget, which is what keeps the
+// controller's expiry pass from leaving the cache permanently full.
 func (c *Cache) Delete(key string) error {
 	if err := os.Remove(c.path(key)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing cache entry: %w", err)
 	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	name := c.fileName(key)
+	c.used -= c.sizes[name]
+	delete(c.sizes, name)
 
 	return nil
 }

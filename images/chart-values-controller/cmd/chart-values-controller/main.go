@@ -74,6 +74,7 @@ func main() {
 		apiTLSKeyFile   string
 		cacheDir        string
 		cacheTTL        time.Duration
+		cacheBudgetMB   int
 		sourceInterval  time.Duration
 		maxChartSizeMB  int
 		tokenAudiences  string
@@ -89,6 +90,12 @@ func main() {
 	flag.StringVar(&apiTLSKeyFile, "api-tls-key-file", "", "Path to the PEM-encoded private key for the chart-values HTTP API; enables TLS together with --api-tls-cert-file.")
 	flag.StringVar(&cacheDir, "cache-dir", "/cache", "Directory used to cache extracted values.yaml files.")
 	flag.DurationVar(&cacheTTL, "chart-values-cache-ttl", time.Hour, "Lifetime of auxiliary source resources and their cache entries; refreshed on each request.")
+	// Deliberately below the sizeLimit of the cache emptyDir (512Mi in
+	// templates/chart-values-controller/deployment.yaml). That limit only makes the
+	// kubelet evict the pod, which restores the entries and fills the volume again;
+	// this budget is what actually stops the cache growing, and the gap absorbs
+	// filesystem overhead and the rounding of files to whole blocks.
+	flag.IntVar(&cacheBudgetMB, "cache-budget-mb", 384, "Total size in MiB the cache directory is allowed to occupy, counting writes in flight; entries that do not fit are not cached.")
 	flag.DurationVar(&sourceInterval, "source-interval", 10*time.Minute, "Reconcile interval set on auxiliary source resources.")
 	flag.IntVar(&maxChartSizeMB, "max-chart-size-mb", 100, "Maximum accepted chart artifact size in MiB; larger artifacts are rejected.")
 	// Empty by default, which keeps the API server checking the token against its
@@ -108,6 +115,20 @@ func main() {
 		os.Exit(1)
 	}
 	maxArtifactBytes := int64(maxChartSizeMB) << 20
+
+	if cacheBudgetMB <= 0 {
+		logger.Error(nil, "invalid --cache-budget-mb, must be greater than 0", "value", cacheBudgetMB)
+		os.Exit(1)
+	}
+	cacheBudgetBytes := int64(cacheBudgetMB) << 20
+	// An atomic write peaks at two copies of the content, so a chart at the accepted
+	// ceiling needs twice its size to be cacheable at all. Such a values.yaml is
+	// pathological (real ones are kilobytes) and the API still answers, only without
+	// caching — worth a line in the log rather than a refusal to start.
+	if cacheBudgetBytes < 2*maxArtifactBytes {
+		logger.Info("cache budget is below twice the accepted artifact size; the largest charts will not be cached",
+			"cacheBudgetMB", cacheBudgetMB, "maxChartSizeMB", maxChartSizeMB)
+	}
 
 	if (apiTLSCertFile == "") != (apiTLSKeyFile == "") {
 		logger.Error(nil, "--api-tls-cert-file and --api-tls-key-file must be set together")
@@ -138,7 +159,7 @@ func main() {
 		splitAudiences(tokenAudiences),
 	)
 
-	valuesCache := cache.New(cacheDir)
+	valuesCache := cache.New(cacheDir, cacheBudgetBytes)
 	httpClient := &http.Client{Timeout: artifactDownloadTimeout}
 
 	res := resolver.New(

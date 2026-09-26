@@ -155,8 +155,15 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 		return
 	}
 
+	// A refused write leaves the remembered digest alone on purpose: the entry is
+	// not there, so a later pass must try again rather than believe the cache is
+	// already up to date with this revision.
 	if err := r.cache.Put(name, values); err != nil {
-		log.FromContext(ctx).Error(err, "failed to write cache entry", "name", name)
+		if errors.Is(err, cache.ErrBudgetExhausted) {
+			log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
+		} else {
+			log.FromContext(ctx).Error(err, "failed to write cache entry", "name", name)
+		}
 		return
 	}
 

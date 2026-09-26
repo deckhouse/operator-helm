@@ -39,6 +39,9 @@ import (
 const (
 	testNamespace = "d8-operator-helm"
 	testName      = "chart-values-abc123"
+	// testCacheBudget is roomy enough that no test here runs into it; the budget
+	// itself is exercised in the cache package.
+	testCacheBudget = int64(16 << 20)
 )
 
 func testScheme(t *testing.T) *runtime.Scheme {
@@ -73,7 +76,7 @@ func newTestReconciler(t *testing.T, c client.Client) *reconciler {
 
 	return &reconciler{
 		client:       c,
-		cache:        cache.New(t.TempDir()),
+		cache:        cache.New(t.TempDir(), testCacheBudget),
 		digests:      map[string]string{},
 		newObject:    func() client.Object { return &sourcev1.HelmChart{} },
 		artifactOf:   func(o client.Object) *meta.Artifact { return o.(*sourcev1.HelmChart).Status.Artifact },
