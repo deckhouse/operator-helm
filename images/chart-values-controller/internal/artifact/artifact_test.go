@@ -270,6 +270,34 @@ func TestBoundedReaderStopsACopyInFlight(t *testing.T) {
 	}
 }
 
+// TestExtractValuesChargesTheBytesOfAnOrdinaryEntryOnce is the guard against
+// paying for the sparse fix with the budget of every real chart. A values.yaml of
+// compressible YAML passes through gzip on the way to the walk and is then read
+// out of it; counting both would halve what a chart is allowed to weigh, and a
+// file over half the budget would be refused with the budget half spent.
+func TestExtractValuesChargesTheBytesOfAnOrdinaryEntryOnce(t *testing.T) {
+	// Repetitive YAML compresses hard, so the archive stays small and its budget
+	// stays at the floor: the entry is then comfortably under the budget and well
+	// over half of it, which is the only interesting size here.
+	values := strings.Repeat("replicaCount: 1\n", (5<<20)/16)
+
+	archive := buildOrderedChartArchive(t, []archiveEntry{{name: "podinfo/values.yaml", content: values}})
+
+	limit := decompressedLimit(int64(len(archive)))
+	if int64(len(values)) <= limit/2 || int64(len(values)) >= limit {
+		t.Fatalf("values of %d bytes against a budget of %d: the test needs a size between half the budget and all of it",
+			len(values), limit)
+	}
+
+	got, err := extractValues(context.Background(), archive, testMaxBytes)
+	if err != nil {
+		t.Fatalf("a chart within its budget was refused: %v", err)
+	}
+	if len(got) != len(values) {
+		t.Fatalf("values = %d bytes, want %d", len(got), len(values))
+	}
+}
+
 // TestCancellableReaderStopsAReaderThatYieldsNothing pins the half of cancellation
 // the budget cannot reach. gzip walks concatenated members inside a single Read of
 // its own, returning no bytes until one of them holds data, so a reader bounded
@@ -400,9 +428,10 @@ func tarHeader(t *testing.T, name string, size int64, typeflag byte) []byte {
 }
 
 // paxRecord formats one "<length> <key>=<value>\n" record, whose length counts
-// itself and so has to be solved for.
+// itself and so has to be solved for. The search starts at the shortest possible
+// record rather than at a guess, so a short key and value cannot run past it.
 func paxRecord(key, value string) string {
-	for n := len(key) + len(value) + 5; ; n++ {
+	for n := 1; ; n++ {
 		record := fmt.Sprintf("%d %s=%s\n", n, key, value)
 		if len(record) == n {
 			return record

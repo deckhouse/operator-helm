@@ -90,6 +90,25 @@ func (b *budget) reader(r io.Reader) io.Reader {
 	return &boundedReader{budget: b, r: r}
 }
 
+// afford reports whether an entry that declares size can still be produced within
+// what is left. It books nothing: the bytes of an ordinary entry are counted as
+// they pass through the readers this budget wraps, and booking them here as well
+// would halve what every chart is allowed to weigh.
+//
+// What this catches is the entry whose bytes never pass a reader at all. tar
+// fabricates the holes of a sparse file out of nothing, so its declared size is
+// both the only thing to judge it on and enough to judge it — tar hands out no
+// more than it declared. The check runs on the header, before the entry is read,
+// so an ordinary file is weighed against a budget its own bytes have not yet
+// touched.
+func (b *budget) afford(size int64) error {
+	if size > b.limit-b.read {
+		return b.tooLarge()
+	}
+
+	return nil
+}
+
 func (b *budget) tooLarge() error {
 	return fmt.Errorf("%w (decompressed > %d bytes)", ErrArtifactTooLarge, b.limit)
 }
@@ -251,12 +270,13 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 		// e.g. "podinfo/values.yaml". Match values.yaml at exactly that depth.
 		parts := strings.Split(path.Clean(header.Name), "/")
 		if len(parts) == 2 && parts[1] == "values.yaml" {
-			// Read through the budget again rather than straight from tr: the holes
-			// of a sparse entry never pass through gzip, so this is the only place
-			// they are counted, and the only place a copy of one can be cancelled.
-			// maxBytes bounds this one file on top of that, since what the caller can
-			// be handed is smaller than what the archive may cost to walk.
-			content, err := io.ReadAll(io.LimitReader(spent.reader(tr), maxBytes+1))
+			if err := spent.afford(header.Size); err != nil {
+				return nil, err
+			}
+
+			// maxBytes bounds this one file on top of the budget, since what the caller
+			// can be handed is smaller than what the archive may cost to walk.
+			content, err := io.ReadAll(io.LimitReader(&cancellableReader{ctx: ctx, r: tr}, maxBytes+1))
 			if err != nil {
 				if errors.Is(err, ErrArtifactTooLarge) || errors.Is(err, context.Canceled) ||
 					errors.Is(err, context.DeadlineExceeded) {
