@@ -243,21 +243,26 @@ func versionDetail(version *helmv1alpha1.ChartVersion) string {
 // catalog are read from, and how its internal objects are recognised — arrives in
 // the family.
 func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, req Request) (Result, error) {
-	name := naming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version)
-
-	// Fast path: the cache (keyed by the auxiliary resource name) is kept fresh by
-	// the auxiliary-resource controller via a watch with a revision-change predicate,
-	// so a hit is served without any Kubernetes calls.
-	if values, ok := r.cache.Get(name); ok {
-		return Result{Outcome: OutcomeReady, Values: values}, nil
-	}
-
+	// The repository is read before anything is keyed on it: the auxiliary resource
+	// name, and with it the cache entry, carries the identity of the object the values
+	// came from. Serving the cache on the request tuple alone would answer for
+	// whatever repository once held that name. The read is one call into the manager's
+	// informer cache, not a round trip to the API server.
 	repo, err := family.GetRepository(ctx, r.client, req.Namespace, req.RepositoryName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return Result{Outcome: OutcomeRepositoryNotFound, Message: fmt.Sprintf("repository %q not found", req.RepositoryName)}, nil
 		}
 		return Result{}, fmt.Errorf("getting repository: %w", err)
+	}
+
+	name := naming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version, repo.Identity)
+
+	// Fast path: the cache (keyed by the auxiliary resource name) is kept fresh by
+	// the auxiliary-resource controller via a watch with a revision-change predicate,
+	// so a hit is served without touching the catalog or the source objects.
+	if values, ok := r.cache.Get(name); ok {
+		return Result{Outcome: OutcomeReady, Values: values}, nil
 	}
 
 	expiresAt := time.Now().UTC().Add(r.ttl).Format(time.RFC3339)

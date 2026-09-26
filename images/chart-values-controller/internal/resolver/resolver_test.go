@@ -56,7 +56,19 @@ func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 		t.Fatalf("registering helm scheme: %v", err)
 	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	// The repository kinds carry a status subresource in the cluster, and a test
+	// that writes one has to go through the same door the operator does — on a fake
+	// client without this, a status write is an ordinary update and moves the
+	// generation, which is exactly what such a test is checking does not happen.
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithStatusSubresource(
+			&helmv1alpha1.HelmClusterAddonRepository{},
+			&helmv1alpha1.HelmApplicationRepository{},
+			&helmv1alpha1.HelmClusterApplicationRepository{},
+		).
+		Build()
 
 	return &Resolver{client: c, cache: cache.New(t.TempDir())}
 }
@@ -270,7 +282,7 @@ func newHybridResolver(t *testing.T, prober chartartifact.Prober, objects ...cli
 // index url — an oci:// one — and fail with `unsupported protocol scheme "oci"`.
 func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
-		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 3},
 		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
 	chart := chartWithVersions("example", "nginx", helmv1alpha1.ChartVersion{
@@ -293,7 +305,8 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	name := cvnaming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version)
+	name := cvnaming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName,
+		req.Chart, req.Version, identityOf(repo.ObjectMeta))
 	key := client.ObjectKey{Name: name, Namespace: "d8-operator-helm"}
 
 	ociRepo := &sourcev1.OCIRepository{}
@@ -370,7 +383,8 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 		t.Fatalf("an archive version must not be reported as unreadable: %+v", result)
 	}
 
-	name := cvnaming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version)
+	name := cvnaming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName,
+		req.Chart, req.Version, identityOf(repo.ObjectMeta))
 	key := client.ObjectKey{Name: name, Namespace: "d8-operator-helm"}
 
 	helmChart := &sourcev1.HelmChart{}
@@ -449,10 +463,18 @@ func TestResolveDispatchesOnTheRequestShape(t *testing.T) {
 func TestClusterScopedRequestsIgnoreAStrayNamespace(t *testing.T) {
 	for _, kind := range []RepositoryKind{RepositoryKindHelmClusterAddon, RepositoryKindHelmClusterApplication} {
 		t.Run(string(kind), func(t *testing.T) {
-			r := newTestResolver(t)
+			meta := metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 2}
+
+			var repo client.Object = &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: meta}
+			if kind == RepositoryKindHelmClusterApplication {
+				repo = &helmv1alpha1.HelmClusterApplicationRepository{ObjectMeta: meta}
+			}
+
+			r := newTestResolver(t, repo)
 
 			req := Request{Kind: kind, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
-			name := cvnaming.AuxResourceName(string(kind), "", req.RepositoryName, req.Chart, req.Version)
+			name := cvnaming.AuxResourceName(string(kind), "",
+				req.RepositoryName, req.Chart, req.Version, identityOf(meta))
 			if err := r.cache.Put(name, []byte("replicaCount: 1\n")); err != nil {
 				t.Fatalf("seeding cache: %v", err)
 			}
@@ -562,4 +584,114 @@ func mustFamily(t *testing.T, kind RepositoryKind) repositoryFamily {
 	}
 
 	return family
+}
+
+// TestAReplacedRepositoryIsNotServedFromTheOldEntry pins what the cache is keyed
+// on. A repository name is reusable: delete one and create another under it, or
+// point the existing one somewhere else, and the request tuple is unchanged. If
+// that tuple were the key, the caller would be handed the values of a chart from a
+// source that no longer exists — under a namespaced kind, from another team's
+// repository.
+func TestAReplacedRepositoryIsNotServedFromTheOldEntry(t *testing.T) {
+	const (
+		repoName = "example"
+		chart    = "podinfo"
+		version  = "6.7.1"
+	)
+
+	previous := metav1.ObjectMeta{Name: repoName, UID: "repo-uid", Generation: 1}
+
+	tests := []struct {
+		name string
+		now  metav1.ObjectMeta
+	}{
+		{
+			name: "recreated under the same name",
+			now:  metav1.ObjectMeta{Name: repoName, UID: "another-uid", Generation: 1},
+		},
+		{
+			name: "edited to point somewhere else",
+			now:  metav1.ObjectMeta{Name: repoName, UID: "repo-uid", Generation: 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newTestResolver(t, &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: tt.now})
+
+			stale := cvnaming.AuxResourceName(string(RepositoryKindHelmClusterAddon), "",
+				repoName, chart, version, identityOf(previous))
+			if err := r.cache.Put(stale, []byte("replicaCount: 1\n")); err != nil {
+				t.Fatalf("seeding cache: %v", err)
+			}
+
+			got, err := r.Resolve(context.Background(), Request{
+				Kind:           RepositoryKindHelmClusterAddon,
+				RepositoryName: repoName,
+				Chart:          chart,
+				Version:        version,
+			})
+			if err != nil {
+				t.Fatalf("Resolve returned %v", err)
+			}
+			if got.Outcome == OutcomeReady {
+				t.Fatalf("values were served from the previous repository: %+v", got)
+			}
+		})
+	}
+}
+
+// TestAStatusWriteDoesNotInvalidateTheEntry is the other side of that key. Both
+// repository kinds carry a status subresource the operator writes on every
+// synchronization — conditions, the observed generation, the catalog — and none of
+// it changes where the chart comes from. Keying on anything that moved with those
+// writes would re-download every chart on every sync.
+func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
+	const (
+		repoName = "example"
+		chart    = "podinfo"
+		version  = "6.7.1"
+	)
+
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: repoName, UID: "repo-uid", Generation: 1},
+	}
+
+	r := newTestResolver(t, repo)
+
+	name := cvnaming.AuxResourceName(string(RepositoryKindHelmClusterAddon), "",
+		repoName, chart, version, identityOf(repo.ObjectMeta))
+	if err := r.cache.Put(name, []byte("replicaCount: 1\n")); err != nil {
+		t.Fatalf("seeding cache: %v", err)
+	}
+
+	// What the operator does on a sync: conditions and the observed generation move,
+	// the spec does not.
+	stored := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := r.client.Get(context.Background(), client.ObjectKey{Name: repoName}, stored); err != nil {
+		t.Fatalf("reading repository: %v", err)
+	}
+	stored.Status.ObservedGeneration = 1
+	stored.Status.Conditions = []metav1.Condition{{
+		Type:               helmv1alpha1.ConditionTypeReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             helmv1alpha1.ReasonSuccess,
+		LastTransitionTime: metav1.Now(),
+	}}
+	if err := r.client.Status().Update(context.Background(), stored); err != nil {
+		t.Fatalf("updating repository status: %v", err)
+	}
+
+	got, err := r.Resolve(context.Background(), Request{
+		Kind:           RepositoryKindHelmClusterAddon,
+		RepositoryName: repoName,
+		Chart:          chart,
+		Version:        version,
+	})
+	if err != nil {
+		t.Fatalf("Resolve returned %v", err)
+	}
+	if got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
+		t.Fatalf("got %+v, want the cached entry: a status write must not cost a re-download", got)
+	}
 }

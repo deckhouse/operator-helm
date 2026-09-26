@@ -38,26 +38,32 @@ const (
 
 // AuxResourceName returns a deterministic DNS-1123 name (<=63 chars) for the
 // auxiliary source resource backing a (kind, namespace, repository, chart, version)
-// tuple. The same tuple always maps to the same name, which makes polling requests
-// idempotent and lets concurrent requests converge on one resource.
+// tuple read from one concrete repository object, named by identity. The same tuple
+// and identity always map to the same name, which makes polling requests idempotent
+// and lets concurrent requests converge on one resource.
+//
+// identity is what the repository is, as opposed to what it is called: a repository
+// deleted and recreated under the same name, or edited to point somewhere else, is a
+// different source of the same chart name and must not share the previous one's
+// auxiliary object or its cache entry — the values of a stranger's chart would be
+// served under the requested name. See resolver.identityOf for what goes into it.
 //
 // namespace is empty for a cluster-scoped repository kind and is then absent from
-// both the hash input and the readable part, so the names the addon family already
-// uses do not move. For a namespaced kind it is what keeps two same-named
+// the readable part. For a namespaced kind it is what keeps two same-named
 // repositories in different namespaces apart: the auxiliary objects of every kind
 // share one namespace, so the tuple without it is not unique. A namespaced name
 // carries one readable part more, so each of its parts is bounded more tightly.
 //
 // The readable parts are only hints; the hash over the full tuple guarantees
 // uniqueness even if they collide.
-func AuxResourceName(kind, namespace, repository, chart, version string) string {
+func AuxResourceName(kind, namespace, repository, chart, version, identity string) string {
 	if namespace == "" {
-		sum := sha256.Sum256([]byte(kind + "\x00" + repository + "/" + chart + "@" + version))
+		sum := sha256.Sum256([]byte(kind + "\x00" + repository + "/" + chart + "@" + version + "\x00" + identity))
 
 		return fmt.Sprintf("%s-%s-%s-%x", resourcePrefix, sanitize(repository, maxPartLen), sanitize(chart, maxPartLen), sum[:8])
 	}
 
-	sum := sha256.Sum256([]byte(kind + "\x00" + namespace + "/" + repository + "/" + chart + "@" + version))
+	sum := sha256.Sum256([]byte(kind + "\x00" + namespace + "/" + repository + "/" + chart + "@" + version + "\x00" + identity))
 
 	return fmt.Sprintf("%s-%s-%s-%s-%x",
 		resourcePrefix,

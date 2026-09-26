@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	apinaming "github.com/deckhouse/operator-helm/api/naming"
@@ -31,6 +32,10 @@ type repositorySpec struct {
 	Auth               *helmv1alpha1.RepositoryAuth
 	CACertificate      string
 	InsecureSkipVerify bool
+
+	// Identity is which repository object this is, not what it is called; see
+	// identityOf.
+	Identity string
 }
 
 // repositoryFamily is everything that differs between the repository kinds: how the
@@ -66,7 +71,7 @@ var families = map[RepositoryKind]repositoryFamily{
 				return nil, err
 			}
 
-			return specOf(repo.Spec), nil
+			return specOf(repo.ObjectMeta, repo.Spec), nil
 		},
 		ChartVersions: func(ctx context.Context, c client.Client, _, repository, chart string) ([]helmv1alpha1.ChartVersion, error) {
 			obj := &helmv1alpha1.HelmClusterAddonChart{}
@@ -90,7 +95,7 @@ var families = map[RepositoryKind]repositoryFamily{
 				return nil, err
 			}
 
-			return specOf(repo.Spec), nil
+			return specOf(repo.ObjectMeta, repo.Spec), nil
 		},
 		ChartVersions: func(ctx context.Context, c client.Client, namespace, repository, chart string) ([]helmv1alpha1.ChartVersion, error) {
 			obj := &helmv1alpha1.HelmApplicationChart{}
@@ -117,7 +122,7 @@ var families = map[RepositoryKind]repositoryFamily{
 				return nil, err
 			}
 
-			return specOf(repo.Spec), nil
+			return specOf(repo.ObjectMeta, repo.Spec), nil
 		},
 		ChartVersions: func(ctx context.Context, c client.Client, _, repository, chart string) ([]helmv1alpha1.ChartVersion, error) {
 			obj := &helmv1alpha1.HelmClusterApplicationChart{}
@@ -141,13 +146,30 @@ func familyFor(kind RepositoryKind) (repositoryFamily, bool) {
 	return family, ok
 }
 
-func specOf(spec helmv1alpha1.RepositorySpec) *repositorySpec {
+func specOf(meta metav1.ObjectMeta, spec helmv1alpha1.RepositorySpec) *repositorySpec {
 	return &repositorySpec{
 		URL:                spec.URL,
 		Auth:               spec.Auth,
 		CACertificate:      spec.CACertificate,
 		InsecureSkipVerify: spec.InsecureSkipVerify,
+		Identity:           identityOf(meta),
 	}
+}
+
+// identityOf names the repository object a chart is read from, so that everything
+// derived from it — the auxiliary source object and the cached values — belongs to
+// that object rather than to its name. A name is reusable: delete a repository and
+// create another one under it, or point the existing one at another url, and the
+// same request would otherwise be answered from what the previous source held.
+//
+// The UID covers deletion and recreation (a new object, whatever its spec says) and
+// the generation covers an edit of the surviving object's spec — url, credentials,
+// TLS. Both repository kinds have a status subresource, so the generation moves only
+// with the spec: the conditions, the observed generation and the catalog the
+// operator writes back on every synchronization leave the cache entry valid, and
+// nothing here re-downloads a chart that did not change.
+func identityOf(meta metav1.ObjectMeta) string {
+	return fmt.Sprintf("%s@%d", meta.UID, meta.Generation)
 }
 
 // requireNamespace reports the request-shape error of a family: a namespaced kind

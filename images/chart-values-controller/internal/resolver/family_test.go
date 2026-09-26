@@ -39,7 +39,7 @@ func TestFamilyForRejectsAnUnknownKind(t *testing.T) {
 // the operator writes for it.
 func TestAddonFamilyReadsTheClusterScopedRepositoryAndCatalog(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
-		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 4},
 		Spec: helmv1alpha1.RepositorySpec{
 			URL:                "oci://ghcr.io/example/charts",
 			Auth:               &helmv1alpha1.RepositoryAuth{Username: "u", Password: "p"},
@@ -74,6 +74,9 @@ func TestAddonFamilyReadsTheClusterScopedRepositoryAndCatalog(t *testing.T) {
 		Auth:               repo.Spec.Auth,
 		CACertificate:      repo.Spec.CACertificate,
 		InsecureSkipVerify: true,
+		// Which object this came from, not what it is called: everything keyed on the
+		// repository hangs off this.
+		Identity: "repo-uid@4",
 	}
 	if !reflect.DeepEqual(spec, want) {
 		t.Fatalf("repository spec = %+v, want %+v", spec, want)
