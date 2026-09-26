@@ -79,9 +79,10 @@ func (s *HelmRepositories) Ensure(
 	state := InternalRepositoryState{Present: true}
 
 	// The Stalled condition is read only while it speaks about the generation the
-	// object now has: source-controller removes it at the end of a pass that reaches a
-	// verdict, not when it picks up a new spec, so a repository just corrected would
-	// otherwise go on being reported as abandoned.
+	// object now has: source-controller clears it at the start of the pass that acts on
+	// a new spec, so between the patch above and that pass the status still carries the
+	// stall of the spec that was just corrected, and a repository already on its way
+	// would be reported as abandoned.
 	if stalled := currentCondition(existing.Status.Conditions, helmv1alpha1.ConditionTypeStalled, existing.Generation); stalled != nil &&
 		stalled.Status == metav1.ConditionTrue {
 		state.Stalled = true

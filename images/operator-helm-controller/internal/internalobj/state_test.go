@@ -134,12 +134,12 @@ func TestReduceInternalConditionsFallsBackToTheStallReason(t *testing.T) {
 }
 
 // TestReduceInternalConditionsIgnoresAStallFromAnOlderGeneration covers the moment
-// right after a broken spec is corrected. Neither controller clears Stalled when it
-// picks up a new generation — helm-controller removes it only at the end of a pass
-// that succeeds — so the condition of the attempt that gave up on the previous spec
-// is still there while the new one is being reconciled. Read as a verdict about the
-// current spec it would suppress Reconciling and tell the user that nothing is
-// happening, for as long as the work actually takes.
+// right after a broken spec is corrected: the generation has been bumped, and the
+// pass that will clear Stalled has not started yet. helm-controller drops that
+// condition at the head of its next pass, so until then the status still carries the
+// verdict of the attempt that gave up on the previous spec. Read as a verdict about
+// the current one it would suppress Reconciling and tell the user that nothing is
+// happening, right when the work is about to begin.
 func TestReduceInternalConditionsIgnoresAStallFromAnOlderGeneration(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{
@@ -175,7 +175,7 @@ func TestReduceInternalConditionsIgnoresAStallFromAnOlderGeneration(t *testing.T
 
 // TestReduceInternalConditionsIgnoresAFailureFromAnOlderGeneration extends the same
 // rule to the error conditions. An object that has been given a new spec and has not
-// started on it yet carries only the fault of the previous one; reporting that fault
+// been picked up yet carries only the fault of the previous one; reporting that fault
 // as the verdict about the new spec would blame it for something it never caused.
 func TestReduceInternalConditionsIgnoresAFailureFromAnOlderGeneration(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
@@ -227,6 +227,83 @@ func TestReduceInternalConditionsTrustsAStallWithoutAnObservedGeneration(t *test
 	}
 	if state.Reason != helmv1alpha1.ReasonRetriesExceeded {
 		t.Fatalf("reason = %q, want %q", state.Reason, helmv1alpha1.ReasonRetriesExceeded)
+	}
+}
+
+// TestReduceInternalConditionsIgnoresAVerdictFromANewerGeneration covers the other
+// end of the same gap. flux patches a status the instant it starts a pass, and that
+// status can reach this cache before the spec it was written for: the conditions
+// then carry a generation ahead of the one read here. They are no more about the
+// spec in hand than an older verdict is, so nothing is reported as observed until
+// the two line up.
+func TestReduceInternalConditionsIgnoresAVerdictFromANewerGeneration(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeStalled,
+			Status:             metav1.ConditionTrue,
+			Reason:             helmv1alpha1.ReasonRetriesExceeded,
+			Message:            "Failed to upgrade after 1 attempt(s)",
+			ObservedGeneration: 6,
+		},
+		{
+			Type:               helmv1alpha1.ConditionTypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 6,
+		},
+		{
+			Type:               "Released",
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 6,
+		},
+	}, 5, helmReleaseErrorRules)
+
+	if state.Stalled {
+		t.Fatalf("state = %+v, want a stall of a generation not yet seen ignored", state)
+	}
+	if state.Observed || state.Status != metav1.ConditionUnknown || state.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("state = %+v, want no verdict yet for the generation in hand", state)
+	}
+}
+
+// TestReduceInternalConditionsPrefersACurrentFailureToAStaleReconciling is the
+// mirror of the stale-stall case: here it is Reconciling that belongs to the
+// previous generation while the failure is about the current one. Reconciling comes
+// first in the reduction, so were it read the release would report progress over a
+// fault the object has already settled on.
+func TestReduceInternalConditionsPrefersACurrentFailureToAStaleReconciling(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             helmv1alpha1.ReasonReconciling,
+			Message:            "Running 'upgrade' action",
+			ObservedGeneration: 4,
+		},
+		{
+			Type:               helmv1alpha1.ConditionTypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 5,
+		},
+		{
+			Type:               "Released",
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 5,
+		},
+	}, 5, helmReleaseErrorRules)
+
+	if !state.Observed || state.Status != metav1.ConditionFalse || state.Reason != helmv1alpha1.ReasonReleaseFailed {
+		t.Fatalf("state = %+v, want the failure of the current generation", state)
+	}
+	if state.Stalled {
+		t.Fatalf("state = %+v, want it left retriable", state)
 	}
 }
 

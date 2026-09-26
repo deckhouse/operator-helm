@@ -67,8 +67,8 @@ type ErrorConditionRule struct {
 // reduceInternalConditions collapses the conditions of an internal object into the
 // state the release evaluation works from. Only conditions that speak about the
 // generation the object currently has are read at all (see currentCondition):
-// neither controller clears its conditions when it picks up a new spec, so every one
-// of them may still be the verdict about the previous spec.
+// between the moment this side writes a new spec and the moment flux starts the pass
+// that acts on it, the status still holds the verdict about the previous spec.
 //
 // Having given up outranks everything: an object that will not act on the spec it
 // was given is not going to reach a verdict about it either, so its Reconciling
@@ -157,12 +157,23 @@ func conditionObserved(conditions []metav1.Condition, conditionType string, gene
 	return cond, true
 }
 
-// currentCondition returns the named condition unless it is the verdict of an older
-// generation. Neither helm-controller nor source-controller clears conditions when a
-// new spec arrives — Stalled, for one, is removed only at the end of a pass that
-// succeeds — so after a spec change the object keeps reporting what happened to the
-// previous one. Read as if it were about the current spec, such a leftover Stalled
-// tells the user the work has been abandoned while it is in fact under way.
+// currentCondition returns the named condition unless it belongs to a generation
+// other than the one the object has. Conditions are rewritten by the controller that
+// owns the object, not by the write that changes its spec: helm-controller clears
+// Stalled and raises Reconciling at the start of a pass
+// (conditions.MarkReconciling, fluxcd/pkg/runtime@v0.110.3
+// conditions/setter.go:146, called from helm-controller@v1.6.4
+// internal/controller/helmrelease_controller.go:236; source-controller reaches the
+// same through reconcile.ProgressiveStatus, pkg/runtime@v0.110.3
+// reconcile/result.go:192). The stale window is therefore not the length of the next
+// pass but the gap before it starts — from the patch that bumps the generation until
+// flux picks the object up and patches its status. Every spec change opens it, and a
+// leftover Stalled read inside it tells the user the work has been abandoned while
+// it is in fact about to begin.
+//
+// Conditions of a generation newer than the object's are dropped by the same test: a
+// status written by flux can reach this cache before the spec that provoked it, and
+// that verdict is no more about the spec in hand than an older one is.
 //
 // A condition with no observedGeneration is taken as current. Both controllers stamp
 // every condition they write through their patch helper, so an unstamped one is not

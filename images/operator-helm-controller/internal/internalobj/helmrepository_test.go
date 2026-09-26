@@ -168,10 +168,11 @@ func TestHelmRepositoriesEnsureReportsStalled(t *testing.T) {
 }
 
 // TestHelmRepositoriesEnsureIgnoresAStallFromAnOlderGeneration covers a repository
-// whose secret reference has just been fixed. source-controller drops Stalled only
-// on a pass that reaches a verdict, so the condition of the rejected spec is still
-// there at generation 2; reading it would report the repository as abandoned while
-// it is being fetched. The fixture matches what applyHelmRepositorySpec writes, so
+// whose secret reference has just been fixed. source-controller drops Stalled at the
+// head of the pass that acts on the new spec, so in the gap before that pass starts
+// the condition of the rejected spec is still there at generation 2; reading it
+// would report as abandoned a repository that is about to be fetched again. The
+// fixture matches what applyHelmRepositorySpec writes, so
 // CreateOrPatch is a no-op and the generation stays where it is put.
 func TestHelmRepositoriesEnsureIgnoresAStallFromAnOlderGeneration(t *testing.T) {
 	repo := testRepository()
