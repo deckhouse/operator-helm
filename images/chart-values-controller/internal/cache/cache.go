@@ -25,6 +25,19 @@ import (
 	"sync"
 )
 
+// blockSize is what a file costs the volume beyond its own length. A filesystem
+// hands out whole blocks, so an entry of a few hundred bytes still takes one, and
+// a budget counting content alone would admit several times more entries than the
+// volume holds — which is the eviction this budget exists to prevent. 4 KiB is the
+// usual block of the filesystems an emptyDir is backed by; being wrong about it
+// costs some unused space, while ignoring it costs the pod.
+const blockSize = 4096
+
+// onDisk rounds a length up to what it occupies.
+func onDisk(n int64) int64 {
+	return (n + blockSize - 1) / blockSize * blockSize
+}
+
 // tempPrefix marks a staging file of an atomic write. One process owns the cache
 // directory (single replica, no leader election), so at construction time no temp
 // file can belong to a live writer: whatever is left carries a crash of the
@@ -103,7 +116,21 @@ func (c *Cache) scan() {
 		}
 
 		if strings.HasPrefix(e.Name(), tempPrefix) {
-			_ = os.Remove(filepath.Join(c.dir, e.Name()))
+			if err := os.Remove(filepath.Join(c.dir, e.Name())); err == nil {
+				continue
+			}
+
+			// A temp file that will not go away still occupies the volume, and the
+			// budget has to know about it even though no key will ever read it.
+			// It is charged under its own name, which nothing else writes.
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+
+			c.sizes[e.Name()] = onDisk(info.Size())
+			c.used += onDisk(info.Size())
+
 			continue
 		}
 
@@ -112,8 +139,8 @@ func (c *Cache) scan() {
 			continue
 		}
 
-		c.sizes[e.Name()] = info.Size()
-		c.used += info.Size()
+		c.sizes[e.Name()] = onDisk(info.Size())
+		c.used += onDisk(info.Size())
 	}
 }
 
@@ -145,6 +172,7 @@ func (c *Cache) reserve(name string, n int64) (int64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	n = onDisk(n)
 	claim := n + max(0, n-c.sizes[name])
 	if c.used+c.reserved+claim > c.budget {
 		return 0, false
@@ -162,6 +190,7 @@ func (c *Cache) commit(name string, n, claim int64, stored bool) {
 	defer c.mu.Unlock()
 
 	c.reserved -= claim
+	n = onDisk(n)
 	if !stored {
 		return
 	}
@@ -188,6 +217,7 @@ func (c *Cache) Put(key string, content []byte) error {
 	}
 
 	stored := false
+	// Runs after the lock below is released, since deferred calls unwind in reverse.
 	defer func() { c.commit(name, size, claim, stored) }()
 
 	if err := os.MkdirAll(c.dir, 0o755); err != nil {
@@ -211,6 +241,13 @@ func (c *Cache) Put(key string, content []byte) error {
 		return fmt.Errorf("closing cache entry: %w", err)
 	}
 
+	// The rename and the bookkeeping it implies happen together. They are two steps
+	// on one entry, and a Delete landing between them would subtract a file that is
+	// about to exist: the entry would stay on the volume, unaccounted, until the pod
+	// restarts. Writing the temp file, which is the slow part, stays outside.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if err := os.Rename(tmpName, c.path(key)); err != nil {
 		return fmt.Errorf("committing cache entry: %w", err)
 	}
@@ -223,12 +260,14 @@ func (c *Cache) Put(key string, content []byte) error {
 // The space it took is given back to the budget, which is what keeps the
 // controller's expiry pass from leaving the cache permanently full.
 func (c *Cache) Delete(key string) error {
+	// Held across the removal for the same reason Put holds it across the rename:
+	// the file and what is recorded about it move together.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if err := os.Remove(c.path(key)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing cache entry: %w", err)
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	name := c.fileName(key)
 	c.used -= c.sizes[name]

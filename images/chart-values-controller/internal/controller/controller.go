@@ -164,6 +164,16 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 		} else {
 			log.FromContext(ctx).Error(err, "failed to write cache entry", "name", name)
 		}
+
+		// Whatever is under this key belongs to the revision that was there before,
+		// and this pass ran precisely because that is no longer the current one.
+		// Serving it would answer with the values of an older chart under the
+		// version that was asked for, so it goes — which also gives the budget back
+		// the room the replacement needs.
+		if err := r.cache.Delete(name); err != nil {
+			log.FromContext(ctx).Error(err, "failed to drop a stale cache entry", "name", name)
+		}
+
 		return
 	}
 

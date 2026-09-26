@@ -95,6 +95,8 @@ func TestConcurrentSameKey(t *testing.T) {
 // is charged twice per write because an atomic write briefly holds a temp copy
 // next to the published one.
 func TestPutRefusesAnEntryThatDoesNotFitTheBudget(t *testing.T) {
+	// One block's worth of content, since a budget is spent in whole blocks: this
+	// is what an entry costs the volume however few bytes it holds.
 	content := bytes.Repeat([]byte("x"), 1024)
 
 	tests := []struct {
@@ -103,18 +105,18 @@ func TestPutRefusesAnEntryThatDoesNotFitTheBudget(t *testing.T) {
 		wantStored bool
 	}{
 		{
-			name:       "budget below the content is refused outright",
-			budget:     int64(len(content)) - 1,
+			name:       "budget below one block is refused outright",
+			budget:     blockSize - 1,
 			wantStored: false,
 		},
 		{
 			name:       "budget covering only the final file still leaves the temp copy unpaid for",
-			budget:     int64(len(content)),
+			budget:     blockSize,
 			wantStored: false,
 		},
 		{
 			name:       "budget covering the temp copy and the final file admits the write",
-			budget:     2 * int64(len(content)),
+			budget:     2 * blockSize,
 			wantStored: true,
 		},
 	}
@@ -156,7 +158,7 @@ func TestPutKeepsServingEarlierEntriesOnceTheBudgetIsExhausted(t *testing.T) {
 	content := bytes.Repeat([]byte("y"), 512)
 	// Room for exactly one entry: 2n is claimed while writing, n stays afterwards,
 	// which leaves n free — not the 2n the next write needs.
-	c := New(t.TempDir(), 2*int64(len(content)))
+	c := New(t.TempDir(), 2*blockSize)
 
 	if err := c.Put("cv-first", content); err != nil {
 		t.Fatalf("first put: %v", err)
@@ -175,7 +177,7 @@ func TestPutKeepsServingEarlierEntriesOnceTheBudgetIsExhausted(t *testing.T) {
 // cache that never gave the old bytes back would refuse everything after a while.
 func TestOverwritingAnEntryCountsItOnce(t *testing.T) {
 	content := bytes.Repeat([]byte("z"), 512)
-	c := New(t.TempDir(), 2*int64(len(content)))
+	c := New(t.TempDir(), 2*blockSize)
 
 	for i := range 5 {
 		if err := c.Put("cv-same", content); err != nil {
@@ -193,7 +195,7 @@ func TestOverwritingAnEntryCountsItOnce(t *testing.T) {
 // if that did not free the space the cache would stay full for the life of the pod.
 func TestDeleteGivesTheSpaceBackToTheBudget(t *testing.T) {
 	content := bytes.Repeat([]byte("q"), 512)
-	c := New(t.TempDir(), 2*int64(len(content)))
+	c := New(t.TempDir(), 2*blockSize)
 
 	if err := c.Put("cv-old", content); err != nil {
 		t.Fatalf("put: %v", err)
@@ -224,7 +226,6 @@ func TestDeleteGivesTheSpaceBackToTheBudget(t *testing.T) {
 // volume's worth of entries on top of them.
 func TestNewAccountsForEntriesAlreadyOnDisk(t *testing.T) {
 	content := bytes.Repeat([]byte("w"), 512)
-	size := int64(len(content))
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "cv-survivor"), content, 0o644); err != nil {
@@ -232,7 +233,7 @@ func TestNewAccountsForEntriesAlreadyOnDisk(t *testing.T) {
 	}
 
 	// Enough for the pre-existing entry and for one more write (2n while it runs).
-	if err := New(dir, 3*size).Put("cv-fresh", content); err != nil {
+	if err := New(dir, 3*blockSize).Put("cv-fresh", content); err != nil {
 		t.Fatalf("put with room for both: %v", err)
 	}
 	if err := os.Remove(filepath.Join(dir, "cv-fresh")); err != nil {
@@ -240,7 +241,7 @@ func TestNewAccountsForEntriesAlreadyOnDisk(t *testing.T) {
 	}
 
 	// One byte short of that, which only shows if the pre-existing file is counted.
-	if err := New(dir, 3*size-1).Put("cv-fresh", content); !errors.Is(err, ErrBudgetExhausted) {
+	if err := New(dir, 3*blockSize-1).Put("cv-fresh", content); !errors.Is(err, ErrBudgetExhausted) {
 		t.Fatalf("put = %v, want ErrBudgetExhausted: files found at startup must be charged to the budget", err)
 	}
 }
@@ -251,7 +252,6 @@ func TestNewAccountsForEntriesAlreadyOnDisk(t *testing.T) {
 // counted it would hold the space until the pod is replaced.
 func TestNewSweepsTempFilesLeftByACrash(t *testing.T) {
 	content := bytes.Repeat([]byte("e"), 512)
-	size := int64(len(content))
 
 	dir := t.TempDir()
 	orphan := filepath.Join(dir, tempPrefix+"12345")
@@ -259,7 +259,7 @@ func TestNewSweepsTempFilesLeftByACrash(t *testing.T) {
 		t.Fatalf("seeding a leftover temp file: %v", err)
 	}
 
-	c := New(dir, 2*size)
+	c := New(dir, 2*blockSize)
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatalf("stat of the leftover temp file = %v, want it removed", err)
 	}
@@ -274,11 +274,10 @@ func TestNewSweepsTempFilesLeftByACrash(t *testing.T) {
 // thing keeping their sum off the volume's sizeLimit.
 func TestConcurrentPutsOfDifferentKeysStayWithinTheBudget(t *testing.T) {
 	content := bytes.Repeat([]byte("k"), 4096)
-	size := int64(len(content))
 
 	const writers = 16
 	// Room for four entries once settled, for two writes at their peak.
-	budget := 4 * size
+	budget := int64(4 * blockSize)
 	dir := t.TempDir()
 	c := New(dir, budget)
 

@@ -1,5 +1,14 @@
 {{- $priorityClassName := include "priorityClassName" . }}
 
+{{- /*
+  The cache volume and the budget the controller keeps inside it are one decision,
+  so they are one number here: the budget is three quarters of the volume, leaving
+  a quarter for filesystem overhead and for entries rounded up to whole blocks.
+  Deriving it is what keeps a later edit of one from silently outgrowing the other.
+*/}}
+{{- $cacheVolumeMB := 512 }}
+{{- $cacheBudgetMB := div (mul $cacheVolumeMB 3) 4 }}
+
 {{- define "operator_helm_chart_values_controller_resources" }}
 cpu: 50m
 memory: 64Mi
@@ -82,8 +91,7 @@ spec:
             - --cache-dir=/cache
             - --chart-values-cache-ttl=1h
             - --max-chart-size-mb=100
-            # Kept in step with the sizeLimit of the cache volume below.
-            - --cache-budget-mb=384
+            - --cache-budget-mb={{ $cacheBudgetMB }}
           volumeMounts:
             - mountPath: /cache
               name: cache
@@ -141,13 +149,13 @@ spec:
           # Emergency cap, not a cleanup mechanism: on overflow the kubelet
           # evicts the pod, which restores the entries and fills the volume
           # again. What actually bounds the cache is the controller's own
-          # --cache-budget-mb=384, kept below this limit; the gap absorbs
-          # filesystem overhead and files rounded up to whole blocks. Both cover
-          # the pathological case of entries at the --max-chart-size-mb=100
-          # ceiling, plus one extra copy while an atomic write stages its temp
-          # file. Real values.yaml are kilobytes.
+          # --cache-budget-mb above, derived from this limit so the two cannot
+          # drift apart. The gap absorbs filesystem overhead and files rounded up
+          # to whole blocks. Both cover the pathological case of entries at the
+          # --max-chart-size-mb=100 ceiling, plus one extra copy while an atomic
+          # write stages its temp file. Real values.yaml are kilobytes.
           emptyDir:
-            sizeLimit: 512Mi
+            sizeLimit: {{ $cacheVolumeMB }}Mi
         - name: api-tls
           secret:
             secretName: chart-values-controller-tls

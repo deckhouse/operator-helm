@@ -17,7 +17,14 @@ limitations under the License.
 package controller
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -35,6 +42,10 @@ import (
 	"github.com/deckhouse/chart-values-controller/internal/cache"
 	"github.com/deckhouse/chart-values-controller/internal/labels"
 )
+
+// cacheBlock is what one entry costs the cache's budget however few bytes it
+// holds — the filesystem block the cache rounds to.
+const cacheBlock = 4096
 
 const (
 	testNamespace = "d8-operator-helm"
@@ -286,4 +297,91 @@ func TestReconcileTreatsAnAlreadyDeletedObjectAsCollected(t *testing.T) {
 	if _, cached := r.cache.Get(testName); cached {
 		t.Fatal("cache entry of a deleted object should be dropped")
 	}
+}
+
+// TestRefreshDropsAStaleEntryWhenTheNewOneDoesNotFit covers what a refused write
+// leaves behind. The pass runs because the artifact's digest moved, so whatever is
+// under the key is the previous revision's values — serving those under the
+// version that was asked for is worse than serving nothing, and the room they
+// occupy is room the replacement needs.
+func TestRefreshDropsAStaleEntryWhenTheNewOneDoesNotFit(t *testing.T) {
+	values := []byte("replicaCount: 2\n")
+	archive := buildValuesArchive(t, values)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+
+	chart := readyChartWithArtifact(srv.URL, fmt.Sprintf("sha256:%x", sha256.Sum256(archive)))
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(chart).Build()
+
+	r := newTestReconciler(t, c)
+	r.httpClient = srv.Client()
+	r.maxArtifactBytes = 1 << 20
+	// Seeded with room to spare, then reopened over the same directory with room
+	// for that entry alone: the refresh stages a temp file beside it, which is a
+	// second block and does not fit, so the write is refused rather than tight.
+	dir := t.TempDir()
+	r.cache = cache.New(dir, 4*cacheBlock)
+	if err := r.cache.Put(testName, []byte("replicaCount: 1\n")); err != nil {
+		t.Fatalf("seeding the stale entry: %v", err)
+	}
+	r.cache = cache.New(dir, cacheBlock)
+
+	if _, err := reconcileOnce(t, r); err != nil {
+		t.Fatalf("a refused cache write is not a failure of the pass, got: %v", err)
+	}
+
+	if got, cached := r.cache.Get(testName); cached {
+		t.Fatalf("stale entry %q survived a refused refresh", got)
+	}
+	if digest := r.lastDigest(testName); digest != "" {
+		t.Fatalf("remembered digest = %q, want empty: a later pass has to try again", digest)
+	}
+}
+
+// readyChartWithArtifact is a chart whose artifact is published and ready to be
+// read, which is what makes a pass attempt a refresh at all.
+func readyChartWithArtifact(url, digest string) *sourcev1.HelmChart {
+	return &sourcev1.HelmChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        testName,
+			Namespace:   testNamespace,
+			Labels:      map[string]string{labels.ManagedBy: labels.ManagedByValue},
+			Annotations: map[string]string{labels.ExpiresAtAnnotation: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)},
+		},
+		Status: sourcev1.HelmChartStatus{
+			Artifact:   &meta.Artifact{URL: url, Digest: digest},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Succeeded"}},
+		},
+	}
+}
+
+// buildValuesArchive packs values.yaml the way a chart artifact carries it.
+func buildValuesArchive(t *testing.T, values []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "podinfo/values.yaml",
+		Mode: 0o644,
+		Size: int64(len(values)),
+	}); err != nil {
+		t.Fatalf("writing archive header: %v", err)
+	}
+	if _, err := tw.Write(values); err != nil {
+		t.Fatalf("writing archive entry: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("closing tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("closing gzip writer: %v", err)
+	}
+
+	return buf.Bytes()
 }
