@@ -46,14 +46,18 @@ var (
 	// indexAttemptTimeout bounds one attempt — connect, respond and hand over the
 	// whole index — on its own. A shared deadline for all attempts is what made the
 	// retries decorative: against a slow mirror the first attempt drank the entire
-	// budget and the backoff had nothing left to retry with.
-	indexAttemptTimeout = 30 * time.Second
+	// budget and the backoff had nothing left to retry with. Fifteen seconds is a
+	// GET of a single file with half of it left to the dial, and it matters because
+	// a repository controller runs two reconciles at a time: a remote that accepts
+	// the connection and then says nothing holds a worker for the whole attempt,
+	// and the repositories behind it wait.
+	indexAttemptTimeout = 15 * time.Second
 	// indexFetchBudget caps the three attempts together with the pauses between
-	// them (3*30s + ~1s + ~2s of backoff, jitter included). It is a read that runs
+	// them (3*15s + ~1s + ~2s of backoff, jitter included). It is a read that runs
 	// once per SyncInterval (5 minutes, see reconcile/repository), so spending up
-	// to two minutes on a struggling remote still leaves the next pass on schedule
+	// to a minute on a struggling remote still leaves the next pass on schedule
 	// and keeps one repository from occupying a worker indefinitely.
-	indexFetchBudget = 2 * time.Minute
+	indexFetchBudget = time.Minute
 	// maxIndexSize bounds the index.yaml held in memory. Large public repositories
 	// publish indexes of a few tens of megabytes (bitnami's is the extreme), so the
 	// limit is set well above them while keeping a repository that streams without
