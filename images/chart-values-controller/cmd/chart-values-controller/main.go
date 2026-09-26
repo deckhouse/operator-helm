@@ -65,7 +65,7 @@ func main() {
 
 	// Metrics stay on the loopback interface: the kube-rbac-proxy sidecar is the
 	// only intended reader and reaches them at 127.0.0.1:8080, so nothing in the
-	// pod network can scrape them unauthenticated.
+	// cluster network can scrape them unauthenticated.
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "127.0.0.1:8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":9440", "The address the health probe endpoint binds to.")
 	flag.StringVar(&apiAddr, "api-bind-address", "127.0.0.1:8081", "The address the chart-values HTTP API binds to.")

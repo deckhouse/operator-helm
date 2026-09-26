@@ -80,6 +80,9 @@ spec:
             - --storage-path=/data
             - --storage-addr=:9091
             - --storage-adv-addr=source-controller.$(RUNTIME_NAMESPACE).svc.{{ .Values.global.discovery.clusterDomain }}
+            # Metrics are reachable only through the kube-rbac-proxy sidecar, which
+            # scrapes them over the loopback interface of this pod.
+            - --metrics-addr=127.0.0.1:8080
           volumeMounts:
             - mountPath: /data
               name: data
@@ -89,9 +92,6 @@ spec:
           ports:
             - containerPort: 9091
               name: controller
-              protocol: TCP
-            - containerPort: 8080
-              name: metrics
               protocol: TCP
             - containerPort: 9440
               name: healthz

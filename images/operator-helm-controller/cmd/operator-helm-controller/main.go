@@ -66,7 +66,10 @@ func main() {
 		enableLeaderElection bool
 	)
 
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
+	// Metrics stay on the loopback interface: the kube-rbac-proxy sidecar is the
+	// only intended reader and reaches them at 127.0.0.1:8080, so nothing in the
+	// cluster network can scrape them unauthenticated.
+	flag.StringVar(&metricsAddr, "metrics-bind-address", "127.0.0.1:8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":9440", "The address the health probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager.")
 	opts := zap.Options{Development: false}
