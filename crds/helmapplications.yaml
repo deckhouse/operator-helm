@@ -43,6 +43,10 @@ spec:
       name: Cluster Repository
       priority: 1
       type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].message
+      name: Message
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:

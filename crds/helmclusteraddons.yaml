@@ -20,7 +20,7 @@ spec:
   - additionalPrinterColumns:
     - description: Helm release chart name.
       jsonPath: .spec.chart.helmClusterAddonChart
-      name: Chart Name
+      name: Chart
       type: string
     - description: Helm release chart version.
       jsonPath: .spec.chart.version
@@ -29,6 +29,18 @@ spec:
     - description: The readiness status of the addon
       jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Status
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - description: The repository the chart is taken from
+      jsonPath: .spec.chart.helmClusterAddonRepository
+      name: Repository
+      priority: 1
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].message
+      name: Message
+      priority: 1
       type: string
     name: v1alpha1
     schema:
@@ -203,6 +215,9 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: addon name must be at most 63 characters long
+          rule: self.metadata.name.size() <= 63
     served: true
     storage: true
     subresources:

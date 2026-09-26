@@ -64,6 +64,7 @@ type RepositoryStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
+	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// LastSuccessfulSyncTime is the last time the chart catalog was fully brought up to date,
 	// including creating and pruning chart resources.

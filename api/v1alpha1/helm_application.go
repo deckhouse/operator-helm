@@ -45,6 +45,7 @@ const (
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="Repository",type="string",JSONPath=".spec.chart.repository",priority=1,description="The namespaced repository the chart is taken from"
 // +kubebuilder:printcolumn:name="Cluster Repository",type="string",JSONPath=".spec.chart.clusterRepository",priority=1,description="The cluster-wide repository the chart is taken from"
+// +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].message",priority=1
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type HelmApplication struct {
@@ -171,7 +172,7 @@ type HelmApplicationSpec struct {
 	// Values holds the values for this HelmApplication release.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
-	Values *apiextensionsv1.JSON `json:"values"`
+	Values *apiextensionsv1.JSON `json:"values,omitempty"`
 	// Maintenance specifies the reconciliation strategy for the resource.
 	// When set to "NoResourceReconciliation", the controller will stop updating the
 	// underlying resources, allowing for manual intervention or maintenance
@@ -222,6 +223,7 @@ type HelmApplicationStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
+	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// LastForceReconcileTime is the time the most recent force reconcile request was
 	// processed. It records that the request was acted on, not that it succeeded:

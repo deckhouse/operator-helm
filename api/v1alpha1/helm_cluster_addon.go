@@ -32,14 +32,29 @@ const (
 	HelmClusterAddonLabelSourceName = "helm.deckhouse.io/cluster-addon"
 )
 
+// The name is bounded to the same 63 characters as a HelmApplication name, and for
+// the same reason: the name is carried as the value of the source-name label on
+// every internal object derived from the addon, and a label value cannot be longer
+// than that. The derived object names themselves do not bound it — they truncate
+// and hash whatever they are given (internal/utils/name.go) — but a label value has
+// nowhere to put the overflow.
+//
+// This note is outside the doc comment on purpose: a doc comment on the type
+// becomes the description of the kind in the CRD.
+
 // HelmClusterAddon represents a single cluster-wide installation of a Helm chart, which may include custom resource definitions (CRDs) and requires cluster-admin permissions to deploy. Only one instance of a specific chart can be installed at any given time.
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:singular=helmclusteraddon,scope=Cluster
-// +kubebuilder:printcolumn:name="Chart Name",type="string",JSONPath=".spec.chart.helmClusterAddonChart",description="Helm release chart name."
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="addon name must be at most 63 characters long"
+// +kubebuilder:printcolumn:name="Chart",type="string",JSONPath=".spec.chart.helmClusterAddonChart",description="Helm release chart name."
 // +kubebuilder:printcolumn:name="Chart Version",type="string",JSONPath=".spec.chart.version",description="Helm release chart version."
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the addon"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Repository",type="string",JSONPath=".spec.chart.helmClusterAddonRepository",priority=1,description="The repository the chart is taken from"
+// +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].message",priority=1
 // +genclient
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -137,13 +152,13 @@ type HelmClusterAddonSpec struct {
 	// Values holds the values for this HelmClusterAddon release.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
-	Values *apiextensionsv1.JSON `json:"values"`
+	Values *apiextensionsv1.JSON `json:"values,omitempty"`
 	// Namespace to deploy cluster addon release
 	// +kubebuilder:default:="default"
 	// +optional
 	// +kubebuilder:validation:MinLength=3
 	// +kubebuilder:validation:MaxLength=63
-	Namespace string `json:"namespace"`
+	Namespace string `json:"namespace,omitempty"`
 	// Maintenance specifies the reconciliation strategy for the resource.
 	// When set to "NoResourceReconciliation", the controller will stop updating the
 	// underlying resources, allowing for manual intervention or maintenance
@@ -185,6 +200,7 @@ type HelmClusterAddonStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
+	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// LastForceReconcileTime is the time the most recent force reconcile request was
 	// processed. It records that the request was acted on, not that it succeeded:

@@ -31,17 +31,19 @@ import (
 
 type ChartCatalogStatus struct {
 	// IconURL is the URL to the Helm chart icon (applicable to Helm Chart repository charts only).
+	// +optional
 	IconURL string `json:"iconURL,omitempty"`
 	// Conditions represent the latest available observations of the chart state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
+	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Versions lists every chart version the controller has examined. A version is
 	// usable when it has no unavailableReason; for an OCI repository a usable version
 	// also carries the media type of the layer that holds it.
 	// +optional
-	Versions []ChartVersion `json:"versions"`
+	Versions []ChartVersion `json:"versions,omitempty"`
 }
 
 type ChartVersion struct {
