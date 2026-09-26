@@ -324,6 +324,206 @@ func TestIdentityEnsureSurvivesLosingTheRoleCreateRace(t *testing.T) {
 	}
 }
 
+// swapOnce replaces the stored object with replacement the first time the write
+// under test reaches the client: it deletes what is there and creates the
+// replacement, which is what an object taken over by someone else looks like — a
+// new UID and a resource version of its own. It stands for the instant between the
+// ownership test and the write, the one the optimistic lock exists to close.
+func swapOnce(t *testing.T, replacement client.Object) (func(ctx context.Context, cl client.WithWatch), *bool) {
+	t.Helper()
+
+	swapped := false
+
+	return func(ctx context.Context, cl client.WithWatch) {
+		if swapped {
+			return
+		}
+		swapped = true
+
+		current := replacement.DeepCopyObject().(client.Object)
+		if err := cl.Get(ctx, client.ObjectKeyFromObject(replacement), current); err != nil {
+			t.Fatalf("reading the object about to be swapped: %v", err)
+		}
+		if err := cl.Delete(ctx, current); err != nil {
+			t.Fatalf("swapping the object out: %v", err)
+		}
+		if err := cl.Create(ctx, replacement.DeepCopyObject().(client.Object)); err != nil {
+			t.Fatalf("swapping the object in: %v", err)
+		}
+	}, &swapped
+}
+
+// TestIdentityEnsureRefusesToPatchARoleSwappedAfterTheOwnershipTest pins that the
+// ownership test and the write are one decision. The Role read carried our label;
+// by the time the patch is sent someone else's Role holds the name, and a patch
+// without the resource version it was read at would widen that Role to full rights.
+// The conflict is not terminal: nothing about it says a retry cannot succeed, and
+// the next pass judges what it then finds on its own labels.
+func TestIdentityEnsureRefusesToPatchARoleSwappedAfterTheOwnershipTest(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+	ours := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ApplicationRoleName, Namespace: "team-a", UID: "ours",
+			Labels: applicationRBACLabels(),
+		},
+		// Narrowed out of band, so this pass has a patch to send at all.
+		Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}},
+	}
+	theirRules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"get"}}}
+	theirs := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: "team-a", UID: "theirs"},
+		Rules:      theirRules,
+	}
+
+	swap, swapped := swapOnce(t, theirs)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(ours).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*rbacv1.Role); ok {
+					swap(ctx, cl)
+				}
+
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+
+	out := NewIdentity(c, testNamespace).Ensure(context.Background(), rel)
+	if !*swapped {
+		t.Fatal("the test did not exercise a patch of the role")
+	}
+	if !apierrors.IsConflict(out.Err) {
+		t.Fatalf("Ensure returned %v, want the patch rejected as a conflict", out.Err)
+	}
+	if out.Terminal {
+		t.Fatalf("outcome = %+v, want a conflict retried rather than stalled", out)
+	}
+	if out.Reason != helmv1alpha1.ReasonRBACSetupFailed {
+		t.Fatalf("reason = %q, want %q", out.Reason, helmv1alpha1.ReasonRBACSetupFailed)
+	}
+
+	stored := &rbacv1.Role{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(theirs), stored); err != nil {
+		t.Fatalf("getting the role that took the name: %v", err)
+	}
+	if !reflect.DeepEqual(stored.Rules, theirRules) {
+		t.Fatalf("rules = %+v, want the swapped-in role untouched", stored.Rules)
+	}
+	if len(stored.Labels) != 0 {
+		t.Fatalf("labels = %v, want the swapped-in role left unlabelled", stored.Labels)
+	}
+}
+
+// TestIdentityEnsureRefusesToPatchARoleBindingSwappedAfterTheOwnershipTest is the
+// same window on the binding: the one that was read was ours, the one the patch
+// would land on is not, and merging our subject into it would hand our account
+// whatever that binding grants.
+func TestIdentityEnsureRefusesToPatchARoleBindingSwappedAfterTheOwnershipTest(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+	name := rel.InternalNames().ServiceAccount
+	ours := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", UID: "ours", Labels: applicationRBACLabels()},
+		RoleRef:    applicationRoleRef(),
+		// Drifted out of band, so this pass has a patch to send at all.
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "drifted"}},
+	}
+	theirSubjects := []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "someone-else"}}
+	theirs := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", UID: "theirs"},
+		RoleRef:    applicationRoleRef(),
+		Subjects:   theirSubjects,
+	}
+
+	swap, swapped := swapOnce(t, theirs)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(ours).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*rbacv1.RoleBinding); ok {
+					swap(ctx, cl)
+				}
+
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+
+	out := NewIdentity(c, testNamespace).Ensure(context.Background(), rel)
+	if !*swapped {
+		t.Fatal("the test did not exercise a patch of the role binding")
+	}
+	if !apierrors.IsConflict(out.Err) {
+		t.Fatalf("Ensure returned %v, want the patch rejected as a conflict", out.Err)
+	}
+	if out.Terminal {
+		t.Fatalf("outcome = %+v, want a conflict retried rather than stalled", out)
+	}
+
+	stored := &rbacv1.RoleBinding{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(theirs), stored); err != nil {
+		t.Fatalf("getting the binding that took the name: %v", err)
+	}
+	if !reflect.DeepEqual(stored.Subjects, theirSubjects) {
+		t.Fatalf("subjects = %+v, want the swapped-in binding untouched", stored.Subjects)
+	}
+	if len(stored.Labels) != 0 {
+		t.Fatalf("labels = %v, want the swapped-in binding left unlabelled", stored.Labels)
+	}
+}
+
+// TestIdentityCleanupRefusesToDeleteARoleBindingSwappedAfterTheOwnershipTest is the
+// delete side of the same window. Cleanup deletes only a binding carrying our
+// label; a binding recreated by someone else in between carries none, and without
+// the preconditions naming the object that was read it would be deleted on the
+// strength of a label it never had.
+func TestIdentityCleanupRefusesToDeleteARoleBindingSwappedAfterTheOwnershipTest(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+	name := rel.InternalNames().ServiceAccount
+	ours := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", UID: "ours", Labels: applicationRBACLabels()},
+		RoleRef:    applicationRoleRef(),
+	}
+	theirRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "someone-elses-role"}
+	theirs := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", UID: "theirs"},
+		RoleRef:    theirRef,
+	}
+
+	swap, swapped := swapOnce(t, theirs)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(ours).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, ok := obj.(*rbacv1.RoleBinding); ok {
+					swap(ctx, cl)
+				}
+
+				return cl.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	err := NewIdentity(c, testNamespace).Cleanup(context.Background(), rel)
+	if !*swapped {
+		t.Fatal("the test did not exercise a delete of the role binding")
+	}
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("Cleanup returned %v, want the delete rejected as a conflict", err)
+	}
+
+	stored := &rbacv1.RoleBinding{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(theirs), stored); err != nil {
+		t.Fatalf("the binding that took the name must survive: %v", err)
+	}
+	if stored.RoleRef != theirRef {
+		t.Fatalf("roleRef = %+v, want the swapped-in binding untouched", stored.RoleRef)
+	}
+}
+
 func TestIdentityEnsureRecreatesADeletedRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newIdentity(t)

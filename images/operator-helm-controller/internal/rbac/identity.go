@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -132,6 +133,48 @@ func managedByOperator(labels map[string]string) bool {
 	return labels[helmv1alpha1.LabelManagedBy] == helmv1alpha1.LabelManagedByValue
 }
 
+// createOrPatchOwned is controllerutil.CreateOrPatch for an object whose ownership
+// has to be judged before it is written: mutate is called with what the read found
+// (exists tells an object that is already there from one about to be created), and
+// the patch that follows carries the resource version it was read at.
+//
+// That resource version is what makes the ownership test and the write one
+// decision. Without it the test says the object carried our label a moment ago,
+// not that the object being written is the one that carried it: an object deleted
+// and recreated by someone else in between would take our patch, and the label is
+// the privilege boundary of this package. Under the lock such a swap is a conflict
+// instead — a transient failure the release is retried from, and the next pass
+// judges whatever it then finds on its own labels.
+//
+// An unchanged object is not written at all, as CreateOrPatch does not write one:
+// a patch every pass would bump the resource version and wake the watches on the
+// Role and the binding for nothing.
+func createOrPatchOwned(ctx context.Context, c client.Client, obj client.Object, mutate func(exists bool) error) error {
+	if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+
+		if err := mutate(false); err != nil {
+			return err
+		}
+
+		return c.Create(ctx, obj)
+	}
+
+	base := obj.DeepCopyObject().(client.Object)
+
+	if err := mutate(true); err != nil {
+		return err
+	}
+
+	if reflect.DeepEqual(base, obj) {
+		return nil
+	}
+
+	return c.Patch(ctx, obj, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+}
+
 // Cleanup removes the account and the binding. The Role stays: it is shared by
 // every application of the namespace, and on its own — with no binding left naming
 // it — it grants nothing.
@@ -210,10 +253,8 @@ func (s *Identity) applyRole(ctx context.Context, namespace string) error {
 		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: namespace},
 	}
 
-	_, err := controllerutil.CreateOrPatch(ctx, s.client, role, func() error {
-		// A resource version is set only on an object that was read back, so it is
-		// what tells a Role that is already there from one about to be created.
-		if role.ResourceVersion != "" && !managedByOperator(role.Labels) {
+	return createOrPatchOwned(ctx, s.client, role, func(exists bool) error {
+		if exists && !managedByOperator(role.Labels) {
 			return &foreignObjectError{message: fmt.Sprintf(
 				"role %s/%s already exists and is not managed by the operator",
 				namespace, ApplicationRoleName,
@@ -236,8 +277,6 @@ func (s *Identity) applyRole(ctx context.Context, namespace string) error {
 
 		return nil
 	})
-
-	return err
 }
 
 // applicationRBACLabels mark the namespace Role and every role binding we own. The
@@ -282,11 +321,14 @@ func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, 
 			"role binding %s/%s already exists and is not managed by the operator", namespace, name,
 		)}
 	case existing.RoleRef != desiredRef:
-		// The precondition keeps the delete off a binding that was replaced between
-		// the read and here: that one has to be judged on its own labels, and the
-		// conflict brings this pass back to do it. A binding that is simply gone by
-		// now needs no deleting — the create below is what it was heading for.
-		err := s.client.Delete(ctx, existing, client.Preconditions{UID: &existing.UID})
+		// The preconditions keep the delete off a binding that was replaced or
+		// rewritten between the read and here: that one has to be judged on its own
+		// labels, and the conflict brings this pass back to do it. A binding that is
+		// simply gone by now needs no deleting — the create below is what it was
+		// heading for.
+		err := s.client.Delete(ctx, existing, client.Preconditions{
+			UID: &existing.UID, ResourceVersion: &existing.ResourceVersion,
+		})
 		if client.IgnoreNotFound(err) != nil {
 			return err
 		}
@@ -296,12 +338,12 @@ func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, 
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 	}
 
-	_, err := controllerutil.CreateOrPatch(ctx, s.client, binding, func() error {
-		// CreateOrPatch reads the object again, so the ownership test is repeated on
-		// what it found: between the read above and this one a binding of someone
+	return createOrPatchOwned(ctx, s.client, binding, func(exists bool) error {
+		// The object is read again here, so the ownership test is repeated on what
+		// that read found: between the read above and this one a binding of someone
 		// else's may have taken the name, and merging our labels onto it is the
 		// adoption the test exists to prevent.
-		if binding.ResourceVersion != "" && !managedByOperator(binding.Labels) {
+		if exists && !managedByOperator(binding.Labels) {
 			return &foreignObjectError{message: fmt.Sprintf(
 				"role binding %s/%s already exists and is not managed by the operator", namespace, name,
 			)}
@@ -325,8 +367,6 @@ func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, 
 
 		return nil
 	})
-
-	return err
 }
 
 // ensureOwnedRoleBindingDeleted deletes the role binding at nn only when it carries
@@ -344,5 +384,13 @@ func (s *Identity) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.N
 		return nil
 	}
 
-	return client.IgnoreNotFound(s.client.Delete(ctx, binding))
+	// Only this exact object at this exact revision: a binding deleted and recreated
+	// by someone else between the read and here would otherwise be deleted on the
+	// strength of a label it never carried. The conflict is transient — the pass that
+	// retries reads the replacement and leaves it alone as foreign.
+	err := s.client.Delete(ctx, binding, client.Preconditions{
+		UID: &binding.UID, ResourceVersion: &binding.ResourceVersion,
+	})
+
+	return client.IgnoreNotFound(err)
 }
