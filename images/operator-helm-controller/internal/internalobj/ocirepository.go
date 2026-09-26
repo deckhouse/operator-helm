@@ -287,7 +287,7 @@ func applyOCIRepositorySpec(
 		Operation: "copy",
 	}
 
-	existing.Labels = rel.SourceLabels()
+	applyOwnedLabels(existing, rel.SourceLabels())
 }
 
 // sameRegistryHost reports whether the artifact lives on the host the repository

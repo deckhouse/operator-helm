@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -128,5 +129,50 @@ func TestChartsEnsureKeepsForeignLabels(t *testing.T) {
 		if chart.Labels[key] != want {
 			t.Fatalf("label %q = %q, want %q", key, chart.Labels[key], want)
 		}
+	}
+}
+
+// TestChartsEnsureDropsTheCatalogLabelOfThePreviousRepositoryKind covers the other
+// half of the merge policy. An application moved from a namespaced repository to a
+// cluster-wide one keeps the same internal HelmChart, and the catalog label naming
+// the object it mirrors changes key with the kind; merging alone would leave the
+// previous key behind forever.
+func TestChartsEnsureDropsTheCatalogLabelOfThePreviousRepositoryKind(t *testing.T) {
+	app := testApplication()
+	app.Spec.Chart.Repository = ""
+	app.Spec.Chart.ClusterRepository = "stable"
+
+	rel := adapter.NewApplicationRelease(app)
+	stale := naming.ApplicationChartName("stable", app.Spec.Chart.Name)
+
+	existing := &sourcev1.HelmChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      rel.InternalNames().HelmChart,
+			Namespace: testNamespace,
+			Labels: map[string]string{
+				helmv1alpha1.HelmApplicationChartLabelSourceName: stale,
+				"cost-center": "team-a",
+			},
+		},
+	}
+	service, c := newCharts(t, existing)
+
+	repo := &helmv1alpha1.HelmClusterApplicationRepository{ObjectMeta: metav1.ObjectMeta{Name: "stable"}}
+	service.Ensure(context.Background(), rel, adapter.NewClusterApplicationRepository(repo))
+
+	chart := &sourcev1.HelmChart{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(existing), chart); err != nil {
+		t.Fatalf("getting helm chart: %v", err)
+	}
+
+	if _, found := chart.Labels[helmv1alpha1.HelmApplicationChartLabelSourceName]; found {
+		t.Fatalf("labels = %v, want the catalog label of the previous repository kind removed", chart.Labels)
+	}
+	want := naming.ClusterApplicationChartName("stable", app.Spec.Chart.Name)
+	if chart.Labels[helmv1alpha1.HelmClusterApplicationChartLabelSourceName] != want {
+		t.Fatalf("labels = %v, want the catalog label of the current repository kind %q", chart.Labels, want)
+	}
+	if chart.Labels["cost-center"] != "team-a" {
+		t.Fatalf("labels = %v, want the foreign label preserved", chart.Labels)
 	}
 }

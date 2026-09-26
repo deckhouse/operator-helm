@@ -263,3 +263,46 @@ func TestHelmRepositoriesEnsureReturnsAPIError(t *testing.T) {
 		t.Fatal("state must still report Present: true even when reconciling failed")
 	}
 }
+
+// TestHelmRepositoriesEnsureKeepsForeignLabels pins that the internal
+// HelmRepository follows the same label policy as every other internal object: a
+// label somebody else put on it survives, while an owned label that is no longer
+// desired goes away.
+func TestHelmRepositoriesEnsureKeepsForeignLabels(t *testing.T) {
+	repo := testRepository()
+	internal := &sourcev1.HelmRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalHelmRepositoryName(repo.Name),
+			Namespace: testNamespace,
+			Labels: map[string]string{
+				"cost-center":                     "team-a",
+				helmv1alpha1.LabelSourceNamespace: "gone",
+			},
+		},
+	}
+
+	scheme := sourceScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(repo, internal).Build()
+	service := NewHelmRepositories(c, testNamespace)
+
+	if _, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo)); err != nil {
+		t.Fatalf("Ensure returned %v", err)
+	}
+
+	got := &sourcev1.HelmRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(internal), got); err != nil {
+		t.Fatalf("getting helm repository: %v", err)
+	}
+
+	if got.Labels["cost-center"] != "team-a" {
+		t.Fatalf("labels = %v, want the foreign label preserved", got.Labels)
+	}
+	if _, found := got.Labels[helmv1alpha1.LabelSourceNamespace]; found {
+		t.Fatalf("labels = %v, want the owned label a cluster-scoped source does not set removed", got.Labels)
+	}
+	for key, want := range adapter.NewAddonRepository(repo).SourceLabels() {
+		if got.Labels[key] != want {
+			t.Fatalf("label %q = %q, want %q", key, got.Labels[key], want)
+		}
+	}
+}

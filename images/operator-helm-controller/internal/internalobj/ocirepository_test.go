@@ -595,3 +595,40 @@ func TestOCIRepositoriesEnsureRequeuesRetriableProbeFailure(t *testing.T) {
 		t.Fatalf("requeue = %v, want %v", result.ProbeRequeueAfter, chartArtifactProbeRequeueInterval)
 	}
 }
+
+// TestOCIRepositoriesEnsureKeepsForeignLabels pins the same label policy on the
+// internal OCIRepository: merge into what is there, but bring the labels this
+// controller owns to the desired set.
+func TestOCIRepositoriesEnsureKeepsForeignLabels(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+
+	internal := internalOCIRepository(addon.Name)
+	internal.Labels = map[string]string{
+		"cost-center":                     "team-a",
+		helmv1alpha1.LabelSourceNamespace: "gone",
+	}
+
+	service, c := newOCIRepositories(t, addon, repo, internal)
+
+	version := &helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"}
+	rel := adapter.NewAddonRelease(addon)
+
+	service.Ensure(context.Background(), rel, adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+
+	got := &sourcev1.OCIRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(internal), got); err != nil {
+		t.Fatalf("getting oci repository: %v", err)
+	}
+
+	if got.Labels["cost-center"] != "team-a" {
+		t.Fatalf("labels = %v, want the foreign label preserved", got.Labels)
+	}
+	if _, found := got.Labels[helmv1alpha1.LabelSourceNamespace]; found {
+		t.Fatalf("labels = %v, want the owned label a cluster-scoped source does not set removed", got.Labels)
+	}
+	for key, want := range rel.SourceLabels() {
+		if got.Labels[key] != want {
+			t.Fatalf("label %q = %q, want %q", key, got.Labels[key], want)
+		}
+	}
+}

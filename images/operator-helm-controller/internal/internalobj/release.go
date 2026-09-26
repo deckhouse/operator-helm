@@ -19,7 +19,6 @@ package internalobj
 import (
 	"context"
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 
@@ -142,13 +141,7 @@ func applyHelmReleaseSpec(rel contract.Release, existing *helmv2.HelmRelease, so
 		setReconcileRequestAnnotations(existing)
 	}
 
-	// Merge rather than replace: the internal HelmRelease may carry labels put
-	// there by someone else (a policy engine, a cost allocator), and dropping them
-	// on every pass would fight whoever set them.
-	if existing.Labels == nil {
-		existing.Labels = map[string]string{}
-	}
-	maps.Copy(existing.Labels, rel.SourceLabels())
+	applyOwnedLabels(existing, rel.SourceLabels())
 
 	names := rel.InternalNames()
 

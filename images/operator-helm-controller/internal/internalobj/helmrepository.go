@@ -161,5 +161,5 @@ func applyHelmRepositorySpec(repo contract.Repository, existing *sourcev1.HelmRe
 		}
 	}
 
-	existing.Labels = repo.SourceLabels()
+	applyOwnedLabels(existing, repo.SourceLabels())
 }

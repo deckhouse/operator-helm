@@ -19,7 +19,6 @@ package internalobj
 import (
 	"context"
 	"fmt"
-	"maps"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -107,13 +106,7 @@ func applyHelmChartSpec(rel contract.Release, repo contract.Repository, existing
 		setReconcileRequestAnnotations(existing)
 	}
 
-	// Merge rather than replace: the internal HelmChart may carry labels put there
-	// by someone else (a policy engine, a cost allocator), and dropping them on
-	// every pass would fight whoever set them.
-	if existing.Labels == nil {
-		existing.Labels = map[string]string{}
-	}
-	maps.Copy(existing.Labels, rel.HelmChartLabels())
+	applyOwnedLabels(existing, rel.HelmChartLabels())
 
 	ref := rel.ChartRef()
 	existing.Spec.Chart = ref.Chart
