@@ -357,35 +357,49 @@ func TestPutAndDeleteOfOneKeyLeaveTheAccountingMatchingTheDisk(t *testing.T) {
 		dir := t.TempDir()
 		c := New(dir, 64*blockSize)
 
-		var wg sync.WaitGroup
+		var (
+			wg                sync.WaitGroup
+			putErr, deleteErr error
+		)
 		wg.Add(2)
 
 		go func() {
 			defer wg.Done()
-			_ = c.Put("cv-contended", content)
+			putErr = c.Put("cv-contended", content)
 		}()
 		go func() {
 			defer wg.Done()
-			_ = c.Delete("cv-contended")
+			deleteErr = c.Delete("cv-contended")
 		}()
 
 		wg.Wait()
 
-		_, onDisk := c.Get("cv-contended")
+		if putErr != nil {
+			t.Fatalf("put: %v", putErr)
+		}
+		if deleteErr != nil {
+			t.Fatalf("delete: %v", deleteErr)
+		}
+
+		_, present := c.Get("cv-contended")
 
 		c.mu.Lock()
-		charged := c.used
-		reserved := c.reserved
+		charged, reserved, recorded := c.used, c.reserved, c.sizes["cv-contended"]
 		c.mu.Unlock()
 
 		if reserved != 0 {
 			t.Fatalf("reserved = %d after both finished, want 0", reserved)
 		}
-		if onDisk && charged == 0 {
-			t.Fatal("the entry is on the volume and nothing is charged for it")
+
+		// Either order is a correct outcome; what has to hold is that the two
+		// agree, down to the exact block the entry costs.
+		want := int64(0)
+		if present {
+			want = blockSize
 		}
-		if !onDisk && charged != 0 {
-			t.Fatalf("no entry on the volume but %d bytes are charged for one", charged)
+		if charged != want || recorded != want {
+			t.Fatalf("entry on the volume: %t, but used = %d and sizes = %d, want %d for both",
+				present, charged, recorded, want)
 		}
 	}
 }

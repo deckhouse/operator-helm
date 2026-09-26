@@ -345,6 +345,66 @@ func TestRefreshDropsAKnownStaleEntryWhenTheNewOneDoesNotFit(t *testing.T) {
 	}
 }
 
+// TestARefusedRefreshDeletesAtMostOnce follows the sequence the deletion above
+// starts: the stale entry goes, the next request has the resolver cache the
+// current values under the same key, and the pass after that is refused too. If
+// the controller still remembered the digest of what it deleted, that fresh entry
+// would look stale to it and be deleted in turn — the thrash the previous fix was
+// about, one pass further along.
+func TestARefusedRefreshDeletesAtMostOnce(t *testing.T) {
+	values := []byte("replicaCount: 2\n")
+	archive := buildValuesArchive(t, values)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+
+	chart := readyChartWithArtifact(srv.URL, fmt.Sprintf("sha256:%x", sha256.Sum256(archive)))
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(chart).Build()
+
+	r := newTestReconciler(t, c)
+	r.httpClient = srv.Client()
+	r.maxArtifactBytes = 1 << 20
+
+	dir := t.TempDir()
+	r.cache = cache.New(dir, 4*cacheBlock)
+	if err := r.cache.Put(testName, []byte("replicaCount: 1\n")); err != nil {
+		t.Fatalf("seeding the stale entry: %v", err)
+	}
+	r.cache = cache.New(dir, cacheBlock)
+	r.setLastDigest(testName, "sha256:the-previous-revision")
+
+	if _, err := reconcileOnce(t, r); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if _, ok := r.cache.Get(testName); ok {
+		t.Fatal("the stale entry should have been dropped by the first pass")
+	}
+
+	// What the resolver does on the miss that follows: the values it just served
+	// are cached under the same key. A write needs room for the temp file beside
+	// the entry, so this is the budget with the space the deletion freed; it is
+	// then reopened at the tight one, which is where the next pass runs.
+	r.cache = cache.New(dir, 2*cacheBlock)
+	if err := r.cache.Put(testName, values); err != nil {
+		t.Fatalf("the resolver could not cache the current values: %v", err)
+	}
+	r.cache = cache.New(dir, cacheBlock)
+
+	if _, err := reconcileOnce(t, r); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	got, ok := r.cache.Get(testName)
+	if !ok {
+		t.Fatal("the current values cached by the resolver were deleted by a later refused pass")
+	}
+	if !bytes.Equal(got, values) {
+		t.Fatalf("entry = %q, want the current values %q", got, values)
+	}
+}
+
 // TestRefreshKeepsAnEntryOfUnknownRevisionWhenTheWriteIsRefused is the other half.
 // An entry this controller did not write — the resolver caches one on every miss
 // and keeps no digests, and a restarted container finds entries on the volume with

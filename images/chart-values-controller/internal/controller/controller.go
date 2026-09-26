@@ -181,6 +181,13 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 			if err := r.cache.Delete(name); err != nil {
 				log.FromContext(ctx).Error(err, "failed to drop a stale cache entry", "name", name)
 			}
+
+			// The entry that digest described is gone, so this controller no longer
+			// knows what is under the key — and the resolver will cache the current
+			// values there on the next miss. Keeping the digest would make that entry
+			// look stale to the next refused pass, which would delete it: the same
+			// thrash, one pass further along.
+			r.forgetDigest(name)
 		}
 
 		return
