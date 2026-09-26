@@ -32,7 +32,6 @@ import (
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/repository"
 	"github.com/deckhouse/operator-helm/internal/reposync"
 	"github.com/deckhouse/operator-helm/internal/status"
-	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 const (
@@ -41,6 +40,8 @@ const (
 
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
+
+	mapInternal := mapInternalResources()
 
 	r := reconcile.New(client, reconcile.Deps{
 		NewRepository:    adapter.EmptyAddonRepository,
@@ -63,28 +64,12 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Watches(
 			&sourcev1.HelmRepository{},
-			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalResources(
-					ControllerName,
-					helmv1alpha1.TargetNamespace,
-					helmv1alpha1.LabelManagedBy,
-					helmv1alpha1.LabelManagedByValue,
-					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName,
-				),
-			),
+			handler.EnqueueRequestsFromMapFunc(mapInternal),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Watches(
 			&corev1.Secret{},
-			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalResources(
-					ControllerName,
-					helmv1alpha1.TargetNamespace,
-					helmv1alpha1.LabelManagedBy,
-					helmv1alpha1.LabelManagedByValue,
-					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName,
-				),
-			),
+			handler.EnqueueRequestsFromMapFunc(mapInternal),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Watches(

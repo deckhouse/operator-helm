@@ -36,36 +36,42 @@ func AddonChartValue(repoName, chartName string) string {
 	return repoName + "/" + chartName
 }
 
+// AddonChartIndexer is the index function behind AddonChart. It is exported, like
+// the application ones below, so tests and the webhook's fake client register the
+// same function the manager's cache does instead of a copy of it.
+func AddonChartIndexer(obj client.Object) []string {
+	addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+	return []string{AddonChartValue(
+		addon.Spec.Chart.HelmClusterAddonRepository,
+		addon.Spec.Chart.HelmClusterAddonChartName,
+	)}
+}
+
 // SetupAddonChart registers the AddonChart index on the manager's cache.
 func SetupAddonChart(mgr ctrl.Manager) error {
 	return mgr.GetFieldIndexer().IndexField(
-		context.Background(), &helmv1alpha1.HelmClusterAddon{}, AddonChart,
-		func(obj client.Object) []string {
-			addon := obj.(*helmv1alpha1.HelmClusterAddon)
-
-			return []string{AddonChartValue(
-				addon.Spec.Chart.HelmClusterAddonRepository,
-				addon.Spec.Chart.HelmClusterAddonChartName,
-			)}
-		},
+		context.Background(), &helmv1alpha1.HelmClusterAddon{}, AddonChart, AddonChartIndexer,
 	)
 }
 
 // AddonRepository indexes HelmClusterAddon objects by the repository they reference.
 const AddonRepository = ".spec.chart.helmClusterAddonRepository"
 
+// AddonRepositoryIndexer is the index function behind AddonRepository.
+func AddonRepositoryIndexer(obj client.Object) []string {
+	addon := obj.(*helmv1alpha1.HelmClusterAddon)
+	if addon.Spec.Chart.HelmClusterAddonRepository == "" {
+		return nil
+	}
+
+	return []string{addon.Spec.Chart.HelmClusterAddonRepository}
+}
+
 // SetupAddonRepository registers the AddonRepository index on the manager's cache.
 func SetupAddonRepository(mgr ctrl.Manager) error {
 	return mgr.GetFieldIndexer().IndexField(
-		context.Background(), &helmv1alpha1.HelmClusterAddon{}, AddonRepository,
-		func(obj client.Object) []string {
-			addon := obj.(*helmv1alpha1.HelmClusterAddon)
-			if addon.Spec.Chart.HelmClusterAddonRepository == "" {
-				return nil
-			}
-
-			return []string{addon.Spec.Chart.HelmClusterAddonRepository}
-		},
+		context.Background(), &helmv1alpha1.HelmClusterAddon{}, AddonRepository, AddonRepositoryIndexer,
 	)
 }
 

@@ -36,7 +36,6 @@ import (
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/repository"
 	"github.com/deckhouse/operator-helm/internal/reposync"
 	"github.com/deckhouse/operator-helm/internal/status"
-	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 const (
@@ -55,14 +54,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Status:           status.NewManager(client),
 	})
 
-	mapInternal := utils.MapNamespacedInternalResources(
-		ControllerName,
-		helmv1alpha1.TargetNamespace,
-		helmv1alpha1.LabelManagedBy,
-		helmv1alpha1.LabelManagedByValue,
-		helmv1alpha1.HelmApplicationRepositoryLabelSourceName,
-		helmv1alpha1.LabelSourceNamespace,
-	)
+	mapInternal := mapInternalResources()
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
