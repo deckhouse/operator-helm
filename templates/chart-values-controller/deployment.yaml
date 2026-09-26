@@ -139,12 +139,10 @@ spec:
       {{- include "helm_lib_tolerations" (tuple . "system") | nindent 6 }}
       volumes:
         - name: cache
-          # One file per (repository, chart, version) holding only that chart's
-          # values.yaml, each capped by --max-chart-size-mb=100 and dropped once
-          # its auxiliary source object expires (--chart-values-cache-ttl=1h).
-          # Real values.yaml files are kilobytes, so this budget holds thousands
-          # of them, or five pathological ones, and still keeps a runaway cache
-          # from eating the node's disk.
+          # Emergency cap, not a cleanup mechanism: on overflow the kubelet
+          # evicts the pod. The budget covers the pathological case of entries
+          # at the --max-chart-size-mb=100 ceiling, plus one extra copy while an
+          # atomic write stages its temp file. Real values.yaml are kilobytes.
           emptyDir:
             sizeLimit: 512Mi
         - name: api-tls
