@@ -197,6 +197,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			Reason:  helmv1alpha1.ReasonFailed,
 			Message: fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
 			Err:     err,
+			// Nothing watches Namespaces, so a failure here rides the work queue — and a
+			// namespace the API server will never accept would ride it forever, logging the
+			// same rejection at every attempt and making no progress at all.
+			Terminal: rejectedByAPIServer(err),
 		}})
 	}
 
@@ -619,6 +623,23 @@ func (r *Reconciler) getChartVersion(
 	}
 
 	return nil, nil, fmt.Errorf("chart catalog does not have version %q", ref.Version)
+}
+
+// rejectedByAPIServer reports whether an API error is the server refusing the
+// object it was handed, rather than failing to deal with it right now. The two
+// answers differ in whether a retry can change them: a conflict, a timeout or an
+// unreachable API server is a passing fault and belongs in the work queue, while a
+// request the server judged invalid comes back judged the same way forever.
+//
+// The target namespace is where this matters. Neither the CRD schema (length only)
+// nor the webhook (system namespaces only) knows the DNS label rules the API server
+// applies to a Namespace name, so a spec.namespace like "Team-A" reaches this
+// controller and is rejected as Invalid on every single attempt. Forbidden is left
+// out on purpose: it is the one refusal that is routinely repaired out of band, by
+// granting the missing permission, and a release stalled on it would then need a
+// force request nobody knows to make.
+func rejectedByAPIServer(err error) bool {
+	return apierrors.IsInvalid(err) || apierrors.IsBadRequest(err)
 }
 
 func versionUnavailableDetail(version helmv1alpha1.ChartVersion) string {

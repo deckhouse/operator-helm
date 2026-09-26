@@ -28,6 +28,9 @@ const (
 	// when the switch between the two landed: an attempt that failed leaves it where
 	// it was and is reported on Ready instead. A release that is not managed is never
 	// Ready — its spec is not being kept true.
+	// A release that is being deleted is outside all of this: the deletion path never
+	// enters or leaves maintenance, so the condition is left at whatever the last
+	// managing pass made of it, while Ready is given over to reporting the teardown.
 	ConditionTypeManaged = "Managed"
 	// ConditionTypeInstalled reports the first deployment of a release. It is the
 	// only condition a release that has never been installed carries besides Ready.

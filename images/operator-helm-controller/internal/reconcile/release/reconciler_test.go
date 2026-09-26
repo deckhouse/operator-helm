@@ -30,10 +30,13 @@ import (
 	"github.com/go-logr/logr/funcr"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1772,6 +1775,42 @@ func TestReconcileMaintenanceSwitchReportsProgressBeforeItIsMade(t *testing.T) {
 	if inFlight == nil || inFlight.Status != metav1.ConditionTrue {
 		t.Fatalf("Reconciling = %+v at the moment of the switch, want True", inFlight)
 	}
+
+	// The same pass has to end in the state the progress was announced for: the
+	// internal release suspended, the addon reported unmanaged and unready, and
+	// nothing left in flight.
+	internal := &helmv2.HelmRelease{}
+	releaseKey := client.ObjectKey{
+		Name:      adapter.NewAddonRelease(addon).InternalNames().HelmRelease,
+		Namespace: helmv1alpha1.TargetNamespace,
+	}
+	if err := c.Get(context.Background(), releaseKey, internal); err != nil {
+		t.Fatalf("getting internal release: %v", err)
+	}
+	if !internal.Spec.Suspend {
+		t.Fatal("the internal release must be suspended before Managed may say the addon is unmanaged")
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	managed := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeManaged)
+	if managed == nil || managed.Status != metav1.ConditionFalse ||
+		managed.Reason != helmv1alpha1.ReasonMaintenanceModeActive {
+		t.Fatalf("Managed = %+v, want False/%s once the switch landed",
+			managed, helmv1alpha1.ReasonMaintenanceModeActive)
+	}
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready = %+v, want False: an unmanaged addon is never ready", ready)
+	}
+	if progress := apimeta.FindStatusCondition(
+		settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling,
+	); progress != nil {
+		t.Fatalf("Reconciling = %+v, want it taken away: the switch is done", progress)
+	}
 }
 
 // TestReconcileTransientNamespaceFailureIsRetried pins the scheduling behind a
@@ -1815,5 +1854,60 @@ func TestReconcileTransientNamespaceFailureIsRetried(t *testing.T) {
 	}
 	if apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeStalled) != nil {
 		t.Fatal("a transient failure is not a stalled one")
+	}
+}
+
+// TestReconcileRejectedNamespaceNameIsNotRetried is the other half of the same
+// decision. A namespace name the API server refuses as invalid is refused the same
+// way on every attempt: nothing about the spec changes by trying again, so the work
+// queue would only log the rejection forever. The verdict is recorded as stalled
+// instead, and correcting the spec is what brings the addon back.
+func TestReconcileRejectedNamespaceNameIsNotRetried(t *testing.T) {
+	addon := testAddon()
+
+	rejectNamespace := interceptor.Funcs{
+		Create: func(
+			ctx context.Context,
+			inner client.WithWatch,
+			obj client.Object,
+			opts ...client.CreateOption,
+		) error {
+			namespace, isNamespace := obj.(*corev1.Namespace)
+			if !isNamespace {
+				return inner.Create(ctx, obj, opts...)
+			}
+
+			return apierrors.NewInvalid(
+				schema.GroupKind{Kind: "Namespace"},
+				namespace.Name,
+				field.ErrorList{field.Invalid(
+					field.NewPath("metadata", "name"),
+					namespace.Name,
+					"a lowercase RFC 1123 label must consist of lower case alphanumeric characters or '-'",
+				)},
+			)
+		},
+	}
+
+	r, c := newForceTestReconciler(t, rejectNamespace, append(forceTestFixtures(), addon)...)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: addon.Name},
+	}); err != nil {
+		t.Fatalf("a refusal no retry can change must not go to the work queue: %v", err)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	stalled := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeStalled)
+	if stalled == nil || stalled.Status != metav1.ConditionTrue {
+		t.Fatalf("Stalled = %+v, want True: the spec has to change before this can work", stalled)
+	}
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready = %+v, want False", ready)
 	}
 }
