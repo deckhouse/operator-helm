@@ -136,8 +136,17 @@ func (s *Server) Start(ctx context.Context) error {
 
 	serve := srv.ListenAndServe
 	if s.tlsCertFile != "" && s.tlsKeyFile != "" {
+		tlsConfig, err := newTLSConfig(ctx, s.tlsCertFile, s.tlsKeyFile)
+		if err != nil {
+			return err
+		}
+		srv.TLSConfig = tlsConfig
+
+		// Both arguments are empty on purpose: the pair comes from TLSConfig's
+		// GetCertificate, which keeps serving a reissued certificate without a
+		// restart. Passing the paths here would read them once and pin that read.
 		serve = func() error {
-			return srv.ListenAndServeTLS(s.tlsCertFile, s.tlsKeyFile)
+			return srv.ListenAndServeTLS("", "")
 		}
 	}
 
