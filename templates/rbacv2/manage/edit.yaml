@@ -10,22 +10,16 @@ metadata:
     ru.meta.deckhouse.io/description: "Управление конфигурацией модуля {{ .Chart.Name }}."
   {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "system-capability.%s.edit" .Chart.Name) "rbac.deckhouse.io/scope" "system" "rbac.deckhouse.io/namespace" (printf "d8-%s" .Chart.Name) "rbac.deckhouse.io/aggregate-to-delivery-as" "manager")) | nindent 2 }}
 rules:
-# helmclusteraddons is deliberately absent, and stays reserved for a cluster
-# administrator as the legacy access levels already reserve it. An addon names no
-# service account, so helm-controller applies its chart as itself — with rights over
-# every resource in the cluster — and whoever may create one may therefore grant
-# themselves anything. A repository only publishes charts and grants nothing.
-- apiGroups:
-  - helm.deckhouse.io
-  resources:
-  - helmclusteraddonrepositories
-  - helmclusterapplicationrepositories
-  verbs:
-  - create
-  - delete
-  - deletecollection
-  - patch
-  - update
+# Every cluster-scoped kind of the module is deliberately absent, and stays reserved
+# for a cluster administrator as the legacy access levels already reserve it. An addon
+# names no service account, so helm-controller applies its chart as itself — with rights
+# over every resource in the cluster — and whoever may create one may therefore grant
+# themselves anything. Writing a repository is the same power once removed: a repository
+# is where an already existing addon takes its executable artifact from, so pointing it
+# at another registry and publishing one's own chart under the same name and version is
+# enough to have arbitrary manifests applied cluster-wide, no rights over the addon
+# needed. A cluster-scoped application repository is reserved for the same reason the
+# legacy model reserves it: it is usable from every namespace at once.
 - apiGroups:
   - deckhouse.io
   resourceNames:

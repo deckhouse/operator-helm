@@ -21,4 +21,14 @@ rules:
   - deletecollection
   - patch
   - update
+# Reading a repository is granted here rather than in the user capability: the registry
+# password lives in the spec, so it must not reach a read-only level.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmapplicationrepositories
+  verbs:
+  - get
+  - list
+  - watch
 {{- end }}

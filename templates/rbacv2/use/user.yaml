@@ -10,11 +10,14 @@ metadata:
     ru.meta.deckhouse.io/description: "Доступ только на чтение к приложениям модуля {{ .Chart.Name }} и их каталогу чартов в пространстве имён."
   {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "namespace-capability.%s.user" .Chart.Name) "rbac.deckhouse.io/scope" "namespace" "rbac.deckhouse.io/aggregate-to-namespace-as" "user")) | nindent 2 }}
 rules:
+# helmapplicationrepositories is deliberately absent: a repository keeps its registry
+# credentials in the spec itself (spec.auth.password, there is no secretRef), so reading
+# one is reading the password. Reading it therefore stays with the admin capability,
+# which is the level that writes those credentials in the first place.
 - apiGroups:
   - helm.deckhouse.io
   resources:
   - helmapplicationcharts
-  - helmapplicationrepositories
   - helmapplications
   verbs:
   - get

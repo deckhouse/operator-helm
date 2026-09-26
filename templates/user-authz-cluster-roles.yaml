@@ -7,11 +7,14 @@ metadata:
   name: d8:user-authz:{{ .Chart.Name }}:privileged-user
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 rules:
+# helmapplicationrepositories is deliberately absent: a repository keeps its registry
+# credentials in the spec itself (spec.auth.password, there is no secretRef), so reading
+# one is reading the password. Reading it therefore stays with Admin, which is the level
+# that writes those credentials in the first place.
 - apiGroups:
   - helm.deckhouse.io
   resources:
   - helmapplicationcharts
-  - helmapplicationrepositories
   - helmapplications
   verbs:
   - get
@@ -45,6 +48,16 @@ rules:
   - deletecollection
   - patch
   - update
+# Reading a repository is granted here rather than at PrivilegedUser: the registry
+# password lives in the spec, so it must not reach a read-only level.
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmapplicationrepositories
+  verbs:
+  - get
+  - list
+  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
