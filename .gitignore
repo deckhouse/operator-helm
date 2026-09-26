@@ -4,6 +4,7 @@
 *.so
 *.dylib
 /bin
+/tools/internalcrds/internalcrds
 
 # Test binary, build with `go test -c`
 *.test
