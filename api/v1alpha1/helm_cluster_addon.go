@@ -32,14 +32,24 @@ const (
 	HelmClusterAddonLabelSourceName = "helm.deckhouse.io/cluster-addon"
 )
 
-// The name is bounded to the same 63 characters as a HelmApplication name, and for
-// the same reason: the name is carried as the value of the source-name label on
-// every internal object derived from the addon, and a label value cannot be longer
-// than that. The derived object names themselves do not bound it — they truncate
-// and hash whatever they are given (internal/utils/name.go) — but a label value has
-// nowhere to put the overflow.
+// The name is bounded to 63 characters, because it is carried as the value of the
+// source-name label on every internal object derived from the addon, and a label
+// value cannot be longer than that. The derived object names themselves do not
+// bound it — they truncate and hash whatever they are given
+// (internal/utils/name.go) — but a label value has nowhere to put the overflow.
 //
-// This note is outside the doc comment on purpose: a doc comment on the type
+// The bound is enforced by the validating webhook on CREATE
+// (internal/webhook/helmclusteraddon), not by a CEL rule here. A rule declared on
+// the object is evaluated on every write of the whole object, so an addon that
+// already carries a longer name would fail its status updates and, because of the
+// helm.deckhouse.io/cleanup finalizer, could never be deleted either.
+//
+// The printer columns below are the ones HelmApplication shows, minus its "Cluster
+// Repository": an application picks between a namespaced and a cluster-wide
+// repository, while an addon has only the one repository kind, so there is no
+// second column to fill. That difference is deliberate, not an oversight.
+//
+// These notes are outside the doc comment on purpose: a doc comment on the type
 // becomes the description of the kind in the CRD.
 
 // HelmClusterAddon represents a single cluster-wide installation of a Helm chart, which may include custom resource definitions (CRDs) and requires cluster-admin permissions to deploy. Only one instance of a specific chart can be installed at any given time.
@@ -48,7 +58,6 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:singular=helmclusteraddon,scope=Cluster
-// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="addon name must be at most 63 characters long"
 // +kubebuilder:printcolumn:name="Chart",type="string",JSONPath=".spec.chart.helmClusterAddonChart",description="Helm release chart name."
 // +kubebuilder:printcolumn:name="Chart Version",type="string",JSONPath=".spec.chart.version",description="Helm release chart version."
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the addon"

@@ -1,4 +1,8 @@
 ---
+# The twin carries the descriptions of the schema only, as every doc-ru- file in
+# this directory does: the descriptions of the printer columns of
+# helmclusteraddons.yaml have no counterpart here on purpose, so a column added or
+# reworded there needs no edit on this side.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:

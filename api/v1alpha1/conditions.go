@@ -55,7 +55,11 @@ const (
 	ConditionTypeReconciling = "Reconciling"
 	// ConditionTypeStalled means the pass failed in a way that retrying cannot fix.
 	// Progress needs a change to the object, to what it references, or to the remote
-	// side; no requeue is scheduled.
+	// side. A release kind schedules no requeue for it and waits to be woken by such
+	// a change. A repository kind keeps synchronizing on its backed-off schedule
+	// instead, because the remote side it reports on can start answering without
+	// anything here changing; only a spec it cannot act on at all, an unsupported
+	// repository type, leaves it with nothing scheduled.
 	ConditionTypeStalled = "Stalled"
 
 	// ReasonMaintenanceModeActive marks a release whose reconciliation is suspended
@@ -119,9 +123,11 @@ const (
 	// another attempt for: the repository read, the auxiliary resources or the
 	// catalog update failed, and the backoff has not run out.
 	ReasonProgressingWithRetry = "ProgressingWithRetry"
-	// ReasonRetriesExceeded marks a repository the controller stopped retrying after
-	// repeated read failures. A change to the repository or its credentials is what
-	// brings it back.
+	// ReasonRetriesExceeded marks a repository whose reads have failed enough times
+	// in a row (MaxFetchFailures) that the failure is reported as more than a passing
+	// one. The retries go on at the backed-off synchronization cadence: a change to
+	// the repository or its credentials is the reliable way back, but a remote side
+	// that recovers on its own clears it too.
 	ReasonRetriesExceeded = "RetriesExceeded"
 	// ReasonAuthenticationFailed marks a repository that rejected the credentials it
 	// was read with (HTTP 401 or 403).
@@ -152,8 +158,10 @@ const (
 	// HelmRelease error reasons. Each mirrors a condition of the internal HelmRelease
 	// onto the release kind that owns it.
 
-	// ReasonReleaseFailed marks a release helm-controller could not deploy; the
-	// message is the one the internal HelmRelease reports.
+	// ReasonReleaseFailed marks a release that is not deployed: either the internal
+	// HelmRelease reports a failed deployment, and the message is the one it reports,
+	// or that object could not be created or updated at all, and the message is the
+	// API error.
 	ReasonReleaseFailed = "ReleaseFailed"
 	// ReasonTestFailed marks a release that was deployed but whose Helm tests did
 	// not pass.
@@ -165,8 +173,10 @@ const (
 	// HelmChart error reasons. Each mirrors a condition of the internal HelmChart the
 	// release is deployed from.
 
-	// ReasonHelmChartFailed marks a chart object that reports no error of its own but
-	// has not produced an artifact the release can be deployed from.
+	// ReasonHelmChartFailed marks a chart the release cannot be deployed from: either
+	// the internal HelmChart reports no error of its own yet has produced no
+	// artifact, or that object could not be created or updated at all, and the
+	// message is the API error.
 	ReasonHelmChartFailed = "HelmChartFailed"
 	// ReasonChartFetchFailed marks a chart source-controller could not pull from the
 	// repository.

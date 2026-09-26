@@ -20,7 +20,9 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
+	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -53,6 +55,10 @@ type HelmClusterAddonWebhookValidator struct {
 }
 
 func (v *HelmClusterAddonWebhookValidator) ValidateCreate(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
+	if err := validateNameFitsTheLabel(addon); err != nil {
+		return nil, err
+	}
+
 	if err := validateNotSystemNamespace(addon); err != nil {
 		return nil, err
 	}
@@ -86,6 +92,30 @@ func (v *HelmClusterAddonWebhookValidator) ValidateDelete(_ context.Context, add
 	}
 
 	return nil, nil
+}
+
+// validateNameFitsTheLabel rejects a name the internal objects could not carry.
+// Every internal object derived from an addon repeats the addon's name in the
+// source-name label, and that is what bounds the name: a label value is at most 63
+// characters and has nowhere to put the overflow. The derived object names are not
+// the limit — they truncate and hash whatever they are given (internal/utils).
+//
+// CREATE only, and deliberately not a CEL rule on the type: a rule declared on the
+// object is evaluated on every write of the whole object, so an addon created
+// before this check would fail its own status updates and, held by the cleanup
+// finalizer, could never be deleted either. A name is immutable, so guarding the
+// one operation that sets it is the whole rule.
+func validateNameFitsTheLabel(addon *helmv1alpha1.HelmClusterAddon) error {
+	errs := validation.IsValidLabelValue(addon.Name)
+	if len(errs) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"helmclusteraddon/%s cannot be created: its name is carried as the value of the %s label "+
+			"on every internal object derived from it, and %s",
+		addon.Name, helmv1alpha1.HelmClusterAddonLabelSourceName, strings.Join(errs, "; "),
+	)
 }
 
 func validateNotSystemNamespace(addon *helmv1alpha1.HelmClusterAddon) error {
