@@ -255,7 +255,32 @@ func TestBoundedReaderStopsACopyInFlight(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	reader := &boundedReader{ctx: ctx, r: bytes.NewReader(make([]byte, 1<<20)), limit: 1 << 20}
+	spent := &budget{ctx: ctx, limit: 1 << 20}
+	reader := spent.reader(bytes.NewReader(make([]byte, 1<<20)))
+
+	buf := make([]byte, 1024)
+	if _, err := reader.Read(buf); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+
+	cancel()
+
+	if _, err := reader.Read(buf); !errors.Is(err, context.Canceled) {
+		t.Fatalf("read after cancel = %v, want context.Canceled", err)
+	}
+}
+
+// TestCancellableReaderStopsAReaderThatYieldsNothing pins the half of cancellation
+// the budget cannot reach. gzip walks concatenated members inside a single Read of
+// its own, returning no bytes until one of them holds data, so a reader bounded
+// only on its output would run an archive of empty members to the end whatever the
+// request said. The check belongs on the compressed side, where every member is
+// pulled from.
+func TestCancellableReaderStopsAReaderThatYieldsNothing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reader := &cancellableReader{ctx: ctx, r: bytes.NewReader(make([]byte, 1<<20))}
 
 	buf := make([]byte, 1024)
 	if _, err := reader.Read(buf); err != nil {
@@ -287,4 +312,108 @@ func TestDecompressedLimit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestExtractValuesRejectsASparseEntryThatFabricatesItsSize covers the one way an
+// entry can cost more than it weighs. tar serves the holes of a sparse file out of
+// its own zero reader without touching the stream underneath (archive/tar
+// reader.go, zeroReader), so a budget counting only what leaves gzip never sees
+// them: a three-kilobyte archive hands back megabytes having read two kilobytes.
+//
+// The size is chosen between the archive's budget and maxBytes, so that the
+// per-file limit cannot be what refuses it — that limit already held, and it is
+// the budget this test is about.
+func TestExtractValuesRejectsASparseEntryThatFabricatesItsSize(t *testing.T) {
+	archive := buildSparseArchive(t, "podinfo/values.yaml", 9<<20)
+
+	if limit := decompressedLimit(int64(len(archive))); limit >= 9<<20 {
+		t.Fatalf("archive of %d bytes licenses %d decompressed bytes; the entry no longer exceeds it",
+			len(archive), limit)
+	}
+	if testMaxBytes <= 9<<20 {
+		t.Fatal("the per-file limit would refuse this entry on its own; the test would prove nothing")
+	}
+
+	_, err := extractValues(context.Background(), archive, testMaxBytes)
+	if !errors.Is(err, ErrArtifactTooLarge) {
+		t.Fatalf("expected ErrArtifactTooLarge, got %v", err)
+	}
+}
+
+// buildSparseArchive writes a PAX 1.0 sparse entry by hand: archive/tar writes no
+// sparse files, so the bytes are assembled here. The entry declares realsize and
+// carries a map saying all of it is a hole, which is what makes it free to produce.
+func buildSparseArchive(t *testing.T, name string, realsize int64) []byte {
+	t.Helper()
+
+	records := paxRecord("GNU.sparse.major", "1") +
+		paxRecord("GNU.sparse.minor", "0") +
+		paxRecord("GNU.sparse.name", name) +
+		paxRecord("GNU.sparse.realsize", fmt.Sprint(realsize))
+
+	// One entry at offset zero holding zero bytes of data: the whole file is a hole.
+	sparseMap := padToBlock([]byte("1\n0\n0\n"))
+
+	var tarball bytes.Buffer
+	tarball.Write(tarHeader(t, "PaxHeaders/0", int64(len(records)), tar.TypeXHeader))
+	tarball.Write(padToBlock([]byte(records)))
+	tarball.Write(tarHeader(t, "GNUSparseFile.0/"+name, int64(len(sparseMap)), tar.TypeReg))
+	tarball.Write(sparseMap)
+	tarball.Write(make([]byte, 1024)) // the two empty blocks that end an archive
+
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
+	if _, err := gz.Write(tarball.Bytes()); err != nil {
+		t.Fatalf("compressing archive: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("closing gzip writer: %v", err)
+	}
+
+	return out.Bytes()
+}
+
+// tarHeader writes one ustar header block, checksum included.
+func tarHeader(t *testing.T, name string, size int64, typeflag byte) []byte {
+	t.Helper()
+
+	block := make([]byte, 512)
+	copy(block[0:100], name)
+	copy(block[100:108], "0000644\x00")
+	copy(block[124:136], fmt.Sprintf("%011o\x00", size))
+	copy(block[136:148], fmt.Sprintf("%011o\x00", 0))
+	block[156] = typeflag
+	copy(block[257:263], "ustar\x00")
+	copy(block[263:265], "00")
+
+	// The checksum is computed with its own field read as spaces.
+	for i := 148; i < 156; i++ {
+		block[i] = ' '
+	}
+	sum := 0
+	for _, b := range block {
+		sum += int(b)
+	}
+	copy(block[148:156], fmt.Sprintf("%06o\x00 ", sum))
+
+	return block
+}
+
+// paxRecord formats one "<length> <key>=<value>\n" record, whose length counts
+// itself and so has to be solved for.
+func paxRecord(key, value string) string {
+	for n := len(key) + len(value) + 5; ; n++ {
+		record := fmt.Sprintf("%d %s=%s\n", n, key, value)
+		if len(record) == n {
+			return record
+		}
+	}
+}
+
+func padToBlock(b []byte) []byte {
+	for len(b)%512 != 0 {
+		b = append(b, 0)
+	}
+
+	return b
 }

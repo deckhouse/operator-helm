@@ -72,16 +72,31 @@ const (
 	maxDecompressedBytes = 512 << 20
 )
 
-// boundedReader is the decompressed side of the archive: it caps how many bytes
-// may be pulled out of the gzip stream in total and aborts as soon as ctx is
-// done. It sits between gzip and tar rather than around a single entry, so the
-// bytes of entries the walk skips over count too — skipping still decompresses
-// them — and a cancelled request stops mid-copy instead of at the next header.
-type boundedReader struct {
+// budget is what the whole extraction is allowed to cost. It is shared by every
+// reader in the chain rather than held by one of them, because no single point in
+// that chain sees all the bytes: tar fabricates the holes of a sparse entry out of
+// nothing (archive/tar zeroReader), so counting only what leaves gzip misses them,
+// while counting only what leaves tar misses the entries the walk skips over —
+// skipping still decompresses them.
+type budget struct {
 	ctx   context.Context
-	r     io.Reader
 	limit int64
 	read  int64
+}
+
+// reader returns r bounded by this budget and by ctx. Every Read consults both, so
+// a cancelled request stops mid-copy rather than at the next entry header.
+func (b *budget) reader(r io.Reader) io.Reader {
+	return &boundedReader{budget: b, r: r}
+}
+
+func (b *budget) tooLarge() error {
+	return fmt.Errorf("%w (decompressed > %d bytes)", ErrArtifactTooLarge, b.limit)
+}
+
+type boundedReader struct {
+	*budget
+	r io.Reader
 }
 
 func (b *boundedReader) Read(p []byte) (int, error) {
@@ -108,8 +123,21 @@ func (b *boundedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (b *boundedReader) tooLarge() error {
-	return fmt.Errorf("%w (decompressed > %d bytes)", ErrArtifactTooLarge, b.limit)
+// cancellableReader carries ctx into a reader that consumes many small pieces per
+// Read of its own. gzip walks concatenated members inside a single Read
+// (compress/gzip gunzip.go), returning no bytes until one of them holds data, so an
+// archive of empty members would otherwise run to its end whatever ctx said.
+type cancellableReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c *cancellableReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	return c.r.Read(p)
 }
 
 // decompressedLimit is the total the archive of compressed bytes may expand to.
@@ -180,13 +208,14 @@ func verifyDigest(data []byte, digest string) error {
 }
 
 func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, error) {
-	gz, err := gzip.NewReader(bytes.NewReader(data))
+	gz, err := gzip.NewReader(&cancellableReader{ctx: ctx, r: bytes.NewReader(data)})
 	if err != nil {
 		return nil, fmt.Errorf("opening gzip stream: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
 
-	tr := tar.NewReader(&boundedReader{ctx: ctx, r: gz, limit: decompressedLimit(int64(len(data)))})
+	spent := &budget{ctx: ctx, limit: decompressedLimit(int64(len(data)))}
+	tr := tar.NewReader(spent.reader(gz))
 
 	for entries := 0; ; entries++ {
 		// The byte budget is only consulted while bytes move; a header-only entry
@@ -222,9 +251,12 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 		// e.g. "podinfo/values.yaml". Match values.yaml at exactly that depth.
 		parts := strings.Split(path.Clean(header.Name), "/")
 		if len(parts) == 2 && parts[1] == "values.yaml" {
-			// Bound the decompressed read too, so a small archive cannot expand
-			// into an oversized values.yaml (decompression bomb).
-			content, err := io.ReadAll(io.LimitReader(tr, maxBytes+1))
+			// Read through the budget again rather than straight from tr: the holes
+			// of a sparse entry never pass through gzip, so this is the only place
+			// they are counted, and the only place a copy of one can be cancelled.
+			// maxBytes bounds this one file on top of that, since what the caller can
+			// be handed is smaller than what the archive may cost to walk.
+			content, err := io.ReadAll(io.LimitReader(spent.reader(tr), maxBytes+1))
 			if err != nil {
 				if errors.Is(err, ErrArtifactTooLarge) || errors.Is(err, context.Canceled) ||
 					errors.Is(err, context.DeadlineExceeded) {
