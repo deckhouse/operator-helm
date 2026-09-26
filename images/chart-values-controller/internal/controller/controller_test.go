@@ -52,12 +52,16 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
+// testUID is the identity of the object every test starts from, named so that a
+// delete can be checked for carrying it.
+const testUID = types.UID("original-uid")
+
 func expiredChart(expiresAt time.Time) *sourcev1.HelmChart {
 	return &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        testName,
 			Namespace:   testNamespace,
-			UID:         types.UID("original-uid"),
+			UID:         testUID,
 			Labels:      map[string]string{labels.ManagedBy: labels.ManagedByValue},
 			Annotations: map[string]string{labels.ExpiresAtAnnotation: expiresAt.UTC().Format(time.RFC3339)},
 		},
@@ -196,6 +200,47 @@ func TestReconcileDeletesOnlyTheExpiredObjectItRead(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReconcileNamesTheReadIdentityInTheDelete pins both halves of the
+// precondition. The fake client enforces only the resource version
+// (client/fake enforces ResourceVersion alone), so the recreation case above
+// would still pass if the UID were dropped from the delete — the replacement
+// carries a different version anyway. Here the request itself is inspected.
+func TestReconcileNamesTheReadIdentityInTheDelete(t *testing.T) {
+	var options client.DeleteOptions
+
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(expiredChart(time.Now().Add(-time.Minute))).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(
+				ctx context.Context,
+				cl client.WithWatch,
+				obj client.Object,
+				opts ...client.DeleteOption,
+			) error {
+				options = client.DeleteOptions{}
+				options.ApplyOptions(opts)
+
+				return cl.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	if _, err := reconcileOnce(t, newTestReconciler(t, c)); err != nil {
+		t.Fatalf("reconcile returned an error: %v", err)
+	}
+
+	if options.Preconditions == nil {
+		t.Fatal("the delete named no identity at all")
+	}
+	if uid := options.Preconditions.UID; uid == nil || *uid != testUID {
+		t.Fatalf("delete precondition UID = %v, want %q", uid, testUID)
+	}
+	if version := options.Preconditions.ResourceVersion; version == nil || *version == "" {
+		t.Fatalf("delete precondition resource version = %v, want the one that was read", version)
 	}
 }
 
