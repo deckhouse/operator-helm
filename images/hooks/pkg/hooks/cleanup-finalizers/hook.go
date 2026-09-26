@@ -31,9 +31,13 @@ import (
 	"hooks/pkg/settings"
 )
 
-// publicAPIVersion carries the module's own kinds; every kind listed below is guarded
-// by the helm.deckhouse.io/cleanup finalizer, which only our controller ever removes.
-// Once the module is gone nothing is left to remove it, so the hook has to.
+// publicAPIVersion carries the module's own kinds. They are guarded by the
+// helm.deckhouse.io/cleanup finalizer, which only our controller ever removes; the
+// internal flux objects listed below instead carry flux's own finalizers, which only
+// the flux controllers ever remove. Once the module is gone neither of those is
+// running, so nothing is left to take either finalizer off and the hook has to. One
+// operation serves both groups: the patch nulls the whole finalizers member, so it
+// does not have to know which finalizer a given object carries.
 const publicAPIVersion = "helm.deckhouse.io/v1alpha1"
 
 // watchedKind is one kind the hook strips finalizers from. A kind is either

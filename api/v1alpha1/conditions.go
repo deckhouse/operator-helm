@@ -160,8 +160,8 @@ const (
 
 	// ReasonReleaseFailed marks a release that is not deployed: either the internal
 	// HelmRelease reports a failed deployment, and the message is the one it reports,
-	// or that object could not be created or updated at all, and the message is the
-	// API error.
+	// or that object could not be created or updated at all, and the message says so
+	// in those words — the API error behind it is logged, not put on the condition.
 	ReasonReleaseFailed = "ReleaseFailed"
 	// ReasonTestFailed marks a release that was deployed but whose Helm tests did
 	// not pass.
@@ -173,10 +173,11 @@ const (
 	// HelmChart error reasons. Each mirrors a condition of the internal HelmChart the
 	// release is deployed from.
 
-	// ReasonHelmChartFailed marks a chart the release cannot be deployed from: either
-	// the internal HelmChart reports no error of its own yet has produced no
-	// artifact, or that object could not be created or updated at all, and the
-	// message is the API error.
+	// ReasonHelmChartFailed marks a chart the release cannot be deployed from because
+	// the internal HelmChart could not be created or updated at all. The message says
+	// so in those words; the API error behind it is logged, not put on the condition.
+	// A HelmChart that exists reports its own faults under the reasons below, and one
+	// that has not reported anything yet leaves the release Reconciling.
 	ReasonHelmChartFailed = "HelmChartFailed"
 	// ReasonChartFetchFailed marks a chart source-controller could not pull from the
 	// repository.

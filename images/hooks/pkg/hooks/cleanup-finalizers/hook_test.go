@@ -43,9 +43,9 @@ type patchCall struct {
 }
 
 // newInput wires a hook input whose snapshots hold the given resources keyed by snapshot
-// name and whose namespace looks free of workloads. The patch collector only accepts
-// merge patches: a JSON patch would hit an unmocked method and fail the test, which is
-// the point — the JSON patch variant is what was not idempotent.
+// name and whose namespace looks free of workloads. Only PatchWithMerge is mocked, so a
+// JSON patch would hit an unmocked method and fail the test; the patch type is not an
+// implementation detail here, see TestCleanupFinalizersNullsFinalizersWithAMergePatch.
 func newInput(t *testing.T, snapshots map[string][]resource, workloads ...*unstructured.Unstructured) (*pkg.HookInput, *[]patchCall) {
 	t.Helper()
 
@@ -143,7 +143,11 @@ func TestCleanupFinalizersStripsFinalizersFromInternalAndPublicKindsOfBothFamili
 	for _, watched := range watchedKinds {
 		namespace := settings.ModuleNamespace
 		if !watched.moduleNamespaceOnly {
-			namespace = "" // cluster-scoped objects carry no namespace in the snapshot
+			// Whatever the binding is not narrowed to the module namespace is patched
+			// wherever it was found. An empty namespace is what the snapshot carries for
+			// the cluster-scoped kinds; the namespaced public ones are covered by
+			// TestCleanupFinalizersPatchesNamespacedPublicObjectsInTheirOwnNamespace.
+			namespace = ""
 		}
 
 		res := resource{
@@ -187,8 +191,10 @@ func TestCleanupFinalizersCoversEveryKindThatCarriesTheCleanupFinalizer(t *testi
 	for _, config := range kubernetesConfigs() {
 		got[config.Kind] = config.APIVersion
 
-		// Public objects live in user namespaces, so their bindings must not be
-		// narrowed to the module namespace.
+		// The public kinds are not confined to the module namespace: the cluster-scoped
+		// ones have no namespace at all, and HelmApplication and HelmApplicationRepository
+		// are namespaced but live in arbitrary user namespaces. Neither can be found by a
+		// binding narrowed to the module namespace.
 		if config.APIVersion == publicAPIVersion && config.NamespaceSelector != nil {
 			t.Errorf("%s is watched only in %v, but it may live in any namespace",
 				config.Kind, config.NamespaceSelector.NameSelector)
@@ -219,11 +225,14 @@ func TestCleanupFinalizersPatchesNamespacedPublicObjectsInTheirOwnNamespace(t *t
 	}
 }
 
-func TestCleanupFinalizersRepeatsTheSamePatchOnASecondRun(t *testing.T) {
-	// A teardown can run the hook more than once, and the second pass sees objects
-	// whose finalizers the first pass already removed. Nulling the member with a merge
-	// patch stays valid there, unlike a JSON patch removing /metadata/finalizers, which
-	// the API server rejects when the path is absent.
+// TestCleanupFinalizersNullsFinalizersWithAMergePatch pins the shape of the patch, not
+// its effect: the collector hands patches to the API server after the hook returns, so
+// nothing here can observe an API server rejecting one. What can be checked is that the
+// hook sends an RFC 7396 merge patch nulling metadata.finalizers — which an object that
+// has no finalizers left accepts as a no-op, the property a teardown running the hook
+// twice depends on — and never the RFC 6902 "remove" of /metadata/finalizers, which the
+// API server rejects once that path is gone.
+func TestCleanupFinalizersNullsFinalizersWithAMergePatch(t *testing.T) {
 	snapshots := map[string][]resource{
 		"helmClusterAddonSnapshot": {
 			{APIVersion: publicAPIVersion, Kind: "HelmClusterAddon", Name: "addon"},
@@ -232,18 +241,34 @@ func TestCleanupFinalizersRepeatsTheSamePatchOnASecondRun(t *testing.T) {
 
 	input, calls := newInput(t, snapshots)
 
-	for run := 1; run <= 2; run++ {
-		if err := cleanupFinalizer(context.Background(), input); err != nil {
-			t.Fatalf("run %d returned an error: %v", run, err)
-		}
+	patchCollector, ok := input.PatchCollector.(*mock.PatchCollectorMock)
+	if !ok {
+		t.Fatalf("unexpected patch collector %T", input.PatchCollector)
+	}
+	patchCollector.PatchWithJSONMock.Optional().Set(
+		func(patch any, _, kind, _, name string, _ ...pkg.PatchCollectorOption) {
+			t.Errorf("%s/%s was patched with a JSON patch %v, which fails on an object "+
+				"that has no finalizers left", kind, name, patch)
+		},
+	)
+
+	if err := cleanupFinalizer(context.Background(), input); err != nil {
+		t.Fatalf("cleanupFinalizer returned an error: %v", err)
 	}
 
-	want := []patchCall{
-		{nullFinalizersPatch(), publicAPIVersion, "HelmClusterAddon", "", "addon"},
-		{nullFinalizersPatch(), publicAPIVersion, "HelmClusterAddon", "", "addon"},
+	if len(*calls) != 1 {
+		t.Fatalf("expected one merge patch, got %+v", *calls)
 	}
-	if !reflect.DeepEqual(*calls, want) {
-		t.Fatalf("patched objects:\n got %+v\nwant %+v", *calls, want)
+
+	metadata, ok := (*calls)[0].patch.(map[string]any)["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("the patch must carry a metadata object, got %+v", (*calls)[0].patch)
+	}
+
+	finalizers, present := metadata["finalizers"]
+	if !present || finalizers != nil {
+		t.Fatalf("metadata.finalizers must be present and null, got %#v (present %v)",
+			finalizers, present)
 	}
 }
 

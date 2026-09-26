@@ -125,11 +125,45 @@ func TestValidateCreateExplainsWhyTheNameIsBounded(t *testing.T) {
 // able to report status and to shed its cleanup finalizer, or it becomes
 // undeletable.
 func TestValidateUpdateAllowsAnExistingOverlongName(t *testing.T) {
-	addon := addonFixture(strings.Repeat("a", 120))
-	v := newValidator(t, addon)
+	tests := []struct {
+		name   string
+		mutate func(addon *helmv1alpha1.HelmClusterAddon)
+	}{
+		{
+			name: "reporting status",
+			mutate: func(addon *helmv1alpha1.HelmClusterAddon) {
+				addon.Status.ObservedGeneration = addon.Generation
+				addon.Status.Conditions = []metav1.Condition{{
+					Type:               helmv1alpha1.ConditionTypeReady,
+					Status:             metav1.ConditionTrue,
+					Reason:             helmv1alpha1.ReasonSuccess,
+					LastTransitionTime: metav1.Now(),
+				}}
+			},
+		},
+		{
+			name: "shedding the cleanup finalizer",
+			mutate: func(addon *helmv1alpha1.HelmClusterAddon) {
+				addon.Finalizers = nil
+			},
+		},
+	}
 
-	if _, err := v.ValidateUpdate(context.Background(), addon, addon); err != nil {
-		t.Fatalf("an existing addon must stay updatable, got %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldAddon := addonFixture(strings.Repeat("a", 120))
+			oldAddon.Generation = 1
+			oldAddon.Finalizers = []string{helmv1alpha1.FinalizerName}
+
+			newAddon := oldAddon.DeepCopy()
+			tt.mutate(newAddon)
+
+			v := newValidator(t, oldAddon)
+
+			if _, err := v.ValidateUpdate(context.Background(), oldAddon, newAddon); err != nil {
+				t.Fatalf("an existing addon must stay updatable, got %v", err)
+			}
+		})
 	}
 }
 
