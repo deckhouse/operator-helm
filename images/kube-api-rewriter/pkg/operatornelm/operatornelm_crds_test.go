@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -34,7 +35,19 @@ import (
 // not found, and nothing but a live cluster says so.
 const definitionsGlob = "../../../../crds/embedded/*.yaml"
 
+// property is the part of an OpenAPI schema a kind reference path walks
+// through. The proxy addresses these paths with gjson on a plain object
+// (see rewriter.TransformObject), so nothing but a named field of an object
+// is ever traversed: no array items, no additionalProperties.
+type property struct {
+	Properties map[string]property `json:"properties"`
+}
+
 type definition struct {
+	// file records where the definition was read from, so a failure names a
+	// file to open rather than a CRD name to grep for.
+	file string
+
 	Metadata struct {
 		Name string `json:"name"`
 	} `json:"metadata"`
@@ -52,11 +65,19 @@ type definition struct {
 			Name    string `json:"name"`
 			Served  bool   `json:"served"`
 			Storage bool   `json:"storage"`
+			Schema  struct {
+				OpenAPIV3Schema property `json:"openAPIV3Schema"`
+			} `json:"schema"`
 		} `json:"versions"`
 	} `json:"spec"`
 }
 
-func TestRulesMatchGeneratedDefinitions(t *testing.T) {
+// loadDefinitions reads every generated internal definition, keyed by the
+// name the API server knows, which is the one thing both sides derive
+// independently.
+func loadDefinitions(t *testing.T) map[string]definition {
+	t.Helper()
+
 	paths, err := filepath.Glob(definitionsGlob)
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no definitions found at %s: %v", definitionsGlob, err)
@@ -64,8 +85,6 @@ func TestRulesMatchGeneratedDefinitions(t *testing.T) {
 
 	separator := regexp.MustCompile(`(?m)^---$`)
 
-	// Keyed by the name the API server knows, which is the one thing both
-	// sides derive independently.
 	definitions := make(map[string]definition)
 
 	for _, path := range paths {
@@ -84,9 +103,16 @@ func TestRulesMatchGeneratedDefinitions(t *testing.T) {
 				t.Fatalf("%s: %v", path, err)
 			}
 
+			parsed.file = path
 			definitions[parsed.Metadata.Name] = parsed
 		}
 	}
+
+	return definitions
+}
+
+func TestRulesMatchGeneratedDefinitions(t *testing.T) {
+	definitions := loadDefinitions(t)
 
 	matched := make(map[string]bool, len(definitions))
 
@@ -151,4 +177,88 @@ func TestRulesMatchGeneratedDefinitions(t *testing.T) {
 			t.Errorf("%s is declared but no rule renames anything to it", name)
 		}
 	}
+}
+
+// TestKindRefPathsExistInGeneratedDefinitions keeps the kind reference paths
+// honest. A path the schema does not declare is silently skipped by the
+// proxy: the reference keeps the upstream kind, and the object reaches the
+// cluster pointing at a kind that does not exist there. A typo, or a field
+// upstream moved during a flux bump, looks exactly like a working rule
+// until then.
+func TestKindRefPathsExistInGeneratedDefinitions(t *testing.T) {
+	definitions := loadDefinitions(t)
+
+	byKind := make(map[string]definition, len(definitions))
+	for _, parsed := range definitions {
+		byKind[parsed.Spec.Names.Kind] = parsed
+	}
+
+	kinds := make([]string, 0, len(OperatorNelmRewriteRules.KindRefPaths))
+	for kind := range OperatorNelmRewriteRules.KindRefPaths {
+		kinds = append(kinds, kind)
+	}
+
+	sort.Strings(kinds)
+
+	for _, kind := range kinds {
+		renamed := OperatorNelmRewriteRules.KindPrefix + kind
+
+		parsed, ok := byKind[renamed]
+		if !ok {
+			t.Errorf("kind reference paths of %s: no definition declares %s", kind, renamed)
+
+			continue
+		}
+
+		for _, path := range OperatorNelmRewriteRules.KindRefPaths[kind] {
+			for _, version := range parsed.Spec.Versions {
+				if !version.Served {
+					continue
+				}
+
+				ref, parent, missing := resolvePath(version.Schema.OpenAPIV3Schema, path)
+				if missing != "" {
+					t.Errorf("%s: kind reference path %q of %s: %s %s declares no %q under %s (%s)",
+						parsed.Metadata.Name, path, kind, renamed, version.Name,
+						missing, parent, parsed.file)
+
+					continue
+				}
+
+				// Reaching a field that holds no kind means the path lost
+				// its meaning even though every segment still resolves.
+				if _, ok := ref.Properties["kind"]; !ok {
+					t.Errorf("%s: kind reference path %q of %s: %s %s declares it with no kind field (%s)",
+						parsed.Metadata.Name, path, kind, renamed, version.Name,
+						parsed.file)
+				}
+			}
+		}
+	}
+}
+
+// resolvePath walks a dotted kind reference path through the schema the same
+// way the proxy walks it through an object: every segment is a named field
+// of the object before it. It returns the schema the path ends at, or the
+// segment the schema stops declaring together with the part of the path
+// that should have declared it.
+func resolvePath(schema property, path string) (ref property, parent, missing string) {
+	current := schema
+	segments := strings.Split(path, ".")
+
+	for i, segment := range segments {
+		next, ok := current.Properties[segment]
+		if !ok {
+			parent = strings.Join(segments[:i], ".")
+			if parent == "" {
+				parent = "the root"
+			}
+
+			return property{}, parent, segment
+		}
+
+		current = next
+	}
+
+	return current, "", ""
 }
