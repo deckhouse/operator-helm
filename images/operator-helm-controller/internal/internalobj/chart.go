@@ -34,10 +34,12 @@ import (
 
 // internalChartInterval is how often source-controller re-checks the chart against
 // the HelmRepository it is built from. spec.interval is required upstream, and an
-// unset one is sent as "0s": GetRequeueAfter then returns zero, controller-runtime
-// reads that as "do not requeue", and the chart is left with no pass of its own -
-// it moves only when a watch on its source fires. It matches the repository's own
-// index interval, which is what its artifact can change on.
+// unset one is sent as "0s": GetRequeueAfter returns it verbatim and a successful
+// pass carries nothing else, so controller-runtime reads it as "do not requeue" and
+// a settled chart has no pass of its own. What still moved it - a spec change, a
+// force request, a retry after an error, a new revision of its source - all needs
+// something to happen; nothing re-checked a chart that had succeeded. It matches the
+// repository's own index interval, which is what its artifact can change on.
 const internalChartInterval = InternalRepositoryInterval
 
 var helmChartErrorRules = []ErrorConditionRule{

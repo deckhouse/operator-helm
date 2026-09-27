@@ -179,8 +179,8 @@ func TestChartsEnsureDropsTheCatalogLabelOfThePreviousRepositoryKind(t *testing.
 
 // TestChartsEnsureGivesTheChartAPassOfItsOwn pins spec.interval. Upstream marks the
 // field required, and an unset one is serialized as "0s", which HelmChart.GetRequeueAfter
-// hands to controller-runtime as "do not requeue": the chart would then only ever move
-// when a watch on its HelmRepository fires, with no pass of its own to fall back on.
+// hands to controller-runtime as "do not requeue": a chart that had succeeded was then
+// left with nothing to re-check it until something happened to it.
 func TestChartsEnsureGivesTheChartAPassOfItsOwn(t *testing.T) {
 	addon := testAddon()
 	service, c := newCharts(t, addon)
@@ -198,5 +198,52 @@ func TestChartsEnsureGivesTheChartAPassOfItsOwn(t *testing.T) {
 	}
 	if chart.Spec.Interval.Duration != internalChartInterval {
 		t.Fatalf("interval = %v, want %v", chart.Spec.Interval.Duration, internalChartInterval)
+	}
+}
+
+// TestChartsEnsureRepairsAChartLeftWithoutAnInterval is the migration: charts created
+// before the interval was set carry "0s" and are only ever touched again by a pass of
+// this operator, which is the one that has to correct them.
+func TestChartsEnsureRepairsAChartLeftWithoutAnInterval(t *testing.T) {
+	addon := testAddon()
+	existing := &sourcev1.HelmChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalHelmChartName(addon.Name),
+			Namespace: testNamespace,
+		},
+		Spec: sourcev1.HelmChartSpec{
+			Chart:     addon.Spec.Chart.HelmClusterAddonChartName,
+			Version:   addon.Spec.Chart.Version,
+			SourceRef: sourcev1.LocalHelmChartSourceReference{Kind: sourcev1.HelmRepositoryKind, Name: "whatever"},
+		},
+	}
+	service, c := newCharts(t, addon, existing)
+
+	ctx := context.Background()
+	rel, repo := adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository())
+	service.Ensure(ctx, rel, repo)
+
+	chart := &sourcev1.HelmChart{}
+	key := client.ObjectKeyFromObject(existing)
+	if err := c.Get(ctx, key, chart); err != nil {
+		t.Fatalf("getting helm chart: %v", err)
+	}
+	if chart.Spec.Interval.Duration != internalChartInterval {
+		t.Fatalf("interval = %v, want the pass to have corrected it to %v",
+			chart.Spec.Interval.Duration, internalChartInterval)
+	}
+
+	// And the correction is a one-off: the pass that follows it writes nothing, so the
+	// charts of a cluster are not bumped into a fresh download on every pass.
+	before := chart.ResourceVersion
+	service.Ensure(ctx, rel, repo)
+
+	settled := &sourcev1.HelmChart{}
+	if err := c.Get(ctx, key, settled); err != nil {
+		t.Fatalf("getting helm chart: %v", err)
+	}
+	if settled.ResourceVersion != before {
+		t.Fatalf("the pass after the correction wrote again: resourceVersion %s -> %s",
+			before, settled.ResourceVersion)
 	}
 }
