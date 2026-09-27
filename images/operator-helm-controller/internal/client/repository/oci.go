@@ -229,6 +229,12 @@ func resolveChartVersions(
 		// answered yet. Such a tag has an answer, unlike a never seen one, but the answer
 		// is known to be out of date, unlike a stalling one.
 		stale bool
+		// relisted says the recorded verdict is that the repository no longer offers the
+		// tag, while this listing offers it again. The listing is itself the evidence that
+		// the recorded verdict is out of date, so it says what the mark says without any
+		// mark having to be written — and it says it about an entry whose media type is the
+		// deleted artifact's, which a consumer is still deploying from.
+		relisted bool
 	}
 
 	candidates := make([]candidate, 0, len(tags))
@@ -250,6 +256,7 @@ func resolveChartVersions(
 			version:  semVersion,
 			recorded: recorded,
 			stale:    recorded && known.ReexaminationRequired,
+			relisted: recorded && known.UnavailableReason == helmv1alpha1.UnavailableReasonRemovedFromRepository,
 		}
 		if !opts.NeedsExamination(chartName, tag) {
 			c.known = &known
@@ -258,20 +265,33 @@ func resolveChartVersions(
 		candidates = append(candidates, c)
 	}
 
-	// probeOrder is the order the tags that need a request are asked in: the ones no
-	// pass has a verdict for first, then the ones whose recorded verdict a forced pass
-	// marked as stale, then the ones a previous pass left without an answer. Within each
-	// group the listing order is kept, so two passes over an unchanged repository ask in
-	// the same order — the convergence must not depend on which tags a pass happened to
-	// get to.
+	// probeOrder is the order the tags that need a request are asked in: the ones no pass
+	// has a verdict for first, then the ones whose recorded verdict a forced pass marked
+	// as stale, then the ones recorded as gone that this listing offers again, and last
+	// the ones a previous pass left without an answer. Within each group the listing order
+	// is kept, so two passes over an unchanged repository ask in the same order — the
+	// convergence must not depend on which tags a pass happened to get to.
+	//
+	// The last group is last because it is the only one that can never empty: a tag the
+	// registry permanently stalls on is re-examined by every pass forever, and a block of
+	// them ahead of anything else would spend every budget on work that cannot finish.
+	// Everything ordered ahead of it is bounded — a never seen tag is recorded once, a
+	// mark is cleared by the pass that answers it, and a relisted tag stops being recorded
+	// as removed as soon as it is examined — so each group drains and the ones behind it
+	// get their turn.
+	//
+	// A relisted tag needs a priority of its own rather than the mark's: it is examined on
+	// the strength of the listing alone (NeedsExamination), so it can be unmarked — a
+	// forced refresh that already ran, or none ever asked for — and left among the stalling
+	// retries it would never be reached behind them, while the catalog goes on publishing
+	// the media type of an artifact that was deleted and replaced.
 	//
 	// The groups are read off what is recorded, never off whether this pass examines a
 	// tag: under Full every tag needs a request, and ordering by that would put the whole
 	// listing in one group and leave the order to the registry. Reading them off the
-	// recorded state is what keeps the three kinds of work apart even then — discovering
-	// the versions no pass has ever recorded, then the refresh a forced pass still owes,
-	// then the retries a stalling tag keeps asking for — so a forced pass that runs out of
-	// its budget stops somewhere in that order rather than somewhere in the registry's.
+	// recorded state is what keeps the four kinds of work apart even then, so a forced pass
+	// that runs out of its budget stops somewhere in that order rather than somewhere in
+	// the registry's.
 	//
 	// The candidates themselves are left in listing order: they index resolved and
 	// examined below, and the versions this function returns are built from them.
@@ -279,8 +299,9 @@ func resolveChartVersions(
 
 	for _, group := range []func(candidate) bool{
 		func(c candidate) bool { return !c.recorded },
-		func(c candidate) bool { return c.recorded && c.stale },
-		func(c candidate) bool { return c.recorded && !c.stale },
+		func(c candidate) bool { return c.stale },
+		func(c candidate) bool { return c.relisted && !c.stale },
+		func(c candidate) bool { return c.recorded && !c.stale && !c.relisted },
 	} {
 		for i := range candidates {
 			if candidates[i].known == nil && group(candidates[i]) {

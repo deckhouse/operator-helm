@@ -81,6 +81,12 @@ func (s *Synchronizer) Sync(
 ) SyncOutcome {
 	forced := repo.ForceReconcileRequired()
 
+	// What the marking wrote, carried to the merge in memory. The catalog is read back
+	// through the manager's cache, which is not guaranteed to show this pass its own
+	// write, so the versions this pass defers take their mark from here rather than from
+	// what that read returned.
+	var marked contract.MarkedVersions
+
 	// A helm repository is marked for nothing: its client ignores FetchOptions outright
 	// (the index is one document carrying every version, and media types are not probed
 	// incrementally there), so no pass ever skips a recorded verdict and no mark can
@@ -91,7 +97,8 @@ func (s *Synchronizer) Sync(
 	// re-examination no pass is going to do. The request is still recorded as far as it
 	// goes: there is nothing to record, so nothing is waiting on the annotation either.
 	if forced && repoType == chartsource.OCI {
-		if err := s.catalog.MarkForReexamination(ctx, repo); err != nil {
+		var err error
+		if marked, err = s.catalog.MarkForReexamination(ctx, repo); err != nil {
 			// ForceRequestRecorded stays false: nothing holds the request but the
 			// annotation, and dropping it here would lose the refresh entirely.
 			return SyncOutcome{Catalog: CatalogOutcome{Err: err}}
@@ -117,7 +124,7 @@ func (s *Synchronizer) Sync(
 		return SyncOutcome{ForceRequestRecorded: true, FetchAttempted: true, Fetch: fetch}
 	}
 
-	result, err := s.catalog.Reconcile(ctx, repo, charts)
+	result, err := s.catalog.Reconcile(ctx, repo, charts, marked)
 
 	return SyncOutcome{
 		ForceRequestRecorded: true,

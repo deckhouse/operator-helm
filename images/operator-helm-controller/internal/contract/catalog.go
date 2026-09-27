@@ -38,6 +38,21 @@ type CatalogResult struct {
 	SkippedCharts []string
 }
 
+// MarkedVersions names, per chart, the versions MarkForReexamination left owing a
+// fresh verdict. It is handed straight back to Reconcile because the mark cannot be
+// re-read reliably: the catalog objects are served by the manager's cache, and the read
+// the merge patch is computed from can still show the state before our own marking
+// write landed. Carrying the set in memory makes the merge independent of that read —
+// the pass knows what it asked for without asking the cache again.
+type MarkedVersions map[string]map[string]struct{}
+
+// Marked reports whether one version of one chart was left owing a fresh verdict.
+func (m MarkedVersions) Marked(chartName, version string) bool {
+	_, marked := m[chartName][version]
+
+	return marked
+}
+
 // Catalog mirrors the chart list of a repository into the chart catalog kind of
 // its family. One Catalog serves every repository of one kind; the repository is
 // passed to each call because the objects it writes are owned by, labelled with
@@ -60,13 +75,18 @@ type Catalog interface {
 	// in the catalog before the registry is contacted, or a read that fails takes the
 	// whole refresh with it and the re-pushed tag it was asked for is never looked at
 	// again. Every later pass — forced or not — re-examines a marked version and
-	// clears the mark by answering it.
-	MarkForReexamination(ctx context.Context, repo Repository) error
+	// clears the mark by answering it. The versions it left marked are returned so the
+	// same pass can hand them to Reconcile instead of reading them back.
+	MarkForReexamination(ctx context.Context, repo Repository) (MarkedVersions, error)
 	// Reconcile writes the fetched charts into the catalog and prunes objects the
 	// repository no longer lists, keeping any version a consumer still references.
 	// The result names the charts it could not publish; it is filled in as far as
 	// the pass got, so it is meaningful next to an error too.
-	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart) (CatalogResult, error)
+	//
+	// marked is what MarkForReexamination recorded earlier in this pass, or nil when
+	// nothing was forced. A version this pass did not reach keeps the mark because it
+	// is in that set, not because the read said so.
+	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart, marked MarkedVersions) (CatalogResult, error)
 	// InUseVersions reports the versions of one chart still referenced by the
 	// consumers of this family. An empty chart name yields no versions.
 	InUseVersions(ctx context.Context, repo Repository, chartName string) (map[string]struct{}, error)

@@ -47,8 +47,15 @@ import (
 // about a version nobody looked at. A version that is unexamined and unrecorded stays
 // out of the status entirely rather than being invented as pending.
 //
+// marked names the versions MarkForReexamination left owing a fresh verdict earlier in
+// this same pass, and it is the only thing a deferred version's mark is taken from. The
+// recorded entries this merge is handed come from a cached read that may predate that
+// write, and a merge patch on a list ships the whole array, so trusting what the read
+// carried would write the deferred versions back unmarked and lose a refresh whose
+// annotation is already consumed. It is empty for an unforced pass, which marks nothing.
+//
 // The mark a forced refresh leaves on a recorded version (ReexaminationRequired) is
-// only ever cleared here, never set: MarkForReexamination puts it on every recorded
+// only ever cleared here, never invented: MarkForReexamination puts it on every recorded
 // version before the registry is read, so by the time a pass is merged the request is
 // already written down for everything it could still owe. This merge decides which
 // half of it is now done. A version this pass put a verdict on has the mark cleared —
@@ -65,6 +72,7 @@ func mergeChartVersions(
 	current []helmv1alpha1.ChartVersion,
 	inUse map[string]struct{},
 	unexamined []string,
+	marked map[string]struct{},
 ) []helmv1alpha1.ChartVersion {
 	merged := make([]helmv1alpha1.ChartVersion, 0, len(fetched)+len(current))
 	listed := make(map[string]struct{}, len(fetched))
@@ -117,6 +125,10 @@ func mergeChartVersions(
 			// kept verbatim, mark included: a version an outstanding refresh still owes a
 			// fresh verdict for is exactly one this pass did not get to, and clearing the
 			// mark here would end the refresh without doing the work it asked for.
+			if _, owed := marked[version.Version]; owed {
+				version.ReexaminationRequired = true
+			}
+
 			merged = append(merged, version)
 
 			continue

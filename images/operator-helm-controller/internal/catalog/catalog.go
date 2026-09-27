@@ -149,44 +149,71 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (rep
 //
 // Objects that already carry the mark everywhere are not patched, so forcing a refresh
 // on an unreachable registry twice in a row costs one write, not two.
-func (t *typed[C, CL]) MarkForReexamination(ctx context.Context, repo contract.Repository) error {
+//
+// What ends up marked is reported back rather than left to be read again. The catalog
+// objects are served by the manager's cache, and the base of the merge patch the pass
+// later computes is such a read: an informer that has not yet caught up with the write
+// made here would hand the merge the version list from before the mark, and because a
+// merge patch on a list ships the whole array, the versions the pass deferred would be
+// written back unmarked — with the annotation already consumed, which loses the refresh
+// exactly where it is needed. The caller carries this set into Reconcile instead.
+func (t *typed[C, CL]) MarkForReexamination(ctx context.Context, repo contract.Repository) (contract.MarkedVersions, error) {
 	charts, err := t.list(ctx, repo)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	allMarked := make(contract.MarkedVersions, len(charts))
 
 	for _, chart := range charts {
 		base := chart.DeepCopyObject().(C)
 		status := t.cfg.Status(chart)
+		chartName := chart.GetLabels()[helmv1alpha1.LabelChartName]
 
-		marked := false
+		patch := false
+		marked := make(map[string]struct{}, len(status.Versions))
+
 		for i := range status.Versions {
-			if status.Versions[i].ReexaminationRequired ||
-				status.Versions[i].UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending {
+			if status.Versions[i].UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending {
 				continue
 			}
 
-			status.Versions[i].ReexaminationRequired = true
-			marked = true
+			// A version that already carries the mark is reported as marked as well: an
+			// earlier forced pass that could not finish owes the same fresh verdict, and
+			// the set is what the merge preserves the mark from.
+			if !status.Versions[i].ReexaminationRequired {
+				status.Versions[i].ReexaminationRequired = true
+				patch = true
+			}
+
+			marked[status.Versions[i].Version] = struct{}{}
 		}
 
-		if !marked {
+		// A chart object with no chart label cannot be matched to a fetched chart (Known
+		// drops its verdicts for the same reason), so recording its versions would key
+		// them under a name no merge ever looks up.
+		if chartName != "" && len(marked) > 0 {
+			allMarked[chartName] = marked
+		}
+
+		if !patch {
 			continue
 		}
 
 		if err := t.client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
-			return fmt.Errorf("marking the versions of chart %s for re-examination: %w",
+			return nil, fmt.Errorf("marking the versions of chart %s for re-examination: %w",
 				describeKey(client.ObjectKeyFromObject(chart)), err)
 		}
 	}
 
-	return nil
+	return allMarked, nil
 }
 
 func (t *typed[C, CL]) Reconcile(
 	ctx context.Context,
 	repo contract.Repository,
 	charts []repoclient.Chart,
+	marked contract.MarkedVersions,
 ) (contract.CatalogResult, error) {
 	logger := log.FromContext(ctx)
 
@@ -269,7 +296,7 @@ func (t *typed[C, CL]) Reconcile(
 		if len(chart.Versions) > 0 {
 			status.IconURL = chart.Versions[0].IconURL
 		}
-		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions)
+		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions, marked[chart.Name])
 
 		if err := t.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
 			return result, fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
@@ -315,6 +342,10 @@ func (t *typed[C, CL]) Reconcile(
 			logger.Info("Keeping a chart referenced by a consumer",
 				"kind", t.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
 
+			if err := t.clearMarks(ctx, chart); err != nil {
+				return result, err
+			}
+
 			continue
 		}
 
@@ -324,6 +355,37 @@ func (t *typed[C, CL]) Reconcile(
 	}
 
 	return result, nil
+}
+
+// clearMarks drops the re-examination mark from every version of a chart this pass saw
+// the whole repository without listing. Such a chart is reconciled nowhere else — it is
+// retained only because a consumer pins a version of it — so a mark left on it is a
+// request no pass can ever answer: the chart is not offered, so none of its versions is
+// ever a probe candidate, and the user-visible status would go on claiming work forever.
+// Only the mark is touched; the media type and reference the pinning consumer builds its
+// OCIRepository from are exactly what a chart kept for a consumer exists to carry.
+func (t *typed[C, CL]) clearMarks(ctx context.Context, chart C) error {
+	base := chart.DeepCopyObject().(C)
+	status := t.cfg.Status(chart)
+
+	cleared := false
+	for i := range status.Versions {
+		if status.Versions[i].ReexaminationRequired {
+			status.Versions[i].ReexaminationRequired = false
+			cleared = true
+		}
+	}
+
+	if !cleared {
+		return nil
+	}
+
+	if err := t.client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("clearing the re-examination marks of chart %s: %w",
+			describeKey(client.ObjectKeyFromObject(chart)), err)
+	}
+
+	return nil
 }
 
 // MigrateNames moves a repository's catalog objects to the names the current scheme

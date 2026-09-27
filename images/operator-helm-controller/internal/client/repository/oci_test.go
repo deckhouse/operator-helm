@@ -467,6 +467,10 @@ func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 	if got := versionByTag(t, chart, "1.0.0").MediaType; got != currentChartMediaType {
 		t.Fatalf("a skipped tag must keep its media type, got %q", got)
 	}
+	if got := versionByTag(t, chart, "1.0.1").UnavailableReason; got != helmv1alpha1.UnavailableReasonUnsupportedMediaType {
+		t.Fatalf("a skipped unsupported tag must keep its recorded reason, got %q, want %q",
+			got, helmv1alpha1.UnavailableReasonUnsupportedMediaType)
+	}
 	if got := versionByTag(t, chart, "1.0.1").UnavailableMessage; got != unsupportedMessage {
 		t.Fatalf("a skipped unsupported tag must keep its recorded message, got %q, want %q", got, unsupportedMessage)
 	}
@@ -842,15 +846,27 @@ func TestFetchChartsOCIExaminesANeverSeenTagAheadOfAStalledOne(t *testing.T) {
 }
 
 // TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne extends the ordering rule to
-// the third group a pass can see. A tag whose recorded verdict is marked for
-// re-examination has an answer, unlike a never seen one, but the answer is known to be
-// out of date; a tag recorded as ResolvePending has no answer and is asked again by
-// every pass, whether or not it ever replies. Ordered the other way round, a block of
-// permanently stalling tags spends the whole budget before the marked ones are reached,
-// and a forced refresh whose remainder they sit behind would never finish — which is
-// the failure this whole mechanism exists to prevent. Marked ahead of stalled bounds
-// it: the pass that examines a marked tag clears the mark, and nothing but a forced
-// pass sets one, so the marked set only shrinks.
+// the two groups a pass can see between the never seen tags and the stalling ones. A
+// tag whose recorded verdict is marked for re-examination has an answer, unlike a never
+// seen one, but the answer is known to be out of date; a tag recorded as removed from
+// the repository that this listing offers again has one that was reached about content
+// the registry deleted; a tag recorded as ResolvePending has no answer and is asked
+// again by every pass, whether or not it ever replies. Ordered the other way round, a
+// block of permanently stalling tags spends the whole budget before either of the first
+// two is reached, and a forced refresh whose remainder they sit behind would never
+// finish — which is the failure this whole mechanism exists to prevent. Ahead of the
+// stalling ones bounds it: both groups drain, because the pass that examines a marked
+// tag clears the mark and the pass that examines a relisted one replaces the removed
+// verdict, while the stalling group never does.
+//
+// The relisted tag carries no mark, which is why it needs a priority of its own. A tag
+// is examined on the strength of the listing alone once it is recorded as removed
+// (NeedsExamination), so the mark it may once have carried is already cleared — by the
+// forced pass that reached it, or by the pass that confirmed the version gone — and a
+// re-push needs no force request at all. Left in the last group it would sit behind the
+// stalling tags on every pass, which is what the repeated ordinary passes below show:
+// each of them retries the same prefix, and nothing ever raises the relisted tag's
+// priority, so the catalog would go on publishing the media type of a deleted artifact.
 func TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne(t *testing.T) {
 	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
 
@@ -861,9 +877,10 @@ func TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne(t *testing.T) {
 	const (
 		stallingTags = 80
 		markedTag    = "9.0.0"
+		relistedTag  = "9.0.1"
 	)
 
-	known := make(KnownVersions, stallingTags+1)
+	known := make(KnownVersions, stallingTags+2)
 
 	for i := range stallingTags {
 		tag := fmt.Sprintf("0.0.%d", i+1)
@@ -872,29 +889,58 @@ func TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne(t *testing.T) {
 	}
 
 	pushChart(t, host, markedTag, helmConfigMediaType, currentChartMediaType)
-	// Listed last and recorded with a media type: without the mark this tag would not
-	// be requested at all, and with it it must be requested first.
+	// Listed after every stalling tag and recorded with a media type: without the mark
+	// this tag would not be requested at all, and with it it must be requested first.
 	known[markedTag] = KnownVersion{MediaType: legacyChartMediaType, ReexaminationRequired: true}
+
+	pushChart(t, host, relistedTag, helmConfigMediaType, currentChartMediaType)
+	// The tag was deleted, a consumer kept the entry alive with the deleted artifact's
+	// media type, and it has now been pushed again. No force was asked for, so nothing
+	// marked it.
+	known[relistedTag] = KnownVersion{
+		MediaType:          legacyChartMediaType,
+		UnavailableReason:  helmv1alpha1.UnavailableReasonRemovedFromRepository,
+		UnavailableMessage: "the repository no longer offers this version",
+	}
 
 	// Stalled only after the fixtures are pushed: remote.Write reads manifests too.
 	for i := range stallingTags {
 		reg.stallTag(fmt.Sprintf("0.0.%d", i+1))
 	}
-	reg.reset()
 
-	chart := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}})
+	// Two ordinary passes, each starting from the state the previous one left behind
+	// the way the catalog builds it: a pass that does not reach the relisted tag hands
+	// the next one the same removed entry, so a tag ordered behind the stalling block
+	// is starved on every pass rather than on one.
+	for pass := 1; pass <= 2; pass++ {
+		reg.reset()
 
-	if got := versionByTag(t, chart, markedTag).MediaType; got != currentChartMediaType {
-		t.Fatalf("%s media type is %q, want %q: a marked tag must be examined before the stalled ones",
-			markedTag, got, currentChartMediaType)
-	}
+		chart := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}})
 
-	probed := 0
-	for i := range stallingTags {
-		probed += reg.manifestGets(fmt.Sprintf("0.0.%d", i+1))
-	}
-	if probed == 0 {
-		t.Fatal("the pending tags must still be re-examined with the budget left after the marked one")
+		if got := versionByTag(t, chart, markedTag).MediaType; got != currentChartMediaType {
+			t.Fatalf("pass %d: %s media type is %q, want %q: a marked tag must be examined before the stalled ones",
+				pass, markedTag, got, currentChartMediaType)
+		}
+
+		relisted := versionByTag(t, chart, relistedTag)
+		if relisted.UnavailableReason != "" {
+			t.Fatalf("pass %d: %s reason is %q, want none: a tag the listing offers again must not stay removed",
+				pass, relistedTag, relisted.UnavailableReason)
+		}
+		if relisted.MediaType != currentChartMediaType {
+			t.Fatalf("pass %d: %s media type is %q, want %q: a relisted tag must be examined ahead of the stalling retries",
+				pass, relistedTag, relisted.MediaType, currentChartMediaType)
+		}
+
+		probed := 0
+		for i := range stallingTags {
+			probed += reg.manifestGets(fmt.Sprintf("0.0.%d", i+1))
+		}
+		if probed == 0 {
+			t.Fatalf("pass %d: the pending tags must still be re-examined with the budget left after the marked one", pass)
+		}
+
+		known = nextKnown(known, chart)
 	}
 }
 
