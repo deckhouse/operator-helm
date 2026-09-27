@@ -210,9 +210,10 @@ func isDesiredChartDeployed(rel contract.Release, latest *helmv2.Snapshot, artif
 			return false
 		}
 
-		// The caller has established that this artifact is the one the current spec asks
-		// for; which chart is deployed out of it is then the digest, and the chart version
-		// cannot stand in for it:
+		// Whether this artifact belongs to the spec being asked about is settled before
+		// the call (see artifactCurrent above); what is left is which chart was deployed
+		// out of it, and the digest is what says so. The chart version cannot stand in
+		// for it:
 		// helm-controller records the version out of the packaged Chart.yaml, and a
 		// registry is free to publish that chart under a tag spelled differently
 		// (v1.2.3 for chart version 1.2.3, say), which kept a perfectly deployed release

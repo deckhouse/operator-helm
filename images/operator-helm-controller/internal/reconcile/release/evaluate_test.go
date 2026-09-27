@@ -1312,11 +1312,12 @@ func TestEvaluateMissingChartVersionIsNotWorkInProgress(t *testing.T) {
 	}
 }
 
-// TestEvaluateDoesNotRecordAChartAppliedFromAKeptArtifact is the other way the record
-// of the applied chart can run ahead of reality. A source that fails to fetch reports
-// that failure under the current generation and keeps the artifact of the spec before
-// it, so the release may well be Ready - it is still running the chart from that
-// artifact - while the chart it is now asked for has never been fetched at all.
+// TestEvaluateDoesNotRecordAChartAppliedFromAKeptArtifact pins the rule on this
+// function's own inputs. The collaborator that builds them answers the same question
+// when it sets ChartDeployed, so the combination below - a release reported as running
+// the desired chart out of an artifact its source never reached - is one no pass
+// produces today. What it guards is that the two cannot drift apart into recording a
+// rollout that never happened, in a function whose whole contract is its inputs.
 func TestEvaluateDoesNotRecordAChartAppliedFromAKeptArtifact(t *testing.T) {
 	keptArtifact := internalobj.InternalObjectState{
 		Observed: true,

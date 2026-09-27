@@ -422,7 +422,9 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 	// The chart is recorded as applied only against an artifact of the spec asking for
 	// it. A source that kept the artifact of the previous spec after a failed fetch has
 	// one the release may well be running happily, and recording the new chart against
-	// it would claim a rollout that never happened.
+	// it would claim a rollout that never happened. The release verdict already carries
+	// that, since ChartDeployed is built from the same answer; stating it here keeps
+	// this function's own inputs from being the place the two can disagree.
 	_, current, resolved := artifactRevision(outcome.Internal)
 	decision.ApplyChart = resolved && current && release.Ready() && outcome.ChartInfoOutdated
 	decision.ApplyValues = release.Ready() && valuesDeployed(outcome)
