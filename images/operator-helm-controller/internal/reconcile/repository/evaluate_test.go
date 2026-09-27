@@ -1258,3 +1258,83 @@ func TestEvaluateScheduledSyncKeepsLastForceReconcileTime(t *testing.T) {
 			decision.Status.LastForceReconcileTime, previous.Time)
 	}
 }
+
+// TestEvaluateSchedulesAnotherPassAfterAnIncompleteRead pins how a pass that read the
+// repository but ran out of its own budget is reported. It is not a failure — the
+// catalog advanced and the failure counter must not move towards Stalled — and it is
+// not a finished synchronization either: lastSyncedGeneration says which spec the
+// published catalog answers for, and this catalog answers for only part of it, so a
+// release asking about a version nobody examined has to wait rather than be told the
+// repository does not offer it. The next pass is due well before the normal interval,
+// because it is what finishes this one.
+func TestEvaluateSchedulesAnotherPassAfterAnIncompleteRead(t *testing.T) {
+	decision := Evaluate(Inputs{
+		Generation: 2,
+		Now:        testNow,
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{Charts: 1, Unexamined: 400},
+		Catalog:    &reposync.CatalogOutcome{},
+		Current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 2, LastSyncedGeneration: 1, ConsecutiveFetchFailures: 0},
+	})
+
+	if decision.Err != nil {
+		t.Fatalf("an incomplete read is not an error, got %v", decision.Err)
+	}
+	if decision.Status.ConsecutiveFetchFailures != 0 {
+		t.Fatalf("failures = %d, want 0: the read succeeded", decision.Status.ConsecutiveFetchFailures)
+	}
+	if apimeta.IsStatusConditionTrue(decision.Status.Conditions, helmv1alpha1.ConditionTypeStalled) {
+		t.Fatal("an incomplete read must never stall the repository")
+	}
+	if !apimeta.IsStatusConditionTrue(decision.Status.Conditions, helmv1alpha1.ConditionTypeReady) {
+		t.Fatal("the repository was read and is usable: Ready must stay true")
+	}
+
+	synced := apimeta.FindStatusCondition(decision.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Status != metav1.ConditionFalse || synced.Reason != helmv1alpha1.ReasonPartialSync {
+		t.Fatalf("synced = %+v, want a false PartialSync verdict", synced)
+	}
+	if !strings.Contains(synced.Message, "400") {
+		t.Fatalf("synced message %q must say how much is left", synced.Message)
+	}
+
+	if decision.Status.LastSyncedGeneration != 1 {
+		t.Fatalf("lastSyncedGeneration = %d, want it held at 1: the catalog does not answer for this spec yet",
+			decision.Status.LastSyncedGeneration)
+	}
+	if decision.Status.LastSuccessfulSyncTime != nil {
+		t.Fatal("lastSuccessfulSyncTime must stay unset: the repository is not mirrored in full")
+	}
+
+	if decision.RequeueAfter > SyncInterval/2 {
+		t.Fatalf("requeueAfter = %v, want the short incomplete-pass delay, not the full interval", decision.RequeueAfter)
+	}
+	if decision.Status.NextSyncTime == nil ||
+		decision.Status.NextSyncTime.Sub(testNow) > IncompleteSyncDelay+withJitter(IncompleteSyncDelay, SyncBackoffJitter) {
+		t.Fatalf("nextSyncTime = %v, want about %v after now", decision.Status.NextSyncTime, IncompleteSyncDelay)
+	}
+}
+
+// TestEvaluateCompletesTheGenerationOnceNothingIsLeftUnexamined is the other half:
+// the hold on lastSyncedGeneration is released by the pass that covers the repository,
+// so the convergence actually ends.
+func TestEvaluateCompletesTheGenerationOnceNothingIsLeftUnexamined(t *testing.T) {
+	decision := Evaluate(Inputs{
+		Generation: 2,
+		Now:        testNow,
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{Charts: 1},
+		Catalog:    &reposync.CatalogOutcome{},
+		Current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 2, LastSyncedGeneration: 1},
+	})
+
+	if decision.Status.LastSyncedGeneration != 2 {
+		t.Fatalf("lastSyncedGeneration = %d, want 2", decision.Status.LastSyncedGeneration)
+	}
+	if !apimeta.IsStatusConditionTrue(decision.Status.Conditions, helmv1alpha1.ConditionTypeSynced) {
+		t.Fatal("a pass that examined everything must report a completed synchronization")
+	}
+	if decision.RequeueAfter < SyncInterval/2 {
+		t.Fatalf("requeueAfter = %v, want the normal interval", decision.RequeueAfter)
+	}
+}

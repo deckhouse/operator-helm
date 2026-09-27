@@ -131,8 +131,19 @@ func (t *typed[C, CL]) Reconcile(
 	var result contract.CatalogResult
 
 	desired := make(map[string]struct{}, len(charts))
+	// A fetch that ran out of its budget describes the repository only in part, so
+	// "the remote did not list it" — the sole reason anything is deleted below — is not
+	// a conclusion this pass is entitled to draw about anything. Deleting a chart that
+	// exists remotely costs its consumers their reconciliation, and the catalog is
+	// rebuilt from a listing every few minutes anyway, so the pruning waits for a pass
+	// that saw the whole repository.
+	incomplete := false
 
 	for _, chart := range charts {
+		if len(chart.UnexaminedVersions) > 0 {
+			incomplete = true
+		}
+
 		if errs := validation.IsValidLabelValue(chart.Name); len(errs) > 0 {
 			// The chart label carries the name verbatim, and it is a query surface:
 			// a user finds a catalog object by it. Writing a sanitized value would
@@ -196,11 +207,18 @@ func (t *typed[C, CL]) Reconcile(
 		if len(chart.Versions) > 0 {
 			status.IconURL = chart.Versions[0].IconURL
 		}
-		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse)
+		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions)
 
 		if err := t.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
 			return result, fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
 		}
+	}
+
+	if incomplete {
+		logger.V(1).Info("Keeping every chart: the repository read was incomplete",
+			"kind", t.cfg.Kind, "repository", describeKey(client.ObjectKey{Namespace: repo.Namespace(), Name: repo.Name()}))
+
+		return result, nil
 	}
 
 	existingCharts, err := t.list(ctx, repo)

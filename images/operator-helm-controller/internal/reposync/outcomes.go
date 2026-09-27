@@ -26,6 +26,12 @@ type FetchOutcome struct {
 	Reason   string
 	Message  string
 	Pending  int
+	// Unexamined counts the chart versions the remote offers that the pass reached no
+	// verdict about at all, because it ran out of its own budget before getting to
+	// them. It is not a failure and not a pending verdict: nothing was recorded for
+	// those versions, so a positive count means the catalog advanced but does not yet
+	// mirror the repository, and another pass is due sooner than the usual interval.
+	Unexamined int
 	// Charts is how many charts the repository listed. It is meaningful only when the
 	// read succeeded; a failed one leaves it zero, which is why the status field it
 	// feeds is only written on success.

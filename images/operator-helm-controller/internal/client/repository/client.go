@@ -34,6 +34,14 @@ import (
 type Chart struct {
 	Name     string
 	Versions []ChartVersion
+	// UnexaminedVersions names the versions the repository offers that this pass
+	// reached no verdict about at all, because it ran out of its own budget before
+	// getting to them. They are neither usable nor unavailable: nothing was observed
+	// about them, so they carry no entry in Versions and the catalog leaves whatever a
+	// previous pass recorded for them untouched. A client that always answers in full
+	// leaves this empty, and a non-empty value is what tells the caller the pass was
+	// incomplete and has to be repeated.
+	UnexaminedVersions []string
 }
 
 type ChartVersion struct {

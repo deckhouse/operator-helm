@@ -119,10 +119,11 @@ type fakeRegistry struct {
 	mu     sync.Mutex
 	gets   map[string]int
 	forced map[string]int
-	// stalling makes manifest reads hang until stall is closed, which models the
-	// registry that accepts the request and then says nothing. stalledTags does the
-	// same for one tag only, so a pass can be observed with both kinds of answer.
-	stalling    bool
+	// stalledTags makes the manifest reads of the named tags hang until stall is
+	// closed, which models the registry that accepts the request and then says
+	// nothing. It is per tag so that one pass can be observed with both kinds of
+	// answer: the tags that are left stalling are exactly the ones a pass has to
+	// report as unexamined rather than guess a verdict for.
 	stalledTags map[string]bool
 	stall       chan struct{}
 }
@@ -151,7 +152,7 @@ func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.gets[tag]++
 		status := f.forced[tag]
-		stalling := f.stalling || f.stalledTags[tag]
+		stalling := f.stalledTags[tag]
 		f.mu.Unlock()
 
 		if stalling {
@@ -192,16 +193,9 @@ func manifestTag(r *http.Request) (string, bool) {
 	return ref, true
 }
 
-// stallManifests makes every later manifest read hang. Tag listing keeps working, so
-// a pass reaches the per-tag probes and then finds nothing answering them.
-func (f *fakeRegistry) stallManifests() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.stalling = true
-}
-
 // stallTag makes manifest reads of one tag hang while every other tag keeps being
 // served, which is what a pass that must publish some versions and defer one looks like.
+// Tag listing keeps working, so a pass reaches the per-tag probes either way.
 func (f *fakeRegistry) stallTag(tag string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -398,6 +392,11 @@ func TestFetchChartsOCIEscalatesUnauthorized(t *testing.T) {
 // the ctx.Err() check, every goroutine's remote.Get fails with a wrapped context.Canceled
 // that is not a *transport.Error, so it falls through to a fabricated ResolvePending verdict
 // and resolveChartVersions returns a clean result with a nil error.
+//
+// A cancelled parent is the one context error the pass does not survive: an expired pass
+// budget publishes what it examined, but a parent that is gone means the controller is
+// shutting down or the reconcile deadline has passed, and there is nobody left to write
+// the catalog this pass would hand over.
 func TestFetchChartsOCIResolveVersionsSurfacesCancelledContext(t *testing.T) {
 	_, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
@@ -410,12 +409,17 @@ func TestFetchChartsOCIResolveVersionsSurfacesCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = resolveChartVersions(ctx, repo, "podinfo", []string{"1.0.0"}, []remote.Option{remote.WithContext(ctx)}, FetchOptions{})
+	versions, unexamined, err := resolveChartVersions(
+		ctx, repo, "podinfo", []string{"1.0.0"}, []remote.Option{remote.WithContext(ctx)}, FetchOptions{},
+	)
 	if err == nil {
 		t.Fatal("a cancelled context must not produce a completed pass")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected an error wrapping context.Canceled, got %v", err)
+	}
+	if versions != nil || unexamined != nil {
+		t.Fatalf("an abandoned pass must publish nothing, got versions %+v and unexamined %v", versions, unexamined)
 	}
 }
 
@@ -609,42 +613,106 @@ func TestFetchChartsOCIAbandonsARegistryThatNeverAnswersTheListing(t *testing.T)
 	}
 }
 
-// TestFetchChartsOCIFailsThePassWhenManifestReadsStall is the classification half of
-// the bound: when the pass runs out of time every in-flight probe fails with the
-// pass's own context error, which resolveChartVersion cannot tell from a registry
-// failure and records as ResolvePending. Publishing that would mean a catalog whose
-// every version is pending for a reason nothing observed — so the pass has to fail,
-// and fail retriably, leaving the previous catalog in place.
-func TestFetchChartsOCIFailsThePassWhenManifestReadsStall(t *testing.T) {
+// TestFetchChartsOCIPublishesWhatAnExpiredPassExamined pins what the pass budget is
+// for: it bounds how much one pass does, not whether the pass counts. A repository
+// with more unexamined tags than the budget allows would otherwise never converge —
+// every pass would throw away what it had resolved, so every next pass would start
+// from the same empty known state and die at the same point, forever.
+//
+// The three tags stand for the three outcomes such a pass has: one already carries a
+// recorded verdict, one is examined in time, and one stalls until the budget is gone.
+// The stalled one is the delicate case — its probe fails on the pass's own context,
+// which resolveChartVersion cannot tell from a registry failure and turns into a
+// ResolvePending entry. Publishing that would be our own timeout recorded as the
+// registry's answer, and the known state carries ResolvePending forward, so it must
+// be reported as unexamined instead: no entry at all.
+func TestFetchChartsOCIPublishesWhatAnExpiredPassExamined(t *testing.T) {
 	// The probe timeout is deliberately far above the pass budget: this test is
 	// about the whole pass expiring, not about one tag doing so.
-	shortenOCILimits(t, tagListBudget, 10*time.Second, 300*time.Millisecond)
+	shortenOCILimits(t, tagListBudget, 10*time.Second, 500*time.Millisecond)
 
 	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
 	pushChart(t, host, "1.0.1", helmConfigMediaType, currentChartMediaType)
-	reg.stallManifests()
+	pushChart(t, host, "1.0.2", helmConfigMediaType, currentChartMediaType)
+	reg.stallTag("1.0.1")
+
+	known := KnownCharts{"podinfo": KnownVersions{"1.0.2": {MediaType: legacyChartMediaType}}}
 
 	start := time.Now()
 	charts, err := OCIRepositoryDefaultClient.FetchCharts(
-		context.Background(), "oci://"+host+"/podinfo", nil, FetchOptions{},
+		context.Background(), "oci://"+host+"/podinfo", nil, FetchOptions{Known: known},
 	)
 	elapsed := time.Since(start)
 
-	if err == nil {
-		t.Fatalf("an expired pass must fail, got %d chart(s): %+v", len(charts), charts)
-	}
-	if charts != nil {
-		t.Fatalf("no catalog may be published alongside the failure, got %+v", charts)
+	if err != nil {
+		t.Fatalf("an expired budget must not fail the pass, got %v", err)
 	}
 	if elapsed > 10*time.Second {
 		t.Fatalf("the pass took %v: the budget did not bound it", elapsed)
+	}
+	if len(charts) != 1 {
+		t.Fatalf("expected one chart, got %d", len(charts))
+	}
+
+	if got := versionByTag(t, charts[0], "1.0.0").MediaType; got != currentChartMediaType {
+		t.Fatalf("a tag examined before the budget expired must be published, got media type %q", got)
+	}
+	// A recorded verdict costs no request, so an expired budget is no reason to lose
+	// it: dropping it would shrink the known state the next pass builds on.
+	if got := versionByTag(t, charts[0], "1.0.2").MediaType; got != legacyChartMediaType {
+		t.Fatalf("a carried verdict must survive an expired budget, got media type %q", got)
+	}
+
+	for _, version := range charts[0].Versions {
+		if version.Version.Original() == "1.0.1" {
+			t.Fatalf("the unexamined tag must carry no verdict, got %+v", version)
+		}
+	}
+	if got := charts[0].UnexaminedVersions; len(got) != 1 || got[0] != "1.0.1" {
+		t.Fatalf("unexamined versions = %v, want exactly the stalled tag", got)
+	}
+	// The pass is reported as incomplete only because a tag was left over, not because
+	// the registry was asked and failed to answer about it.
+	if reg.manifestGets("1.0.1") == 0 {
+		t.Fatal("the stalled tag must have been attempted at all")
+	}
+}
+
+// TestFetchChartsOCIAbandonsThePassWhenTheParentDeadlineIsGone is the boundary of the
+// test above: the pass survives its own budget, but not the caller's. passCtx.Err()
+// cannot tell the two apart — the parent's deadline propagates into it — so the parent
+// context has to be consulted directly, or a controller shutting down would publish a
+// half-read catalog as a synchronization that advanced.
+func TestFetchChartsOCIAbandonsThePassWhenTheParentDeadlineIsGone(t *testing.T) {
+	// A pass budget far above the parent deadline: whatever ends this pass, it is not
+	// the budget.
+	shortenOCILimits(t, tagListBudget, 10*time.Second, 30*time.Second)
+
+	reg, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.0.1", helmConfigMediaType, currentChartMediaType)
+	reg.stallTag("1.0.1")
+
+	repo, err := name.NewRepository(host + "/podinfo")
+	if err != nil {
+		t.Fatalf("parsing repository: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	versions, unexamined, err := resolveChartVersions(
+		ctx, repo, "podinfo", []string{"1.0.0", "1.0.1"}, []remote.Option{remote.WithContext(ctx)}, FetchOptions{},
+	)
+	if err == nil {
+		t.Fatalf("a dead parent context must fail the pass, got versions %+v and unexamined %v", versions, unexamined)
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error %v must report the expired deadline", err)
 	}
 	if _, ok := AsTerminal(err); ok {
-		t.Fatalf("error %v must stay retriable: a stalled registry may answer next time", err)
+		t.Fatalf("error %v must stay retriable: the next reconcile is worth running", err)
 	}
 }
 

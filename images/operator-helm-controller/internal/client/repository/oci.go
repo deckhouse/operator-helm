@@ -75,12 +75,12 @@ var (
 	// chartResolvePassBudget bounds the examination pass as a whole. It has to exist
 	// separately from chartProbeTimeout: with chartResolveConcurrency probes in
 	// flight and hundreds of tags queued behind them, per-probe deadlines alone still
-	// multiply into hours. It also has to be generous, because a pass that expires is
-	// a failed pass — nothing it examined is published — so a bound that a large
-	// repository cannot meet would mean it never converges. Three minutes is that
-	// compromise: against a registry answering in milliseconds it admits tens of
-	// thousands of tags, while against a stalled one it gives up well inside the
-	// 5-minute SyncInterval instead of starving the repositories behind this worker.
+	// multiply into hours. An expired budget is not a failed pass: what was examined
+	// is published and the rest is reported as unexamined, so a repository with more
+	// tags than one budget admits converges over several passes instead of never.
+	// Three minutes is the compromise between how much one pass gets through and how
+	// long a stalled registry may hold a worker: it gives up well inside the 5-minute
+	// SyncInterval instead of starving the repositories queued behind this worker.
 	chartResolvePassBudget = 3 * time.Minute
 )
 
@@ -155,34 +155,43 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 		return nil, classifyRemoteError(err, url)
 	}
 
-	versions, err := resolveChartVersions(ctx, repo, chartName, tags, options, opts)
+	versions, unexamined, err := resolveChartVersions(ctx, repo, chartName, tags, options, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	return []Chart{
 		{
-			Name:     chartName,
-			Versions: versions,
+			Name:               chartName,
+			Versions:           versions,
+			UnexaminedVersions: unexamined,
 		},
 	}, nil
 }
 
-// resolveChartVersions turns the listed tags into one version entry per tag. A tag
-// whose verdict is already recorded is carried through without a request; the rest are
-// examined concurrently. A per-tag failure becomes a ResolvePending entry, not a
-// returned error, so the rest of the pass is still published. resolveChartVersions
-// itself returns an error in three cases, none of them a per-tag verdict, and all of
-// them a failure of the whole pass rather than of one tag:
+// resolveChartVersions turns the listed tags into one version entry per tag, plus the
+// names of the tags it never got to. A tag whose verdict is already recorded is
+// carried through without a request; the rest are examined concurrently. A per-tag
+// failure becomes a ResolvePending entry, not a returned error, so the rest of the
+// pass is still published.
+//
+// Running out of the pass budget is not an error either: the versions examined before
+// it expired are returned, the rest are reported as unexamined, and the caller repeats
+// the pass. A repository with more tags than one budget can cover would otherwise never
+// converge — every pass would die at the same point, having published nothing, so every
+// next pass would start from the same empty known state.
+//
+// resolveChartVersions returns an error in three cases, none of them a per-tag verdict,
+// and all of them a failure of the whole pass rather than of one tag:
 //   - building the shared puller fails: a transport/auth setup step that happens once
 //     for the repository, not per tag, so its failure cannot be attributed to any tag;
 //   - a per-tag request is rejected with 401/403: credentials rejected for one tag are
 //     rejected for all of them, so resolveChartVersion escalates it to a terminal
 //     error instead of a ResolvePending verdict, and group.Wait propagates it here;
-//   - the pass runs out of time, or the parent context is cancelled, while tags are
-//     still in flight, which would otherwise make every in-flight remote.Get fail and
-//     be misreported as a pass full of fabricated ResolvePending verdicts instead of
-//     the abandoned pass it is.
+//   - the parent context is cancelled — the controller is shutting down or the reconcile
+//     deadline is gone. That is not our budget running out, nothing is waiting to publish
+//     the partial catalog, and the versions still in flight were cut short by it, so the
+//     pass is abandoned rather than reported.
 func resolveChartVersions(
 	ctx context.Context,
 	repo name.Repository,
@@ -190,7 +199,7 @@ func resolveChartVersions(
 	tags []string,
 	options []remote.Option,
 	opts FetchOptions,
-) ([]ChartVersion, error) {
+) ([]ChartVersion, []string, error) {
 	type candidate struct {
 		tag     string
 		version *semver.Version
@@ -219,9 +228,16 @@ func resolveChartVersions(
 	}
 
 	resolved := make([]*ChartVersion, len(candidates))
+	// examined records which candidates this pass reached a verdict about, which a nil
+	// entry in resolved cannot: nil is also the answer for a tag that vanished between
+	// the listing and its probe, and that one is a verdict — the tag is gone and the
+	// catalog must drop it — while an unexamined tag must be left exactly as the
+	// previous pass recorded it. Each goroutine writes only its own index.
+	examined := make([]bool, len(candidates))
 
-	// passCtx, not groupCtx, is the one consulted after group.Wait: errgroup cancels
-	// its own context as Wait returns, so groupCtx always reports an error there.
+	// passCtx, not groupCtx, is the one consulted inside the goroutines: errgroup
+	// cancels its own context as Wait returns, and also as soon as any goroutine fails,
+	// so groupCtx cannot tell an expired budget from a sibling's terminal error.
 	passCtx, cancelPass := context.WithTimeout(ctx, chartResolvePassBudget)
 	defer cancelPass()
 
@@ -247,16 +263,28 @@ func resolveChartVersions(
 	// examined tag.
 	puller, err := remote.NewPuller(tagOptions...)
 	if err != nil {
-		return nil, fmt.Errorf("building the registry puller: %w", err)
+		return nil, nil, fmt.Errorf("building the registry puller: %w", err)
 	}
 
 	for i := range candidates {
 		index, c := i, candidates[i]
 
-		group.Go(func() error {
-			if c.known != nil {
-				resolved[index] = carryKnown(c.version, *c.known)
+		// Carried here rather than inside the group: a recorded verdict costs no
+		// request, and a pass whose budget expires must still publish every one of them.
+		// A carry queued behind stalled probes would be left undone, its verdict would
+		// drop out of the catalog, and the next pass would have to examine that tag from
+		// scratch — the incremental state would shrink instead of growing.
+		if c.known != nil {
+			resolved[index], examined[index] = carryKnown(c.version, *c.known), true
 
+			continue
+		}
+
+		group.Go(func() error {
+			// The budget is already spent: every probe from here on would fail on a
+			// cancelled context, and behind a stalled registry the queue is as long as the
+			// tag list. They are unexamined either way, so do not ask.
+			if passCtx.Err() != nil {
 				return nil
 			}
 
@@ -280,36 +308,53 @@ func resolveChartVersions(
 			if err != nil {
 				return err
 			}
-			resolved[index] = version
+
+			// A probe cut short by our own budget (or by the parent context) fails inside
+			// remote.Get without any transport error, so resolveChartVersion cannot tell it
+			// from a registry that answered badly and builds a ResolvePending entry for it.
+			// Recording that would publish our own timeout as the registry's answer, and
+			// ResolvePending is carried forward by the known state, so the lie would outlive
+			// the pass that told it. Only a pending verdict is suspect: a tag that answered
+			// just before the budget expired was genuinely examined and is kept.
+			if version != nil &&
+				version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending &&
+				passCtx.Err() != nil {
+				return nil
+			}
+
+			resolved[index], examined[index] = version, true
 
 			return nil
 		})
 	}
 
 	if err := group.Wait(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// An expired pass budget or a cancelled parent context makes every remote.Get fail
-	// without surfacing as a transport error, so every goroutine above would otherwise
-	// return a fabricated ResolvePending verdict instead of an error. That is
-	// indistinguishable from a real registry failure and must not be reported as a
-	// completed pass: the repository has to report a failed synchronization and retry,
-	// not publish a catalog in which every version is pending. The error is deliberately
-	// not a TerminalError — a registry that stalled once is worth asking again.
-	if err := passCtx.Err(); err != nil {
-		return nil, fmt.Errorf("examining the versions of %s: %w", chartName, err)
+	// The parent context, not passCtx: passCtx is also done when our own budget expired,
+	// which is the case this function now survives. A cancelled parent is something else
+	// — the controller is shutting down or the reconcile deadline is gone — and nobody is
+	// left to write the partial catalog this pass collected, so it is abandoned. The
+	// error is deliberately not a TerminalError: the next reconcile is worth running.
+	if err := ctx.Err(); err != nil {
+		return nil, nil, fmt.Errorf("examining the versions of %s: %w", chartName, err)
 	}
 
 	versions := make([]ChartVersion, 0, len(resolved))
-	for _, version := range resolved {
-		if version == nil {
-			continue
+
+	var unexamined []string
+
+	for i := range candidates {
+		switch {
+		case !examined[i]:
+			unexamined = append(unexamined, candidates[i].version.Original())
+		case resolved[i] != nil:
+			versions = append(versions, *resolved[i])
 		}
-		versions = append(versions, *version)
 	}
 
-	return versions, nil
+	return versions, unexamined, nil
 }
 
 // carryKnown reuses a recorded verdict. A tag that is listed again is by definition no

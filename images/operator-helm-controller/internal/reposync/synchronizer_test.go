@@ -496,3 +496,30 @@ func TestSynchronizerSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T)
 		t.Fatalf("catalog error must wrap the underlying failure, got %v", outcome.Catalog.Err)
 	}
 }
+
+// TestSynchronizerSyncReportsTheVersionsAPassLeftUnexamined pins the signal that
+// travels from the client to the reconciler. A pass that ran out of its budget did
+// publish a catalog, so it is not a fetch failure, and it did not finish, so it must
+// not read as a completed synchronization either: the count is what the reconciler
+// schedules the next pass by.
+func TestSynchronizerSyncReportsTheVersionsAPassLeftUnexamined(t *testing.T) {
+	repo := testRepository()
+	incomplete := chartFixture("podinfo", "6.7.1")
+	incomplete.UnexaminedVersions = []string{"6.7.0", "6.6.0"}
+
+	service, _ := newSynchronizer(t, stubRepoClient{charts: []repoclient.Chart{incomplete}}, repo)
+
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm)
+	if outcome.Fetch.Err != nil {
+		t.Fatalf("an incomplete pass is not a failed fetch, got %v", outcome.Fetch.Err)
+	}
+	if outcome.Catalog.Err != nil {
+		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
+	}
+	if outcome.Fetch.Unexamined != 2 {
+		t.Fatalf("unexamined = %d, want 2", outcome.Fetch.Unexamined)
+	}
+	if outcome.Fetch.Pending != 0 {
+		t.Fatalf("pending = %d: an unexamined version is not a pending verdict", outcome.Fetch.Pending)
+	}
+}

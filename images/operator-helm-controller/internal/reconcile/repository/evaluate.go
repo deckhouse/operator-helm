@@ -109,6 +109,10 @@ func Evaluate(in Inputs) Decision {
 
 	fetchFailed := in.Attempted && in.Fetch != nil && in.Fetch.Err != nil
 	fetchSucceeded := in.Attempted && in.Fetch != nil && in.Fetch.Err == nil
+	// A read that stopped short of the repository: it published what it learned, so it
+	// is neither a failure nor a finished pass, and the only thing that finishes it is
+	// another pass.
+	fetchIncomplete := fetchSucceeded && in.Fetch.Unexamined > 0
 	catalogFailed := in.MigrateErr != nil || (in.Attempted && in.Catalog != nil && in.Catalog.Err != nil)
 
 	failures := in.Current.ConsecutiveFetchFailures
@@ -161,7 +165,7 @@ func Evaluate(in Inputs) Decision {
 			status.ChartCount = ptr.To(int32(in.Fetch.Charts - len(skippedCharts(in))))
 		}
 
-		if fetchSucceeded && !catalogFailed {
+		if fetchSucceeded && !catalogFailed && !fetchIncomplete {
 			// Written on every pass that published a catalog for this spec, pending tags
 			// included: a version the registry has not answered about is listed like any
 			// other, so the catalog is still the repository's full answer as to which
@@ -173,6 +177,12 @@ func Evaluate(in Inputs) Decision {
 			// so a transient fetch failure turns it False over a catalog that is complete
 			// and unchanged. Neither can lastSuccessfulSyncTime, which says when the
 			// repository was last mirrored in full but not which spec that was.
+			//
+			// A pass that ran out of its budget is the one exception, and the reason is the
+			// same sentence: its catalog is not the repository's full answer about which
+			// versions exist, because it never asked about some of them. Released early, a
+			// release asking for one of those versions would be told the repository does
+			// not offer it, instead of waiting for the pass that finds out.
 			status.LastSyncedGeneration = in.Generation
 
 			if in.Fetch.Pending == 0 {
@@ -180,7 +190,19 @@ func Evaluate(in Inputs) Decision {
 			}
 		}
 
-		next := in.Now.Add(withJitter(syncDelay(failures), in.Jitter))
+		delay := syncDelay(failures)
+		if fetchIncomplete && delay > IncompleteSyncDelay {
+			// The repository is known to have more to say and the next pass picks up
+			// where this one stopped, so waiting a full interval between passes would
+			// stretch the convergence of a large repository over hours. It is still a
+			// wait rather than an immediate requeue: the pass that came back incomplete
+			// spent its whole budget holding one of the two workers, and the
+			// repositories queued behind it must not be starved by the one that is
+			// catching up.
+			delay = IncompleteSyncDelay
+		}
+
+		next := in.Now.Add(withJitter(delay, in.Jitter))
 		status.NextSyncTime = &metav1.Time{Time: next}
 	}
 
@@ -296,6 +318,19 @@ func partialSyncMessage(in Inputs) string {
 		// in evaluateSynced today, but the invariant lives elsewhere and must not be
 		// relied on here.
 		parts = append(parts, fmt.Sprintf("The first repository read left %d chart versions unresolved", in.Fetch.Pending))
+	}
+
+	if in.Fetch != nil && in.Fetch.Unexamined > 0 {
+		// Said on every such pass, not only the first one, because unlike a pending tag
+		// this is not a property of the remote but of how far our own budget got: the
+		// catalog in front of the reader is missing versions the repository does offer,
+		// and the count is what shows the next pass making progress. Synced stays False
+		// until a pass covers the repository, which is the same state
+		// lastSyncedGeneration is held back for.
+		parts = append(parts, fmt.Sprintf(
+			"The repository read ran out of time with %d chart versions still unexamined; another pass is scheduled",
+			in.Fetch.Unexamined,
+		))
 	}
 
 	return strings.Join(parts, ". ")
@@ -555,6 +590,11 @@ const (
 	// the cause may disappear on the remote side. Moved here from task 4's
 	// standalone declaration — the value does not change.
 	MaxFetchFailures = 5
+	// IncompleteSyncDelay is the wait after a pass that read the repository but ran out
+	// of its budget before examining every version it listed. It is far below
+	// SyncInterval because such a pass leaves work that only another pass can finish,
+	// and each one starts from the verdicts its predecessor published.
+	IncompleteSyncDelay = 1 * time.Minute
 	// SyncBackoffJitter spreads the schedule of repositories that share a remote.
 	SyncBackoffJitter = 0.1
 	// minRequeue keeps a due schedule from being reported as "no requeue",

@@ -113,7 +113,11 @@ func (s *Synchronizer) fetchCharts(
 
 	charts, err := repoClient.FetchCharts(ctx, repo.URL(), buildRepoConfig(repo), opts)
 	if err == nil {
-		return charts, FetchOutcome{Pending: countPending(charts), Charts: len(charts)}
+		return charts, FetchOutcome{
+			Pending:    countPending(charts),
+			Unexamined: countUnexamined(charts),
+			Charts:     len(charts),
+		}
 	}
 
 	if terminal, ok := repoclient.AsTerminal(err); ok {
@@ -130,6 +134,18 @@ func (s *Synchronizer) fetchCharts(
 		Reason:  helmv1alpha1.ReasonSyncFailed,
 		Message: "Failed to read the repository catalog: " + err.Error(),
 	}
+}
+
+// countUnexamined counts the versions the client listed but never looked at. They are
+// the measure of how far short of the repository this pass stopped, and the caller
+// schedules the next one by it.
+func countUnexamined(charts []repoclient.Chart) int {
+	unexamined := 0
+	for _, chart := range charts {
+		unexamined += len(chart.UnexaminedVersions)
+	}
+
+	return unexamined
 }
 
 func countPending(charts []repoclient.Chart) int {

@@ -879,3 +879,121 @@ func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 		t.Fatalf("recovered version = %+v, want the media type alone with nothing of the failure left", got)
 	}
 }
+
+// TestAnIncompletePassKeepsTheVersionsItDidNotExamine pins what a fetch that ran out
+// of its own budget may and may not change. The versions it examined are written, and
+// the ones it never got to keep exactly the verdict a previous pass recorded: not
+// dropped, which would cost the next pass the work this one already paid for, and not
+// marked removed from the repository, which is a statement about the remote that this
+// pass made no observation to support.
+func TestAnIncompletePassKeepsTheVersionsItDidNotExamine(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	c := newClient(t)
+	cat := adapter.NewApplicationCatalog(c)
+	repo := applicationRepo("team-a", "stable")
+
+	complete := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
+		{Version: semver.MustParse("6.7.0"), MediaType: mediaType},
+	}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{complete}); err != nil {
+		t.Fatalf("the first pass returned %v", err)
+	}
+
+	// The next pass carries 6.7.0 from the known state, examines the new 6.8.0 and
+	// runs out of budget before reaching 6.7.1.
+	incomplete := repoclient.Chart{
+		Name: "podinfo",
+		Versions: []repoclient.ChartVersion{
+			{Version: semver.MustParse("6.8.0"), MediaType: mediaType},
+			{Version: semver.MustParse("6.7.0"), MediaType: mediaType},
+		},
+		UnexaminedVersions: []string{"6.7.1"},
+	}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{incomplete}); err != nil {
+		t.Fatalf("the incomplete pass returned %v", err)
+	}
+
+	stored := &helmv1alpha1.HelmApplicationChart{}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	if err := c.Get(context.Background(), key, stored); err != nil {
+		t.Fatalf("reading the catalog object: %v", err)
+	}
+
+	versions := map[string]helmv1alpha1.ChartVersion{}
+	for _, version := range stored.Status.Versions {
+		versions[version.Version] = version
+	}
+
+	if len(versions) != 3 {
+		t.Fatalf("versions = %+v, want the two carried ones plus the new one", stored.Status.Versions)
+	}
+	if got := versions["6.8.0"].MediaType; got != mediaType {
+		t.Fatalf("6.8.0 media type = %q, want the one this pass examined", got)
+	}
+
+	deferred, recorded := versions["6.7.1"]
+	if !recorded {
+		t.Fatal("a version this pass did not examine must keep its recorded entry")
+	}
+	if deferred.MediaType != mediaType {
+		t.Fatalf("6.7.1 media type = %q, want the recorded one", deferred.MediaType)
+	}
+	if deferred.UnavailableReason != "" {
+		t.Fatalf("6.7.1 reason = %q: an unexamined version must not be given a verdict", deferred.UnavailableReason)
+	}
+
+	// The point of keeping it: the next pass skips it, which is what lets a repository
+	// larger than one budget converge over several passes.
+	known, err := cat.Known(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("Known returned %v", err)
+	}
+	if (repoclient.FetchOptions{Known: known}).NeedsExamination("podinfo", "6.7.1") {
+		t.Fatal("a version kept with its verdict must not be examined again")
+	}
+}
+
+// TestAnIncompletePassPrunesNothing pins the most destructive thing a partially read
+// repository could do. Pruning reads "the remote did not list it" out of "it is not in
+// what we were handed", and a pass that stopped early is in no position to say that.
+// Deleting a chart that exists remotely costs every consumer of it its reconciliation,
+// so the pruning waits for a pass that saw the whole repository.
+func TestAnIncompletePassPrunesNothing(t *testing.T) {
+	c := newClient(t)
+	cat := adapter.NewApplicationCatalog(c)
+	repo := applicationRepo("team-a", "stable")
+
+	if _, err := cat.Reconcile(context.Background(), repo,
+		[]repoclient.Chart{chart("podinfo", "1.0.0"), chart("nginx", "1.0.0")}); err != nil {
+		t.Fatalf("the first pass returned %v", err)
+	}
+
+	incomplete := chart("podinfo", "1.0.0")
+	incomplete.UnexaminedVersions = []string{"1.0.1"}
+
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{incomplete}); err != nil {
+		t.Fatalf("the incomplete pass returned %v", err)
+	}
+
+	var charts helmv1alpha1.HelmApplicationChartList
+	if err := c.List(context.Background(), &charts, client.InNamespace("team-a")); err != nil {
+		t.Fatalf("listing charts: %v", err)
+	}
+	if len(charts.Items) != 2 {
+		t.Fatalf("charts = %v, want both: an incomplete pass may delete nothing", charts.Items)
+	}
+
+	// The guard is the incompleteness, not a change of heart about pruning: the next
+	// complete pass still removes the chart the repository no longer offers.
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0")}); err != nil {
+		t.Fatalf("the complete pass returned %v", err)
+	}
+	if err := c.List(context.Background(), &charts, client.InNamespace("team-a")); err != nil {
+		t.Fatalf("listing charts: %v", err)
+	}
+	if len(charts.Items) != 1 || charts.Items[0].Labels[helmv1alpha1.LabelChartName] != "podinfo" {
+		t.Fatalf("charts = %v, want only podinfo after a complete pass", charts.Items)
+	}
+}

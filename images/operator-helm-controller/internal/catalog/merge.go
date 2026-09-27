@@ -39,13 +39,26 @@ import (
 // every change to the running consumer (values, maintenance mode, ...) rather than just
 // the pull that the new artifact actually breaks; the real pull failure is reported by
 // the source controller instead.
+//
+// unexamined names the versions the fetch offers no verdict about because it ran out of
+// its budget before reaching them. They are not absent from the repository and must not
+// be read as such: whatever a previous pass recorded for them is kept verbatim, which is
+// both the incremental state the next pass carries forward and the only honest answer
+// about a version nobody looked at. A version that is unexamined and unrecorded stays
+// out of the status entirely rather than being invented as pending.
 func mergeChartVersions(
 	fetched []repoclient.ChartVersion,
 	current []helmv1alpha1.ChartVersion,
 	inUse map[string]struct{},
+	unexamined []string,
 ) []helmv1alpha1.ChartVersion {
 	merged := make([]helmv1alpha1.ChartVersion, 0, len(fetched)+len(current))
 	listed := make(map[string]struct{}, len(fetched))
+
+	deferred := make(map[string]struct{}, len(unexamined))
+	for _, version := range unexamined {
+		deferred[version] = struct{}{}
+	}
 
 	currentByVersion := make(map[string]helmv1alpha1.ChartVersion, len(current))
 	for _, version := range current {
@@ -81,6 +94,14 @@ func mergeChartVersions(
 
 	for _, version := range current {
 		if _, stillListed := listed[version.Version]; stillListed {
+			continue
+		}
+		if _, notExamined := deferred[version.Version]; notExamined {
+			// The repository still offers this version; this pass simply never got to
+			// it. Marking it removed would be a lie told by our own budget, and dropping
+			// it would throw away the verdict the next pass is meant to skip.
+			merged = append(merged, version)
+
 			continue
 		}
 		if _, referenced := inUse[version.Version]; !referenced {
