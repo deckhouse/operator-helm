@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -126,6 +127,11 @@ func Evaluate(in Inputs) Decision {
 	// another pass.
 	fetchIncomplete := fetchSucceeded && in.Fetch.Unexamined > 0
 	catalogFailed := in.MigrateErr != nil || (in.Attempted && in.Catalog != nil && in.Catalog.Err != nil)
+	// A catalog write rejected by its optimistic lock, which is a lost race rather than a
+	// failure: it is scheduled as a pass another one finishes. A pass whose fetch failed
+	// is not one of those — its schedule is the read backoff, which a rename conflict must
+	// not cut short.
+	catalogRaced := catalogFailed && !fetchFailed && apierrors.IsConflict(firstErr(in.MigrateErr, catalogErr(in)))
 
 	failures := in.Current.ConsecutiveFetchFailures
 	if in.Generation != in.Current.ObservedGeneration {
@@ -217,7 +223,7 @@ func Evaluate(in Inputs) Decision {
 		}
 
 		delay := syncDelay(failures)
-		if fetchIncomplete && delay > IncompleteSyncDelay {
+		if (fetchIncomplete || catalogRaced) && delay > IncompleteSyncDelay {
 			// The repository is known to have more to say and the next pass picks up
 			// where this one stopped, so waiting a full interval between passes would
 			// stretch the convergence of a large repository over hours. It is still a
@@ -225,6 +231,13 @@ func Evaluate(in Inputs) Decision {
 			// spent its whole budget holding one of the two workers, and the
 			// repositories queued behind it must not be starved by the one that is
 			// catching up.
+			//
+			// A pass whose catalog write was rejected by its lock is the same case: it
+			// read the repository and learned things it could not publish, and only a
+			// read that has since caught up stands in the way. The work queue does retry
+			// it at once, but that retry attempts no synchronization while the schedule
+			// says the next one is minutes away (ShouldAttempt), so the schedule is what
+			// decides when the write is actually redone.
 			delay = IncompleteSyncDelay
 		}
 
@@ -305,6 +318,20 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 		err := in.MigrateErr
 		if err == nil {
 			err = in.Catalog.Err
+		}
+
+		if apierrors.IsConflict(err) {
+			// A catalog write is patched against the read it was computed from, under an
+			// optimistic lock (catalog.lockedTo), so a base that lagged behind another
+			// writer is rejected instead of overwriting it. Nothing is wrong with the
+			// repository, the catalog or the cluster: the pass lost a race and another
+			// one runs against a current read. The verbatim API error would say "the
+			// object has been modified; please apply your changes to the latest version
+			// and try again" in a status a user reads as a defect report, so the race is
+			// named instead. It is still Synced=False, because the catalog in front of
+			// that user is indeed not what this pass read.
+			return metav1.ConditionFalse, helmv1alpha1.ReasonCatalogUpdateFailed,
+				"The chart catalog was written by someone else while this pass was updating it; retrying"
 		}
 
 		return metav1.ConditionFalse, helmv1alpha1.ReasonCatalogUpdateFailed,

@@ -25,8 +25,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
@@ -1471,5 +1473,88 @@ func TestEvaluateKeepsTheIncompleteCatalogThroughAFailedPass(t *testing.T) {
 	if decision.Status.UnexaminedVersions != 400 {
 		t.Fatalf("unexaminedVersions = %d, want it kept at 400: a failed pass published no catalog",
 			decision.Status.UnexaminedVersions)
+	}
+}
+
+// TestEvaluateReportsACatalogWriteRejectedByItsLockAsALostRace covers what a user is
+// told, and how soon the write is redone, when a catalog patch is refused because its
+// base predates another writer (catalog.lockedTo). Nothing is broken: the pass read the
+// repository and lost a race with a write it could not see, and the next pass computes
+// the same catalog from a read that has caught up.
+//
+// Both halves of that are verdicts of their own. The message must not be the verbatim
+// "the object has been modified; please apply your changes to the latest version and
+// try again", which a user reads as a defect in the operator. And the retry must not
+// wait a full synchronization interval: the work queue does retry the failed pass at
+// once, but that retry attempts no synchronization while the schedule says the next one
+// is minutes away (ShouldAttempt), so the schedule this pass writes is what decides when
+// the catalog is actually rewritten.
+func TestEvaluateReportsACatalogWriteRejectedByItsLockAsALostRace(t *testing.T) {
+	conflict := apierrors.NewConflict(
+		schema.GroupResource{Group: helmv1alpha1.GroupName, Resource: "helmapplicationcharts"},
+		"stable-podinfo",
+		errors.New("the object has been modified; please apply your changes to the latest version and try again"),
+	)
+
+	tests := []struct {
+		name              string
+		err               error
+		wantMessage       string
+		wantShortSchedule bool
+	}{
+		{
+			name:              "a rejected patch is named as the race it is and retried promptly",
+			err:               conflict,
+			wantMessage:       "The chart catalog was written by someone else while this pass was updating it; retrying",
+			wantShortSchedule: true,
+		},
+		{
+			name:              "any other catalog failure keeps its own error and the ordinary cadence",
+			err:               errors.New("chart catalog object is invalid"),
+			wantMessage:       "Failed to update the chart catalog: chart catalog object is invalid",
+			wantShortSchedule: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decision := Evaluate(Inputs{
+				Generation: 1,
+				Now:        testNow,
+				SyncEnd:    testNow,
+				Current:    readyStatus(1),
+				Attempted:  true,
+				Fetch:      &reposync.FetchOutcome{Charts: 1},
+				Catalog:    &reposync.CatalogOutcome{Err: test.err},
+			})
+
+			if !errors.Is(decision.Err, test.err) {
+				t.Fatalf("decision error = %v, want the catalog failure handed to the work queue", decision.Err)
+			}
+
+			synced := apimeta.FindStatusCondition(decision.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
+			if synced == nil || synced.Status != metav1.ConditionFalse ||
+				synced.Reason != helmv1alpha1.ReasonCatalogUpdateFailed {
+				t.Fatalf("synced = %+v, want False with %s", synced, helmv1alpha1.ReasonCatalogUpdateFailed)
+			}
+
+			if stalled := apimeta.FindStatusCondition(decision.Status.Conditions, helmv1alpha1.ConditionTypeStalled); stalled != nil {
+				t.Fatalf("stalled = %+v, want absent: a catalog write failure is retried, never terminal", stalled)
+			}
+
+			if synced.Message != test.wantMessage {
+				t.Fatalf("synced message = %q, want %q", synced.Message, test.wantMessage)
+			}
+
+			if decision.Status.NextSyncTime == nil {
+				t.Fatal("a pass that attempted a synchronization must schedule the next one")
+			}
+
+			short := decision.Status.NextSyncTime.Sub(testNow) <= IncompleteSyncDelay+withJitter(IncompleteSyncDelay, SyncBackoffJitter)
+			if short != test.wantShortSchedule {
+				t.Fatalf("nextSyncTime = %v after the pass, want the short retry: %v",
+					decision.Status.NextSyncTime.Sub(testNow), test.wantShortSchedule)
+			}
+		})
 	}
 }

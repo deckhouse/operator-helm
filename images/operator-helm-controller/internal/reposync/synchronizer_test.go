@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1086,4 +1087,178 @@ func TestSynchronizerSyncReportsTheVersionsAPassLeftUnexamined(t *testing.T) {
 	if outcome.Fetch.Pending != 0 {
 		t.Fatalf("pending = %d: an unexamined version is not a pending verdict", outcome.Fetch.Pending)
 	}
+}
+
+// stagedRepoClient serves a different repository client to each pass of a test that
+// runs several. The passes of one scenario are not variations on a fixture: what the
+// registry answers is part of the story being told.
+type stagedRepoClient struct {
+	current repoclient.ClientInterface
+}
+
+func (s *stagedRepoClient) FetchCharts(
+	ctx context.Context,
+	url string,
+	config *repoclient.RepoConfig,
+	opts repoclient.FetchOptions,
+) ([]repoclient.Chart, error) {
+	return s.current.FetchCharts(ctx, url, config, opts)
+}
+
+// TestSynchronizerSyncRejectsACatalogWriteComputedFromAPreMarkRead covers the write the
+// whole mark mechanism rests on: the patch that publishes a pass is computed from a read
+// through the manager's cache, and that cache can lag behind this controller's own
+// writes.
+//
+// The trace is the one a forced refresh dies of. The forced pass marks every recorded
+// version and its fetch then fails, so the annotation is consumed
+// (SyncOutcome.ForceRequestRecorded) and the mark is the only record of the request. An
+// ordinary pass follows while the cache still holds the pre-mark object: its Known says
+// the verdict is recorded and unmarked, so it carries that verdict forward without
+// asking the registry anything, and the base of its merge patch is the same pre-mark
+// object. Anything else in the array differing — here one tag the repository published
+// since — makes the merge patch ship the whole array, and the array it ships was built
+// from a list that has no mark in it. Without the lock the write lands and the mark is
+// gone, with nothing left anywhere to ask for the refresh again.
+//
+// Under the lock the pre-mark base carries the resource version it was read at, so the
+// server rejects the patch as a conflict: the pass reports it, the catalog keeps the
+// mark, and the retry — the second pass here — is computed from a read that has caught
+// up, examines exactly the version the mark asked for and clears it by answering.
+//
+// The existing lag fixtures intercept List, which is what a pass builds its Known from;
+// this one intercepts Get as well, because the merge patch base is a Get and it is the
+// read the write is judged against.
+func TestSynchronizerSyncRejectsACatalogWriteComputedFromAPreMarkRead(t *testing.T) {
+	const (
+		recorded = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+		repushed = "application/tar+gzip"
+	)
+
+	// The pre-mark object the lagging cache keeps serving: its status and, just as
+	// importantly, the resource version it was observed at.
+	var stale *helmv1alpha1.HelmClusterAddonChart
+
+	funcs := interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			chart, ok := obj.(*helmv1alpha1.HelmClusterAddonChart)
+			if !ok || stale == nil || key.Name != stale.Name {
+				return cl.Get(ctx, key, obj, opts...)
+			}
+
+			stale.DeepCopyInto(chart)
+
+			return nil
+		},
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := cl.List(ctx, list, opts...); err != nil {
+				return err
+			}
+
+			charts, ok := list.(*helmv1alpha1.HelmClusterAddonChartList)
+			if !ok || stale == nil {
+				return nil
+			}
+
+			for i := range charts.Items {
+				if charts.Items[i].Name == stale.Name {
+					stale.DeepCopyInto(&charts.Items[i])
+				}
+			}
+
+			return nil
+		},
+	}
+
+	repo := testRepository()
+	staged := &stagedRepoClient{
+		current: &budgetedRepoClient{chartName: "podinfo", tags: []string{"6.7.1"}, mediaType: recorded, budget: 1},
+	}
+	service, c := newSynchronizerWithInterceptor(t, staged, funcs, repo)
+	addonRepo := adapter.NewAddonRepository(repo)
+
+	// A steady-state pass first, so the catalog object exists exactly as the production
+	// code writes it: labels, owner reference and one recorded verdict.
+	if outcome := service.Sync(context.Background(), addonRepo, chartsource.OCI); outcome.Catalog.Err != nil {
+		t.Fatalf("the seeding pass returned %v", outcome.Catalog.Err)
+	}
+
+	preMark := &helmv1alpha1.HelmClusterAddonChart{}
+	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
+	if err := c.Get(context.Background(), key, preMark); err != nil {
+		t.Fatalf("reading the catalog object before the mark: %v", err)
+	}
+
+	// The forced pass: it marks the recorded verdict and then cannot read the registry.
+	repo.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+	staged.current = stubRepoClient{err: errors.New("registry unreachable")}
+
+	forcedOutcome := service.Sync(context.Background(), addonRepo, chartsource.OCI)
+	if forcedOutcome.Fetch.Err == nil {
+		t.Fatal("the fixture must reach a forced pass whose read failed")
+	}
+	if !forcedOutcome.ForceRequestRecorded {
+		t.Fatal("the forced pass must record the request before reading: the annotation is consumed either way")
+	}
+	if marked := chartStatus(t, c, repo.Name, "podinfo").Versions; len(marked) != 1 || !marked[0].ReexaminationRequired {
+		t.Fatalf("recorded versions = %+v, want the single version marked", marked)
+	}
+
+	// From here the cache serves the pre-mark object, which is older than what the
+	// marking wrote: same list of versions, no mark, an earlier resource version.
+	stale = preMark
+	repo.Annotations = nil
+	staged.current = &budgetedRepoClient{
+		chartName: "podinfo",
+		tags:      []string{"6.7.2", "6.7.1"},
+		mediaType: repushed,
+		budget:    2,
+	}
+
+	lagging := service.Sync(context.Background(), addonRepo, chartsource.OCI)
+	if lagging.Fetch.Err != nil {
+		t.Fatalf("the fetch of the lagging pass failed: %v", lagging.Fetch.Err)
+	}
+	if !apierrors.IsConflict(lagging.Catalog.Err) {
+		t.Fatalf("catalog error = %v, want the patch rejected as a conflict: its base predates this controller's own write", lagging.Catalog.Err)
+	}
+
+	stale = nil
+
+	survived := versionsByVersion(t, chartStatus(t, c, repo.Name, "podinfo").Versions)
+	if len(survived) != 1 || !survived["6.7.1"].ReexaminationRequired {
+		t.Fatalf("recorded versions = %+v, want the mark untouched by the rejected write", survived)
+	}
+	if got := survived["6.7.1"].MediaType; got != recorded {
+		t.Fatalf("6.7.1 media type = %q, want %q: a rejected patch must leave the catalog as it was", got, recorded)
+	}
+
+	// The retry the work queue runs: nothing lags any more, so the pass sees the mark,
+	// examines the version it asks about and answers it.
+	retried := service.Sync(context.Background(), addonRepo, chartsource.OCI)
+	if retried.Fetch.Err != nil || retried.Catalog.Err != nil {
+		t.Fatalf("the retry returned fetch %v, catalog %v: a caught-up read must be writable", retried.Fetch.Err, retried.Catalog.Err)
+	}
+
+	written := versionsByVersion(t, chartStatus(t, c, repo.Name, "podinfo").Versions)
+	if len(written) != 2 {
+		t.Fatalf("recorded versions = %+v, want both tags published", written)
+	}
+	if written["6.7.1"].ReexaminationRequired {
+		t.Fatal("the pass that examined the marked version must clear the mark: the refresh has been answered")
+	}
+	if got := written["6.7.1"].MediaType; got != repushed {
+		t.Fatalf("6.7.1 media type = %q, want %q: the mark survived to be answered by a probe", got, repushed)
+	}
+}
+
+func versionsByVersion(t *testing.T, versions []helmv1alpha1.ChartVersion) map[string]helmv1alpha1.ChartVersion {
+	t.Helper()
+
+	byVersion := make(map[string]helmv1alpha1.ChartVersion, len(versions))
+	for _, version := range versions {
+		byVersion[version.Version] = version
+	}
+
+	return byVersion
 }

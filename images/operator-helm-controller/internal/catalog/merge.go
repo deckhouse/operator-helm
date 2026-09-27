@@ -89,9 +89,10 @@ import (
 // mark survives this pass, and the next pass builds its Known from a read that has caught
 // up (the write it lagged behind is a whole synchronization interval old by then), so
 // NeedsExamination sees the mark, the version is probed, and the mark is cleared by an
-// answer. Nothing in this merge can put a mark on, so a version cannot be kept marked by
-// this rule alone; only MarkForReexamination writes one, and only a probe, a confirmed
-// absence or a drop takes it off.
+// answer. This merge never marks a version the marking pass did not: the only mark it
+// writes is the one put back on a deferred version from the set that pass reported, so a
+// version cannot be kept marked by this rule alone; a mark comes off by a probe, a
+// confirmed absence or a drop.
 func mergeChartVersions(
 	fetched []repoclient.ChartVersion,
 	current []helmv1alpha1.ChartVersion,
@@ -121,8 +122,10 @@ func mergeChartVersions(
 		// A carry is not an answer: the mark stays exactly as the read found it. A forced
 		// pass never gets here — it asks for every tag (FetchOptions.Full), so nothing it
 		// fetches is carried — which is why the set the marking reported is not consulted
-		// for a fetched version the way it is for a deferred one.
-		reexaminationRequired := version.Carried && recorded && old.ReexaminationRequired
+		// for a fetched version the way it is for a deferred one. A version nothing is
+		// recorded for needs no test of its own: old is the zero value then, and an entry
+		// the catalog has never held carries no mark.
+		reexaminationRequired := version.Carried && old.ReexaminationRequired
 
 		mediaType := version.MediaType
 		// The carry-forward only makes sense for a version that still resolves to an

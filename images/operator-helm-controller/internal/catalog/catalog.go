@@ -156,7 +156,10 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (rep
 // made here would hand the merge the version list from before the mark, and because a
 // merge patch on a list ships the whole array, the versions the pass deferred would be
 // written back unmarked — with the annotation already consumed, which loses the refresh
-// exactly where it is needed. The caller carries this set into Reconcile instead.
+// exactly where it is needed. The caller carries this set into Reconcile instead. The
+// write itself is guarded too (lockedTo), which is what covers everything else a stale
+// base would carry back; the set is what the same pass knows without waiting for a read
+// to catch up.
 func (t *typed[C, CL]) MarkForReexamination(ctx context.Context, repo contract.Repository) (contract.MarkedVersions, error) {
 	charts, err := t.list(ctx, repo)
 	if err != nil {
@@ -200,7 +203,7 @@ func (t *typed[C, CL]) MarkForReexamination(ctx context.Context, repo contract.R
 			continue
 		}
 
-		if err := t.client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
+		if err := t.client.Status().Patch(ctx, chart, lockedTo(base)); err != nil {
 			return nil, fmt.Errorf("marking the versions of chart %s for re-examination: %w",
 				describeKey(client.ObjectKeyFromObject(chart)), err)
 		}
@@ -298,7 +301,7 @@ func (t *typed[C, CL]) Reconcile(
 		}
 		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions, marked[chart.Name])
 
-		if err := t.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
+		if err := t.client.Status().Patch(ctx, existing, lockedTo(base)); err != nil {
 			return result, fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
 		}
 	}
@@ -381,7 +384,7 @@ func (t *typed[C, CL]) recordAbsence(ctx context.Context, chart C, inUse, marked
 
 	status.Versions = mergeChartVersions(nil, status.Versions, inUse, nil, marked)
 
-	if err := t.client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
+	if err := t.client.Status().Patch(ctx, chart, lockedTo(base)); err != nil {
 		return fmt.Errorf("recording that the repository no longer offers chart %s: %w",
 			describeKey(client.ObjectKeyFromObject(chart)), err)
 	}
@@ -472,6 +475,29 @@ func (t *typed[C, CL]) Lookup(ctx context.Context, repo contract.Repository, cha
 	}
 
 	return obj, t.cfg.Status(obj), nil
+}
+
+// lockedTo builds the status patch of a catalog object against the read it was
+// computed from, carrying that read's resource version so the server rejects the
+// write if the object moved on in between.
+//
+// The lock is what makes a cached read safe to patch from. Catalog objects are served
+// by the manager's cache, so every base this package patches against — the Get inside
+// CreateOrPatch, the List behind MarkForReexamination and the pruning loop — can lag
+// behind writes this controller itself made. A version list is merged from that base
+// and a merge patch on a list ships the whole array, so a base that predates our own
+// marking write would carry every mark on it back to false: a forced refresh whose
+// annotation is already consumed would be lost for good, with no record anywhere that
+// it was ever asked for. Reconstructing the list from a lagging read is wrong for the
+// same reason whatever it holds, which is why the lock sits on the write rather than on
+// any one field of it.
+//
+// A rejected patch is a conflict, not a failure of the pass's own making: the caller
+// reports it, the work queue retries, and the retry is computed from a read that has
+// caught up. The catalog on the server is left exactly as the write that overtook us
+// left it, which is the state the retry has to build on.
+func lockedTo[C client.Object](base C) client.Patch {
+	return client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
 }
 
 // describeKey names an object in a message. A cluster-scoped object has no
