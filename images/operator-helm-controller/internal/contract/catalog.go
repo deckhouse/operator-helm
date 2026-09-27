@@ -57,7 +57,14 @@ type Catalog interface {
 	// repository no longer lists, keeping any version a consumer still references.
 	// The result names the charts it could not publish; it is filled in as far as
 	// the pass got, so it is meaningful next to an error too.
-	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart) (CatalogResult, error)
+	//
+	// forced says the charts come from a read that ignored every recorded verdict.
+	// The catalog is where that request outlives the pass: a forced read cut short by
+	// its budget marks the versions it did not reach as owing a fresh verdict, and the
+	// passes that follow examine them. It is passed rather than read off the repository
+	// so the write records the same pass the read was made under, whatever happens to
+	// the force annotation in between.
+	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart, forced bool) (CatalogResult, error)
 	// InUseVersions reports the versions of one chart still referenced by the
 	// consumers of this family. An empty chart name yields no versions.
 	InUseVersions(ctx context.Context, repo Repository, chartName string) (map[string]struct{}, error)

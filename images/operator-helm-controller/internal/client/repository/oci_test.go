@@ -835,3 +835,199 @@ func TestFetchChartsOCIExaminesANeverSeenTagAheadOfAStalledOne(t *testing.T) {
 		t.Fatal("the pending tags must still be re-examined with the budget left after the new ones")
 	}
 }
+
+// TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne extends the ordering rule to
+// the third group a pass can see. A tag whose recorded verdict is marked for
+// re-examination has an answer, unlike a never seen one, but the answer is known to be
+// out of date; a tag recorded as ResolvePending has no answer and is asked again by
+// every pass, whether or not it ever replies. Ordered the other way round, a block of
+// permanently stalling tags spends the whole budget before the marked ones are reached,
+// and a forced refresh whose remainder they sit behind would never finish — which is
+// the failure this whole mechanism exists to prevent. Marked ahead of stalled bounds
+// it: the pass that examines a marked tag clears the mark, and nothing but a forced
+// pass sets one, so the marked set only shrinks.
+func TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
+
+	reg, host := newFakeRegistry(t)
+
+	// More stalling tags than one budget can probe, as in the never-seen case: eight
+	// concurrent probes of 200ms get through some forty of them in a second.
+	const (
+		stallingTags = 80
+		markedTag    = "9.0.0"
+	)
+
+	known := make(KnownVersions, stallingTags+1)
+
+	for i := range stallingTags {
+		tag := fmt.Sprintf("0.0.%d", i+1)
+		pushChart(t, host, tag, helmConfigMediaType, currentChartMediaType)
+		known[tag] = KnownVersion{UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending}
+	}
+
+	pushChart(t, host, markedTag, helmConfigMediaType, currentChartMediaType)
+	// Listed last and recorded with a media type: without the mark this tag would not
+	// be requested at all, and with it it must be requested first.
+	known[markedTag] = KnownVersion{MediaType: legacyChartMediaType, ReexaminationRequired: true}
+
+	// Stalled only after the fixtures are pushed: remote.Write reads manifests too.
+	for i := range stallingTags {
+		reg.stallTag(fmt.Sprintf("0.0.%d", i+1))
+	}
+	reg.reset()
+
+	chart := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}})
+
+	if got := versionByTag(t, chart, markedTag).MediaType; got != currentChartMediaType {
+		t.Fatalf("%s media type is %q, want %q: a marked tag must be examined before the stalled ones",
+			markedTag, got, currentChartMediaType)
+	}
+
+	probed := 0
+	for i := range stallingTags {
+		probed += reg.manifestGets(fmt.Sprintf("0.0.%d", i+1))
+	}
+	if probed == 0 {
+		t.Fatal("the pending tags must still be re-examined with the budget left after the marked one")
+	}
+}
+
+// TestFetchChartsOCIOrdersAForcedPassByWhatIsRecorded pins the one thing a forced pass
+// must keep taking from the recorded state. Full says the verdicts are not to be
+// trusted, so every listed tag is examined — but it says nothing about the order, and
+// the order is what decides which tags a pass that runs out of its budget reaches.
+// Read off "does this tag need a request", every tag of a forced pass falls into one
+// group, the listing order decides, and the forced pass publishes an arbitrary prefix.
+func TestFetchChartsOCIOrdersAForcedPassByWhatIsRecorded(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
+
+	reg, host := newFakeRegistry(t)
+
+	const (
+		stallingTags = 80
+		newTag       = "9.0.0"
+	)
+
+	known := make(KnownVersions, stallingTags)
+
+	for i := range stallingTags {
+		tag := fmt.Sprintf("0.0.%d", i+1)
+		pushChart(t, host, tag, helmConfigMediaType, currentChartMediaType)
+		known[tag] = KnownVersion{MediaType: currentChartMediaType}
+	}
+
+	// Listed last, recorded nowhere: a forced pass has to reach it just as an ordinary
+	// one does, and only the recorded state can tell it apart from the eighty ahead.
+	pushChart(t, host, newTag, helmConfigMediaType, currentChartMediaType)
+
+	for i := range stallingTags {
+		reg.stallTag(fmt.Sprintf("0.0.%d", i+1))
+	}
+	reg.reset()
+
+	chart := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}, Full: true})
+
+	if got := versionByTag(t, chart, newTag).MediaType; got != currentChartMediaType {
+		t.Fatalf("%s media type is %q, want %q: a forced pass must order by what is recorded, not by what it examines",
+			newTag, got, currentChartMediaType)
+	}
+}
+
+// nextKnown is the state the next pass starts from, the way the catalog builds it:
+// every version this pass reached carries its fresh verdict and no mark, every version
+// it did not reach keeps the recorded one and is marked when the pass was forced.
+// internal/catalog/merge.go owns this rule — TestAForcedPassMarksTheVersionsItDidNotReach-
+// ForReexamination pins it there — and it is restated here only so the two passes of
+// the scenario below can be run against a real registry.
+func nextKnown(previous KnownVersions, chart Chart, forced bool) KnownVersions {
+	next := make(KnownVersions, len(previous))
+
+	for _, version := range chart.Versions {
+		next[version.Version.Original()] = KnownVersion{
+			MediaType:          version.MediaType,
+			UnavailableReason:  version.UnavailableReason,
+			UnavailableMessage: version.UnavailableMessage,
+		}
+	}
+
+	for _, tag := range chart.UnexaminedVersions {
+		if recorded, ok := previous[tag]; ok {
+			recorded.ReexaminationRequired = recorded.ReexaminationRequired || forced
+			next[tag] = recorded
+		}
+	}
+
+	return next
+}
+
+// TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach is the scenario the
+// whole mechanism exists for, run against a registry over two passes.
+//
+// Someone re-pushes a tag the catalog already holds a verdict for. No ordinary pass
+// will ever look at it again — a recorded media type is exactly what NeedsExamination
+// reads as answered — so they force a refresh. The forced pass runs out of its budget
+// among the tags ahead of it and never reaches the re-pushed one, which is where this
+// used to end: the request was consumed, the next pass skipped the tag, and the catalog
+// kept publishing the media type of an artifact that no longer exists, with nothing
+// anywhere saying so.
+//
+// The pass records the mark instead, and the ordinary pass that follows examines the
+// marked tag first and sees the new content.
+func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing.T) {
+	// A budget that admits at most two rounds of probes, against forty tags that never
+	// answer: the re-pushed tag, listed last, is out of the forced pass's reach.
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, 400*time.Millisecond)
+
+	reg, host := newFakeRegistry(t)
+
+	const (
+		blockingTags = 40
+		repushedTag  = "9.0.0"
+	)
+
+	known := make(KnownVersions, blockingTags+1)
+
+	for i := range blockingTags {
+		tag := fmt.Sprintf("0.0.%d", i+1)
+		pushChart(t, host, tag, helmConfigMediaType, currentChartMediaType)
+		known[tag] = KnownVersion{MediaType: currentChartMediaType}
+	}
+
+	// The registry holds the new content; the catalog still records what the tag
+	// carried when it was last examined.
+	pushChart(t, host, repushedTag, helmConfigMediaType, currentChartMediaType)
+	known[repushedTag] = KnownVersion{MediaType: legacyChartMediaType}
+
+	for i := range blockingTags {
+		reg.stallTag(fmt.Sprintf("0.0.%d", i+1))
+	}
+	reg.reset()
+
+	forced := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}, Full: true})
+
+	if !slices.Contains(forced.UnexaminedVersions, repushedTag) {
+		t.Fatalf("the forced pass was expected to run out of budget before %s; unexamined = %v",
+			repushedTag, forced.UnexaminedVersions)
+	}
+
+	known = nextKnown(known, forced, true)
+
+	// The second pass is an ordinary one: the force annotation was consumed by the pass
+	// above, and everything that is left to do is in the recorded state.
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, 10*time.Second)
+	reg.reset()
+
+	second := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}})
+
+	if got := reg.manifestGets(repushedTag); got == 0 {
+		t.Fatal("the re-pushed tag must be examined by the pass that follows the forced one")
+	}
+	if got := versionByTag(t, second, repushedTag).MediaType; got != currentChartMediaType {
+		t.Fatalf("%s media type is %q, want %q: the refresh must reach the tag it was asked for",
+			repushedTag, got, currentChartMediaType)
+	}
+	if nextKnown(known, second, false)[repushedTag].ReexaminationRequired {
+		t.Fatal("the pass that examined the re-pushed tag must clear the mark, or the refresh never ends")
+	}
+}

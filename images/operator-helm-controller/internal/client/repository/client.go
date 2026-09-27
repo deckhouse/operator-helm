@@ -66,6 +66,10 @@ type KnownVersion struct {
 	MediaType          string
 	UnavailableReason  string
 	UnavailableMessage string
+	// ReexaminationRequired says the recorded verdict is stale: a forced refresh was
+	// asked for and did not reach this tag. It is a verdict about the verdict, so it
+	// travels next to it rather than in FetchOptions.
+	ReexaminationRequired bool
 }
 
 // KnownVersions maps a tag to its recorded verdict.
@@ -85,10 +89,13 @@ type FetchOptions struct {
 // entry is examined whatever else it records: ResolvePending is not a verdict but the
 // absence of one, and the media type next to it is the one the catalog merge carries
 // forward to keep a version still in use deployable, so reading it as "already
-// examined" would freeze the probe that never reached a verdict. Otherwise a recorded
-// media type is authoritative; an unsupported artifact is a verdict and is not
-// re-examined until a full pass; anything else — never seen, or seen without a verdict
-// (an entry written before media types were recorded) — is examined.
+// examined" would freeze the probe that never reached a verdict. A tag whose entry is
+// marked for re-examination is asked for the same reason and in the same way: the
+// verdict next to the mark is the one a reader still deploys from, and the mark says
+// it is no longer trusted. Otherwise a recorded media type is authoritative; an
+// unsupported artifact is a verdict and is not re-examined until a full pass; anything
+// else — never seen, or seen without a verdict (an entry written before media types
+// were recorded) — is examined.
 func (o FetchOptions) NeedsExamination(chartName, tag string) bool {
 	if o.Full {
 		return true
@@ -97,6 +104,8 @@ func (o FetchOptions) NeedsExamination(chartName, tag string) bool {
 	known, recorded := o.Known[chartName][tag]
 	switch {
 	case !recorded:
+		return true
+	case known.ReexaminationRequired:
 		return true
 	case known.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending:
 		return true

@@ -109,9 +109,10 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (rep
 		versions := make(repoclient.KnownVersions, len(recorded))
 		for _, version := range recorded {
 			versions[version.Version] = repoclient.KnownVersion{
-				MediaType:          version.MediaType,
-				UnavailableReason:  version.UnavailableReason,
-				UnavailableMessage: version.UnavailableMessage,
+				MediaType:             version.MediaType,
+				UnavailableReason:     version.UnavailableReason,
+				UnavailableMessage:    version.UnavailableMessage,
+				ReexaminationRequired: version.ReexaminationRequired,
 			}
 		}
 
@@ -125,6 +126,7 @@ func (t *typed[C, CL]) Reconcile(
 	ctx context.Context,
 	repo contract.Repository,
 	charts []repoclient.Chart,
+	forced bool,
 ) (contract.CatalogResult, error) {
 	logger := log.FromContext(ctx)
 
@@ -207,7 +209,7 @@ func (t *typed[C, CL]) Reconcile(
 		if len(chart.Versions) > 0 {
 			status.IconURL = chart.Versions[0].IconURL
 		}
-		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions)
+		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions, forced)
 
 		if err := t.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
 			return result, fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)

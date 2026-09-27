@@ -146,7 +146,7 @@ func syncCatalog(cat contract.Catalog, repo contract.Repository, charts ...repoc
 		return err
 	}
 
-	_, err := cat.Reconcile(context.Background(), repo, charts)
+	_, err := cat.Reconcile(context.Background(), repo, charts, false)
 
 	return err
 }
@@ -163,7 +163,7 @@ func TestReconcileWritesNamespacedCatalogNextToTheRepository(t *testing.T) {
 	cat := adapter.NewApplicationCatalog(c)
 	repo := applicationRepo("team-a", "stable")
 
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}, false); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -206,10 +206,10 @@ func TestSameNamedRepositoriesKeepSeparateCatalogs(t *testing.T) {
 	teamA := applicationRepo("team-a", "stable")
 	teamB := applicationRepo("team-b", "stable")
 
-	if _, err := cat.Reconcile(context.Background(), teamA, []repoclient.Chart{chart("podinfo", "1.0.0")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), teamA, []repoclient.Chart{chart("podinfo", "1.0.0")}, false); err != nil {
 		t.Fatalf("Reconcile(team-a) returned %v", err)
 	}
-	if _, err := cat.Reconcile(context.Background(), teamB, []repoclient.Chart{chart("nginx", "2.0.0")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), teamB, []repoclient.Chart{chart("nginx", "2.0.0")}, false); err != nil {
 		t.Fatalf("Reconcile(team-b) returned %v", err)
 	}
 
@@ -221,7 +221,7 @@ func TestSameNamedRepositoriesKeepSeparateCatalogs(t *testing.T) {
 		t.Fatalf("Known(team-a) = %v, want only podinfo", known)
 	}
 
-	if _, err := cat.Reconcile(context.Background(), teamA, nil); err != nil {
+	if _, err := cat.Reconcile(context.Background(), teamA, nil, false); err != nil {
 		t.Fatalf("Reconcile(team-a, empty) returned %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestClusterCatalogObjectsHaveNoNamespace(t *testing.T) {
 		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://ghcr.io/example/charts"},
 	})
 
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}, false); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -265,7 +265,7 @@ func TestUnreferencedVersionsArePruned(t *testing.T) {
 	cat := adapter.NewApplicationCatalog(c)
 	repo := applicationRepo("team-a", "stable")
 
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0"), chart("nginx", "1.0.0")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0"), chart("nginx", "1.0.0")}, false); err != nil {
 		t.Fatalf("first Reconcile returned %v", err)
 	}
 	if err := syncCatalog(cat, repo, chart("podinfo", "1.0.0")); err != nil {
@@ -294,7 +294,7 @@ func TestLookupReturnsTheCatalogObjectAndItsStatus(t *testing.T) {
 	cat := adapter.NewApplicationCatalog(c)
 	repo := applicationRepo("team-a", "stable")
 
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "6.7.1")}, false); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
 
@@ -338,7 +338,7 @@ func TestListErrorNamesAClusterScopedRepositoryWithoutALeadingSlash(t *testing.T
 			&helmv1alpha1.HelmClusterApplicationRepository{
 				ObjectMeta: metav1.ObjectMeta{Name: "shared", UID: types.UID("shared")},
 			},
-		), nil)
+		), nil, false)
 	if err == nil {
 		t.Fatal("Reconcile must report the list failure")
 	}
@@ -679,7 +679,7 @@ func TestReconcileSkipsAChartWhoseNameCannotBeALabel(t *testing.T) {
 	result, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{
 		chart("my chart", "1.0.0"),
 		chart("podinfo", "6.7.1"),
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("Reconcile returned %v, want the pass to complete", err)
 	}
@@ -760,7 +760,7 @@ func TestReconcileReportsEveryChartItCannotPublish(t *testing.T) {
 				charts = append(charts, chart(name, "1.0.0"))
 			}
 
-			result, err := adapter.NewAddonCatalog(c).Reconcile(context.Background(), repo, charts)
+			result, err := adapter.NewAddonCatalog(c).Reconcile(context.Background(), repo, charts, false)
 			if err != nil {
 				t.Fatalf("Reconcile returned %v, want the pass to complete", err)
 			}
@@ -822,7 +822,7 @@ func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 	resolved := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
 		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
 	}}
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{resolved}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{resolved}, false); err != nil {
 		t.Fatalf("the resolving pass returned %v", err)
 	}
 
@@ -833,7 +833,7 @@ func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 		UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
 		UnavailableMessage: "GET https://registry.example.invalid/v2/: dial tcp: i/o timeout",
 	}}}
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{pending}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{pending}, false); err != nil {
 		t.Fatalf("the failing pass returned %v", err)
 	}
 
@@ -863,7 +863,7 @@ func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 	// Being examined again is only half of it: the pass that reaches the registry has
 	// to leave nothing of the failure behind, or the repository would keep counting a
 	// pending version and never report a successful sync.
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{resolved}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{resolved}, false); err != nil {
 		t.Fatalf("the recovering pass returned %v", err)
 	}
 
@@ -897,7 +897,7 @@ func TestAnIncompletePassKeepsTheVersionsItDidNotExamine(t *testing.T) {
 		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
 		{Version: semver.MustParse("6.7.0"), MediaType: mediaType},
 	}}
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{complete}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{complete}, false); err != nil {
 		t.Fatalf("the first pass returned %v", err)
 	}
 
@@ -911,7 +911,7 @@ func TestAnIncompletePassKeepsTheVersionsItDidNotExamine(t *testing.T) {
 		},
 		UnexaminedVersions: []string{"6.7.1"},
 	}
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{incomplete}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{incomplete}, false); err != nil {
 		t.Fatalf("the incomplete pass returned %v", err)
 	}
 
@@ -965,15 +965,14 @@ func TestAnIncompletePassPrunesNothing(t *testing.T) {
 	cat := adapter.NewApplicationCatalog(c)
 	repo := applicationRepo("team-a", "stable")
 
-	if _, err := cat.Reconcile(context.Background(), repo,
-		[]repoclient.Chart{chart("podinfo", "1.0.0"), chart("nginx", "1.0.0")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0"), chart("nginx", "1.0.0")}, false); err != nil {
 		t.Fatalf("the first pass returned %v", err)
 	}
 
 	incomplete := chart("podinfo", "1.0.0")
 	incomplete.UnexaminedVersions = []string{"1.0.1"}
 
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{incomplete}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{incomplete}, false); err != nil {
 		t.Fatalf("the incomplete pass returned %v", err)
 	}
 
@@ -987,7 +986,7 @@ func TestAnIncompletePassPrunesNothing(t *testing.T) {
 
 	// The guard is the incompleteness, not a change of heart about pruning: the next
 	// complete pass still removes the chart the repository no longer offers.
-	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0")}); err != nil {
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{chart("podinfo", "1.0.0")}, false); err != nil {
 		t.Fatalf("the complete pass returned %v", err)
 	}
 	if err := c.List(context.Background(), &charts, client.InNamespace("team-a")); err != nil {
@@ -996,4 +995,192 @@ func TestAnIncompletePassPrunesNothing(t *testing.T) {
 	if len(charts.Items) != 1 || charts.Items[0].Labels[helmv1alpha1.LabelChartName] != "podinfo" {
 		t.Fatalf("charts = %v, want only podinfo after a complete pass", charts.Items)
 	}
+}
+
+// TestAForcedPassMarksTheVersionsItDidNotReachForReexamination pins where the work a
+// forced refresh did not finish is recorded. A forced read ignores every recorded
+// verdict, which is the only way a tag that was re-pushed with different content is
+// ever looked at again; an ordinary pass skips it, because its media type is recorded
+// and that is what keeps a steady-state synchronization cheap. So a forced read that
+// ran out of its budget leaves a question open for every version it did not reach, and
+// the catalog entry of that version is the only place the question can wait: the force
+// annotation is consumed by the pass it triggered, and the count in the repository
+// status names no versions.
+//
+// The mark is not a verdict. The entry keeps its media type and stays usable while it
+// carries the mark, so a release already deploying that version resolves it exactly as
+// before while the refresh finishes over the next passes.
+func TestAForcedPassMarksTheVersionsItDidNotReachForReexamination(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	c := newClient(t)
+	cat := adapter.NewApplicationCatalog(c)
+	repo := applicationRepo("team-a", "stable")
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+
+	complete := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
+		{Version: semver.MustParse("6.7.0"), MediaType: mediaType},
+	}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{complete}, false); err != nil {
+		t.Fatalf("the steady-state pass returned %v", err)
+	}
+
+	// The forced pass: it re-examined 6.7.0 and ran out of its budget before reaching
+	// 6.7.1 — the version someone re-pushed and forced the refresh for.
+	forced := repoclient.Chart{
+		Name:               "podinfo",
+		Versions:           []repoclient.ChartVersion{{Version: semver.MustParse("6.7.0"), MediaType: mediaType}},
+		UnexaminedVersions: []string{"6.7.1"},
+	}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{forced}, true); err != nil {
+		t.Fatalf("the forced pass returned %v", err)
+	}
+
+	marked := versionsByName(t, c, key)
+	if !marked["6.7.1"].ReexaminationRequired {
+		t.Fatal("a forced pass must mark the version it did not reach: nothing else re-examines a recorded media type")
+	}
+	if marked["6.7.0"].ReexaminationRequired {
+		t.Fatal("a version the forced pass examined must not be marked")
+	}
+	if got := marked["6.7.1"]; got.MediaType != mediaType || got.UnavailableReason != "" {
+		t.Fatalf("marked version = %+v, want the recorded verdict untouched: a release still deploys from it", got)
+	}
+
+	known, err := cat.Known(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("Known returned %v", err)
+	}
+	opts := repoclient.FetchOptions{Known: known}
+	if !opts.NeedsExamination("podinfo", "6.7.1") {
+		t.Fatal("the next pass must examine the marked version, forced or not")
+	}
+	if opts.NeedsExamination("podinfo", "6.7.0") {
+		t.Fatal("the next pass must still skip the version the forced pass examined")
+	}
+
+	// The next pass is an ordinary one — the request was consumed by the forced pass —
+	// and it examines exactly what the mark asked for. Answering clears the mark, so
+	// the refresh ends here rather than repeating forever.
+	repushed := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.7.1"), MediaType: "application/tar+gzip"},
+		{Version: semver.MustParse("6.7.0"), MediaType: mediaType},
+	}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{repushed}, false); err != nil {
+		t.Fatalf("the pass that finished the refresh returned %v", err)
+	}
+
+	refreshed := versionsByName(t, c, key)
+	if refreshed["6.7.1"].ReexaminationRequired {
+		t.Fatal("the pass that examined the marked version must clear the mark")
+	}
+	if got := refreshed["6.7.1"].MediaType; got != "application/tar+gzip" {
+		t.Fatalf("6.7.1 media type = %q, want the one the re-pushed tag actually holds", got)
+	}
+}
+
+// TestAnUnforcedIncompletePassMarksNothing is the bound on the rule above. An ordinary
+// pass does not re-examine a recorded verdict in the first place, so the versions it
+// did not reach are owed nothing: marking them would send every later pass back over a
+// catalog that is already current and turn every incomplete synchronization of a large
+// repository into a full re-examination of it.
+func TestAnUnforcedIncompletePassMarksNothing(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	c := newClient(t)
+	cat := adapter.NewApplicationCatalog(c)
+	repo := applicationRepo("team-a", "stable")
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+
+	complete := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
+	}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{complete}, false); err != nil {
+		t.Fatalf("the first pass returned %v", err)
+	}
+
+	incomplete := repoclient.Chart{Name: "podinfo", UnexaminedVersions: []string{"6.7.1"}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{incomplete}, false); err != nil {
+		t.Fatalf("the incomplete pass returned %v", err)
+	}
+
+	if versionsByName(t, c, key)["6.7.1"].ReexaminationRequired {
+		t.Fatal("an unforced pass must mark nothing: it never promised to re-examine a recorded verdict")
+	}
+}
+
+// TestAMarkedVersionTheRepositoryNoLongerOffersIsReportedRemoved covers the one way a
+// marked version can stop being listed: the tag is deleted from the registry before a
+// pass gets to it. The mark asks for an examination that can now never happen, so the
+// pass that sees the version gone drops it — the entry a consumer keeps alive must not
+// carry a request no pass can clear, or the repository would re-examine it forever.
+func TestAMarkedVersionTheRepositoryNoLongerOffersIsReportedRemoved(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	c := newClient(t)
+	cat := adapter.NewApplicationCatalog(c)
+	repo := applicationRepo("team-a", "stable")
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+
+	app := &helmv1alpha1.HelmApplication{
+		ObjectMeta: metav1.ObjectMeta{Name: "podinfo", Namespace: "team-a"},
+		Spec: helmv1alpha1.HelmApplicationSpec{
+			Chart: helmv1alpha1.HelmApplicationChartRef{Name: "podinfo", Repository: "stable", Version: "6.7.1"},
+		},
+	}
+	if err := c.Create(context.Background(), app); err != nil {
+		t.Fatalf("creating the application using the version: %v", err)
+	}
+
+	complete := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
+	}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{complete}, false); err != nil {
+		t.Fatalf("the steady-state pass returned %v", err)
+	}
+
+	forced := repoclient.Chart{Name: "podinfo", UnexaminedVersions: []string{"6.7.1"}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{forced}, true); err != nil {
+		t.Fatalf("the forced pass returned %v", err)
+	}
+	if !versionsByName(t, c, key)["6.7.1"].ReexaminationRequired {
+		t.Fatal("the fixture must reach a marked version first")
+	}
+
+	// The tag is gone from the registry, and this pass saw the whole listing.
+	gone := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.8.0"), MediaType: mediaType},
+	}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{gone}, false); err != nil {
+		t.Fatalf("the pass that no longer lists the version returned %v", err)
+	}
+
+	removed := versionsByName(t, c, key)["6.7.1"]
+	if removed.UnavailableReason != helmv1alpha1.UnavailableReasonRemovedFromRepository {
+		t.Fatalf("6.7.1 reason = %q, want %q", removed.UnavailableReason, helmv1alpha1.UnavailableReasonRemovedFromRepository)
+	}
+	if removed.ReexaminationRequired {
+		t.Fatal("a version the repository no longer offers must not stay marked: no pass can ever clear it")
+	}
+	if removed.MediaType != mediaType {
+		t.Fatalf("6.7.1 media type = %q, want the recorded one: the application still deploys it", removed.MediaType)
+	}
+}
+
+// versionsByName reads the recorded versions of one catalog object, keyed by version.
+func versionsByName(t *testing.T, c client.Client, key client.ObjectKey) map[string]helmv1alpha1.ChartVersion {
+	t.Helper()
+
+	stored := &helmv1alpha1.HelmApplicationChart{}
+	if err := c.Get(context.Background(), key, stored); err != nil {
+		t.Fatalf("reading the catalog object: %v", err)
+	}
+
+	versions := make(map[string]helmv1alpha1.ChartVersion, len(stored.Status.Versions))
+	for _, version := range stored.Status.Versions {
+		versions[version.Version] = version
+	}
+
+	return versions
 }

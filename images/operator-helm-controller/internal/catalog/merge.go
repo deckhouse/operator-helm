@@ -46,11 +46,27 @@ import (
 // both the incremental state the next pass carries forward and the only honest answer
 // about a version nobody looked at. A version that is unexamined and unrecorded stays
 // out of the status entirely rather than being invented as pending.
+//
+// forced says this pass read the repository in full, ignoring every recorded verdict,
+// which is what someone asks for by forcing a refresh. It is the one thing that marks a
+// recorded version for re-examination, and it marks exactly the ones it did not reach:
+// an ordinary pass skips a version whose media type is recorded, so without the mark the
+// unreached half of a forced refresh is silently dropped and a tag that was re-pushed —
+// the reason to force in the first place — is never looked at again. The mark is a note
+// about the verdict, not a verdict: the entry keeps everything it recorded, so a release
+// already deploying that version still resolves it while the refresh finishes.
+//
+// Every version this pass did put a verdict on has the mark cleared, whether the pass
+// was forced or not: a pass that examined a version has answered the question the mark
+// asked. So is a version that is gone from the repository — there is nothing left to
+// examine, and the RemovedFromRepository entry a consumer keeps alive must not carry a
+// request for a pass that can never clear it.
 func mergeChartVersions(
 	fetched []repoclient.ChartVersion,
 	current []helmv1alpha1.ChartVersion,
 	inUse map[string]struct{},
 	unexamined []string,
+	forced bool,
 ) []helmv1alpha1.ChartVersion {
 	merged := make([]helmv1alpha1.ChartVersion, 0, len(fetched)+len(current))
 	listed := make(map[string]struct{}, len(fetched))
@@ -99,7 +115,10 @@ func mergeChartVersions(
 		if _, notExamined := deferred[version.Version]; notExamined {
 			// The repository still offers this version; this pass simply never got to
 			// it. Marking it removed would be a lie told by our own budget, and dropping
-			// it would throw away the verdict the next pass is meant to skip.
+			// it would throw away the verdict the next pass is meant to skip. A forced
+			// pass leaves behind the one thing that does change: the verdict it was asked
+			// to replace and did not get to is now known to be stale.
+			version.ReexaminationRequired = version.ReexaminationRequired || forced
 			merged = append(merged, version)
 
 			continue
@@ -110,6 +129,7 @@ func mergeChartVersions(
 
 		version.UnavailableReason = helmv1alpha1.UnavailableReasonRemovedFromRepository
 		version.UnavailableMessage = "the repository no longer offers this version"
+		version.ReexaminationRequired = false
 		merged = append(merged, version)
 	}
 

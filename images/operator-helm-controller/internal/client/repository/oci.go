@@ -191,7 +191,10 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 // repeated. Examining the never-seen tags first bounds that: the set of tags with no
 // verdict only shrinks, so every tag the repository offers is examined within a finite
 // number of passes, and the stalling ones are re-probed with whatever budget is left
-// after them rather than instead of them.
+// after them rather than instead of them. A tag whose recorded verdict is marked for
+// re-examination goes between the two, for the same reason: the mark is cleared by the
+// pass that examines the tag and set by nothing but a forced pass, so that set only
+// shrinks too, while a stalling tag is asked again for as long as it keeps stalling.
 //
 // resolveChartVersions returns an error in three cases, none of them a per-tag verdict,
 // and all of them a failure of the whole pass rather than of one tag:
@@ -221,6 +224,10 @@ func resolveChartVersions(
 		// entry is recorded and still has to be examined again, and it is exactly that
 		// combination the examination order has to put last.
 		recorded bool
+		// stale says the recorded verdict was marked for re-examination by a forced pass
+		// that did not reach this tag. Such a tag has an answer, unlike a never seen one,
+		// but the answer is known to be out of date, unlike a stalling one.
+		stale bool
 	}
 
 	candidates := make([]candidate, 0, len(tags))
@@ -237,7 +244,12 @@ func resolveChartVersions(
 
 		known, recorded := opts.Known[chartName][tag]
 
-		c := candidate{tag: tag, version: semVersion, recorded: recorded}
+		c := candidate{
+			tag:      tag,
+			version:  semVersion,
+			recorded: recorded,
+			stale:    recorded && known.ReexaminationRequired,
+		}
 		if !opts.NeedsExamination(chartName, tag) {
 			c.known = &known
 		}
@@ -246,24 +258,31 @@ func resolveChartVersions(
 	}
 
 	// probeOrder is the order the tags that need a request are asked in: the ones no
-	// pass has a verdict for first, the ones a previous pass left without an answer
-	// after them. Within each group the listing order is kept, so two passes over an
-	// unchanged repository ask in the same order — the convergence must not depend on
-	// which tags a pass happened to get to.
+	// pass has a verdict for first, then the ones whose recorded verdict a forced pass
+	// marked as stale, then the ones a previous pass left without an answer. Within each
+	// group the listing order is kept, so two passes over an unchanged repository ask in
+	// the same order — the convergence must not depend on which tags a pass happened to
+	// get to.
+	//
+	// The groups are read off what is recorded, never off whether this pass examines a
+	// tag: under Full every tag needs a request, and ordering by that would put the whole
+	// listing in one group and leave the order to the registry. A forced pass that runs
+	// out of its budget would then publish an arbitrary prefix, and the pass after it
+	// would start from the same prefix.
 	//
 	// The candidates themselves are left in listing order: they index resolved and
 	// examined below, and the versions this function returns are built from them.
 	probeOrder := make([]int, 0, len(candidates))
 
-	for i := range candidates {
-		if candidates[i].known == nil && !candidates[i].recorded {
-			probeOrder = append(probeOrder, i)
-		}
-	}
-
-	for i := range candidates {
-		if candidates[i].known == nil && candidates[i].recorded {
-			probeOrder = append(probeOrder, i)
+	for _, group := range []func(candidate) bool{
+		func(c candidate) bool { return !c.recorded },
+		func(c candidate) bool { return c.recorded && c.stale },
+		func(c candidate) bool { return c.recorded && !c.stale },
+	} {
+		for i := range candidates {
+			if candidates[i].known == nil && group(candidates[i]) {
+				probeOrder = append(probeOrder, i)
+			}
 		}
 	}
 

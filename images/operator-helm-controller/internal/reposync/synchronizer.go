@@ -78,15 +78,20 @@ func (s *Synchronizer) Sync(
 		return SyncOutcome{Catalog: CatalogOutcome{Err: err}}
 	}
 
+	forced := repo.ForceReconcileRequired()
+
 	charts, fetch := s.fetchCharts(ctx, repo, repoType, repoclient.FetchOptions{
 		Known: known,
-		Full:  repo.ForceReconcileRequired(),
+		Full:  forced,
 	})
 	if fetch.Err != nil {
 		return SyncOutcome{FetchAttempted: true, Fetch: fetch}
 	}
 
-	result, err := s.catalog.Reconcile(ctx, repo, charts)
+	// The same flag the read was made under: the catalog records which versions a
+	// forced read left without a fresh verdict, and reading the annotation a second
+	// time could disagree with what was actually asked of the registry.
+	result, err := s.catalog.Reconcile(ctx, repo, charts, forced)
 
 	return SyncOutcome{
 		FetchAttempted: true,
