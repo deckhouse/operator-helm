@@ -728,11 +728,15 @@ func releaseReported(out *internalobj.ReleaseOutcome) bool {
 }
 
 // valuesDeployed reports that the values the spec asks for are the ones the release
-// is running. The digest belongs to the revision carrying it, so a deployed revision
-// answering to the requested digest was installed with exactly those values — which
-// is also what keeps a rollout in flight from recording them: while a new chart
-// version is being applied, the newest deployed revision is still the previous one,
-// and it answers to the values that were current when it was installed.
+// is running. The digest belongs to the revision carrying it, so a revision answering
+// to the requested digest was installed with exactly those values.
+//
+// Latest is the highest revision whatever became of it, not the newest one that
+// succeeded, and that is what is wanted: an attempt sitting ahead of a deployed
+// revision is the release's current answer about those values, and looking past it to
+// an older entry that happens to match would read a superseded install as the live
+// one. Requiring that entry to be deployed is therefore the second guard, alongside
+// the release's own report of having finished with the spec that carries the digest.
 func valuesDeployed(outcome ChartReached) bool {
 	if outcome.Release == nil {
 		return false

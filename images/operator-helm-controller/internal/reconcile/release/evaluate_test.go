@@ -1550,3 +1550,77 @@ func TestEvaluateDoesNotRecordValuesAReleaseThatFailedWasGiven(t *testing.T) {
 		t.Fatal("values a failed release never got as far as deploying must not be recorded")
 	}
 }
+
+// TestEvaluateRecordsValuesOnlyOnAReleaseThatReportedSuccess pins the readiness half
+// of the rule with the digest deliberately matching, so that the digest cannot be
+// what carries the case. Every state here is one where the newest snapshot answers
+// to the requested values and the release still has nothing to say about the spec it
+// was given: it failed on it, it is mid-flight, or it has not looked at it yet.
+func TestEvaluateRecordsValuesOnlyOnAReleaseThatReportedSuccess(t *testing.T) {
+	const digest = "sha256:edited"
+
+	for name, state := range map[string]internalobj.InternalObjectState{
+		"failed on the spec it was given": {
+			Observed: true,
+			Status:   metav1.ConditionFalse,
+			Reason:   helmv1alpha1.ReasonReleaseFailed,
+			Message:  "upgrade retries exhausted",
+		},
+		"still applying the spec it was given": {
+			Observed: true,
+			Status:   metav1.ConditionUnknown,
+			Reason:   helmv1alpha1.ReasonReconciling,
+			Message:  "running upgrade",
+		},
+		// Ready, but for the generation before the edit: the snapshot carrying the
+		// requested digest is not evidence about a spec the object has not read.
+		"has not observed the spec it was given": {
+			Status:  metav1.ConditionTrue,
+			Reason:  "Succeeded",
+			Message: "Helm upgrade succeeded",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := baseInputs()
+			in.Outcome = ChartReached{
+				Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}},
+				Release: &internalobj.ReleaseOutcome{
+					Internal:      state,
+					ChartDeployed: true,
+					History:       helmv2.Snapshots{{Status: "deployed", ConfigDigest: digest}},
+				},
+				ValuesDigest: digest,
+			}
+
+			if Evaluate(in).ApplyValues {
+				t.Fatal("values must be recorded only once the release itself reports success on the spec carrying them")
+			}
+		})
+	}
+}
+
+// TestEvaluateDoesNotRecordValuesBehindAPendingSnapshot pins that the newest snapshot
+// is the one that answers, whatever its status: helm-controller keeps history newest
+// first regardless of outcome, so a pending or failed attempt sitting ahead of a
+// deployed revision must not be looked past to the older entry that happens to match.
+func TestEvaluateDoesNotRecordValuesBehindAPendingSnapshot(t *testing.T) {
+	const digest = "sha256:edited"
+
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}},
+		Release: &internalobj.ReleaseOutcome{
+			Internal:      readyInternal(),
+			ChartDeployed: true,
+			History: helmv2.Snapshots{
+				{Version: 2, Status: "pending-upgrade", ConfigDigest: digest},
+				{Version: 1, Status: "deployed", ConfigDigest: digest},
+			},
+		},
+		ValuesDigest: digest,
+	}
+
+	if Evaluate(in).ApplyValues {
+		t.Fatal("an attempt that has not finished must not be read as the deployed revision")
+	}
+}
