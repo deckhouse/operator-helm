@@ -2718,6 +2718,268 @@ func TestReconcileDeleteKeepsTheServiceAccountUntilTheInternalReleaseIsGone(t *t
 	}
 }
 
+// TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight pins the
+// one repair a teardown cannot do without. helm-controller uninstalls the release by
+// impersonating its ServiceAccount, so a RoleBinding taken away mid-teardown — by a
+// human, a policy engine, a namespace sweeper — leaves every uninstall attempt
+// refused: the internal HelmRelease never goes away and the finalizer never comes
+// off. The watches on the Role and the binding do bring the release back, so the
+// pass that lands here is the one that has to put the binding back.
+func TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight(t *testing.T) {
+	app, objects := deletingApplicationFixtures(false)
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	r, c := newApplicationFullReconciler(t, nil, objects...)
+
+	ctx := context.Background()
+	key := client.ObjectKeyFromObject(app)
+	bindingKey := client.ObjectKey{Namespace: app.Namespace, Name: names.ServiceAccount}
+	releaseKey := client.ObjectKey{Namespace: helmv1alpha1.TargetNamespace, Name: names.HelmRelease}
+
+	// The binding goes away out of band, with the uninstall still in flight.
+	if err := c.Delete(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
+		Name: names.ServiceAccount, Namespace: app.Namespace,
+	}}); err != nil {
+		t.Fatalf("deleting the role binding out of band: %v", err)
+	}
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+	if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
+		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+	}
+
+	repaired := &rbacv1.RoleBinding{}
+	if !objectExists(t, c, bindingKey, repaired) {
+		t.Fatal("the role binding must be back: without it the uninstall is refused and the teardown never ends")
+	}
+	if repaired.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: rbac.ApplicationRoleName}) {
+		t.Fatalf("roleRef = %+v, want the shared application role", repaired.RoleRef)
+	}
+	wantSubjects := []rbacv1.Subject{{
+		Kind: rbacv1.ServiceAccountKind, Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace,
+	}}
+	if !reflect.DeepEqual(repaired.Subjects, wantSubjects) {
+		t.Fatalf("subjects = %+v, want %+v", repaired.Subjects, wantSubjects)
+	}
+	if repaired.Labels[helmv1alpha1.LabelManagedBy] != helmv1alpha1.LabelManagedByValue {
+		t.Fatalf("labels = %+v, want the managed-by label the watches select on", repaired.Labels)
+	}
+
+	if !objectExists(t, c, releaseKey, &helmv2.HelmRelease{}) {
+		t.Fatal("the internal release must still be there: this pass is the one that waits for it")
+	}
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(ctx, key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(settled, helmv1alpha1.FinalizerName) {
+		t.Fatal("the finalizer must stay while the internal release is still there")
+	}
+	uninstalling := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if uninstalling == nil || uninstalling.Status != metav1.ConditionUnknown {
+		t.Fatalf("Ready = %+v, want Unknown: the repair succeeded and the wait goes on", uninstalling)
+	}
+}
+
+// ensureCountingIdentity records the identity repairs a teardown asked for, over a
+// real identity service that answers them.
+type ensureCountingIdentity struct {
+	Identity
+	ensureCalls int
+}
+
+func (s *ensureCountingIdentity) Ensure(ctx context.Context, rel contract.Release) rbac.IdentityOutcome {
+	s.ensureCalls++
+
+	return s.Identity.Ensure(ctx, rel)
+}
+
+// TestReconcileDeleteOfAnAddonRepairsNoIdentity pins where family safety lives. The
+// repair above is asked for whatever the family — the teardown does not branch on it
+// — and an addon, applied by helm-controller under its own cluster-wide identity,
+// names no ServiceAccount, which is what makes Ensure a no-op for it. Nothing may
+// appear in the cluster because of the call.
+func TestReconcileDeleteOfAnAddonRepairsNoIdentity(t *testing.T) {
+	now := metav1.Now()
+	addon := testAddon()
+	addon.Finalizers = []string{helmv1alpha1.FinalizerName}
+	addon.DeletionTimestamp = &now
+
+	names := adapter.NewAddonRelease(addon).InternalNames()
+
+	r, c := newFullReconciler(t, nil, interceptor.Funcs{},
+		addon,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: addon.Spec.Namespace}},
+		&helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{
+			Name:       names.HelmRelease,
+			Namespace:  helmv1alpha1.TargetNamespace,
+			Finalizers: []string{"finalizers.fluxcd.io"},
+		}},
+	)
+
+	// The real identity service, so the guard being tested is the one in Ensure and
+	// not a stub standing in for it.
+	identity := &ensureCountingIdentity{Identity: rbac.NewIdentity(c, helmv1alpha1.TargetNamespace)}
+	r.deps.Identity = identity
+
+	ctx := context.Background()
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(addon)})
+	if err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+	if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
+		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+	}
+
+	if identity.ensureCalls != 1 {
+		t.Fatalf("Ensure was called %d times, want once: the repair is not conditional on the family",
+			identity.ensureCalls)
+	}
+
+	accounts := &corev1.ServiceAccountList{}
+	if err := c.List(ctx, accounts); err != nil {
+		t.Fatalf("listing service accounts: %v", err)
+	}
+	roles := &rbacv1.RoleList{}
+	if err := c.List(ctx, roles); err != nil {
+		t.Fatalf("listing roles: %v", err)
+	}
+	bindings := &rbacv1.RoleBindingList{}
+	if err := c.List(ctx, bindings); err != nil {
+		t.Fatalf("listing role bindings: %v", err)
+	}
+
+	if len(accounts.Items)+len(roles.Items)+len(bindings.Items) != 0 {
+		t.Fatalf("the addon's teardown created %d accounts, %d roles and %d bindings, want none",
+			len(accounts.Items), len(roles.Items), len(bindings.Items))
+	}
+}
+
+// TestReconcileDeleteKeepsWaitingWhenTheIdentityRepairIsBlockedByAForeignObject pins
+// the terminal half of the repair. A binding under the derived name that is not ours
+// is never taken over, and no retry changes that: the informers behind both watches
+// select on the managed-by label it does not carry, so nothing even observes it
+// going away. Handing that to the work queue would spin the rate limiter forever, so
+// the teardown writes the blocking reason on the object and stays on the wait for the
+// internal release — never reporting the pass as a success that removed the
+// finalizer.
+func TestReconcileDeleteKeepsWaitingWhenTheIdentityRepairIsBlockedByAForeignObject(t *testing.T) {
+	app, objects := deletingApplicationFixtures(false)
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	r, c := newApplicationFullReconciler(t, nil, objects...)
+
+	ctx := context.Background()
+	key := client.ObjectKeyFromObject(app)
+	bindingKey := client.ObjectKey{Namespace: app.Namespace, Name: names.ServiceAccount}
+	releaseKey := client.ObjectKey{Namespace: helmv1alpha1.TargetNamespace, Name: names.HelmRelease}
+
+	// Ours goes, and someone else's takes the derived name.
+	if err := c.Delete(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
+		Name: names.ServiceAccount, Namespace: app.Namespace,
+	}}); err != nil {
+		t.Fatalf("deleting the role binding out of band: %v", err)
+	}
+	foreign := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: names.ServiceAccount, Namespace: app.Namespace},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "someone-elses-role"},
+	}
+	if err := c.Create(ctx, foreign); err != nil {
+		t.Fatalf("creating the foreign role binding: %v", err)
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		if err != nil {
+			t.Fatalf("attempt %d: a terminal repair failure must not be handed to the work queue: %v", attempt, err)
+		}
+		if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
+			t.Fatalf("attempt %d: requeueAfter = %v, want %v",
+				attempt, result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+		}
+	}
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(ctx, key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(settled, helmv1alpha1.FinalizerName) {
+		t.Fatal("the finalizer must stay: the internal release is still there")
+	}
+
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonFailed {
+		t.Fatalf("Ready = %+v, want False/%s", ready, helmv1alpha1.ReasonFailed)
+	}
+	if !strings.Contains(ready.Message, "not managed by the operator") {
+		t.Fatalf("Ready message = %q, want the foreign object named as what blocks the teardown", ready.Message)
+	}
+
+	if !objectExists(t, c, releaseKey, &helmv2.HelmRelease{}) {
+		t.Fatal("the teardown must still be waiting on the internal release")
+	}
+
+	stored := &rbacv1.RoleBinding{}
+	if !objectExists(t, c, bindingKey, stored) {
+		t.Fatal("the foreign binding must survive: it is not ours to remove")
+	}
+	if stored.RoleRef.Name != "someone-elses-role" || len(stored.Subjects) != 0 || stored.Labels != nil {
+		t.Fatalf("the foreign binding was modified: %+v", stored)
+	}
+}
+
+// identityRepairFails is an identity whose repair fails the way a passing API fault
+// does: not terminal, so the pass belongs in the work queue.
+type identityRepairFails struct {
+	Identity
+}
+
+func (identityRepairFails) Ensure(context.Context, contract.Release) rbac.IdentityOutcome {
+	err := errors.New("role binding create refused")
+
+	return rbac.IdentityOutcome{
+		Err:     err,
+		Reason:  helmv1alpha1.ReasonRBACSetupFailed,
+		Message: "Failed to set up the release identity: " + err.Error(),
+	}
+}
+
+// TestReconcileDeleteRetriesATransientIdentityRepairFailure pins the other half of
+// the decision: a repair that failed for a passing reason is worth retrying, so it
+// is handed back for the work queue's backoff rather than swallowed into a wait that
+// would report the teardown as merely pending.
+func TestReconcileDeleteRetriesATransientIdentityRepairFailure(t *testing.T) {
+	app, objects := deletingApplicationFixtures(false)
+
+	r, c := newApplicationFullReconciler(t, nil, objects...)
+	r.deps.Identity = identityRepairFails{Identity: r.deps.Identity}
+
+	ctx := context.Background()
+	key := client.ObjectKeyFromObject(app)
+
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err == nil {
+		t.Fatal("a transient repair failure must be returned so the work queue retries it")
+	}
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(ctx, key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(settled, helmv1alpha1.FinalizerName) {
+		t.Fatal("the finalizer must stay while the identity cannot be repaired")
+	}
+
+	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonFailed {
+		t.Fatalf("Ready = %+v, want False/%s", ready, helmv1alpha1.ReasonFailed)
+	}
+}
+
 // countingNamespaces records whether the teardown asked about the target namespace.
 type countingNamespaces struct {
 	Namespaces

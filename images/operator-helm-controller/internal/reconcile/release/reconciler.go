@@ -538,7 +538,8 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 	//
 	// A terminating target namespace is the one case that order cannot serve, and it
 	// is handled before the first wait: see removeIdentityOfTerminatingNamespace.
-	if err := r.removeIdentityOfTerminatingNamespace(ctx, rel); err != nil {
+	identityRemoved, err := r.removeIdentityOfTerminatingNamespace(ctx, rel)
+	if err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -554,6 +555,43 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 		if err := r.deps.Releases.SyncSpec(ctx, rel, release); err != nil {
 			return reconcile.Result{}, err
 		}
+
+		// The identity is repaired for the same reason the spec above is re-applied:
+		// helm-controller uninstalls the release by impersonating its account, so a
+		// RoleBinding deleted out of band — by a human, a policy engine, a namespace
+		// sweeper — leaves every uninstall attempt refused, and the release would wait
+		// on an internal HelmRelease that never goes away. The watches on the Role and
+		// the binding bring the release back into exactly this branch, which is why the
+		// repair has to live in it.
+		//
+		// Only while the internal release is still there. Once it is gone the identity is
+		// being torn down instead, and anything recreated after Identity.Cleanup would be
+		// left behind for good: these objects carry no ownerReference. The account taken
+		// away above is not put back either — recreating it is the very stall that branch
+		// exists to break.
+		if !identityRemoved {
+			if identity := r.deps.Identity.Ensure(ctx, rel); identity.Err != nil {
+				// Best-effort, like every other status write of this path: what gets the pass
+				// retried is the error returned below, and for the terminal case the timer.
+				_ = r.deps.Status.MarkDeletionFailed(ctx, rel.Object(), "release identity", identity.Err)
+
+				if !identity.Terminal {
+					return reconcile.Result{}, fmt.Errorf("repairing release identity: %w", identity.Err)
+				}
+
+				// A foreign object under the derived name is not something a retry resolves,
+				// and the informers behind both watches select on the managed-by label it does
+				// not carry, so nothing observes it being removed either: handing it to the
+				// work queue would spin the rate limiter on it forever. The teardown keeps its
+				// finalizer and stays on the same coarse timer the wait below uses, with the
+				// blocking reason written on the object — and this is then the only place its
+				// cause is logged, as no error is handed back for controller-runtime to log.
+				logger.Error(identity.Err, identity.Message, "reason", identity.Reason)
+
+				return reconcile.Result{RequeueAfter: pass.InternalResourceDeletionRequeueInterval}, nil
+			}
+		}
+
 		return pass.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal release", release)
 	}
 
@@ -628,7 +666,9 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 
 // removeIdentityOfTerminatingNamespace takes the release's ServiceAccount away
 // before anything is waited on, when the namespace the release deploys into is
-// terminating.
+// terminating. It reports whether it did, because the teardown must not put back
+// what it just took away: the repair of a still-present release's identity is
+// skipped for the rest of the pass.
 //
 // The ordinary teardown deletes the identity last, because helm-controller
 // uninstalls as that account and it has to outlive the internal HelmRelease. A
@@ -648,12 +688,12 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 // to remove the account is reported the way every other deletion failure of a
 // resource without conditions of its own is, and handed back so the work queue
 // retries it.
-func (r *Reconciler) removeIdentityOfTerminatingNamespace(ctx context.Context, rel contract.Release) error {
+func (r *Reconciler) removeIdentityOfTerminatingNamespace(ctx context.Context, rel contract.Release) (bool, error) {
 	if rel.InternalNames().ServiceAccount == "" {
 		// A family that does not impersonate is applied as helm-controller itself, an
 		// identity no namespace deletion can take apart. There is nothing to repair, and
 		// no reason to read the namespace on every pass of every such teardown.
-		return nil
+		return false, nil
 	}
 
 	terminating, err := r.deps.Namespaces.Terminating(ctx, rel)
@@ -664,17 +704,17 @@ func (r *Reconciler) removeIdentityOfTerminatingNamespace(ctx context.Context, r
 		// writes a status then, which is why one is written here.
 		_ = r.deps.Status.MarkDeletionFailed(ctx, rel.Object(), "release identity", err)
 
-		return err
+		return false, err
 	}
 	if !terminating {
-		return nil
+		return false, nil
 	}
 
 	if err := r.deps.Identity.RemoveAccount(ctx, rel); err != nil {
 		err = fmt.Errorf("removing the release identity of a terminating namespace: %w", err)
 		_ = r.deps.Status.MarkDeletionFailed(ctx, rel.Object(), "release identity", err)
 
-		return err
+		return false, err
 	}
 
 	log.FromContext(ctx).Info(
@@ -682,7 +722,7 @@ func (r *Reconciler) removeIdentityOfTerminatingNamespace(ctx context.Context, r
 		"namespace", rel.TargetNamespace(),
 	)
 
-	return nil
+	return true, nil
 }
 
 // markMaintenanceChangeInProgress publishes Reconciling before the maintenance
