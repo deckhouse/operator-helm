@@ -59,11 +59,16 @@ type stubRepoClient struct {
 	// from which a test can observe the status the controller publishes *while* it
 	// is working rather than the one it leaves behind.
 	onFetch func()
+	// options records what each pass asked for, in order. Full is the half of it a
+	// force request travels in, and a test about force can only see it here.
+	options []repoclient.FetchOptions
 }
 
 // The receiver is a pointer so a test can change what the repository returns
 // between reconcile passes.
-func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, _ repoclient.FetchOptions) ([]repoclient.Chart, error) {
+func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, opts repoclient.FetchOptions) ([]repoclient.Chart, error) {
+	s.options = append(s.options, opts)
+
 	if s.onFetch != nil {
 		s.onFetch()
 	}
@@ -1143,5 +1148,108 @@ func TestReconcileNamespacedRepositoryDerivesNamespacedInternalObjects(t *testin
 	}
 	if updated.Status.ObservedGeneration != 1 {
 		t.Fatalf("status was not patched on the namespaced object: %+v", updated.Status)
+	}
+}
+
+// forcedRepositoryFixture is an oci repository with the force reconcile request on
+// it, already carrying a synced status so the pass under test is not the first one.
+func forcedRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
+	repo := ociRepository()
+	repo.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+
+	return repo
+}
+
+// forceAnnotationPresent reports whether the request is still on the stored object.
+func forceAnnotationPresent(t *testing.T, c client.Client, name string) bool {
+	t.Helper()
+
+	stored := &helmv1alpha1.HelmClusterAddonRepository{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: name}, stored); err != nil {
+		t.Fatalf("getting repository: %v", err)
+	}
+	_, found := stored.Annotations[helmv1alpha1.AnnotationForceReconcile]
+
+	return found
+}
+
+// TestReconcileKeepsAForceRequestWhoseRefreshIsUnfinished pins what a force request
+// means when the pass it triggered could not get through the repository. A forced pass
+// re-examines every version, ignoring the recorded verdicts; a pass that ran out of its
+// budget applied that to the versions it reached and named the rest. Consuming the
+// request there loses the remainder without a trace: the next pass is unforced, the
+// catalog merge kept the media type of every version this pass never examined, and
+// NeedsExamination reads those as already answered — so a tag that was repushed, which
+// is the whole reason someone forces a refresh, would never be looked at again.
+//
+// The second half is the bound. The request keeps the passes forced only while they
+// shrink what is left; a repository whose passes stop making progress consumes it
+// instead of forcing forever.
+func TestReconcileKeepsAForceRequestWhoseRefreshIsUnfinished(t *testing.T) {
+	repo := forcedRepositoryFixture()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:               "podinfo",
+		Versions:           []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+		UnexaminedVersions: []string{"6.7.0", "6.6.0"},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if !forceAnnotationPresent(t, c, repo.Name) {
+		t.Fatal("a forced pass that left versions unexamined must keep the request: the refresh it asked for is unfinished")
+	}
+	if len(stub.options) != 1 || !stub.options[0].Full {
+		t.Fatalf("fetch options = %+v, want one forced read", stub.options)
+	}
+
+	// The next pass: still forced, because the request is still there, and it reads
+	// the repository in full again rather than skipping the versions a recorded media
+	// type would otherwise make it skip.
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if len(stub.options) != 2 || !stub.options[1].Full {
+		t.Fatalf("fetch options = %+v, want the next pass to read in full too", stub.options)
+	}
+	// That pass left exactly as much unexamined as the one before it, so the refresh
+	// is not getting anywhere and the request is taken off rather than repeated for
+	// as long as the repository stays too large for one budget.
+	if forceAnnotationPresent(t, c, repo.Name) {
+		t.Fatal("a force that stops shrinking the work left must be consumed, or the repository is wedged into forcing forever")
+	}
+}
+
+// TestReconcileConsumesAForceRequestWhoseRefreshCompleted is the unchanged case: a
+// forced pass that covered the repository has done what was asked, so the request goes
+// away and the next pass is an ordinary incremental one.
+func TestReconcileConsumesAForceRequestWhoseRefreshCompleted(t *testing.T) {
+	repo := forcedRepositoryFixture()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if forceAnnotationPresent(t, c, repo.Name) {
+		t.Fatal("a forced pass that examined everything must consume the request")
+	}
+	if len(stub.options) != 1 || !stub.options[0].Full {
+		t.Fatalf("fetch options = %+v, want one forced read", stub.options)
 	}
 }

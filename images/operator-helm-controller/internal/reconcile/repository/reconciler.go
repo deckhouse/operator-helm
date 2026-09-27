@@ -159,9 +159,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return r.finish(ctx, repo, in, in.Attempted)
 }
 
-// finish applies the decision and consumes the force annotation when an attempt
-// actually ran. The annotation is removed after the status patch so a conflict
-// does not lose the request.
+// finish applies the decision and consumes the force annotation when the attempt has
+// done what the request asked for. The annotation is removed after the status patch so
+// a conflict does not lose the request.
 func (r *Reconciler) finish(
 	ctx context.Context,
 	repo contract.Repository,
@@ -182,7 +182,7 @@ func (r *Reconciler) finish(
 		return reconcile.Result{}, err
 	}
 
-	if attempted {
+	if attempted && repo.ForceReconcileRequired() {
 		// A force request reaches a consumer's artifact only through the consumer's
 		// own internal OCIRepository, and any repository can have those: an oci:// one
 		// for every consumer, a helm one for every version its index publishes in a
@@ -190,12 +190,16 @@ func (r *Reconciler) finish(
 		// request in place to be retried. The versions a helm repository serves as
 		// archives need no equivalent — there the internal HelmRepository carries the
 		// request and its HelmCharts follow the re-indexed source on their own.
-		if repo.ForceReconcileRequired() {
-			if err := r.deps.Consumers.ForceReconcileConsumers(ctx, repo); err != nil {
-				return reconcile.Result{}, fmt.Errorf("failed to force reconcile internal oci repositories: %w", err)
-			}
+		if err := r.deps.Consumers.ForceReconcileConsumers(ctx, repo); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to force reconcile internal oci repositories: %w", err)
 		}
+	}
 
+	// Not simply "an attempt ran": a forced read that stopped short of the repository
+	// leaves the request in place, so the pass that finishes it is forced too (see
+	// forceOutstanding). The request is idempotent, and the repository is reconciled
+	// again by the schedule that pass writes.
+	if decision.ConsumeForce {
 		if err := pass.ConsumeForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(repo.Object()), r.deps.NewRepository().Object()); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 		}
