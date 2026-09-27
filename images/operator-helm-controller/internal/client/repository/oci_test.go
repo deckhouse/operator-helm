@@ -120,19 +120,22 @@ type fakeRegistry struct {
 	gets   map[string]int
 	forced map[string]int
 	// stalling makes manifest reads hang until stall is closed, which models the
-	// registry that accepts the request and then says nothing.
-	stalling bool
-	stall    chan struct{}
+	// registry that accepts the request and then says nothing. stalledTags does the
+	// same for one tag only, so a pass can be observed with both kinds of answer.
+	stalling    bool
+	stalledTags map[string]bool
+	stall       chan struct{}
 }
 
 func newFakeRegistry(t *testing.T) (*fakeRegistry, string) {
 	t.Helper()
 
 	f := &fakeRegistry{
-		inner:  registry.New(registry.Logger(log.New(io.Discard, "", 0))),
-		gets:   map[string]int{},
-		forced: map[string]int{},
-		stall:  make(chan struct{}),
+		inner:       registry.New(registry.Logger(log.New(io.Discard, "", 0))),
+		gets:        map[string]int{},
+		forced:      map[string]int{},
+		stalledTags: map[string]bool{},
+		stall:       make(chan struct{}),
 	}
 	server := httptest.NewServer(f)
 	t.Cleanup(server.Close)
@@ -148,7 +151,7 @@ func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.gets[tag]++
 		status := f.forced[tag]
-		stalling := f.stalling
+		stalling := f.stalling || f.stalledTags[tag]
 		f.mu.Unlock()
 
 		if stalling {
@@ -195,6 +198,14 @@ func (f *fakeRegistry) stallManifests() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stalling = true
+}
+
+// stallTag makes manifest reads of one tag hang while every other tag keeps being
+// served, which is what a pass that must publish some versions and defer one looks like.
+func (f *fakeRegistry) stallTag(tag string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stalledTags[tag] = true
 }
 
 func (f *fakeRegistry) force(tag string, status int) {
@@ -639,7 +650,7 @@ func TestFetchChartsOCIFailsThePassWhenManifestReadsStall(t *testing.T) {
 
 // TestFetchChartsOCIRecordsASingleStalledTagAsPending is the other side of the same
 // boundary: one tag that stalls is a verdict about that tag, not a failed pass. The
-// probe timeout expires well inside the pass budget, so the remaining tags are
+// probe timeout expires well inside the pass budget, so the tag that answers is
 // published and the stalled one is examined again by the next synchronization.
 func TestFetchChartsOCIRecordsASingleStalledTagAsPending(t *testing.T) {
 	shortenOCILimits(t, tagListBudget, 300*time.Millisecond, 30*time.Second)
@@ -647,7 +658,7 @@ func TestFetchChartsOCIRecordsASingleStalledTagAsPending(t *testing.T) {
 	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
 	pushChart(t, host, "1.0.1", helmConfigMediaType, currentChartMediaType)
-	reg.stallManifests()
+	reg.stallTag("1.0.1")
 
 	start := time.Now()
 	charts, err := OCIRepositoryDefaultClient.FetchCharts(
@@ -664,10 +675,15 @@ func TestFetchChartsOCIRecordsASingleStalledTagAsPending(t *testing.T) {
 	if len(charts) != 1 {
 		t.Fatalf("expected one chart, got %d", len(charts))
 	}
+
+	reasons := map[string]string{}
 	for _, version := range charts[0].Versions {
-		if version.UnavailableReason != helmv1alpha1.UnavailableReasonResolvePending {
-			t.Fatalf("version %s reason = %q, want %q",
-				version.Version, version.UnavailableReason, helmv1alpha1.UnavailableReasonResolvePending)
-		}
+		reasons[version.Version.String()] = version.UnavailableReason
+	}
+	if got := reasons["1.0.0"]; got != "" {
+		t.Fatalf("the tag that answered must be usable, got reason %q", got)
+	}
+	if got := reasons["1.0.1"]; got != helmv1alpha1.UnavailableReasonResolvePending {
+		t.Fatalf("the stalled tag reason = %q, want %q", got, helmv1alpha1.UnavailableReasonResolvePending)
 	}
 }

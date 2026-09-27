@@ -263,6 +263,16 @@ func resolveChartVersions(
 			// One tag that stalls must cost only its own deadline: without this the
 			// slot it holds is unavailable to every tag still queued behind it, and
 			// chartResolveConcurrency of them would stall the pass until its budget.
+			//
+			// The puller builds its fetcher on whichever probe gets there first and
+			// caches the outcome, the error included, so a /v2/ ping or token exchange
+			// that outlasts this deadline is remembered as that probe's failure and
+			// handed to every later tag at once: a catalog of pending verdicts under a
+			// pass budget that never expired. Initialising it here instead would cost a
+			// manifest request of its own and turn a tag that merely stalls into a
+			// failed pass. The state corrects itself — a pending version is examined
+			// again on the next synchronization — and the transport's response-header
+			// timeout keeps the handshake well inside this deadline in the first place.
 			probeCtx, cancelProbe := context.WithTimeout(groupCtx, chartProbeTimeout)
 			defer cancelProbe()
 
