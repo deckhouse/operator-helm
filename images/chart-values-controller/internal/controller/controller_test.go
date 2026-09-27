@@ -93,7 +93,6 @@ func newTestReconciler(t *testing.T, c client.Client) *reconciler {
 	return &reconciler{
 		client:       c,
 		cache:        cache.New(t.TempDir(), testCacheBudget),
-		digests:      map[string]string{},
 		newObject:    func() client.Object { return &sourcev1.HelmChart{} },
 		artifactOf:   func(o client.Object) *meta.Artifact { return o.(*sourcev1.HelmChart).Status.Artifact },
 		conditionsOf: func(o client.Object) []metav1.Condition { return o.(*sourcev1.HelmChart).Status.Conditions },
@@ -188,7 +187,6 @@ func TestReconcileDeletesOnlyTheExpiredObjectItRead(t *testing.T) {
 			if err := r.cache.Put(testName, "sha256:cafe", []byte("replicaCount: 1\n")); err != nil {
 				t.Fatalf("seeding cache: %v", err)
 			}
-			r.setLastDigest(testName, "sha256:cafe")
 
 			result, err := reconcileOnce(t, r)
 			if err != nil {
@@ -214,8 +212,8 @@ func TestReconcileDeletesOnlyTheExpiredObjectItRead(t *testing.T) {
 				if result.RequeueAfter <= 0 {
 					t.Fatalf("a refused delete must requeue, got %+v", result)
 				}
-				if digest := r.lastDigest(testName); digest != "sha256:cafe" {
-					t.Fatalf("remembered digest = %q, want it kept", digest)
+				if entry, _ := r.cache.GetEntry(testName); entry.Digest != "sha256:cafe" {
+					t.Fatalf("the surviving entry records %q, want the revision it was seeded with", entry.Digest)
 				}
 			}
 		})
@@ -462,17 +460,12 @@ func TestARefreshThatCannotBeCompletedNeverLeavesAnEarlierRevisionUnderTheKey(t 
 					if ok {
 						t.Fatalf("a read after the pass is answered with %q; it must miss so the client is served the current values or told to retry", got.Values)
 					}
-					if remembered := r.lastDigest(testName); remembered != "" {
-						t.Fatalf("digest %q remembered for a key holding nothing: a later pass has to write it again", remembered)
-					}
 				case !ok:
 					t.Fatal("the entry holding the revision being refreshed was thrown away")
 				case !bytes.Equal(got.Values, entry.wantKept):
 					t.Fatalf("entry = %q, want %q", got.Values, entry.wantKept)
 				case got.Digest != digest:
 					t.Fatalf("the surviving entry records %q, want the revision being refreshed %q", got.Digest, digest)
-				case r.lastDigest(testName) != digest:
-					t.Fatal("the revision that entry holds must be remembered, or every pass under a tight budget judges it again")
 				}
 			})
 		}
@@ -529,8 +522,8 @@ func TestARefreshThatCannotBeCompletedLeavesTheEntryOfAnotherChartAlone(t *testi
 
 // TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves is the path the refusal
 // above is the degradation of: with room on the volume, a republished chart has
-// its cached values replaced by the new revision's, and the revision is remembered
-// so the passes that follow do not download it again.
+// its cached values replaced by the new revision's, and the entry records that
+// revision so the passes that follow do not download it again.
 func TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves(t *testing.T) {
 	current := []byte("replicaCount: 2\n")
 
@@ -538,7 +531,6 @@ func TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves(t *testing.T) {
 	if err := r.cache.Put(testName, "sha256:the-previous-revision", []byte("replicaCount: 1\n")); err != nil {
 		t.Fatalf("seeding the previous revision's entry: %v", err)
 	}
-	r.setLastDigest(testName, "sha256:the-previous-revision")
 
 	if _, err := reconcileOnce(t, r); err != nil {
 		t.Fatalf("refresh pass: %v", err)
@@ -553,9 +545,6 @@ func TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves(t *testing.T) {
 	}
 	if got.Digest != digest {
 		t.Fatalf("the entry records %q, want the revision it was extracted from %q", got.Digest, digest)
-	}
-	if r.lastDigest(testName) != digest {
-		t.Fatalf("lastDigest = %q, want the revision just written %q", r.lastDigest(testName), digest)
 	}
 }
 
@@ -598,10 +587,10 @@ func serveBytes(body []byte) http.HandlerFunc {
 
 // TestARefusedRefreshDeletesAtMostOnce follows the sequence the deletion above
 // starts: the stale entry goes, the next request has the resolver cache the
-// current values under the same key, and the pass after that is refused too. If
-// the controller still remembered the digest of what it deleted, that fresh entry
-// would look stale to it and be deleted in turn — the thrash the previous fix was
-// about, one pass further along.
+// current values under the same key, and the pass after that is refused too. If a
+// refused pass judged the key by the digest it last tried to write rather than by
+// the one the entry records, that fresh entry would look stale to it and be deleted
+// in turn — the thrash the previous fix was about, one pass further along.
 func TestARefusedRefreshDeletesAtMostOnce(t *testing.T) {
 	values := []byte("replicaCount: 2\n")
 	archive := buildValuesArchive(t, values)
@@ -624,7 +613,6 @@ func TestARefusedRefreshDeletesAtMostOnce(t *testing.T) {
 		t.Fatalf("seeding the stale entry: %v", err)
 	}
 	r.cache = cache.New(dir, cacheBlock)
-	r.setLastDigest(testName, "sha256:the-previous-revision")
 
 	if _, err := reconcileOnce(t, r); err != nil {
 		t.Fatalf("first pass: %v", err)
@@ -707,4 +695,49 @@ func buildArchive(t *testing.T, name string, content []byte) []byte {
 	}
 
 	return buf.Bytes()
+}
+
+// TestARefreshRepairsAnEntryLeftAtAnotherRevisionByALateWrite covers the key this
+// controller believes it made current and did not. A request that missed the cache
+// started its download from the previous revision; the artifact was republished, a
+// pass here cached the new one, and only then did that download finish and write its
+// older revision over the entry. A pass that judged the key by the revision it
+// remembers writing would find nothing to do and leave an earlier revision to be
+// served for the whole TTL. The entry says which revision is actually under the key,
+// and the pass acts on that.
+func TestARefreshRepairsAnEntryLeftAtAnotherRevisionByALateWrite(t *testing.T) {
+	current := []byte("replicaCount: 2\n")
+	stale := []byte("replicaCount: 1\n")
+
+	r, digest := newRefreshFixture(t, current)
+
+	// The pass that made the key current, and whose write this controller would be
+	// remembering.
+	if _, err := reconcileOnce(t, r); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if entry, ok := r.cache.GetEntry(testName); !ok || entry.Digest != digest {
+		t.Fatalf("the first pass left %+v under the key, want the current revision %q", entry, digest)
+	}
+
+	// The download that started before that revision existed, landing after it: the
+	// resolver caches on every miss, and it writes the revision it downloaded.
+	if err := r.cache.Put(testName, "sha256:the-revision-the-download-started-from", stale); err != nil {
+		t.Fatalf("the late write: %v", err)
+	}
+
+	if _, err := reconcileOnce(t, r); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	entry, ok := r.cache.GetEntry(testName)
+	if !ok {
+		t.Fatal("the key holds nothing at all after the repairing pass")
+	}
+	if !bytes.Equal(entry.Values, current) {
+		t.Fatalf("the entry holds %q, want the current revision's values %q: an entry recorded at another revision than the source publishes must be replaced", entry.Values, current)
+	}
+	if entry.Digest != digest {
+		t.Fatalf("the entry records %q, want the revision the source publishes %q", entry.Digest, digest)
+	}
 }

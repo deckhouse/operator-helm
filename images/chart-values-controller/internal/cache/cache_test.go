@@ -564,3 +564,77 @@ func TestTheBudgetChargesTheRecordedRevisionAlongWithTheValues(t *testing.T) {
 		t.Fatalf("put into the full cache = %v, want ErrBudgetExhausted", err)
 	}
 }
+
+// TestAnEntryFileThatSaysNothingUsableReadsAsUnknownRatherThanAsAnotherRevision
+// walks the edges of the one line an entry file opens with. None of these files can
+// be published by this cache — a write is a whole file put in place by one rename —
+// but the volume outlives the process and a reader must have an answer for whatever
+// is found there. The only answers that are safe are "no revision on record" and
+// "no values": both make the next pass download the artifact again, while a digest
+// read off a file that does not really carry it would attribute somebody else's
+// values to the revision that is current.
+func TestAnEntryFileThatSaysNothingUsableReadsAsUnknownRatherThanAsAnotherRevision(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        []byte
+		wantValues []byte
+		wantDigest string
+	}{
+		{
+			name:       "an empty file has no values and names no revision",
+			raw:        nil,
+			wantValues: nil,
+			wantDigest: DigestUnknown,
+		},
+		{
+			name: "a file that is the header alone, with no line to end it, names no revision",
+			// Truncated before the newline that would close the header: there is no
+			// digest on the line, so it is read the way a file from before this
+			// format is — values of an unknown revision, dropped by the next pass.
+			raw:        []byte(entryHeaderPrefix),
+			wantValues: []byte(entryHeaderPrefix),
+			wantDigest: DigestUnknown,
+		},
+		{
+			name:       "a header naming no digest names no revision",
+			raw:        []byte(entryHeaderPrefix + "\nreplicaCount: 1\n"),
+			wantValues: []byte("replicaCount: 1\n"),
+			wantDigest: DigestUnknown,
+		},
+		{
+			name: "a header with no values behind it keeps its revision and holds nothing",
+			// A chart whose values.yaml is empty reaches the disk as exactly this,
+			// so the digest is real and the values are genuinely empty.
+			raw:        []byte(entryHeaderPrefix + "sha256:c0ffee\n"),
+			wantValues: nil,
+			wantDigest: "sha256:c0ffee",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "cv-edge"), tt.raw, 0o644); err != nil {
+				t.Fatalf("seeding the entry file: %v", err)
+			}
+
+			entry, ok := New(dir, testBudget).GetEntry("cv-edge")
+			if !ok {
+				t.Fatal("a file on the volume must be readable, not a miss with a reason")
+			}
+			if !bytes.Equal(entry.Values, tt.wantValues) {
+				t.Fatalf("values = %q, want %q", entry.Values, tt.wantValues)
+			}
+			if entry.Digest != tt.wantDigest {
+				t.Fatalf("digest = %q, want %q", entry.Digest, tt.wantDigest)
+			}
+
+			// And the request path sees the same values, without a second reading of
+			// the file's shape.
+			got, ok := New(dir, testBudget).Get("cv-edge")
+			if !ok || !bytes.Equal(got, tt.wantValues) {
+				t.Fatalf("get = (%q, %v), want (%q, true)", got, ok, tt.wantValues)
+			}
+		})
+	}
+}

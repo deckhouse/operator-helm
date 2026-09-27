@@ -288,6 +288,10 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 
 	var conditions []metav1.Condition
 	var art *meta.Artifact
+	// How to ask, once the artifact has been downloaded, which revision the source
+	// object publishes by then. Which object that is has just been decided here, and
+	// nothing below this switch knows it any more.
+	var current currentDigestFunc
 
 	switch {
 	case version.OCIRef != "":
@@ -301,7 +305,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		if done != nil {
 			return *done, nil
 		}
-		conditions, art = ociRepo.Status.Conditions, ociRepo.Status.Artifact
+		conditions, art, current = ociRepo.Status.Conditions, ociRepo.Status.Artifact, r.ociRepositoryDigest(name)
 	case isOCI(repo.URL):
 		mediaType, done := ociMediaType(req, version)
 		if done != nil {
@@ -312,7 +316,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		if err != nil {
 			return Result{}, err
 		}
-		conditions, art = ociRepo.Status.Conditions, ociRepo.Status.Artifact
+		conditions, art, current = ociRepo.Status.Conditions, ociRepo.Status.Artifact, r.ociRepositoryDigest(name)
 	case isHelm(repo.URL):
 		chart, pending, err := r.ensureHelmChart(ctx, family, req, name, expiresAt)
 		if err != nil {
@@ -321,7 +325,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		if pending {
 			return Result{Outcome: OutcomePending}, nil
 		}
-		conditions, art = chart.Status.Conditions, chart.Status.Artifact
+		conditions, art, current = chart.Status.Conditions, chart.Status.Artifact, r.helmChartDigest(name)
 	default:
 		return Result{Outcome: OutcomeFetchFailed, Message: fmt.Sprintf("unsupported repository URL scheme: %q", repo.URL)}, nil
 	}
@@ -333,7 +337,45 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		return Result{Outcome: OutcomePending}, nil
 	}
 
-	return r.readValues(ctx, name, art)
+	return r.readValues(ctx, name, art, current)
+}
+
+// currentDigestFunc reports the digest of the artifact the auxiliary source object
+// publishes now. Like the repository read resolveChart opens with, it is one call
+// into the manager's informer cache rather than a round trip to the API server, so a
+// download may afford to ask it again on the way out.
+type currentDigestFunc func(ctx context.Context) (string, error)
+
+func (r *Resolver) helmChartDigest(name string) currentDigestFunc {
+	return func(ctx context.Context) (string, error) {
+		var chart sourcev1.HelmChart
+		if err := r.client.Get(ctx, client.ObjectKey{Namespace: r.namespace, Name: name}, &chart); err != nil {
+			return "", fmt.Errorf("getting helm chart: %w", err)
+		}
+
+		return artifactDigest(chart.Status.Artifact), nil
+	}
+}
+
+func (r *Resolver) ociRepositoryDigest(name string) currentDigestFunc {
+	return func(ctx context.Context) (string, error) {
+		var ociRepo sourcev1.OCIRepository
+		if err := r.client.Get(ctx, client.ObjectKey{Namespace: r.namespace, Name: name}, &ociRepo); err != nil {
+			return "", fmt.Errorf("getting oci repository: %w", err)
+		}
+
+		return artifactDigest(ociRepo.Status.Artifact), nil
+	}
+}
+
+// artifactDigest reads the revision off an artifact that may not be published at
+// all. An object with no artifact names no revision, which compares equal to none.
+func artifactDigest(art *meta.Artifact) string {
+	if art == nil {
+		return ""
+	}
+
+	return art.Digest
 }
 
 // readValues downloads the artifact and returns the chart's values.yaml, caching
@@ -347,7 +389,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 // repository was re-synchronized in between. The window closes by itself: the
 // entry is keyed on the tuple, and the controller replaces what is cached under it
 // when the revision moves.
-func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact) (Result, error) {
+func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact, current currentDigestFunc) (Result, error) {
 	values, _, err := r.downloads.do(ctx, name, func() ([]byte, error) {
 		values, err := artifact.FetchValues(ctx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
 		if err != nil {
@@ -363,6 +405,18 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 		// from having to guess at an entry it did not write: a refresh it cannot
 		// complete leaves this one alone when it is the current revision, and drops it
 		// when it is not.
+		//
+		// This download started from a revision read before it, and a download takes
+		// time: the artifact may have been republished since and the controller's watch
+		// may already have published the newer values under this very key. Writing now
+		// would put the older revision back under it, and nothing would take it away
+		// again until the entry expires. So what the source object publishes is read
+		// once more and a revision that moved means the values are served without being
+		// kept.
+		if !r.stillCurrent(ctx, name, current, art.Digest) {
+			return values, nil
+		}
+
 		if err := r.cache.Put(name, art.Digest, values); err != nil {
 			if errors.Is(err, cache.ErrBudgetExhausted) {
 				log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
@@ -395,6 +449,26 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 	}
 
 	return Result{Outcome: OutcomeReady, Values: values}, nil
+}
+
+// stillCurrent reports whether the artifact a finished download came from is the one
+// the source object publishes by now, which is the only condition under which this
+// download may be cached. A source object that cannot be read at all answers no: it
+// was collected as expired, or renamed out from under this key, and an entry written
+// for an object that is gone would sit there until it expires.
+func (r *Resolver) stillCurrent(ctx context.Context, name string, current currentDigestFunc, downloaded string) bool {
+	digest, err := current(ctx)
+	if err != nil {
+		log.FromContext(ctx).Info("not caching values.yaml, the source object could not be read back", "name", name, "error", err.Error())
+		return false
+	}
+
+	if digest != downloaded {
+		log.FromContext(ctx).Info("not caching values.yaml, the artifact revision moved while it was downloading", "name", name, "downloaded", downloaded, "current", digest)
+		return false
+	}
+
+	return true
 }
 
 // isTransient reports whether an error only describes how a call ended, rather

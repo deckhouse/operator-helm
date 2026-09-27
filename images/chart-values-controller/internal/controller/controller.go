@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/fluxcd/pkg/apis/meta"
@@ -65,9 +64,6 @@ type reconciler struct {
 	newObject        func() client.Object
 	artifactOf       artifactFunc
 	conditionsOf     conditionsFunc
-
-	mu      sync.Mutex
-	digests map[string]string
 }
 
 func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -77,7 +73,6 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			_ = r.cache.Delete(req.Name)
-			r.forgetDigest(req.Name)
 			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("getting %s: %w", req.Name, err)
@@ -110,9 +105,9 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 // away an object somebody is already waiting on. A refusal is an ordinary outcome of
 // the pass, not a failure — the next pass reads the object again and judges it anew.
 //
-// The cache entry and the remembered digest are dropped only once the object is
-// really gone. Dropping them first would leave a live object without its values and
-// every request for it answered with a retry until they are downloaded again.
+// The cache entry is dropped only once the object is really gone. Dropping it first
+// would leave a live object without its values and every request for it answered
+// with a retry until they are downloaded again.
 func (r *reconciler) deleteExpired(ctx context.Context, obj client.Object, name string) (reconcile.Result, error) {
 	uid, resourceVersion := obj.GetUID(), obj.GetResourceVersion()
 
@@ -128,7 +123,6 @@ func (r *reconciler) deleteExpired(ctx context.Context, obj client.Object, name 
 	}
 
 	_ = r.cache.Delete(name)
-	r.forgetDigest(name)
 
 	if err == nil {
 		log.FromContext(ctx).Info("deleted expired auxiliary resource", "name", name)
@@ -143,7 +137,14 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 		return
 	}
 
-	if r.lastDigest(name) == art.Digest {
+	// What may be skipped is a key that already holds this revision, and the entry is
+	// what says so: it records the digest it was extracted from. Remembering instead
+	// what this process last wrote would gate on the wrong fact — the resolver caches
+	// on every miss too, and a download it started before this revision was published
+	// can land after this pass, leaving an earlier revision under a key this
+	// controller believes it made current. The entry is the only statement about what
+	// a request would actually be served, and it survives a restart besides.
+	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest != cache.DigestUnknown && entry.Digest == art.Digest {
 		return
 	}
 
@@ -173,8 +174,6 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 
 		return
 	}
-
-	r.setLastDigest(name, art.Digest)
 }
 
 // invalidateOutdated settles what stays under one key whose refresh could not be
@@ -189,8 +188,8 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 // Which revision the entry holds is not guessed: the entry records the digest it was
 // extracted from, and both writers (this controller and the resolver, which caches on
 // every miss) record it. An entry already holding the revision being refreshed is
-// current, so it stays and its digest is remembered, or a tight budget would have
-// every pass throw away what the previous request cached.
+// current, so it stays, or a tight budget would have every pass throw away what the
+// previous request cached.
 //
 // An entry whose digest is unknown can only come from a container image older than
 // this format, since every write since records one. Nothing attributes it to the
@@ -198,35 +197,12 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 // which the next request has the resolver write it back with its revision named.
 func (r *reconciler) invalidateOutdated(ctx context.Context, name, digest string) {
 	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest != cache.DigestUnknown && entry.Digest == digest {
-		r.setLastDigest(name, digest)
 		return
 	}
 
 	if err := r.cache.Delete(name); err != nil {
 		log.FromContext(ctx).Error(err, "failed to drop an outdated cache entry", "name", name)
 	}
-
-	// Nothing is known about the key any more, and the refused revision must not be
-	// remembered as cached: the next pass has to attempt the write again.
-	r.forgetDigest(name)
-}
-
-func (r *reconciler) lastDigest(name string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.digests[name]
-}
-
-func (r *reconciler) setLastDigest(name, digest string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.digests[name] = digest
-}
-
-func (r *reconciler) forgetDigest(name string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.digests, name)
 }
 
 func parseExpiry(obj client.Object, logger interface{ Error(error, string, ...any) }) (time.Time, bool) {
@@ -258,7 +234,6 @@ func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient 
 		cache:            valuesCache,
 		httpClient:       httpClient,
 		maxArtifactBytes: maxArtifactBytes,
-		digests:          map[string]string{},
 		newObject:        func() client.Object { return &sourcev1.HelmChart{} },
 		artifactOf:       func(o client.Object) *meta.Artifact { return o.(*sourcev1.HelmChart).Status.Artifact },
 		conditionsOf:     func(o client.Object) []metav1.Condition { return o.(*sourcev1.HelmChart).Status.Conditions },
@@ -276,7 +251,6 @@ func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient 
 		cache:            valuesCache,
 		httpClient:       httpClient,
 		maxArtifactBytes: maxArtifactBytes,
-		digests:          map[string]string{},
 		newObject:        func() client.Object { return &sourcev1.OCIRepository{} },
 		artifactOf:       func(o client.Object) *meta.Artifact { return o.(*sourcev1.OCIRepository).Status.Artifact },
 		conditionsOf:     func(o client.Object) []metav1.Condition { return o.(*sourcev1.OCIRepository).Status.Conditions },

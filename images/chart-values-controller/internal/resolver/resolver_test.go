@@ -521,10 +521,9 @@ func TestReadValuesCachesNothingFromARefusedArchive(t *testing.T) {
 		maxArtifactBytes: 100 << 20,
 	}
 
-	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{
-		URL:    srv.URL,
-		Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archive)),
-	})
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
+
+	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest}, stillAt(digest))
 	if err != nil {
 		t.Fatalf("readValues returned %v", err)
 	}
@@ -726,7 +725,7 @@ func TestATransportTimeoutIsAnsweredAsPendingWhoeverHitIt(t *testing.T) {
 
 	r := &Resolver{cache: cache.New(t.TempDir(), testCacheBudget), httpClient: c, maxArtifactBytes: 1 << 20}
 
-	result, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL})
+	result, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL}, stillAt(""))
 	if err != nil {
 		t.Fatalf("readValues returned an error: %v", err)
 	}
@@ -796,7 +795,7 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 					defer wg.Done()
 
 					entered <- struct{}{}
-					got, err := r.readValues(context.Background(), tt.key(i), art)
+					got, err := r.readValues(context.Background(), tt.key(i), art, stillAt(art.Digest))
 					if err != nil {
 						t.Errorf("caller %d: readValues returned %v", i, err)
 						return
@@ -875,10 +874,9 @@ func TestAFullCacheStillAnswersTheRequest(t *testing.T) {
 		maxArtifactBytes: 1 << 20,
 	}
 
-	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{
-		URL:    srv.URL,
-		Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archive)),
-	})
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
+
+	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest}, stillAt(digest))
 	if err != nil {
 		t.Fatalf("readValues returned %v", err)
 	}
@@ -915,7 +913,7 @@ func TestTheEntryCachedOnAMissNamesTheRevisionItCameFrom(t *testing.T) {
 		maxArtifactBytes: 1 << 20,
 	}
 
-	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest})
+	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest}, stillAt(digest))
 	if err != nil {
 		t.Fatalf("readValues returned %v", err)
 	}
@@ -932,5 +930,178 @@ func TestTheEntryCachedOnAMissNamesTheRevisionItCameFrom(t *testing.T) {
 	}
 	if entry.Digest != digest {
 		t.Fatalf("the entry records %q, want the artifact revision it was extracted from %q", entry.Digest, digest)
+	}
+}
+
+// stillAt answers as a source object that still publishes the revision a download
+// came from, which is the ordinary case every test not about the revision moving
+// needs from the read that guards the write.
+func stillAt(digest string) currentDigestFunc {
+	return func(context.Context) (string, error) { return digest, nil }
+}
+
+// TestALateDownloadNeverPublishesOverANewerEntry is the interleaving the entry's
+// recorded revision alone does not close. A request misses the cache, the resolver
+// reads the source object at revision A and starts downloading; the artifact is
+// republished at B while that download runs and the controller's watch caches B
+// under the same key; the download then finishes and would write A over it. Nothing
+// repairs that afterwards — the controller's pass finds the source at B and the
+// entry claiming B is what it wrote — so the key answers requests with an earlier
+// revision's values until it expires, up to the whole TTL.
+//
+// The values in hand are still this request's answer: caching is an optimization,
+// never part of it.
+func TestALateDownloadNeverPublishesOverANewerEntry(t *testing.T) {
+	const (
+		key       = "chart-values-abc123"
+		namespace = "d8-operator-helm"
+	)
+
+	downloaded := []byte("replicaCount: 1\n")
+	republished := []byte("replicaCount: 2\n")
+
+	tests := []struct {
+		name string
+		// interfere is what happens while the download is held open, against the
+		// same backing store and the same cache directory the resolver is using.
+		interfere  func(t *testing.T, c client.Client, valuesCache *cache.Cache, digestB string)
+		wantCached bool
+		wantValues []byte
+		wantDigest string
+	}{
+		{
+			name: "the artifact republished mid-download keeps the entry the controller wrote for it",
+			interfere: func(t *testing.T, c client.Client, valuesCache *cache.Cache, digestB string) {
+				t.Helper()
+
+				// Exactly what the controller does on the watch event: the newer
+				// values under the key, and the source object now publishing B.
+				if err := valuesCache.Put(key, digestB, republished); err != nil {
+					t.Fatalf("caching the newer revision: %v", err)
+				}
+				moveArtifactTo(t, c, key, namespace, digestB)
+			},
+			wantCached: true,
+			wantValues: republished,
+			wantDigest: "B",
+		},
+		{
+			name:       "an artifact that did not move is cached as it always was",
+			interfere:  func(*testing.T, client.Client, *cache.Cache, string) {},
+			wantCached: true,
+			wantValues: downloaded,
+			wantDigest: "A",
+		},
+		{
+			name: "a source object collected mid-download leaves nothing behind",
+			interfere: func(t *testing.T, c client.Client, _ *cache.Cache, _ string) {
+				t.Helper()
+
+				// The auxiliary object expired and was collected with its entry;
+				// writing one now would leave it there with nothing watching it.
+				chart := &sourcev1.HelmChart{ObjectMeta: metav1.ObjectMeta{Name: key, Namespace: namespace}}
+				if err := c.Delete(context.Background(), chart); err != nil {
+					t.Fatalf("collecting the source object: %v", err)
+				}
+			},
+			wantCached: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			archive := buildValuesArchive(t, string(downloaded))
+			digestA := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
+			digestB := "sha256:the-revision-published-while-the-download-ran"
+
+			// The handler is the whole ordering: it says when the download is under
+			// way and does not answer until the test has done its interfering, so
+			// nothing here depends on timing.
+			started := make(chan struct{})
+			release := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				close(started)
+				<-release
+				_, _ = w.Write(archive)
+			}))
+			t.Cleanup(srv.Close)
+
+			scheme := runtime.NewScheme()
+			if err := sourcev1.AddToScheme(scheme); err != nil {
+				t.Fatalf("registering source scheme: %v", err)
+			}
+
+			chart := &sourcev1.HelmChart{
+				ObjectMeta: metav1.ObjectMeta{Name: key, Namespace: namespace},
+				Status:     sourcev1.HelmChartStatus{Artifact: &meta.Artifact{URL: srv.URL, Digest: digestA}},
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(chart).Build()
+
+			r := &Resolver{
+				client:           c,
+				cache:            cache.New(t.TempDir(), testCacheBudget),
+				httpClient:       srv.Client(),
+				namespace:        namespace,
+				maxArtifactBytes: 1 << 20,
+			}
+
+			results := make(chan Result, 1)
+			go func() {
+				got, err := r.readValues(
+					context.Background(), key,
+					&meta.Artifact{URL: srv.URL, Digest: digestA},
+					r.helmChartDigest(key),
+				)
+				if err != nil {
+					t.Errorf("readValues returned %v", err)
+				}
+				results <- got
+			}()
+
+			<-started
+			tt.interfere(t, c, r.cache, digestB)
+			close(release)
+
+			got := <-results
+			if got.Outcome != OutcomeReady || !bytes.Equal(got.Values, downloaded) {
+				t.Fatalf("the caller got %+v, want the values of the artifact it asked for %q: the cache never decides the answer", got, downloaded)
+			}
+
+			entry, ok := r.cache.GetEntry(key)
+			if ok != tt.wantCached {
+				t.Fatalf("an entry under the key = %v, want %v", ok, tt.wantCached)
+			}
+			if !tt.wantCached {
+				return
+			}
+
+			wantDigest := digestA
+			if tt.wantDigest == "B" {
+				wantDigest = digestB
+			}
+			if !bytes.Equal(entry.Values, tt.wantValues) {
+				t.Fatalf("the entry holds %q, want %q", entry.Values, tt.wantValues)
+			}
+			if entry.Digest != wantDigest {
+				t.Fatalf("the entry records %q, want %q", entry.Digest, wantDigest)
+			}
+		})
+	}
+}
+
+// moveArtifactTo republishes the chart's artifact at another revision, the way the
+// source controller does between a resolver's read and its download finishing.
+func moveArtifactTo(t *testing.T, c client.Client, name, namespace, digest string) {
+	t.Helper()
+
+	ctx := context.Background()
+	chart := &sourcev1.HelmChart{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, chart); err != nil {
+		t.Fatalf("reading the chart to republish it: %v", err)
+	}
+
+	chart.Status.Artifact.Digest = digest
+	if err := c.Update(ctx, chart); err != nil {
+		t.Fatalf("republishing the artifact: %v", err)
 	}
 }
