@@ -127,6 +127,128 @@ func TestReleasesEnsureKeepsForeignLabels(t *testing.T) {
 	}
 }
 
+// TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest pins what identifies a
+// chart pulled from a registry: the artifact digest, and nothing else. The version in
+// the history is the one helm-controller read out of the packaged Chart.yaml (with the
+// digest appended as build metadata), while the version the release asks for is the
+// registry tag, and a registry may publish a chart under a tag spelled differently
+// from its chart version. Comparing the two would leave such a release reported as
+// never finished rolling out, forever.
+func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
+	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	cases := []struct {
+		name             string
+		version          string
+		artifactRevision string
+		status           string
+		snapshot         helmv2.Snapshot
+		want             bool
+	}{
+		{
+			name:             "a tag spelled differently from the chart version",
+			version:          "v6.7.1",
+			artifactRevision: "v6.7.1@" + digest,
+			status:           "deployed",
+			snapshot:         helmv2.Snapshot{OCIDigest: digest, ChartVersion: "6.7.1+0123456789ab"},
+			want:             true,
+		},
+		{
+			name:             "a tag equal to the chart version",
+			version:          "6.7.1",
+			artifactRevision: "6.7.1@" + digest,
+			status:           "deployed",
+			snapshot:         helmv2.Snapshot{OCIDigest: digest, ChartVersion: "6.7.1+0123456789ab"},
+			want:             true,
+		},
+		{
+			// A tag that is no semantic version at all makes helm-controller record the
+			// whole revision, tag included, as the digest of the deployed artifact.
+			name:             "a recorded digest that kept the tag in front of it",
+			version:          "stable",
+			artifactRevision: "stable@" + digest,
+			status:           "deployed",
+			snapshot:         helmv2.Snapshot{OCIDigest: "stable@" + digest, ChartVersion: "6.7.1+0123456789ab"},
+			want:             true,
+		},
+		{
+			name:             "another artifact under the same tag",
+			version:          "6.7.1",
+			artifactRevision: "6.7.1@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+			status:           "deployed",
+			snapshot:         helmv2.Snapshot{OCIDigest: digest, ChartVersion: "6.7.1+0123456789ab"},
+			want:             false,
+		},
+		{
+			name:             "the artifact is deployed but the release failed",
+			version:          "6.7.1",
+			artifactRevision: "6.7.1@" + digest,
+			status:           "failed",
+			snapshot:         helmv2.Snapshot{OCIDigest: digest, ChartVersion: "6.7.1+0123456789ab"},
+			want:             false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := testApplication()
+			app.Spec.Chart.Version = tc.version
+			rel := adapter.NewApplicationRelease(app)
+
+			latest := tc.snapshot
+			latest.Status = tc.status
+
+			if got := isDesiredChartDeployed(rel, &latest, tc.artifactRevision); got != tc.want {
+				t.Fatalf("isDesiredChartDeployed(_, %+v, %q) = %v, want %v",
+					latest, tc.artifactRevision, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsDesiredChartDeployedComparesVersionsForAnArchiveChart is the other branch: a
+// release served by a HelmChart has no digest to go by, so the version the release
+// asks for is compared to the version in the history as it stands.
+func TestIsDesiredChartDeployedComparesVersionsForAnArchiveChart(t *testing.T) {
+	cases := []struct {
+		name    string
+		version string
+		latest  helmv2.Snapshot
+		want    bool
+	}{
+		{
+			name:    "the deployed version is the one asked for",
+			version: "6.7.1",
+			latest:  helmv2.Snapshot{Status: "deployed", ChartVersion: "6.7.1"},
+			want:    true,
+		},
+		{
+			name:    "another version is deployed",
+			version: "6.7.1",
+			latest:  helmv2.Snapshot{Status: "deployed", ChartVersion: "6.7.0"},
+			want:    false,
+		},
+		{
+			name:    "the release asks for no version at all",
+			version: "",
+			latest:  helmv2.Snapshot{Status: "deployed", ChartVersion: "6.7.1"},
+			want:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := testApplication()
+			app.Spec.Chart.Version = tc.version
+			rel := adapter.NewApplicationRelease(app)
+
+			if got := isDesiredChartDeployed(rel, &tc.latest, "6.7.1"); got != tc.want {
+				t.Fatalf("isDesiredChartDeployed(_, %+v, _) = %v, want %v", tc.latest, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestIsDesiredChartDeployedSurvivesASourceKindFlip pins that a revision carrying no
 // digest is read as "not the desired chart" rather than indexed into. A release
 // installed from a registry keeps an OCI digest in its history; when the repository

@@ -193,8 +193,6 @@ func isDesiredChartDeployed(rel contract.Release, latest *helmv2.Snapshot, artif
 		return false
 	}
 
-	desired := rel.ChartRef().Version
-
 	if latest.OCIDigest != "" {
 		// The history says the deployed chart came from a registry, but the revision
 		// the source now offers need not: a version the index republishes as an
@@ -202,18 +200,37 @@ func isDesiredChartDeployed(rel contract.Release, latest *helmv2.Snapshot, artif
 		// with no digest to compare against. That is a chart other than the deployed
 		// one, not a reason to index into a revision that has no digest part.
 		_, latestDigest, ok := strings.Cut(artifactRevision, "@")
-		if !ok || len(latestDigest) < 19 {
+		if !ok {
 			return false
 		}
 
-		desiredVersion := desired + "+" + latestDigest[7:19]
-
-		return latest.OCIDigest == latestDigest && latest.ChartVersion == desiredVersion
+		// The digest settles it on its own: the revision comes from the internal source
+		// object built for exactly the tag this release asks for, and it is only read
+		// once that object has observed the spec carrying that tag, so an artifact with
+		// this digest is the artifact the release wants. The chart version cannot stand
+		// in for the tag: helm-controller records the version out of the packaged
+		// Chart.yaml, and a registry is free to publish that chart under a tag spelled
+		// differently (v1.2.3 for chart version 1.2.3, say).
+		return recordedOCIDigest(latest.OCIDigest) == latestDigest
 	}
 
-	if desired != "" {
+	if desired := rel.ChartRef().Version; desired != "" {
 		return latest.ChartVersion == desired
 	}
 
 	return false
+}
+
+// recordedOCIDigest is the artifact digest out of a history entry, in the shape the
+// source revision spells it. helm-controller stores the digest part of the revision
+// when the tag parses as a semantic version and the whole `<tag>@<algorithm>:<digest>`
+// revision when it does not (mutateChartWithSourceRevision in helm-controller's
+// internal/controller/helmrelease_controller.go), so a tag that survived into the
+// recorded value is cut off here to leave the digest in both cases.
+func recordedOCIDigest(ociDigest string) string {
+	if _, digest, ok := strings.Cut(ociDigest, "@"); ok {
+		return digest
+	}
+
+	return ociDigest
 }
