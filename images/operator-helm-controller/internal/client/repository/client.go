@@ -92,7 +92,10 @@ type FetchOptions struct {
 // examined" would freeze the probe that never reached a verdict. A tag whose entry is
 // marked for re-examination is asked for the same reason and in the same way: the
 // verdict next to the mark is the one a reader still deploys from, and the mark says
-// it is no longer trusted. Otherwise a recorded media type is authoritative; an
+// it is no longer trusted. A tag recorded as removed from the repository is asked too:
+// the entry survives only because a consumer references it, and the listing this is
+// asked about offers the tag again, so there is new content behind a verdict that was
+// reached about content that was deleted. Otherwise a recorded media type is authoritative; an
 // unsupported artifact is a verdict and is not re-examined until a full pass; anything
 // else — never seen, or seen without a verdict (an entry written before media types
 // were recorded) — is examined.
@@ -108,6 +111,8 @@ func (o FetchOptions) NeedsExamination(chartName, tag string) bool {
 	case known.ReexaminationRequired:
 		return true
 	case known.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending:
+		return true
+	case known.UnavailableReason == helmv1alpha1.UnavailableReasonRemovedFromRepository:
 		return true
 	case known.MediaType != "":
 		return false

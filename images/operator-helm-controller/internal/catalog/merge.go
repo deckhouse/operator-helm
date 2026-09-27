@@ -54,9 +54,12 @@ import (
 // half of it is now done. A version this pass put a verdict on has the mark cleared —
 // the question it asked has been answered — and a version this pass deferred keeps it,
 // because that is the work the passes after this one have to finish. A version that is
-// gone from the repository has it cleared too: there is nothing left to examine, and
-// the RemovedFromRepository entry a consumer keeps alive must not carry a request for a
-// pass that can never clear it.
+// gone from the repository has it cleared too: a pass that saw the whole repository and
+// did not list the version has answered the question the mark asked — there is no
+// verdict left to refresh — and the RemovedFromRepository entry a consumer keeps alive
+// must not go on claiming work in a status a user reads. Should the tag be pushed again,
+// the pass that lists it examines it on the strength of that reason alone
+// (FetchOptions.NeedsExamination), mark or no mark.
 func mergeChartVersions(
 	fetched []repoclient.ChartVersion,
 	current []helmv1alpha1.ChartVersion,

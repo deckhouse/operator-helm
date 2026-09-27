@@ -997,23 +997,24 @@ func TestAnIncompletePassPrunesNothing(t *testing.T) {
 	}
 }
 
-// TestAForcedPassMarksTheVersionsItDidNotReachForReexamination pins where the work a
-// forced refresh did not finish is recorded. A forced read ignores every recorded
-// verdict, which is the only way a tag that was re-pushed with different content is
-// ever looked at again; an ordinary pass skips it, because its media type is recorded
-// and that is what keeps a steady-state synchronization cheap. So a forced read that
-// ran out of its budget leaves a question open for every version it did not reach, and
-// the catalog entry of that version is the only place the question can wait: the force
-// annotation is consumed by the pass it triggered, and the count in the repository
-// status names no versions.
+// TestAForcedPassKeepsTheMarkOnTheVersionsItDidNotReach pins where the work a forced
+// refresh did not finish waits. A forced read ignores every recorded verdict, which is
+// the only way a tag that was re-pushed with different content is ever looked at again;
+// an ordinary pass skips it, because its media type is recorded and that is what keeps a
+// steady-state synchronization cheap. So a forced read that ran out of its budget leaves
+// a question open for every version it did not reach, and the catalog entry of that
+// version is the only place the question can wait: the force annotation is consumed by
+// the pass it triggered, and the count in the repository status names no versions.
 //
-// The request is written onto every recorded version before the read (MarkForReexamination),
-// so what the merge decides here is which half of it this pass has done.
+// The request is written onto every recorded version before the read
+// (MarkForReexamination), so the merge never sets the mark; what it decides is which
+// half of the request this pass has done — cleared on what it examined, kept on what it
+// deferred.
 //
 // The mark is not a verdict. The entry keeps its media type and stays usable while it
 // carries the mark, so a release already deploying that version resolves it exactly as
 // before while the refresh finishes over the next passes.
-func TestAForcedPassMarksTheVersionsItDidNotReachForReexamination(t *testing.T) {
+func TestAForcedPassKeepsTheMarkOnTheVersionsItDidNotReach(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
 	c := newClient(t)
@@ -1047,7 +1048,7 @@ func TestAForcedPassMarksTheVersionsItDidNotReachForReexamination(t *testing.T) 
 
 	marked := versionsByName(t, c, key)
 	if !marked["6.7.1"].ReexaminationRequired {
-		t.Fatal("a forced pass must mark the version it did not reach: nothing else re-examines a recorded media type")
+		t.Fatal("a forced pass must keep the mark on the version it did not reach: nothing else re-examines a recorded media type")
 	}
 	if marked["6.7.0"].ReexaminationRequired {
 		t.Fatal("a version the forced pass examined must not be marked")
@@ -1088,12 +1089,13 @@ func TestAForcedPassMarksTheVersionsItDidNotReachForReexamination(t *testing.T) 
 	}
 }
 
-// TestAnUnforcedIncompletePassMarksNothing is the bound on the rule above. An ordinary
-// pass does not re-examine a recorded verdict in the first place, so the versions it
-// did not reach are owed nothing: marking them would send every later pass back over a
-// catalog that is already current and turn every incomplete synchronization of a large
-// repository into a full re-examination of it.
-func TestAnUnforcedIncompletePassMarksNothing(t *testing.T) {
+// TestAnIncompletePassMarksNothingItself is the bound on the rule above. The merge only
+// ever clears the mark or keeps what is already recorded; it never puts one on. An
+// incomplete pass over a catalog nothing marked therefore leaves it unmarked, whatever
+// it failed to reach — a pass that reads no verdict it is entitled to skip owes nothing,
+// and marking what it ran out of budget for would turn every incomplete synchronization
+// of a large repository into a full re-examination of it.
+func TestAnIncompletePassMarksNothingItself(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
 	c := newClient(t)
@@ -1114,7 +1116,7 @@ func TestAnUnforcedIncompletePassMarksNothing(t *testing.T) {
 	}
 
 	if versionsByName(t, c, key)["6.7.1"].ReexaminationRequired {
-		t.Fatal("an unforced pass must mark nothing: it never promised to re-examine a recorded verdict")
+		t.Fatal("the merge must mark nothing: only a forced refresh writes the mark, and it writes it before the read")
 	}
 }
 
@@ -1180,13 +1182,18 @@ func TestAMarkedVersionTheRepositoryNoLongerOffersIsReportedRemoved(t *testing.T
 	}
 }
 
-// TestForcingARefreshLeavesAVersionTheRepositoryNoLongerOffersUnmarked pins the one
-// verdict a forced refresh must not ask about. A version the repository stopped
-// offering is kept only because a consumer still references it, and no pass can ever
-// examine it again, so a mark put on it would sit in the status of a chart a user reads
-// claiming work that nothing is going to do. The merge keeps such an entry unmarked for
-// the same reason; the request written before the read must not reintroduce it.
-func TestForcingARefreshLeavesAVersionTheRepositoryNoLongerOffersUnmarked(t *testing.T) {
+// TestForcingARefreshMarksARetainedRemovedVersionAndALaterPassClearsIt pins that a
+// forced refresh exempts nothing it recorded. A version the repository stopped offering
+// is retained because a consumer still deploys it, and it keeps the media type of the
+// artifact that was deleted — so re-pushing that exact tag is precisely the change a
+// forced refresh exists to notice. Exempting it would let a forced pass that ran out of
+// its budget leave the entry unmarked and unexamined, and the ordinary pass after it
+// would republish the deleted artifact's media type without ever probing the tag.
+//
+// The mark is not a dead end: this repository still does not offer the version, and the
+// pass that says so clears it while reporting the version removed, so nothing claims
+// work forever in a status a user reads.
+func TestForcingARefreshMarksARetainedRemovedVersionAndALaterPassClearsIt(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
 	c := newClient(t)
@@ -1229,11 +1236,69 @@ func TestForcingARefreshLeavesAVersionTheRepositoryNoLongerOffersUnmarked(t *tes
 	}
 
 	marked := versionsByName(t, c, key)
-	if marked["6.7.0"].ReexaminationRequired {
-		t.Fatal("a version the repository no longer offers must not be marked: no pass can ever clear it")
+	if !marked["6.7.0"].ReexaminationRequired {
+		t.Fatal("a retained removed version must be marked too: a re-push of its tag is what the refresh looks for")
 	}
 	if !marked["6.7.1"].ReexaminationRequired {
 		t.Fatal("the version the repository still offers must carry the request")
+	}
+	if got := marked["6.7.0"]; got.MediaType != mediaType || got.UnavailableReason != helmv1alpha1.UnavailableReasonRemovedFromRepository {
+		t.Fatalf("marked version = %+v, want the recorded entry untouched: the consumer still deploys from it", got)
+	}
+
+	// The repository still does not offer 6.7.0, and the pass that sees the whole
+	// repository says so: the mark ends there rather than sitting in the status forever.
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{dropped}); err != nil {
+		t.Fatalf("the pass after the mark returned %v", err)
+	}
+
+	cleared := versionsByName(t, c, key)
+	if cleared["6.7.0"].ReexaminationRequired {
+		t.Fatal("a pass that still does not list the version has answered the mark and must clear it")
+	}
+	if cleared["6.7.0"].UnavailableReason != helmv1alpha1.UnavailableReasonRemovedFromRepository {
+		t.Fatalf("version = %+v, want the version still reported removed", cleared["6.7.0"])
+	}
+}
+
+// TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked pins the one entry the
+// request is not written onto, and it is left out because it already asks for
+// everything the mark would ask for: a version whose probe failed is re-examined by
+// every pass (FetchOptions.NeedsExamination), so marking it buys a status write and
+// nothing else. It also costs something: the probe order asks the stalling tags last,
+// after the never-seen ones and the ones a refresh owes, and a mark would move this tag
+// out of that last group and let a block of permanently stalling tags spend the budget
+// ahead of work that can finish.
+func TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	c := newClient(t)
+	cat := adapter.NewApplicationCatalog(c)
+	repo := applicationRepo("team-a", "stable")
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+
+	pending := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
+		{
+			Version:            semver.MustParse("6.7.0"),
+			UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
+			UnavailableMessage: "GET https://registry.example.invalid/v2/: dial tcp: i/o timeout",
+		},
+	}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{pending}); err != nil {
+		t.Fatalf("the pass whose probe failed returned %v", err)
+	}
+
+	if err := cat.MarkForReexamination(context.Background(), repo); err != nil {
+		t.Fatalf("marking the recorded versions returned %v", err)
+	}
+
+	marked := versionsByName(t, c, key)
+	if marked["6.7.0"].ReexaminationRequired {
+		t.Fatal("a version still awaiting a verdict is re-examined anyway: the mark only costs a write")
+	}
+	if !marked["6.7.1"].ReexaminationRequired {
+		t.Fatal("the version with a verdict to distrust must carry the request")
 	}
 }
 

@@ -128,15 +128,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	in.Forced = repo.ForceReconcileRequired()
 
+	// forceRecorded says the request may be taken off the object: the catalog now
+	// carries it, so the refresh survives whatever happens to the annotation. A pass
+	// that never got as far as recording it leaves this false and keeps the request —
+	// as does a pass that never attempted a synchronization at all.
+	forceRecorded := false
+
 	// A rename left unfinished must stop the synchronization: the object under the
 	// new name still has an empty status, and writing the fetched versions into it
 	// would make the next pass skip the status carry-over and delete the old object,
 	// taking with it the only copy of a version a consumer still holds.
-	// forceRecorded says the request may be taken off the object: the catalog now
-	// carries it, so the refresh survives whatever happens to the annotation. A pass
-	// that never got as far as recording it leaves this false and keeps the request.
-	forceRecorded := false
-
 	if in.MigrateErr == nil && in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
 		ShouldAttempt(in.Current, in.Generation, in.Now, in.Forced) {
 		if err := r.markSyncInProgress(ctx, repo, in.Forced); err != nil {
@@ -162,7 +163,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		in.Catalog = &outcome.Catalog
 	}
 
-	return r.finish(ctx, repo, in, in.Attempted && forceRecorded)
+	return r.finish(ctx, repo, in, forceRecorded)
 }
 
 // finish applies the decision and consumes the force annotation once an attempt has

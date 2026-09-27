@@ -224,9 +224,10 @@ func resolveChartVersions(
 		// entry is recorded and still has to be examined again, and it is exactly that
 		// combination the examination order has to put last.
 		recorded bool
-		// stale says the recorded verdict was marked for re-examination by a forced pass
-		// that did not reach this tag. Such a tag has an answer, unlike a never seen one,
-		// but the answer is known to be out of date, unlike a stalling one.
+		// stale says the recorded verdict carries the mark a forced refresh writes onto
+		// everything the catalog holds before the registry is read, and that no pass has
+		// answered yet. Such a tag has an answer, unlike a never seen one, but the answer
+		// is known to be out of date, unlike a stalling one.
 		stale bool
 	}
 
@@ -421,21 +422,17 @@ func resolveChartVersions(
 	return versions, unexamined, nil
 }
 
-// carryKnown reuses a recorded verdict. A tag that is listed again is by definition no
-// longer removed from the repository, so that marker - and the message describing the
-// absence it no longer holds - is dropped here: presence in the listing is registry
-// truth, which is this client's domain.
+// carryKnown reuses a recorded verdict. It is reached only for a tag NeedsExamination
+// answers no for, which is never one recorded as removed from the repository: a tag the
+// listing offers again has content behind it that the recorded verdict was not reached
+// about, so it is examined rather than carried, and the removed marker is dropped by the
+// fresh verdict that replaces it.
 func carryKnown(version *semver.Version, known KnownVersion) *ChartVersion {
-	reason, message := known.UnavailableReason, known.UnavailableMessage
-	if reason == helmv1alpha1.UnavailableReasonRemovedFromRepository {
-		reason, message = "", ""
-	}
-
 	return &ChartVersion{
 		Version:            version,
 		MediaType:          known.MediaType,
-		UnavailableReason:  reason,
-		UnavailableMessage: message,
+		UnavailableReason:  known.UnavailableReason,
+		UnavailableMessage: known.UnavailableMessage,
 	}
 }
 

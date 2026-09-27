@@ -491,25 +491,30 @@ func TestFetchChartsOCIFullIgnoresKnown(t *testing.T) {
 	}
 }
 
-func TestFetchChartsOCIClearsRemovedFromRepository(t *testing.T) {
+// TestFetchChartsOCIReexaminesATagRecordedAsRemoved covers the one way a tag comes
+// back. A version recorded as removed is kept only because a consumer references it,
+// and the media type next to that reason is the deleted artifact's. A listing that
+// offers the tag again therefore describes content that was pushed after the verdict
+// was reached, and carrying the recorded verdict forward would republish the media type
+// of an artifact the registry no longer holds — with nothing left to correct it, since
+// the entry no longer looks removed to any later pass either.
+func TestFetchChartsOCIReexaminesATagRecordedAsRemoved(t *testing.T) {
 	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
 	reg.reset()
 
+	// The recorded media type is the one the deleted artifact had, so a carried verdict
+	// is distinguishable from a fresh one.
 	known := KnownCharts{"podinfo": KnownVersions{"1.0.0": {
-		MediaType:          currentChartMediaType,
+		MediaType:          legacyChartMediaType,
 		UnavailableReason:  helmv1alpha1.UnavailableReasonRemovedFromRepository,
 		UnavailableMessage: "no longer offered by the repository",
 	}}}
 
 	version := versionByTag(t, fetchOne(t, host, FetchOptions{Known: known}), "1.0.0")
 
-	// This must be the carry path, not a re-examination that happens to come back
-	// clean: a NeedsExamination bug that sent RemovedFromRepository down the examine
-	// path would also clear the reason, so the assertion above alone is not evidence
-	// of which path ran.
-	if got := reg.manifestGets("1.0.0"); got != 0 {
-		t.Fatalf("a tag carried from a known verdict must not be requested, got %d requests", got)
+	if got := reg.manifestGets("1.0.0"); got != 1 {
+		t.Fatalf("a tag the registry offers again must be examined once, got %d requests", got)
 	}
 	if version.UnavailableReason != "" {
 		t.Fatalf("a listed tag must not stay removed, got reason %q", version.UnavailableReason)
@@ -518,7 +523,7 @@ func TestFetchChartsOCIClearsRemovedFromRepository(t *testing.T) {
 		t.Fatalf("clearing the removed marker must also clear its message, got %q", version.UnavailableMessage)
 	}
 	if version.MediaType != currentChartMediaType {
-		t.Fatalf("the recorded media type must survive the carry, got %q", version.MediaType)
+		t.Fatalf("media type = %q, want the one the re-pushed artifact holds (%q)", version.MediaType, currentChartMediaType)
 	}
 }
 
@@ -950,8 +955,8 @@ func markAll(known KnownVersions) KnownVersions {
 // nextKnown is the state the next pass starts from, the way the catalog builds it:
 // every version this pass reached carries its fresh verdict and no mark, every version
 // it did not reach keeps what was recorded for it, mark included.
-// internal/catalog/merge.go owns this rule — TestAForcedPassMarksTheVersionsItDidNotReach-
-// ForReexamination pins it there, and TestSynchronizerSyncFinishesAForcedRefreshOverSeveral-
+// internal/catalog/merge.go owns this rule — TestAForcedPassKeepsTheMarkOnTheVersionsIt-
+// DidNotReach pins it there, and TestSynchronizerSyncFinishesAForcedRefreshOverSeveral-
 // IncompletePasses drives the real merge over a whole refresh — and it is restated here
 // only so the two passes of the scenario below can be run against a real registry.
 func nextKnown(previous KnownVersions, chart Chart) KnownVersions {

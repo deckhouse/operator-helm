@@ -106,6 +106,17 @@ func TestNeedsExaminationPerRecordedVerdict(t *testing.T) {
 			}},
 			want: true,
 		},
+		{
+			// The entry survives only because a consumer references it, and its media type
+			// belongs to an artifact the registry deleted. Being asked about the tag at all
+			// means the listing offers it again, so there is new content behind that verdict
+			// and the tag has to be probed; carrying it forward would republish the deleted
+			// artifact's media type and drop the removed marker that is the only sign
+			// anything is wrong with it.
+			name:  "a version the repository removed and now lists again",
+			known: KnownVersions{"1.0.0": {MediaType: mediaType, UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository}},
+			want:  true,
+		},
 		{name: "an entry written before media types were recorded", known: KnownVersions{"1.0.0": {}}, want: true},
 		{
 			name:  "a full pass ignores every verdict",

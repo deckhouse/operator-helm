@@ -131,9 +131,21 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (rep
 //
 // The mark is not a verdict: an entry keeps its media type and stays deployable while
 // it carries one, so nothing a release resolves changes between the mark and the pass
-// that answers it. A version the repository no longer offers is left alone — it is kept
-// only because a consumer still references it, no pass can ever examine it again, and a
-// mark nothing can clear would make the repository re-examine it forever.
+// that answers it.
+//
+// A version the repository no longer offers is marked like any other. It is retained
+// only because a consumer references it, but its recorded verdict is exactly as stale
+// as the rest: a tag that was deleted and pushed again is the re-pushed tag a forced
+// refresh exists for, and leaving it unmarked would let an ordinary pass carry the old
+// media type forward the moment the registry lists it again. The mark is not a dead end
+// either — a pass that sees the whole repository and still does not list the version
+// clears it while reporting the version removed (mergeChartVersions) — and it costs no
+// request while the version stays unlisted, because the probe candidates are built from
+// the registry listing alone.
+//
+// A version that is already awaiting a verdict (ResolvePending) is left alone: every
+// pass re-examines it anyway, so the mark would buy nothing and would move the tag out
+// of the group the probe order deliberately asks last.
 //
 // Objects that already carry the mark everywhere are not patched, so forcing a refresh
 // on an unreachable registry twice in a row costs one write, not two.
@@ -150,7 +162,7 @@ func (t *typed[C, CL]) MarkForReexamination(ctx context.Context, repo contract.R
 		marked := false
 		for i := range status.Versions {
 			if status.Versions[i].ReexaminationRequired ||
-				status.Versions[i].UnavailableReason == helmv1alpha1.UnavailableReasonRemovedFromRepository {
+				status.Versions[i].UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending {
 				continue
 			}
 

@@ -66,13 +66,14 @@ func (s *Synchronizer) MigrateNames(ctx context.Context, repo contract.Repositor
 // mirror it. The two phases are reported separately: a fetch failure is about the
 // remote, a catalog failure is about this cluster.
 //
-// A forced pass starts by writing the request into the catalog, before anything is
-// asked of the registry. The force annotation is consumed by the pass that attempts
-// the read, so this write is the only thing that makes the request outlive it: without
-// it a registry that is briefly unreachable ends with the annotation gone and no
-// version marked, and every pass after that skips the recorded verdicts — including
-// the re-pushed tag the refresh was asked for. Failing to write it is reported before
-// the fetch precisely so the caller keeps the annotation and retries the whole thing.
+// A forced pass over an OCI repository starts by writing the request into the catalog,
+// before anything is asked of the registry. The force annotation is consumed by the
+// pass that attempts the read, so this write is the only thing that makes the request
+// outlive it: without it a registry that is briefly unreachable ends with the annotation
+// gone and no version marked, and every pass after that skips the recorded verdicts —
+// including the re-pushed tag the refresh was asked for. Failing to write it is reported
+// before the fetch precisely so the caller keeps the annotation and retries the whole
+// thing.
 func (s *Synchronizer) Sync(
 	ctx context.Context,
 	repo contract.Repository,
@@ -80,7 +81,16 @@ func (s *Synchronizer) Sync(
 ) SyncOutcome {
 	forced := repo.ForceReconcileRequired()
 
-	if forced {
+	// A helm repository is marked for nothing: its client ignores FetchOptions outright
+	// (the index is one document carrying every version, and media types are not probed
+	// incrementally there), so no pass ever skips a recorded verdict and no mark can
+	// change what the next read does. Writing one would rewrite the whole version list of
+	// every chart object the index publishes — hundreds, on a large index — and rewrite
+	// them again to clear it, where an unchanged index produces no status diff at all; an
+	// index fetch that then failed would leave every version of every chart claiming a
+	// re-examination no pass is going to do. The request is still recorded as far as it
+	// goes: there is nothing to record, so nothing is waiting on the annotation either.
+	if forced && repoType == chartsource.OCI {
 		if err := s.catalog.MarkForReexamination(ctx, repo); err != nil {
 			// ForceRequestRecorded stays false: nothing holds the request but the
 			// annotation, and dropping it here would lose the refresh entirely.

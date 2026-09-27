@@ -58,10 +58,22 @@ func (s *recordingRepoClient) FetchCharts(_ context.Context, _ string, _ *repocl
 func newSynchronizer(t *testing.T, stub stubRepoClient, objects ...client.Object) (*Synchronizer, client.Client) {
 	t.Helper()
 
+	return newSynchronizerWithInterceptor(t, stub, interceptor.Funcs{}, objects...)
+}
+
+func newSynchronizerWithInterceptor(
+	t *testing.T,
+	stub stubRepoClient,
+	funcs interceptor.Funcs,
+	objects ...client.Object,
+) (*Synchronizer, client.Client) {
+	t.Helper()
+
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objects...).
+		WithInterceptorFuncs(funcs).
 		WithStatusSubresource(&helmv1alpha1.HelmClusterAddonChart{}, &helmv1alpha1.HelmClusterAddonRepository{}).
 		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonChart, func(obj client.Object) []string {
 			addon := obj.(*helmv1alpha1.HelmClusterAddon)
@@ -324,6 +336,140 @@ func TestSynchronizerSyncRecordsAForcedRefreshBeforeTheRegistryIsRead(t *testing
 	}
 	if got := chartStatus(t, c, forced.Name, "podinfo").Versions; len(got) != 1 || got[0].ReexaminationRequired {
 		t.Fatalf("versions after the refresh = %+v, want the mark cleared by the pass that answered it", got)
+	}
+}
+
+// TestSynchronizerSyncRecordsAForcedRefreshOnlyWhereItMeansSomething pins which
+// repositories pay for the durable form of the request. The mark exists to stop a later
+// pass from skipping a recorded verdict, and only the OCI client skips anything: the
+// helm client ignores FetchOptions outright, because the index is one document carrying
+// every version and media types are not probed incrementally there. Marking a helm
+// repository would rewrite the whole version list of every chart the index publishes —
+// hundreds of status writes on a large index, and as many again to clear them — where an
+// unchanged index produces no status diff at all, and an index fetch that failed would
+// leave every version of every chart claiming a re-examination no pass is going to do.
+//
+// The request counts as recorded either way: a repository with nothing to record has
+// nothing left waiting on the annotation, and keeping it would force the repository on
+// every pass forever.
+func TestSynchronizerSyncRecordsAForcedRefreshOnlyWhereItMeansSomething(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	tests := []struct {
+		name     string
+		repoType chartsource.Kind
+		wantMark bool
+	}{
+		{name: "an oci repository, whose passes skip recorded verdicts", repoType: chartsource.OCI, wantMark: true},
+		{name: "a helm repository, whose client ignores what is recorded", repoType: chartsource.Helm, wantMark: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			forced := testRepository()
+			forced.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+			chart := existingChart(forced.Name, "podinfo",
+				helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: mediaType},
+			)
+
+			patches := 0
+			// The read fails, so the only writes this pass can make are the marking ones:
+			// the catalog is never reconciled, and every patch counted here is the request
+			// being written down.
+			service, c := newSynchronizerWithInterceptor(t,
+				stubRepoClient{err: errors.New("dial tcp: connection refused")},
+				interceptor.Funcs{
+					SubResourcePatch: func(
+						ctx context.Context,
+						cl client.Client,
+						sub string,
+						obj client.Object,
+						patch client.Patch,
+						opts ...client.SubResourcePatchOption,
+					) error {
+						if _, ok := obj.(*helmv1alpha1.HelmClusterAddonChart); ok {
+							patches++
+						}
+
+						return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+					},
+				}, forced, chart)
+
+			outcome := service.Sync(context.Background(), adapter.NewAddonRepository(forced), test.repoType)
+			if outcome.Fetch.Err == nil {
+				t.Fatal("the fixture must reach a failed forced read")
+			}
+			if !outcome.ForceRequestRecorded {
+				t.Fatal("there is nothing left to record: the caller must be free to consume the annotation")
+			}
+
+			wantPatches := 0
+			if test.wantMark {
+				wantPatches = 1
+			}
+			if patches != wantPatches {
+				t.Fatalf("chart status patches = %d, want %d", patches, wantPatches)
+			}
+
+			versions := chartStatus(t, c, forced.Name, "podinfo").Versions
+			if len(versions) != 1 {
+				t.Fatalf("recorded versions = %+v, want the fixture's single version", versions)
+			}
+			if versions[0].ReexaminationRequired != test.wantMark {
+				t.Fatalf("ReexaminationRequired = %t, want %t", versions[0].ReexaminationRequired, test.wantMark)
+			}
+		})
+	}
+}
+
+// TestSynchronizerSyncReportsAForcedRefreshRecordedWhenTheKnownListingFails covers the
+// gap between the two catalog reads a forced pass makes. The request is written first
+// and the recorded verdicts are read after it; a failure of that second read is a
+// cluster-side failure of this pass, not of the refresh, which is already in the
+// catalog. Reporting the request as unrecorded there would keep the annotation and force
+// the whole repository again on the next pass, for work the passes that follow are
+// already going to do.
+func TestSynchronizerSyncReportsAForcedRefreshRecordedWhenTheKnownListingFails(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	forced := testRepository()
+	forced.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+	chart := existingChart(forced.Name, "podinfo",
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: mediaType},
+	)
+
+	sentinel := errors.New("synthetic chart list failure")
+	// Marking lists the charts too, so only the listing after it may fail: the request
+	// has to have landed for this to be about anything.
+	lists := 0
+	service, c := newSynchronizerWithInterceptor(t, stubRepoClient{}, interceptor.Funcs{
+		List: func(ctx context.Context, wc client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*helmv1alpha1.HelmClusterAddonChartList); ok {
+				lists++
+				if lists > 1 {
+					return sentinel
+				}
+			}
+
+			return wc.List(ctx, list, opts...)
+		},
+	}, forced, chart)
+
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(forced), chartsource.OCI)
+
+	if !errors.Is(outcome.Catalog.Err, sentinel) {
+		t.Fatalf("the fixture must fail the listing the recorded verdicts are read from, got %v", outcome.Catalog.Err)
+	}
+	if outcome.FetchAttempted {
+		t.Fatal("the registry is never contacted once the recorded verdicts cannot be read")
+	}
+	if !outcome.ForceRequestRecorded {
+		t.Fatal("the request landed before this failure: keeping the annotation would force the repository again for nothing")
+	}
+
+	marked := chartStatus(t, c, forced.Name, "podinfo").Versions
+	if len(marked) != 1 || !marked[0].ReexaminationRequired {
+		t.Fatalf("recorded versions = %+v, want the refresh written onto them before the failure", marked)
 	}
 }
 
