@@ -253,17 +253,17 @@ func TestEvaluateStepFailureOwnsReadyAlone(t *testing.T) {
 
 // TestEvaluateStepFailureAwaitingAWatchPromisesNoRetry is the other half of the
 // rule above: the same step failure, but one nothing was scheduled for — the
-// release is parked until a watch fires or the timer the step asked for runs out.
-// Reporting it as a retry would name an attempt no pass is making, which is how a
-// release applied before its repository's first sync reads to whoever looks at it.
+// release is parked until the watch on the repository kinds fires. This is the
+// shape the step that resolves the internal repository produces when the release
+// was applied before its repository, and reporting it as a retry would name an
+// attempt no pass is making.
 func TestEvaluateStepFailureAwaitingAWatchPromisesNoRetry(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = StepFailed{Failure{
-		Reason:       helmv1alpha1.ReasonChartFetchFailed,
-		Message:      "Failed to resolve the desired chart version",
-		Err:          errors.New("repository has not synced yet"),
-		AwaitsWatch:  true,
-		RequeueAfter: time.Minute,
+		Reason:      helmv1alpha1.ReasonFailed,
+		Message:     "Failed to get internal repository",
+		Err:         errors.New(`getting internal repository: helmapplicationrepositories.helm.deckhouse.io "example" not found`),
+		AwaitsWatch: true,
 	}}
 
 	decision := Evaluate(in)
@@ -275,6 +275,54 @@ func TestEvaluateStepFailureAwaitingAWatchPromisesNoRetry(t *testing.T) {
 	}
 	if decision.Err != nil {
 		t.Fatalf("Err = %v, want none: a watch brings the release back", decision.Err)
+	}
+}
+
+// TestEvaluateUnresolvedSourceAwaitingASyncPromisesNoRetry is the same rule on the
+// path the two waits actually take: resolving the chart version does not fail the
+// pass, it ends it at the chart with the source unresolved, so the verdict reaches
+// the progress condition instead of the step-failure branch. Both waits are on the
+// repository's first sync of its current spec, which no pass of this controller is
+// retrying — the timer the failure carries is the whole schedule, and losing it
+// parks the release until something else happens to write to it.
+func TestEvaluateUnresolvedSourceAwaitingASyncPromisesNoRetry(t *testing.T) {
+	tests := []struct {
+		name  string
+		cause error
+	}{
+		{name: "the catalog of the chart is not written yet", cause: errCatalogAwaited},
+		{name: "the repository has reached no verdict on the version", cause: errVersionResolvePending},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := baseInputs()
+			in.Outcome = ChartReached{Internal: SourceUnresolved{Failure: Failure{
+				Reason:      helmv1alpha1.ReasonChartFetchFailed,
+				Message:     "Failed to resolve the desired chart version",
+				Err:         tt.cause,
+				AwaitsWatch: true,
+				RetryAfter:  awaitSyncInterval,
+			}}}
+
+			decision := Evaluate(in)
+
+			progress := condition(t, decision, helmv1alpha1.ConditionTypeReconciling)
+			if progress.Status != metav1.ConditionTrue || progress.Reason != helmv1alpha1.ReasonReconciling {
+				t.Fatalf("Reconciling = %s/%s, want True/%s: nothing is being retried",
+					progress.Status, progress.Reason, helmv1alpha1.ReasonReconciling)
+			}
+			if progress.Message != "Waiting for what the failed step needs" {
+				t.Fatalf("Reconciling message = %q, want one naming the wait rather than a retry", progress.Message)
+			}
+			if decision.Err != nil {
+				t.Fatalf("Err = %v, want none: the wait is expected and rides the timer", decision.Err)
+			}
+			if decision.RequeueAfter != awaitSyncInterval {
+				t.Fatalf("RequeueAfter = %v, want %v: without it the release waits for an event nobody sends",
+					decision.RequeueAfter, awaitSyncInterval)
+			}
+		})
 	}
 }
 

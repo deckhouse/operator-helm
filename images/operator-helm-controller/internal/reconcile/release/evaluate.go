@@ -461,7 +461,9 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 // A bad input outranks it for the same reason a terminal failure does, without being
 // one: no pass is on its way to what the spec asks for, because what it asks for is
 // not there. Promising a retry would tell whoever mistyped a chart version that the
-// controller is working on it.
+// controller is working on it. It is checked before the wait below for the same
+// reason it is checked beside stalled: a spec that asks for something absent is not
+// waiting for anything, whatever else the failure carries.
 func evaluateReconciling(verdict conditionState, found, stalled bool) (Failure, bool) {
 	if stalled || !found || verdict.Failure.BadInput {
 		return Failure{}, false
@@ -471,6 +473,20 @@ func evaluateReconciling(verdict conditionState, found, stalled bool) (Failure, 
 	case metav1.ConditionUnknown:
 		return Failure{Reason: verdict.Reason, Message: verdict.Message}, true
 	case metav1.ConditionFalse:
+		if verdict.Failure.AwaitsWatch {
+			// The same honesty a step failure awaiting a watch gets, for the verdict this
+			// pass produced itself: the source could not be resolved because the repository
+			// has yet to sync, and a watch or the timer the step asked for brings the release
+			// back when it has. No pass is retrying anything in the meantime, so the plain
+			// Reconciling reason reports work still in flight without naming an attempt
+			// nobody made. Only a failure says this — an internal object that is merely not
+			// ready carries none, and keeps its own words.
+			return Failure{
+				Reason:  helmv1alpha1.ReasonReconciling,
+				Message: "Waiting for what the failed step needs",
+			}, true
+		}
+
 		return Failure{
 			Reason:  helmv1alpha1.ReasonProgressingWithRetry,
 			Message: "Retrying after a failed reconcile",
