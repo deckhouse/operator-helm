@@ -312,7 +312,7 @@ func TestEvaluateUnresolvedSourceAwaitingASyncPromisesNoRetry(t *testing.T) {
 				t.Fatalf("Reconciling = %s/%s, want True/%s: nothing is being retried",
 					progress.Status, progress.Reason, helmv1alpha1.ReasonReconciling)
 			}
-			if progress.Message != "Waiting for what the failed step needs" {
+			if progress.Message != "Waiting for the repository to resolve the chart version" {
 				t.Fatalf("Reconciling message = %q, want one naming the wait rather than a retry", progress.Message)
 			}
 			if decision.Err != nil {

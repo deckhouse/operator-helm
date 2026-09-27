@@ -475,15 +475,16 @@ func evaluateReconciling(verdict conditionState, found, stalled bool) (Failure, 
 	case metav1.ConditionFalse:
 		if verdict.Failure.AwaitsWatch {
 			// The same honesty a step failure awaiting a watch gets, for the verdict this
-			// pass produced itself: the source could not be resolved because the repository
-			// has yet to sync, and a watch or the timer the step asked for brings the release
-			// back when it has. No pass is retrying anything in the meantime, so the plain
+			// pass produced itself. Nothing failed here — the repository has yet to publish
+			// its catalog or to reach a verdict on the version — so the message names the
+			// wait rather than a step, and a watch or the timer the step asked for brings
+			// the release back when the repository has. No pass is retrying anything in the meantime, so the plain
 			// Reconciling reason reports work still in flight without naming an attempt
 			// nobody made. Only a failure says this — an internal object that is merely not
 			// ready carries none, and keeps its own words.
 			return Failure{
 				Reason:  helmv1alpha1.ReasonReconciling,
-				Message: "Waiting for what the failed step needs",
+				Message: "Waiting for the repository to resolve the chart version",
 			}, true
 		}
 
