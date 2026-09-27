@@ -35,6 +35,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
+	"github.com/deckhouse/operator-helm/internal/namespace"
 	"github.com/deckhouse/operator-helm/internal/rbac"
 	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/release"
 	"github.com/deckhouse/operator-helm/internal/status"
@@ -56,9 +57,11 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Releases:        internalobj.NewReleases(client, helmv1alpha1.TargetNamespace),
 		Maintenance:     internalobj.NewMaintenance(client, helmv1alpha1.TargetNamespace),
 		Claims:          reconcile.NoClaims{},
-		Namespaces:      reconcile.ExistingTargetNamespace{},
-		Identity:        rbac.NewIdentity(client, helmv1alpha1.TargetNamespace),
-		Status:          status.NewManager(client),
+		// The application's namespace is its own and is never created here; the reader
+		// bypasses the cache because nothing watches Namespaces.
+		Namespaces: namespace.NewExistingTarget(mgr.GetAPIReader()),
+		Identity:   rbac.NewIdentity(client, helmv1alpha1.TargetNamespace),
+		Status:     status.NewManager(client),
 	})
 
 	mapInternal := utils.MapNamespacedInternalResources(

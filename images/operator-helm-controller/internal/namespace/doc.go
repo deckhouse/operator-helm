@@ -19,7 +19,9 @@ limitations under the License.
 // to whoever created it, and an addon that happens to install into a namespace the
 // cluster already uses must not relabel it.
 //
-// Today only the addon controller wires this in. Other families deploy into a
-// namespace that must already exist, and their reconciler leaves the collaborator
-// empty.
+// Today only the addon controller wires the creating implementation in. Other
+// families deploy into a namespace that must already exist and get ExistingTarget,
+// which creates nothing. Both answer the second question this package owns —
+// whether the target namespace is terminating — because a release whose namespace
+// is going away is torn down differently from one that is merely deleted.
 package namespace

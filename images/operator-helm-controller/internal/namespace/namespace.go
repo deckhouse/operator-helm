@@ -32,7 +32,7 @@ import (
 // release's target namespace when it does not exist yet, and never modifies an
 // existing one — the namespace belongs to whoever created it. Today only the addon
 // controller wires it in; other families deploy into a namespace that must already
-// exist (their own).
+// exist (their own), which ExistingTarget below serves.
 type Namespaces struct {
 	// reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
 	// controller cache: nothing watches Namespaces, so a cached typed Get would start
@@ -67,4 +67,50 @@ func (s *Namespaces) EnsureTarget(ctx context.Context, rel contract.Release) err
 	}
 
 	return nil
+}
+
+func (s *Namespaces) Terminating(ctx context.Context, rel contract.Release) (bool, error) {
+	return terminating(ctx, s.reader, rel.TargetNamespace())
+}
+
+// ExistingTarget is the Namespaces of a family whose target namespace is the
+// release's own: it exists by definition, or the release could not, and this
+// collaborator never creates one. It still has to answer whether that namespace is
+// on its way out, which is what makes an application's teardown different from an
+// ordinary deletion.
+type ExistingTarget struct {
+	// reader reads from the API server directly, for the same reason Namespaces does:
+	// nothing watches Namespaces, so a cached typed Get would start an informer the
+	// ClusterRole has no watch permission for — and whether a namespace is terminating
+	// must not be answered from a cache that may predate the deletion.
+	reader client.Reader
+}
+
+func NewExistingTarget(reader client.Reader) *ExistingTarget {
+	return &ExistingTarget{reader: reader}
+}
+
+func (*ExistingTarget) EnsureTarget(context.Context, contract.Release) error { return nil }
+
+func (s *ExistingTarget) Terminating(ctx context.Context, rel contract.Release) (bool, error) {
+	return terminating(ctx, s.reader, rel.TargetNamespace())
+}
+
+// terminating reports whether the namespace is being deleted or is already gone.
+// A namespace that is not there at all counts as terminating: everything it held
+// is gone with it, which is the very state the callers of this act on. A read that
+// fails for any other reason is handed back — the answer decides whether a release
+// tears itself down differently, and guessing it from a passing API error would
+// make that decision at random.
+func terminating(ctx context.Context, reader client.Reader, name string) (bool, error) {
+	ns := &corev1.Namespace{}
+	if err := reader.Get(ctx, client.ObjectKey{Name: name}, ns); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+
+		return false, fmt.Errorf("getting namespace: %w", err)
+	}
+
+	return !ns.DeletionTimestamp.IsZero(), nil
 }

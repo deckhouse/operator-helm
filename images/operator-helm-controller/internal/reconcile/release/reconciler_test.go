@@ -660,7 +660,7 @@ func newApplicationFullReconciler(
 		Releases:        internalobj.NewReleases(c, helmv1alpha1.TargetNamespace),
 		Maintenance:     internalobj.NewMaintenance(c, helmv1alpha1.TargetNamespace),
 		Claims:          NoClaims{},
-		Namespaces:      ExistingTargetNamespace{},
+		Namespaces:      namespace.NewExistingTarget(c),
 		Identity:        identity,
 		Status:          status.NewManager(c),
 	}), c
@@ -996,6 +996,8 @@ func (failingIdentity) Cleanup(context.Context, contract.Release) (status.Deleti
 	return nil, nil
 }
 
+func (failingIdentity) RemoveAccount(context.Context, contract.Release) error { return nil }
+
 // TestReconcileApplicationReportsRBACSetupFailure pins that the pass stops at the
 // identity. A release applied without one would run as helm-controller itself,
 // which is exactly the privilege the namespaced family exists to avoid, so the
@@ -1055,6 +1057,10 @@ func (a *intermittentIdentity) Ensure(ctx context.Context, rel contract.Release)
 
 func (a *intermittentIdentity) Cleanup(ctx context.Context, rel contract.Release) (status.DeletingResource, error) {
 	return a.real.Cleanup(ctx, rel)
+}
+
+func (a *intermittentIdentity) RemoveAccount(ctx context.Context, rel contract.Release) error {
+	return a.real.RemoveAccount(ctx, rel)
 }
 
 // TestReconcileApplicationRecoversAfterTransientRBACSetupFailure pins the fix for
@@ -1207,6 +1213,8 @@ func (accessCleanupFails) Ensure(context.Context, contract.Release) rbac.Identit
 func (accessCleanupFails) Cleanup(context.Context, contract.Release) (status.DeletingResource, error) {
 	return nil, errors.New("role binding deletion forbidden")
 }
+
+func (accessCleanupFails) RemoveAccount(context.Context, contract.Release) error { return nil }
 
 // TestReconcileDeleteReportsRBACCleanupFailure pins that a failed Cleanup
 // leaves the status saying so. By the time this step runs the internal release and
@@ -2480,5 +2488,293 @@ func TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone(t *testing.T) {
 		Namespace: helmv1alpha1.TargetNamespace, Name: names.ServiceAccount,
 	}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("the service account must be gone, got %v", err)
+	}
+}
+
+// deletingApplicationFixtures are one application being deleted, its identity and
+// the internal HelmRelease helm-controller is still holding on to: everything the
+// teardown path walks through, in the state it finds it in halfway through. The
+// HelmRelease carries helm-controller's own finalizer, which is what makes the
+// object stay Terminating until that controller is done with it — and what the
+// wait in reconcileDelete is a wait for.
+func deletingApplicationFixtures(namespaceTerminating bool) (*helmv1alpha1.HelmApplication, []client.Object) {
+	now := metav1.Now()
+	app := &helmv1alpha1.HelmApplication{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app",
+			Namespace:         "team-a",
+			Generation:        1,
+			Finalizers:        []string{helmv1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: testApplication().Spec,
+	}
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: app.Namespace}}
+	if namespaceTerminating {
+		// A namespace being deleted keeps the kubernetes finalizer until its contents
+		// are gone; the fake client needs a finalizer to hold a deleted object at all.
+		ns.Finalizers = []string{"kubernetes"}
+		ns.DeletionTimestamp = &now
+	}
+
+	return app, []client.Object{
+		app,
+		ns,
+		&helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{
+			Name:       names.HelmRelease,
+			Namespace:  helmv1alpha1.TargetNamespace,
+			Finalizers: []string{"finalizers.fluxcd.io"},
+		}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+			Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace,
+		}},
+		&rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      names.ServiceAccount,
+				Namespace: app.Namespace,
+				Labels:    map[string]string{helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue},
+			},
+			RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: rbac.ApplicationRoleName},
+		},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
+			Name:      rbac.ApplicationRoleName,
+			Namespace: app.Namespace,
+			Labels:    map[string]string{helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue},
+		}},
+	}
+}
+
+func objectExists(t *testing.T, c client.Client, key client.ObjectKey, obj client.Object) bool {
+	t.Helper()
+
+	switch err := c.Get(context.Background(), key, obj); {
+	case err == nil:
+		return true
+	case apierrors.IsNotFound(err):
+		return false
+	default:
+		t.Fatalf("getting %T %s: %v", obj, key, err)
+		return false
+	}
+}
+
+// releaseHelmControllerFinalizer stands in for helm-controller finishing with the
+// internal HelmRelease: it drops its finalizer, and the object — already carrying a
+// deletion timestamp — goes away.
+func releaseHelmControllerFinalizer(t *testing.T, c client.Client, key client.ObjectKey) {
+	t.Helper()
+
+	release := &helmv2.HelmRelease{}
+	if err := c.Get(context.Background(), key, release); err != nil {
+		t.Fatalf("getting the terminating internal release: %v", err)
+	}
+
+	release.Finalizers = nil
+	if err := c.Update(context.Background(), release); err != nil {
+		t.Fatalf("releasing the internal release's finalizer: %v", err)
+	}
+}
+
+// TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminating
+// pins the one teardown that the ordinary order cannot finish. The namespace
+// controller deletes the Role and the RoleBinding of the application, while the
+// ServiceAccount lives in the operator's namespace and survives, so helm-controller
+// would impersonate an account that exists and may do nothing: its uninstall reads
+// the Helm storage secret in the terminating namespace, is refused, and the wait on
+// the internal HelmRelease never ends. helm-controller skips the uninstall for an
+// account that is absent, so the account has to be gone before that wait begins.
+func TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminating(t *testing.T) {
+	app, objects := deletingApplicationFixtures(true)
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	r, c := newApplicationFullReconciler(t, nil, objects...)
+
+	ctx := context.Background()
+	key := client.ObjectKeyFromObject(app)
+	accountKey := client.ObjectKey{Namespace: helmv1alpha1.TargetNamespace, Name: names.ServiceAccount}
+	releaseKey := client.ObjectKey{Namespace: helmv1alpha1.TargetNamespace, Name: names.HelmRelease}
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+	if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
+		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+	}
+
+	if objectExists(t, c, accountKey, &corev1.ServiceAccount{}) {
+		t.Fatal("the service account must be gone before the wait on the internal release, or the uninstall hangs on it")
+	}
+
+	internalRelease := &helmv2.HelmRelease{}
+	if !objectExists(t, c, releaseKey, internalRelease) {
+		t.Fatal("the internal release must still be there: this pass is the one that waits for it")
+	}
+	if internalRelease.DeletionTimestamp.IsZero() {
+		t.Fatal("the internal release must have been asked to go away in the same pass")
+	}
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(ctx, key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(settled, helmv1alpha1.FinalizerName) {
+		t.Fatal("the finalizer must stay while the internal release is still there")
+	}
+
+	// With the account gone helm-controller skips the uninstall and lets the
+	// HelmRelease go, and the namespace controller takes the binding with the
+	// namespace. The teardown then finishes on its own.
+	releaseHelmControllerFinalizer(t, c, releaseKey)
+
+	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
+		Name: names.ServiceAccount, Namespace: app.Namespace,
+	}}
+	if err := c.Delete(ctx, binding); err != nil {
+		t.Fatalf("deleting the role binding the namespace controller collects: %v", err)
+	}
+
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("second Reconcile returned %v", err)
+	}
+
+	if objectExists(t, c, key, &helmv1alpha1.HelmApplication{}) {
+		t.Fatal("the teardown must complete once the internal release and the identity are gone")
+	}
+}
+
+// TestReconcileDeleteKeepsTheServiceAccountUntilTheInternalReleaseIsGone is the
+// property the branch above must not cost: in a namespace that is not going
+// anywhere, helm-controller really does uninstall as the application's account, so
+// the identity is still removed last — after the internal HelmRelease has actually
+// disappeared.
+func TestReconcileDeleteKeepsTheServiceAccountUntilTheInternalReleaseIsGone(t *testing.T) {
+	app, objects := deletingApplicationFixtures(false)
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	r, c := newApplicationFullReconciler(t, nil, objects...)
+
+	ctx := context.Background()
+	key := client.ObjectKeyFromObject(app)
+	accountKey := client.ObjectKey{Namespace: helmv1alpha1.TargetNamespace, Name: names.ServiceAccount}
+	bindingKey := client.ObjectKey{Namespace: app.Namespace, Name: names.ServiceAccount}
+	releaseKey := client.ObjectKey{Namespace: helmv1alpha1.TargetNamespace, Name: names.HelmRelease}
+
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if !objectExists(t, c, accountKey, &corev1.ServiceAccount{}) {
+		t.Fatal("the service account must outlive the internal release: helm-controller uninstalls as it")
+	}
+	if !objectExists(t, c, bindingKey, &rbacv1.RoleBinding{}) {
+		t.Fatal("the role binding must outlive the internal release: without it the account may do nothing")
+	}
+
+	releaseHelmControllerFinalizer(t, c, releaseKey)
+
+	// From here the teardown runs to the end: the identity is deleted and then
+	// waited on, so it takes one more pass than the deletes themselves.
+	for attempt := 1; attempt <= 3 && objectExists(t, c, key, &helmv1alpha1.HelmApplication{}); attempt++ {
+		if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("attempt %d: Reconcile returned %v", attempt, err)
+		}
+	}
+
+	if objectExists(t, c, key, &helmv1alpha1.HelmApplication{}) {
+		t.Fatal("the teardown must complete once the internal release is gone")
+	}
+	if objectExists(t, c, accountKey, &corev1.ServiceAccount{}) {
+		t.Fatal("the service account must be gone by the end of the teardown")
+	}
+	if objectExists(t, c, bindingKey, &rbacv1.RoleBinding{}) {
+		t.Fatal("the role binding must be gone by the end of the teardown")
+	}
+}
+
+// countingNamespaces records whether the teardown asked about the target namespace.
+type countingNamespaces struct {
+	Namespaces
+	terminatingCalls int
+}
+
+func (s *countingNamespaces) Terminating(ctx context.Context, rel contract.Release) (bool, error) {
+	s.terminatingCalls++
+
+	return s.Namespaces.Terminating(ctx, rel)
+}
+
+// countingIdentity records whether the teardown removed an account early.
+type countingIdentity struct {
+	NoIdentity
+	removeCalls int
+}
+
+func (s *countingIdentity) RemoveAccount(context.Context, contract.Release) error {
+	s.removeCalls++
+
+	return nil
+}
+
+// TestReconcileDeleteOfAnAddonIgnoresATerminatingTargetNamespace pins that the
+// branch belongs to the family it was written for. An addon is applied by
+// helm-controller under its own cluster-wide identity — there is no account to
+// impersonate and none a namespace deletion could disarm — so nothing about its
+// teardown changes, down to not reading the namespace at all.
+func TestReconcileDeleteOfAnAddonIgnoresATerminatingTargetNamespace(t *testing.T) {
+	now := metav1.Now()
+	addon := testAddon()
+	addon.Finalizers = []string{helmv1alpha1.FinalizerName}
+	addon.DeletionTimestamp = &now
+
+	names := adapter.NewAddonRelease(addon).InternalNames()
+
+	r, c := newFullReconciler(t, nil, interceptor.Funcs{},
+		addon,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:              addon.Spec.Namespace,
+			Finalizers:        []string{"kubernetes"},
+			DeletionTimestamp: &now,
+		}},
+		&helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{
+			Name:       names.HelmRelease,
+			Namespace:  helmv1alpha1.TargetNamespace,
+			Finalizers: []string{"finalizers.fluxcd.io"},
+		}},
+	)
+
+	namespaces := &countingNamespaces{Namespaces: r.deps.Namespaces}
+	identity := &countingIdentity{}
+	r.deps.Namespaces = namespaces
+	r.deps.Identity = identity
+
+	ctx := context.Background()
+	key := client.ObjectKeyFromObject(addon)
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+	if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
+		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+	}
+
+	if identity.removeCalls != 0 {
+		t.Fatalf("RemoveAccount was called %d times, want none: an addon has no identity to remove",
+			identity.removeCalls)
+	}
+	if namespaces.terminatingCalls != 0 {
+		t.Fatalf("the namespace was read %d times, want none: the answer cannot change an addon's teardown",
+			namespaces.terminatingCalls)
+	}
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(ctx, key, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(settled, helmv1alpha1.FinalizerName) {
+		t.Fatal("the addon must still wait for its internal release, exactly as it always has")
 	}
 }

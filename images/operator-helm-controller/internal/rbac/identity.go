@@ -228,6 +228,38 @@ func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) (status.De
 	}
 }
 
+// RemoveAccount deletes the ServiceAccount and nothing else, and waits for nothing.
+//
+// It is the escape from a teardown that cannot be applied as this identity at all:
+// the namespace the release lives in is terminating, so the namespace controller
+// deletes the Role and the RoleBinding there while the account — which lives in the
+// operator's namespace — survives, leaving helm-controller impersonating an account
+// that exists and may do nothing. Its uninstall reads the Helm storage secret in
+// that namespace and is refused, on every attempt, forever. helm-controller skips
+// the uninstall when the account is absent (v1.6.4, the "Confirm any ServiceAccount
+// used for impersonation exists" check in internal/controller/helmrelease_controller.go,
+// which tests NotFound on a Get of it), so taking the account away is what lets the
+// internal HelmRelease finish.
+//
+// Nothing is returned to wait on: the caller reaches Cleanup later in the same
+// teardown, and that is where the account — gone or still Terminating on someone
+// else's finalizer — is waited for as it always was.
+func (s *Identity) RemoveAccount(ctx context.Context, rel contract.Release) error {
+	name := rel.InternalNames().ServiceAccount
+	if name == "" {
+		return nil
+	}
+
+	account := &corev1.ServiceAccount{}
+	key := types.NamespacedName{Namespace: s.targetNamespace, Name: name}
+
+	if _, err := utils.DeleteIfPresent(ctx, s.client, key, account); err != nil {
+		return fmt.Errorf("deleting service account: %w", err)
+	}
+
+	return nil
+}
+
 // pendingDeletion adapts an RBAC object to status.DeletingResource. Unlike the
 // internal flux objects that interface was written for, a ServiceAccount or a
 // RoleBinding has no conditions to report: whatever holds it in Terminating is a

@@ -56,9 +56,12 @@ type Claims interface {
 	Drop(ctx context.Context, rel contract.Release) error
 }
 
-// Namespaces makes sure the namespace a release deploys into exists.
+// Namespaces makes sure the namespace a release deploys into exists, and answers
+// whether it is on its way out — which the teardown path needs, because a namespace
+// that is terminating takes the release's identity apart underneath it.
 type Namespaces interface {
 	EnsureTarget(ctx context.Context, rel contract.Release) error
+	Terminating(ctx context.Context, rel contract.Release) (bool, error)
 }
 
 // Identity provides the identity a release is applied with. The application
@@ -70,6 +73,10 @@ type Identity interface {
 	// it to actually go away before the release drops its finalizer, exactly as it
 	// does for the internal objects below.
 	Cleanup(ctx context.Context, rel contract.Release) (status.DeletingResource, error)
+	// RemoveAccount deletes the account alone and waits for nothing, so a teardown
+	// that must not be applied as this identity can take it away ahead of everything
+	// the ordinary order puts first.
+	RemoveAccount(ctx context.Context, rel contract.Release) error
 }
 
 // Charts owns the internal HelmChart of a release, the source object of a
@@ -127,14 +134,6 @@ func (NoClaims) DropStale(context.Context, contract.Release) error { return nil 
 
 func (NoClaims) Drop(context.Context, contract.Release) error { return nil }
 
-// ExistingTargetNamespace is the ensurer of a family whose target namespace is the
-// release's own: it exists by definition, or the release could not.
-type ExistingTargetNamespace struct{}
-
-func (ExistingTargetNamespace) EnsureTarget(context.Context, contract.Release) error {
-	return nil
-}
-
 // NoIdentity is the Identity of a family that does not impersonate.
 type NoIdentity struct{}
 
@@ -145,3 +144,5 @@ func (NoIdentity) Ensure(context.Context, contract.Release) rbac.IdentityOutcome
 func (NoIdentity) Cleanup(context.Context, contract.Release) (status.DeletingResource, error) {
 	return nil, nil
 }
+
+func (NoIdentity) RemoveAccount(context.Context, contract.Release) error { return nil }

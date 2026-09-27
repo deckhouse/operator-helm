@@ -21,10 +21,12 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
 // TestNamespacesEnsureTargetCreatesItOnceAndLeavesItAlone pins the addon rule moved
@@ -59,5 +61,72 @@ func TestNamespacesEnsureTargetCreatesItOnceAndLeavesItAlone(t *testing.T) {
 	}
 	if again.Labels["owner"] != "team" {
 		t.Fatalf("an existing namespace must not be rewritten, labels = %v", again.Labels)
+	}
+}
+
+// TestTerminatingReportsANamespaceThatIsGoingOrAlreadyGone pins the answer the
+// teardown of a release depends on. A namespace that is not there at all counts as
+// terminating: everything it held is gone with it, which is the state the caller
+// acts on, and reporting it as live would leave a release waiting for an identity
+// that can no longer be repaired.
+func TestTerminatingReportsANamespaceThatIsGoingOrAlreadyGone(t *testing.T) {
+	deleted := metav1.Now()
+
+	tests := []struct {
+		name      string
+		namespace *corev1.Namespace
+		want      bool
+	}{
+		{
+			name: "a live namespace is not terminating",
+			namespace: &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: "app"},
+			},
+			want: false,
+		},
+		{
+			name: "a namespace with a deletion timestamp is terminating",
+			namespace: &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "app",
+					// The fake client holds a deleted object only while a finalizer does;
+					// a namespace being emptied carries the kubernetes one.
+					Finalizers:        []string{"kubernetes"},
+					DeletionTimestamp: &deleted,
+				},
+			},
+			want: true,
+		},
+		{
+			name:      "a namespace that is not there is terminating",
+			namespace: nil,
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := fake.NewClientBuilder().WithScheme(testScheme(t))
+			if tt.namespace != nil {
+				builder = builder.WithObjects(tt.namespace)
+			}
+			c := builder.Build()
+
+			addon := testAddon()
+			for name, service := range map[string]interface {
+				Terminating(context.Context, contract.Release) (bool, error)
+			}{
+				"Namespaces":     NewNamespaces(c, c),
+				"ExistingTarget": NewExistingTarget(c),
+			} {
+				got, err := service.Terminating(context.Background(), adapter.NewAddonRelease(addon))
+				if err != nil {
+					t.Fatalf("%s: Terminating returned %v", name, err)
+				}
+				if got != tt.want {
+					t.Fatalf("%s: Terminating = %v, want %v", name, got, tt.want)
+				}
+			}
+		})
 	}
 }
