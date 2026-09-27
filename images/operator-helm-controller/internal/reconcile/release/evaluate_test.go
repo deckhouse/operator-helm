@@ -1058,3 +1058,42 @@ func TestEvaluateRefusesAPassThatEndedOnLiftedMaintenance(t *testing.T) {
 		t.Fatalf("Conditions = %+v, want no status written", decision.Conditions)
 	}
 }
+
+// TestEvaluateMissingChartVersionIsNotWorkInProgress pins how a release reports a
+// version that is not in the catalog: not ready, under its own reason, and without
+// the promise of a retry — nothing this controller does produces a version the
+// repository does not offer. Stalled stays off all the same: the version may be
+// published later, and the watch on the catalog brings the release back with no
+// edit to its spec.
+func TestEvaluateMissingChartVersionIsNotWorkInProgress(t *testing.T) {
+	const message = "Version 6.7.2 of chart podinfo is not in the catalog of repository example"
+
+	in := baseInputs()
+	in.Outcome = ChartReached{Internal: SourceUnresolved{Failure: Failure{
+		Reason:   helmv1alpha1.ReasonChartVersionNotFound,
+		Message:  message,
+		Err:      errors.New(`chart catalog does not have version "6.7.2": chart version not found`),
+		BadInput: true,
+	}}}
+
+	decision := Evaluate(in)
+
+	ready := condition(t, decision, helmv1alpha1.ConditionTypeReady)
+	if ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonChartVersionNotFound {
+		t.Fatalf("Ready = %s/%s, want False/%s",
+			ready.Status, ready.Reason, helmv1alpha1.ReasonChartVersionNotFound)
+	}
+	if ready.Message != message {
+		t.Fatalf("Ready message = %q, want %q", ready.Message, message)
+	}
+
+	if cond := apimeta.FindStatusCondition(decision.Conditions, helmv1alpha1.ConditionTypeReconciling); cond != nil {
+		t.Fatalf("Reconciling = %+v, want none: a version that is not offered is not work in flight", cond)
+	}
+	if !slices.Contains(decision.RemoveConditions, helmv1alpha1.ConditionTypeReconciling) {
+		t.Fatal("Reconciling must be taken away, otherwise an earlier one keeps promising a retry")
+	}
+	if !slices.Contains(decision.RemoveConditions, helmv1alpha1.ConditionTypeStalled) {
+		t.Fatal("Stalled must stay off: the version may be published without any edit to the spec")
+	}
+}

@@ -154,6 +154,12 @@ const (
 	// ReasonChartVersionRemoved marks an addon whose chart version is still recorded in
 	// the catalog but is no longer offered by the repository.
 	ReasonChartVersionRemoved = "ChartVersionRemoved"
+	// ReasonChartVersionNotFound marks a release asking for a chart version the
+	// repository's catalog does not list, which is most often a typo in spec. It is
+	// kept apart from a catalog that has not been synced yet, which is progress, and
+	// from Stalled: the version may be published later, and the watch on the catalog
+	// brings the release back when it is, without any edit to the spec.
+	ReasonChartVersionNotFound = "ChartVersionNotFound"
 	// ReasonPartialSync marks a repository whose catalog does not mirror everything
 	// the repository offers. The two cases it covers need different reactions, so the
 	// message says which one it is: chart versions an earlier read left unresolved may

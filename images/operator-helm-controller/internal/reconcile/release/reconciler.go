@@ -18,6 +18,7 @@ package release
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -299,7 +300,19 @@ func (r *Reconciler) resolveSource(
 		src, err = chartsource.Resolve(repo.URL(), chartVersion)
 	}
 
-	if err != nil {
+	switch {
+	case errors.Is(err, errChartVersionNotFound):
+		// The catalog is populated and the version the spec names is not in it, which
+		// is what a typo looks like. It is reported as a fault of the spec rather than
+		// as work in flight: no pass of this controller is on its way to that version.
+		return src, chartVersion, &Failure{
+			Reason: helmv1alpha1.ReasonChartVersionNotFound,
+			Message: fmt.Sprintf("Version %s of chart %s is not in the catalog of repository %s",
+				rel.ChartRef().Version, rel.ChartRef().Chart, repo.Name()),
+			Err:      err,
+			BadInput: true,
+		}
+	case err != nil:
 		return src, chartVersion, &Failure{
 			Reason:  helmv1alpha1.ReasonChartFetchFailed,
 			Message: "Failed to resolve the desired chart version",
@@ -622,8 +635,22 @@ func (r *Reconciler) getChartVersion(
 		return obj, version, nil
 	}
 
-	return nil, nil, fmt.Errorf("chart catalog does not have version %q", ref.Version)
+	if len(catalogStatus.Versions) == 0 {
+		// The repository controller has not written the catalog of this chart yet, so
+		// the absence says nothing about the version the release asks for. It is the
+		// repository that is behind, not the spec that is wrong.
+		return nil, nil, errors.New("chart catalog has no versions yet")
+	}
+
+	return nil, nil, fmt.Errorf("chart catalog does not have version %q: %w", ref.Version, errChartVersionNotFound)
 }
+
+// errChartVersionNotFound marks the one way of failing to resolve a version that is
+// a fault of the release's own spec: the catalog lists what the repository offers
+// and the version asked for is not among it. It is a sentinel rather than a plain
+// message because the caller reports it differently from every other resolution
+// failure — as a bad input, not as progress.
+var errChartVersionNotFound = errors.New("chart version not found")
 
 // rejectedByAPIServer reports whether an API error is the server refusing the
 // object it was handed, rather than failing to deal with it right now. The two

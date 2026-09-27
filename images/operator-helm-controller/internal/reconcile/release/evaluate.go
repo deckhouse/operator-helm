@@ -49,6 +49,13 @@ type Failure struct {
 	// retried — a step that failed on the way to a write left nothing for a watch to
 	// fire on.
 	AwaitsWatch bool
+	// BadInput marks a failure of the spec the release was given rather than of the
+	// work towards it: what the spec asks for is not there. It is not Terminal — the
+	// thing asked for may be published later, and a watch brings the release back
+	// when it is — but it is not progress either, so the release reports it without
+	// Reconciling and without handing it to the work queue: nothing about a retry
+	// changes what the spec asks for.
+	BadInput bool
 	// RequeueAfter schedules another pass on a timer, for a cause no watch covers.
 	RequeueAfter time.Duration
 }
@@ -183,12 +190,14 @@ type Decision struct {
 
 // conditionState is one verdict: the value a condition would carry if this were the
 // thing the release reports. It is what Evaluate compares and projects. An internal
-// object's own state is already that verdict, so it is carried whole; Err is what
-// sits behind a verdict the pass produced itself.
+// object's own state is already that verdict, so it is carried whole; Failure is
+// what sits behind a verdict the pass produced itself, and it is carried whole too —
+// its error is what the pass reports, and its flags are what decides whether
+// anything comes back to it.
 type conditionState struct {
 	internalobj.InternalObjectState
 
-	Err error
+	Failure Failure
 }
 
 // Evaluate derives the desired release status from the results of a single
@@ -408,8 +417,13 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 // are the most specific thing to show for it. False is a failure that is not
 // terminal, so something will come back to it: the watch on the internal object, the
 // probe's timer, or the work queue.
+//
+// A bad input outranks it for the same reason a terminal failure does, without being
+// one: no pass is on its way to what the spec asks for, because what it asks for is
+// not there. Promising a retry would tell whoever mistyped a chart version that the
+// controller is working on it.
 func evaluateReconciling(verdict conditionState, found, stalled bool) (Failure, bool) {
-	if stalled || !found {
+	if stalled || !found || verdict.Failure.BadInput {
 		return Failure{}, false
 	}
 
@@ -558,27 +572,26 @@ func failureState(failure Failure) conditionState {
 			Reason:   failure.Reason,
 			Message:  failure.Message,
 		},
-		Err: failure.Err,
+		Failure: failure,
 	}
 }
 
 func reported(state conditionState) *Failure {
-	if state.Err == nil {
+	if state.Failure.Err == nil {
 		return nil
 	}
 
-	return &Failure{Reason: state.Reason, Message: state.Message, Err: state.Err}
+	return &state.Failure
 }
 
-// retryErr hands the cause of a step failure to the work queue. A step before the
-// chart is a cluster read or a cluster write, and a transient failure of one leaves
-// nothing behind for a watch to fire on — the object it would have written was not
-// written — so the rate limiter is what brings the release back. The two exceptions
-// say so themselves: a terminal failure retrying cannot change, and one the release
-// is woken from by a watch. A failure carrying no error of its own rides the timer
-// the step asked for instead.
+// retryErr hands the cause of a failure to the work queue. A failed cluster read or
+// cluster write leaves nothing behind for a watch to fire on — the object it would
+// have written was not written — so the rate limiter is what brings the release
+// back. The exceptions say so themselves: a terminal failure retrying cannot change,
+// one the release is woken from by a watch, and one whose cause is the spec itself. A
+// failure carrying no error of its own rides the timer the step asked for instead.
 func retryErr(failure Failure) error {
-	if failure.Terminal || failure.AwaitsWatch {
+	if failure.Terminal || failure.AwaitsWatch || failure.BadInput {
 		return nil
 	}
 

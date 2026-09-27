@@ -274,6 +274,65 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 	}
 }
 
+// TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog pins the
+// difference the release's status turns on. A catalog with no versions in it says
+// nothing about the version asked for — the repository controller has not written it
+// yet — while a populated catalog without that version is the repository's full
+// answer, and the spec names something it does not offer.
+func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.T) {
+	addon := testAddon()
+
+	tests := []struct {
+		name         string
+		versions     []helmv1alpha1.ChartVersion
+		wantReason   string
+		wantBadInput bool
+	}{
+		{
+			name:         "a catalog that has not been synced yet is still progressing",
+			versions:     nil,
+			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput: false,
+		},
+		{
+			name:         "a populated catalog without the version is a fault of the spec",
+			versions:     []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
+			wantReason:   helmv1alpha1.ReasonChartVersionNotFound,
+			wantBadInput: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chart := addonChartFixture(
+				addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName, tt.versions...,
+			)
+			r, c := newTestReconciler(t, chart)
+
+			_, _, failure := r.resolveSource(
+				context.Background(),
+				adapter.NewAddonRelease(addon),
+				adapter.NewAddonRepository(helmRepositoryFixture()),
+				adapter.NewAddonCatalog(c),
+				chartsource.Helm,
+			)
+
+			if failure == nil {
+				t.Fatal("expected the version resolution to fail")
+			}
+			if failure.Reason != tt.wantReason {
+				t.Fatalf("reason = %q, want %q", failure.Reason, tt.wantReason)
+			}
+			if failure.BadInput != tt.wantBadInput {
+				t.Fatalf("BadInput = %v, want %v", failure.BadInput, tt.wantBadInput)
+			}
+			if failure.Err == nil {
+				t.Fatal("the cause must be carried out, it is the only place it is written down")
+			}
+		})
+	}
+}
+
 func TestGetHelmClusterAddonChartMissingChart(t *testing.T) {
 	addon := testAddon()
 	r, c := newTestReconciler(t)
