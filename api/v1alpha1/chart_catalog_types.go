@@ -81,10 +81,12 @@ type ChartVersion struct {
 	// an ordinary pass - so the request is written here to outlive the pass it was asked
 	// of. A version recorded as removed from the repository needs no force: the listing
 	// that offers the tag again is itself the evidence that there is new content behind
-	// the verdict, so any pass that lists it examines it. The mark is cleared by the pass
-	// that examines the version, and by a pass that sees the whole repository and confirms
-	// the version is no longer offered, so the refresh finishes across as many passes as
-	// it needs while the entries themselves stay readable and deployable.
+	// the verdict, so the version needs examining on any pass that lists it, marked or
+	// not - whether that pass gets to it, or one after it does, is left to the budget a
+	// pass examines versions under. The mark is cleared by the pass that examines the
+	// version, and by a pass that sees the whole repository and confirms the version is
+	// no longer offered, so the refresh finishes across as many passes as it needs while
+	// the entries themselves stay readable and deployable.
 	// +optional
 	ReexaminationRequired bool `json:"reexaminationRequired,omitempty"`
 }
