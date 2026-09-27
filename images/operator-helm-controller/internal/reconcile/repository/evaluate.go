@@ -153,6 +153,11 @@ func Evaluate(in Inputs) Decision {
 
 		if fetchSucceeded && !catalogFailed && in.Fetch.Pending == 0 {
 			status.LastSuccessfulSyncTime = &metav1.Time{Time: in.Now}
+			// Recorded alongside the time because the time alone does not say which spec
+			// the published catalog belongs to, and the Synced condition does not either:
+			// it is the verdict of the latest pass, so one transient fetch failure turns
+			// it False over a catalog that is still published and still current.
+			status.LastSyncedGeneration = in.Generation
 		}
 
 		next := in.Now.Add(withJitter(syncDelay(failures), in.Jitter))

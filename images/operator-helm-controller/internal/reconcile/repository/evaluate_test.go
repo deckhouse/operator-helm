@@ -625,6 +625,72 @@ func TestEvaluateFullSyncAdvancesLastSuccessfulSyncTime(t *testing.T) {
 	if decision.Status.LastSuccessfulSyncTime == nil || !decision.Status.LastSuccessfulSyncTime.Time.Equal(now) {
 		t.Fatalf("lastSuccessfulSyncTime is %v, want %v", decision.Status.LastSuccessfulSyncTime, now)
 	}
+	if decision.Status.LastSyncedGeneration != 1 {
+		t.Fatalf("lastSyncedGeneration is %d, want 1", decision.Status.LastSyncedGeneration)
+	}
+}
+
+// TestEvaluateLastSyncedGenerationSurvivesAFailedPass pins the property releases
+// depend on: the field says which spec the published catalog belongs to, so a pass
+// that failed without touching the catalog must leave it alone. The Synced
+// condition cannot answer that question — it is the verdict of the latest pass, and
+// goes False over a catalog that is complete and current.
+func TestEvaluateLastSyncedGenerationSurvivesAFailedPass(t *testing.T) {
+	earlier := metav1.NewTime(time.Now().UTC().Add(-time.Hour))
+	published := helmv1alpha1.RepositoryStatus{
+		ObservedGeneration:     1,
+		LastSyncedGeneration:   1,
+		LastSuccessfulSyncTime: &earlier,
+	}
+
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        time.Now().UTC(),
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{Err: errors.New("the index request failed")},
+		Current:    published,
+	})
+
+	synced := apimeta.FindStatusCondition(decision.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
+	if synced == nil || synced.Status != metav1.ConditionFalse {
+		t.Fatalf("Synced is %+v, want False: the pass did fail", synced)
+	}
+	if decision.Status.LastSyncedGeneration != 1 {
+		t.Fatalf("lastSyncedGeneration is %d, want it left at 1", decision.Status.LastSyncedGeneration)
+	}
+}
+
+// TestEvaluateLastSyncedGenerationWaitsForTheCatalog pins the other half: a spec
+// change does not carry the previous catalog's generation forward, and neither does
+// a pass that read the repository but could not write the catalog.
+func TestEvaluateLastSyncedGenerationWaitsForTheCatalog(t *testing.T) {
+	published := helmv1alpha1.RepositoryStatus{ObservedGeneration: 1, LastSyncedGeneration: 1}
+
+	edited := Evaluate(Inputs{
+		Generation: 2,
+		Now:        time.Now().UTC(),
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{},
+		Catalog:    &reposync.CatalogOutcome{Err: errors.New("the catalog write failed")},
+		Current:    published,
+	})
+
+	if edited.Status.LastSyncedGeneration != 1 {
+		t.Fatalf("lastSyncedGeneration is %d, want it still 1: generation 2 has no catalog yet", edited.Status.LastSyncedGeneration)
+	}
+
+	written := Evaluate(Inputs{
+		Generation: 2,
+		Now:        time.Now().UTC(),
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{},
+		Catalog:    &reposync.CatalogOutcome{},
+		Current:    published,
+	})
+
+	if written.Status.LastSyncedGeneration != 2 {
+		t.Fatalf("lastSyncedGeneration is %d, want 2", written.Status.LastSyncedGeneration)
+	}
 }
 
 // TestEvaluateChartCount pins what the field means: how many charts the catalog

@@ -705,11 +705,14 @@ func (r *Reconciler) getChartVersion(
 			// version may well be deployable once the next sync gets an answer. That is
 			// a catalog write, which the release's catalog watch delivers.
 			//
-			// A pending verdict over metadata an earlier sync did resolve is a different
-			// thing and is not caught here: the version is still deployable from what is
-			// recorded, and a later sync will not re-examine it precisely because that
-			// metadata is there. Blocking on it would hold the release — its values, its
-			// maintenance mode — on a transient registry failure it has outlived.
+			// A pending verdict over a media type an earlier sync did resolve is a
+			// different thing and is not caught here: a forced re-examination that fails
+			// carries the known media type forward, the version is still deployable from
+			// it, and no later sync will revisit the version precisely because it is
+			// recorded. Blocking on that would hold the release — its values, its
+			// maintenance mode — on a registry failure it has already outlived. The
+			// OCIRef half of the test is for symmetry; the catalog never records a
+			// reference for a version it left pending.
 			return nil, nil, fmt.Errorf(
 				"chart version %q is not resolved yet: %s: %w",
 				version.Version, versionUnavailableDetail(*version), errVersionResolvePending,
@@ -787,17 +790,16 @@ var errChartNotFound = errors.New("chart not found")
 // catalogIsCurrent reports whether the repository's catalog describes the spec the
 // repository carries now.
 //
-// The evidence is the Synced condition rather than the status-level
-// observedGeneration, which is advanced on every pass including failed ones: after
-// a url is edited, one failed fetch would otherwise be enough to make the previous
-// url's catalog look like the current answer. Synced is raised only by a pass that
-// published a catalog, and carries the generation of the spec it published for.
+// The question is which spec the published catalog belongs to, and only
+// lastSyncedGeneration answers it. The status-level observedGeneration is advanced
+// by every pass including the ones that fail, so one failed fetch after a url edit
+// would make the previous url's catalog look current. The Synced condition is the
+// verdict of the latest pass rather than a record of what is published: a transient
+// fetch failure, or a chart name the API cannot hold, turns it False over a catalog
+// that is complete and unchanged, and reading that as "not current" would put every
+// release on this repository back to waiting.
 func catalogIsCurrent(repo contract.Repository) bool {
-	synced := apimeta.FindStatusCondition(repo.Status().Conditions, helmv1alpha1.ConditionTypeSynced)
-
-	return synced != nil &&
-		synced.Status == metav1.ConditionTrue &&
-		synced.ObservedGeneration == repo.Generation()
+	return repo.Status().LastSyncedGeneration == repo.Generation()
 }
 
 // hasVersion reports whether the catalog lists a version under that exact name.

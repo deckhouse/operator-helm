@@ -70,6 +70,14 @@ type RepositoryStatus struct {
 	// including creating and pruning chart resources.
 	// +optional
 	LastSuccessfulSyncTime *metav1.Time `json:"lastSuccessfulSyncTime,omitempty"`
+	// LastSyncedGeneration is the generation of the spec whose catalog is the one
+	// published now. It is written only by a pass that brought the catalog fully up
+	// to date, and keeps its value through later failures, which is what tells a
+	// published catalog apart from one that is merely not being updated at the
+	// moment. Releases read it to know whether this repository has already answered
+	// about the chart they name.
+	// +optional
+	LastSyncedGeneration int64 `json:"lastSyncedGeneration,omitempty"`
 	// NextSyncTime is the scheduled time of the next synchronization attempt.
 	// +optional
 	NextSyncTime *metav1.Time `json:"nextSyncTime,omitempty"`
