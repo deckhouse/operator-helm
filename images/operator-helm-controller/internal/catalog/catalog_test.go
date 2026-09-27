@@ -1153,7 +1153,7 @@ func TestAForcedRefreshSurvivesAMergeThatReadsThePreMarkCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marking the recorded versions returned %v", err)
 	}
-	if !owed.Marked("podinfo", "6.7.1") {
+	if !owesFreshVerdict(owed, "podinfo", "6.7.1") {
 		t.Fatal("the marking must report what it wrote: the merge has nothing else to go by")
 	}
 
@@ -1364,18 +1364,23 @@ func TestForcingARefreshMarksARetainedRemovedVersionAndALaterPassClearsIt(t *tes
 	}
 }
 
-// TestAMarkedChartTheFetchDoesNotOfferAnyMoreHasItsMarksCleared covers the mark with
-// nowhere to go. A chart the repository stopped offering is kept as long as a consumer
-// pins a version of it, and it is then reconciled nowhere: it is not in the fetched
-// list, so no pass writes its status, and none of its versions is ever a probe candidate
-// either — the candidates are built from the registry listing. A mark left on it is
-// therefore a request no pass can ever answer, sitting in a status a user reads for as
-// long as the consumer lives.
+// TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved covers the
+// chart that disappears whole. A chart the repository stopped offering is kept as long
+// as a consumer pins a version of it, and it is then in no fetched list, so the merge
+// the main loop runs never reaches it: its versions keep the media type recorded when
+// the chart was last listed, with no unavailability reason next to it. That is the one
+// state a re-push survives — every tag deleted and published again with different
+// content behind it — because an ordinary pass reads a recorded media type as
+// authoritative and carries it forward (FetchOptions.NeedsExamination), so the catalog
+// would go on publishing the verdict of an artifact that no longer exists.
 //
-// The pass that saw the whole repository without the chart has answered it, exactly as
-// it does for a single removed version, and the entry it clears the mark on keeps
-// everything the pinning consumer builds its OCIRepository from.
-func TestAMarkedChartTheFetchDoesNotOfferAnyMoreHasItsMarksCleared(t *testing.T) {
+// The pass that saw the whole repository without the chart answers it instead, with the
+// merge a listed chart with an empty version list would get: the pinned version is
+// reported removed and keeps everything the consumer's OCIRepository is built from, an
+// unreferenced version is dropped as it would be anywhere else, and the re-examination
+// mark — a request no pass could answer while the chart is unlisted, since probe
+// candidates come from the listing — is cleared by having been answered.
+func TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
 	c := newClient(t)
@@ -1394,6 +1399,7 @@ func TestAMarkedChartTheFetchDoesNotOfferAnyMoreHasItsMarksCleared(t *testing.T)
 	}
 
 	pinned := repoclient.Chart{Name: "legacy", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("1.1.0"), MediaType: mediaType, OCIRef: "registry.example.invalid/legacy:1.1.0"},
 		{Version: semver.MustParse("1.0.0"), MediaType: mediaType, OCIRef: "registry.example.invalid/legacy:1.0.0"},
 	}}
 	offered := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
@@ -1418,11 +1424,28 @@ func TestAMarkedChartTheFetchDoesNotOfferAnyMoreHasItsMarksCleared(t *testing.T)
 	}
 
 	kept := versionsByName(t, c, key)
-	if kept["1.0.0"].ReexaminationRequired {
-		t.Fatal("a chart no fetch offers any more must not keep a mark: no pass can ever examine its versions")
+	if len(kept) != 1 {
+		t.Fatalf("recorded versions = %+v, want only the one a consumer pins: the rest is prunable like anywhere else", kept)
+	}
+	if got := kept["1.0.0"].UnavailableReason; got != helmv1alpha1.UnavailableReasonRemovedFromRepository {
+		t.Fatalf("unavailability reason = %q, want the version reported removed: nothing else records that the chart is gone", got)
 	}
 	if got := kept["1.0.0"]; got.MediaType != mediaType || got.OCIRef != "registry.example.invalid/legacy:1.0.0" {
 		t.Fatalf("kept version = %+v, want the artifact information intact: the application still deploys it", got)
+	}
+	if kept["1.0.0"].ReexaminationRequired {
+		t.Fatal("a chart no fetch offers any more must not keep a mark: no pass can ever examine its versions")
+	}
+
+	// What the recorded reason buys: the tag is a probe candidate again the moment the
+	// chart is listed once more, without a forced refresh, because the listing offering
+	// it is the evidence that there is new content behind the verdict.
+	known, err := cat.Known(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("reading the recorded verdicts returned %v", err)
+	}
+	if !(repoclient.FetchOptions{Known: known}).NeedsExamination("legacy", "1.0.0") {
+		t.Fatal("a re-pushed tag of a chart that came back must be examined by an ordinary pass")
 	}
 }
 
@@ -1469,10 +1492,10 @@ func TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked(t *testing.T) {
 
 	// The set handed to the merge says the same thing as the status: an unmarked
 	// version must not be preserved as marked by a pass that defers it.
-	if owed.Marked("podinfo", "6.7.0") {
+	if owesFreshVerdict(owed, "podinfo", "6.7.0") {
 		t.Fatal("a version left unmarked must not be reported as owing a fresh verdict")
 	}
-	if !owed.Marked("podinfo", "6.7.1") {
+	if !owesFreshVerdict(owed, "podinfo", "6.7.1") {
 		t.Fatal("the marked version must be reported to the merge: the read it is computed from may predate the mark")
 	}
 }
@@ -1482,6 +1505,12 @@ func TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked(t *testing.T) {
 // and each retry marks again; rewriting the status of every chart object of the
 // repository on each of those retries would multiply a broken registry into a write
 // storm against the API server, for a status that already says what the mark says.
+//
+// Writing nothing must not mean reporting nothing, though. The set is what the merge
+// takes a deferred version's mark from, and a version this retry found already marked is
+// owed a fresh verdict by the force that could not finish — so leaving it out would let
+// the pass write the versions it deferred back unmarked, on a cache that may still
+// predate either marking write, and consume the second force having done nothing.
 func TestForcingARefreshAgainRewritesNothing(t *testing.T) {
 	patches := 0
 	c := newAddonClientWithInterceptor(t, interceptor.Funcs{
@@ -1504,13 +1533,26 @@ func TestForcingARefreshAgainRewritesNothing(t *testing.T) {
 
 	afterFirst := patches
 
-	if _, err := cat.MarkForReexamination(context.Background(), repo); err != nil {
+	owed, err := cat.MarkForReexamination(context.Background(), repo)
+	if err != nil {
 		t.Fatalf("marking the recorded versions again returned %v", err)
+	}
+
+	if !owesFreshVerdict(owed, "podinfo", "1.0.0") {
+		t.Fatal("a version already carrying the mark is still owed a fresh verdict: the merge has nothing else to preserve it from")
 	}
 
 	if patches != afterFirst {
 		t.Fatalf("status patches = %d, want %d: a mark that is already recorded must not be rewritten", patches, afterFirst)
 	}
+}
+
+// owesFreshVerdict reports whether the set a marking pass handed the merge says this
+// version of this chart is still owed a fresh verdict.
+func owesFreshVerdict(owed contract.MarkedVersions, chartName, version string) bool { //nolint:unparam // the chart name says which set is being read; hard-coding it would hide what the assertion is about
+	_, marked := owed[chartName][version]
+
+	return marked
 }
 
 // versionsByName reads the recorded versions of one catalog object, keyed by version.

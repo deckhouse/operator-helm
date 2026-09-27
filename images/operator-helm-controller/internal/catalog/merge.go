@@ -31,6 +31,10 @@ import (
 // and keeps both its media type and its recorded OCI reference, without either of
 // which the consumer's internal OCIRepository could not be built at all.
 //
+// An empty list of fetched entries is an input like any other, not a degenerate one:
+// it is how a chart the repository stopped offering altogether is merged (recordAbsence),
+// every recorded version of it being unlisted by definition.
+//
 // The same protection applies to a version that is still listed but whose tag was
 // re-pushed as a non-chart artifact: the fresh verdict carries no media type, but if a
 // consumer still references the version, its previously recorded media type is carried

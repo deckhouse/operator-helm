@@ -19,6 +19,7 @@ package reposync
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -32,6 +33,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
 )
 
@@ -336,6 +338,118 @@ func TestSynchronizerSyncRecordsAForcedRefreshBeforeTheRegistryIsRead(t *testing
 	}
 	if got := chartStatus(t, c, forced.Name, "podinfo").Versions; len(got) != 1 || got[0].ReexaminationRequired {
 		t.Fatalf("versions after the refresh = %+v, want the mark cleared by the pass that answered it", got)
+	}
+}
+
+// recordingCatalog stands in for the catalog so the set one pass hands from its marking
+// to its merge can be observed directly. The real catalog cannot show it here: over the
+// fake client nothing lags behind a write, so a merge that re-read the marks from the
+// cluster would reach the same status as one that was handed them, and the carry the
+// production code depends on would be indistinguishable from not carrying anything.
+type recordingCatalog struct {
+	marked   contract.MarkedVersions
+	received contract.MarkedVersions
+	merged   bool
+}
+
+func (c *recordingCatalog) Known(context.Context, contract.Repository) (repoclient.KnownCharts, error) {
+	return nil, nil
+}
+
+func (c *recordingCatalog) MigrateNames(context.Context, contract.Repository) error {
+	return nil
+}
+
+func (c *recordingCatalog) MarkForReexamination(context.Context, contract.Repository) (contract.MarkedVersions, error) {
+	return c.marked, nil
+}
+
+func (c *recordingCatalog) Reconcile(
+	_ context.Context,
+	_ contract.Repository,
+	_ []repoclient.Chart,
+	marked contract.MarkedVersions,
+) (contract.CatalogResult, error) {
+	c.received = marked
+	c.merged = true
+
+	return contract.CatalogResult{}, nil
+}
+
+func (c *recordingCatalog) InUseVersions(context.Context, contract.Repository, string) (map[string]struct{}, error) {
+	return nil, nil
+}
+
+func (c *recordingCatalog) Lookup(
+	context.Context,
+	contract.Repository,
+	string,
+) (client.Object, *helmv1alpha1.ChartCatalogStatus, error) {
+	return nil, nil, nil
+}
+
+// TestSynchronizerSyncHandsTheMergeTheVersionsItMarked pins the one thing that connects
+// the two halves of a forced pass. The marking write is read back through the manager's
+// cache, which is not guaranteed to show a pass its own write, and a merge patch on a
+// list ships the whole array: a merge that trusted that read would write the versions
+// this pass deferred back unmarked, with the force annotation already consumed. The
+// pass therefore carries what it marked in memory, and what reaches the merge has to be
+// exactly what the marking reported — an empty set for a pass that marked nothing.
+func TestSynchronizerSyncHandsTheMergeTheVersionsItMarked(t *testing.T) {
+	tests := []struct {
+		name   string
+		forced bool
+		marked contract.MarkedVersions
+		want   contract.MarkedVersions
+	}{
+		{
+			name:   "a forced pass carries every version its marking reported",
+			forced: true,
+			marked: contract.MarkedVersions{
+				"podinfo": {"6.7.1": struct{}{}, "6.7.0": struct{}{}},
+				"legacy":  {"1.0.0": struct{}{}},
+			},
+			want: contract.MarkedVersions{
+				"podinfo": {"6.7.1": struct{}{}, "6.7.0": struct{}{}},
+				"legacy":  {"1.0.0": struct{}{}},
+			},
+		},
+		{
+			name:   "an unforced pass marks nothing and carries nothing",
+			forced: false,
+			marked: contract.MarkedVersions{"podinfo": {"6.7.1": struct{}{}}},
+			want:   nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := testRepository()
+			if test.forced {
+				repo.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+			}
+
+			cat := &recordingCatalog{marked: test.marked}
+			stub := stubRepoClient{charts: []repoclient.Chart{{
+				Name:     "podinfo",
+				Versions: []repoclient.ChartVersion{ociVersion("6.7.1", "application/tar+gzip")},
+			}}}
+			service := NewSynchronizer(nil, func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
+				return stub, nil
+			}, cat)
+
+			outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
+			if outcome.Catalog.Err != nil {
+				t.Fatalf("the pass returned %v", outcome.Catalog.Err)
+			}
+			if !cat.merged {
+				t.Fatal("the fixture must reach the merge, or it proves nothing about what the merge is handed")
+			}
+
+			if !reflect.DeepEqual(cat.received, test.want) {
+				t.Fatalf("the merge was handed %v, want %v: the mark cannot be read back from a cache that may predate it", cat.received, test.want)
+			}
+		})
 	}
 }
 

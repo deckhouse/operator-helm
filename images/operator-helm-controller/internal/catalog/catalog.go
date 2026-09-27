@@ -342,7 +342,7 @@ func (t *typed[C, CL]) Reconcile(
 			logger.Info("Keeping a chart referenced by a consumer",
 				"kind", t.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
 
-			if err := t.clearMarks(ctx, chart); err != nil {
+			if err := t.recordAbsence(ctx, chart, inUse, marked[chartName]); err != nil {
 				return result, err
 			}
 
@@ -357,31 +357,32 @@ func (t *typed[C, CL]) Reconcile(
 	return result, nil
 }
 
-// clearMarks drops the re-examination mark from every version of a chart this pass saw
-// the whole repository without listing. Such a chart is reconciled nowhere else — it is
-// retained only because a consumer pins a version of it — so a mark left on it is a
-// request no pass can ever answer: the chart is not offered, so none of its versions is
-// ever a probe candidate, and the user-visible status would go on claiming work forever.
-// Only the mark is touched; the media type and reference the pinning consumer builds its
-// OCIRepository from are exactly what a chart kept for a consumer exists to carry.
-func (t *typed[C, CL]) clearMarks(ctx context.Context, chart C) error {
+// recordAbsence writes the verdict owed to a chart this pass saw the whole repository
+// without listing, and which is retained only because a consumer pins a version of it.
+// Nothing else reconciles such a chart: it is not among the fetched charts, so the loop
+// above never merges it, and its status would otherwise keep whatever the last listing
+// that did offer it left there — a media type for an artifact the repository no longer
+// holds, with no unavailability reason, which is the one state that survives a chart
+// being deleted and pushed again with different content behind every tag.
+//
+// The answer is the merge a listed chart with an empty version list would get. An
+// in-use version is retained as RemovedFromRepository and keeps its media type and
+// reference, which is what the pinning consumer builds its internal OCIRepository from;
+// an unreferenced one is dropped, exactly as it would be for a chart still listed. The
+// reason is also what makes the tag a probe candidate again the moment the chart is
+// listed once more (FetchOptions.NeedsExamination), so a re-push is noticed without a
+// forced refresh. And the re-examination mark — a request no pass could ever answer
+// while the chart is unlisted, because probe candidates are built from the listing — is
+// cleared by the same rule that clears it for a single removed version, rather than by a
+// special case that clears it without answering anything.
+func (t *typed[C, CL]) recordAbsence(ctx context.Context, chart C, inUse, marked map[string]struct{}) error {
 	base := chart.DeepCopyObject().(C)
 	status := t.cfg.Status(chart)
 
-	cleared := false
-	for i := range status.Versions {
-		if status.Versions[i].ReexaminationRequired {
-			status.Versions[i].ReexaminationRequired = false
-			cleared = true
-		}
-	}
-
-	if !cleared {
-		return nil
-	}
+	status.Versions = mergeChartVersions(nil, status.Versions, inUse, nil, marked)
 
 	if err := t.client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
-		return fmt.Errorf("clearing the re-examination marks of chart %s: %w",
+		return fmt.Errorf("recording that the repository no longer offers chart %s: %w",
 			describeKey(client.ObjectKeyFromObject(chart)), err)
 	}
 

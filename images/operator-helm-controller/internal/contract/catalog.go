@@ -46,13 +46,6 @@ type CatalogResult struct {
 // the pass knows what it asked for without asking the cache again.
 type MarkedVersions map[string]map[string]struct{}
 
-// Marked reports whether one version of one chart was left owing a fresh verdict.
-func (m MarkedVersions) Marked(chartName, version string) bool {
-	_, marked := m[chartName][version]
-
-	return marked
-}
-
 // Catalog mirrors the chart list of a repository into the chart catalog kind of
 // its family. One Catalog serves every repository of one kind; the repository is
 // passed to each call because the objects it writes are owned by, labelled with
