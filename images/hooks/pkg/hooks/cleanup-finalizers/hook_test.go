@@ -159,18 +159,16 @@ func applyFilter(t *testing.T, filter string, object map[string]any) map[string]
 }
 
 // objectWithFinalizers is the stored object a collected filter is replayed against.
+// objectWithFinalizers builds the stored object carrying exactly the given list; with
+// no arguments the list is present and empty, which is a different shape from the list
+// being absent and is asserted separately.
 func objectWithFinalizers(finalizers ...string) map[string]any {
-	metadata := map[string]any{"name": "object"}
-	if finalizers != nil {
-		list := make([]any, 0, len(finalizers))
-		for _, finalizer := range finalizers {
-			list = append(list, finalizer)
-		}
-
-		metadata["finalizers"] = list
+	list := make([]any, 0, len(finalizers))
+	for _, finalizer := range finalizers {
+		list = append(list, finalizer)
 	}
 
-	return map[string]any{"metadata": metadata}
+	return map[string]any{"metadata": map[string]any{"name": "object", "finalizers": list}}
 }
 
 // finalizersOf reads the member back, telling an empty list from an absent one.
@@ -242,6 +240,33 @@ func TestCleanupFinalizersCoversEveryKindThatCarriesTheCleanupFinalizer(t *testi
 		"InternalNelmOperatorOCIRepository":  "source.internal.operator-helm.deckhouse.io/v1",
 	}
 
+	// Which finalizer belongs to which kind, spelled out rather than read back from the
+	// table under test: the hook now removes one name instead of the whole list, so a
+	// kind paired with the wrong name would leave its object finalized forever, and a
+	// test deriving the expectation from the same field could not see it. The public
+	// kinds carry the finalizer our controllers add; the internal flux objects carry
+	// flux's own, under the name the kube-api-rewriter stores it with.
+	wantFinalizers := map[string]string{
+		"HelmApplication":                    "helm.deckhouse.io/cleanup",
+		"HelmApplicationRepository":          "helm.deckhouse.io/cleanup",
+		"HelmClusterAddon":                   "helm.deckhouse.io/cleanup",
+		"HelmClusterAddonRepository":         "helm.deckhouse.io/cleanup",
+		"HelmClusterApplicationRepository":   "helm.deckhouse.io/cleanup",
+		"InternalNelmOperatorHelmRelease":    "finalizers.internal.operator-helm.deckhouse.io",
+		"InternalNelmOperatorHelmChart":      "finalizers.internal.operator-helm.deckhouse.io",
+		"InternalNelmOperatorHelmRepository": "finalizers.internal.operator-helm.deckhouse.io",
+		"InternalNelmOperatorOCIRepository":  "finalizers.internal.operator-helm.deckhouse.io",
+	}
+
+	gotFinalizers := map[string]string{}
+	for _, watched := range watchedKinds {
+		gotFinalizers[watched.kind] = watched.finalizer
+	}
+
+	if !reflect.DeepEqual(gotFinalizers, wantFinalizers) {
+		t.Errorf("finalizer per kind:\n got %v\nwant %v", gotFinalizers, wantFinalizers)
+	}
+
 	got := map[string]string{}
 	for _, config := range kubernetesConfigs() {
 		got[config.Kind] = config.APIVersion
@@ -305,12 +330,36 @@ func TestCleanupFinalizersRemovesOnlyTheModuleFinalizerAndLeavesForeignOnesInPla
 		},
 		{
 			name:   "an object with no finalizers at all is left untouched",
-			stored: objectWithFinalizers(),
+			stored: map[string]any{"metadata": map[string]any{"name": "object"}},
 			want:   "absent",
 		},
 		{
 			name:   "a second run over an already stripped object changes nothing",
 			stored: objectWithFinalizers("backup.example.com/protect"),
+			want:   []any{"backup.example.com/protect"},
+		},
+		{
+			// A list emptied by an earlier removal, ours or somebody else's. The guard
+			// has to treat it as present, not as absent: jq's `if` is false only on
+			// null and false, and an empty array is neither.
+			name:   "an empty list stays an empty list",
+			stored: objectWithFinalizers(),
+			want:   []any{},
+		},
+		{
+			// An explicit null is what a client that removed the last finalizer with a
+			// merge patch leaves behind, and it is the shape the previous JSON Patch
+			// implementation of this hook could not handle at all.
+			name:   "an explicit null is left alone",
+			stored: map[string]any{"metadata": map[string]any{"name": "object", "finalizers": nil}},
+			want:   nil,
+		},
+		{
+			// The API server does not create duplicates, but an object edited by two
+			// clients racing on the list can carry one. Removing only the first would
+			// leave the object finalized forever with nobody left to finish the job.
+			name:   "every copy of ours is removed, not just the first",
+			stored: objectWithFinalizers(publicFinalizer, "backup.example.com/protect", publicFinalizer),
 			want:   []any{"backup.example.com/protect"},
 		},
 	}
