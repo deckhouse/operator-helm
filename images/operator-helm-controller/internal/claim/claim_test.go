@@ -439,6 +439,34 @@ func TestDropStaleDropsTheClaimsTheSpecMovedAwayFrom(t *testing.T) {
 	}
 }
 
+// TestDropStaleDropsOrphansWhenOnlyTheVersionMoved pins that a version bump is a
+// settled move, not an unconfirmed one: the claim is per repository/chart pair and
+// carries no version, so a record naming an older version of the chart the spec
+// names is the same pair and releases what sits beside it.
+func TestDropStaleDropsOrphansWhenOnlyTheVersionMoved(t *testing.T) {
+	addon := claimingAddon("metrics", "podinfo")
+	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+		HelmClusterAddonRepository: claimRepo,
+		HelmClusterAddonChartName:  "podinfo",
+		Version:                    "6.0.0",
+	}
+
+	current := claimFor(claimRepo, "podinfo", "metrics", "metrics")
+	orphan := claimFor(claimRepo, "old-chart", "metrics", "metrics")
+	claims, c := newClaims(t, addon, current, orphan)
+
+	if err := claims.DropStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("DropStale returned %v", err)
+	}
+
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(current), &coordinationv1.Lease{}); err != nil {
+		t.Fatalf("the claim of the pair in use was released: %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(orphan), &coordinationv1.Lease{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("getting the orphan returned %v, want it gone", err)
+	}
+}
+
 // TestDropStaleIgnoresClaimsOfOtherAddons pins the label scope: the list is
 // filtered by the addon's own source labels, so a claim belonging to a different
 // addon is never a candidate for cleanup.

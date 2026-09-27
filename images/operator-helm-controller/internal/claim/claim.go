@@ -173,11 +173,18 @@ func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
 	// still carry no record of it at all. An empty record therefore cannot be read as
 	// "nothing is deployed" — it is read as "unknown", and nothing is released.
 	//
-	// This keeps a pair the release cannot move off — a spec pointed at a chart
-	// somebody else holds never reaches the status — until the release is deleted,
-	// when teardown frees everything it holds. That is the cheaper failure: a pair
-	// held too long needs someone to look at it, a pair freed too early corrupts an
-	// installation.
+	// This keeps a pair the release cannot move off until the release is deleted,
+	// when teardown frees everything it holds. Two states reach that: a spec pointed
+	// at a chart somebody else holds, and a chart that never installs, since neither
+	// ever reaches the status. That is the cheaper failure — a pair held too long
+	// needs someone to look at it, a pair freed too early corrupts an installation.
+	//
+	// The record is written after the fact, and one sequence outruns it: a spec that
+	// moves A -> B, gets B deployed, and moves back to A before the pass that would
+	// have recorded B. The record still reads A, the spec reads A, so the move looks
+	// settled and B — deployed under this release's name — is released. Closing it
+	// needs an intent written before the internal release is repointed, or claims
+	// held by renewal rather than by spec; both are larger than what this guards.
 	last := rel.LastAppliedChart()
 	if last == nil {
 		return nil

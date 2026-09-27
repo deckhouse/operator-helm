@@ -104,11 +104,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// because a duplicate that loses the race must not accrue a finalizer it would
 	// otherwise have to clean up: it simply surfaces the conflict on its status and
 	// requeues, recovering on its own once the owner releases the pair.
-	// Before claiming anything, let go of the pairs this release no longer names. A
+	// Before claiming anything, let go of the pairs this release has moved off. A
 	// claim is only ever released by the release that holds it, so this must not sit
-	// behind a claim that may not be granted: an addon whose new pair is taken would
-	// otherwise hold its old one for as long as it kept retrying, and nobody —
-	// including the addon that wants the old pair — could do anything about it.
+	// behind a claim that may not be granted — a pass that fails to acquire still
+	// releases. What it may release is narrower than "everything the spec no longer
+	// names": see DropStale, which lets a pair go only once the move off it is on
+	// the status.
 	if err := r.deps.Claims.DropStale(ctx, rel); err != nil {
 		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
 	}

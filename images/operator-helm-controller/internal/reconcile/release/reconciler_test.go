@@ -2788,7 +2788,10 @@ func TestReconcileDeleteOfAnAddonIgnoresATerminatingTargetNamespace(t *testing.T
 // is everything except that. Here the recorded chart is the one it moved to, so the
 // move is done and the pair it came from is free even though this pass got nothing.
 func TestReconcileReleasesAnAbandonedClaimEvenWhenTheNewPairIsTaken(t *testing.T) {
-	// The addon moved from podinfo to nginx, which another addon already holds.
+	// The addon runs nginx and has it recorded, so its move onto nginx is settled and
+	// the podinfo lease it still carries from an earlier spec is free to go. The pass
+	// nevertheless gets nothing: another addon holds the pair, which is what makes
+	// this the ordering case — releasing runs even when acquiring will not be granted.
 	addon := testAddon()
 	addon.Spec.Chart.HelmClusterAddonChartName = "nginx"
 	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
