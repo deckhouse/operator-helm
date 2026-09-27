@@ -1059,6 +1059,112 @@ func TestEvaluateRefusesAPassThatEndedOnLiftedMaintenance(t *testing.T) {
 	}
 }
 
+// TestEvaluateTransientInternalObjectFailureIsHandedToTheWorkQueue pins what brings
+// a release back after a pass that reached the chart failed to write one of its
+// internal objects. The write did not land, so the object a watch would fire on is
+// exactly as it was and no event follows: the rate limiter is the only thing left,
+// and without it the release sits reporting a retry nobody scheduled. The cases that
+// opt out each name what is already coming back to them.
+func TestEvaluateTransientInternalObjectFailureIsHandedToTheWorkQueue(t *testing.T) {
+	cause := errors.New("etcdserver: request timed out")
+
+	tests := []struct {
+		name    string
+		outcome ChartReached
+		retried bool
+	}{
+		{
+			name:    "the internal helm chart could not be written",
+			outcome: ChartReached{Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Err: cause}}},
+			retried: true,
+		},
+		{
+			name:    "the internal oci repository could not be written",
+			outcome: ChartReached{Internal: ServedByOCIRepository{Result: internalobj.OCIRepoOutcome{Err: cause}}},
+			retried: true,
+		},
+		{
+			name: "the internal helm release could not be written",
+			outcome: ChartReached{
+				Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{
+					Artifact: &meta.Artifact{Revision: "6.7.1"},
+					Internal: readyInternal(),
+				}},
+				Release: &internalobj.ReleaseOutcome{Err: cause},
+			},
+			retried: true,
+		},
+		{
+			name: "the superseded internal source could not be removed",
+			outcome: ChartReached{Internal: SourceUnresolved{Failure: Failure{
+				Reason:  helmv1alpha1.ReasonFailed,
+				Message: "Repository change failed",
+				Err:     cause,
+			}}},
+			retried: true,
+		},
+		{
+			// The watch on the internal object is what wakes this release, and the
+			// object reports its own state rather than an error of ours.
+			name: "an internal object that exists and is not ready yet",
+			outcome: ChartReached{Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{
+				Internal: internalobj.InternalObjectState{
+					Observed: true,
+					Status:   metav1.ConditionFalse,
+					Reason:   helmv1alpha1.ReasonChartFetchFailed,
+					Message:  "failed to pull the chart",
+				},
+			}}},
+			retried: false,
+		},
+		{
+			// An error returned beside a requeue takes precedence over it, so handing
+			// this one to the queue would silently drop the probe's own timer.
+			name: "an artifact probe failure already on a timer",
+			outcome: ChartReached{Internal: ServedByOCIRepository{Result: internalobj.OCIRepoOutcome{
+				ProbeErr:          cause,
+				ProbeReason:       helmv1alpha1.ReasonOCIFetchFailed,
+				ProbeMessage:      "Failed to examine the chart artifact",
+				ProbeRequeueAfter: time.Minute,
+			}}},
+			retried: false,
+		},
+		{
+			name: "a terminal probe verdict about the artifact itself",
+			outcome: ChartReached{Internal: ServedByOCIRepository{Result: internalobj.OCIRepoOutcome{
+				ProbeErr:      cause,
+				ProbeReason:   helmv1alpha1.ReasonUnsupportedChartArtifact,
+				ProbeMessage:  "the tag does not address a packaged chart",
+				ProbeTerminal: true,
+			}}},
+			retried: false,
+		},
+		{
+			name: "a chart version the catalog does not have",
+			outcome: ChartReached{Internal: SourceUnresolved{Failure: Failure{
+				Reason:   helmv1alpha1.ReasonChartVersionNotFound,
+				Message:  "Version 6.7.2 of chart podinfo is not in the catalog of repository example",
+				Err:      errors.New("chart catalog does not have version"),
+				BadInput: true,
+			}}},
+			retried: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := baseInputs()
+			in.Outcome = tt.outcome
+
+			decision := Evaluate(in)
+
+			if retried := decision.Err != nil; retried != tt.retried {
+				t.Fatalf("Err = %v, want retried = %v", decision.Err, tt.retried)
+			}
+		})
+	}
+}
+
 // TestEvaluateMissingChartVersionIsNotWorkInProgress pins how a release reports a
 // version that is not in the catalog: not ready, under its own reason, and without
 // the promise of a retry — nothing this controller does produces a version the

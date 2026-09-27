@@ -400,6 +400,19 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 	decision.ApplyValues = release.Ready() && valuesDeployed(outcome)
 	decision.RequeueAfter = probeRequeueAfter(outcome.Internal)
 
+	if !stalled && decision.RequeueAfter == 0 {
+		// A verdict this pass produced itself — a write to an internal object that did
+		// not land, a source that could not be resolved — is the one failure here that
+		// nothing else comes back to: the object a watch would fire on was left exactly
+		// as it was, so the work queue's rate limiter is all there is. An internal object
+		// that exists and is merely not ready yet carries no error at all and is woken by
+		// the watch on it, which is why it never reaches this. The two exclusions above
+		// are already scheduled: a stalled verdict waits for a new spec, and a failure the
+		// artifact probe put on a timer would lose that timer, because an error returned
+		// beside a requeue takes precedence over it.
+		decision.Err = retryErr(verdict.Failure)
+	}
+
 	return decision
 }
 
