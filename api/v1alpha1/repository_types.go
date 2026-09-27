@@ -46,6 +46,12 @@ type RepositorySpec struct {
 	CACertificate string `json:"caCertificate,omitempty"`
 
 	// InsecureSkipVerify disable TLS certificate verification.
+	// It applies to the catalog fetch this operator performs itself and, for an OCI
+	// registry, to the pull the chart is installed from. An HTTPS Helm repository
+	// pulls its charts through source-controller, which ignores the flag outside OCI
+	// (see spec.insecure of its HelmRepository), so a self-signed HTTPS repository
+	// will publish a catalog and then fail every installation from it. Give such a
+	// repository caCertificate instead.
 	// +optional
 	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }

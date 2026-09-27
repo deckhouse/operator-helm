@@ -22,13 +22,10 @@ import (
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
@@ -58,17 +55,16 @@ func (s *Maintenance) Ensure(ctx context.Context, rel contract.Release) Maintena
 	return MaintenanceOutcome{Activated: activated}
 }
 
+// ChangeRequired reports whether the suspend flag on the internal HelmRelease still
+// has to be moved. What the spec asks for is compared against Managed, which is
+// written only by the pass that has moved the flag: a request that has not been
+// carried out yet leaves the two disagreeing, and one that has leaves them equal.
+//
+// Managed is only ever true or false here. A third reading, "unknown", used to be
+// treated as a request to lift maintenance; nothing has ever written it to this
+// condition, on this branch or before it, so the case is gone.
 func (s *Maintenance) ChangeRequired(rel contract.Release) bool {
-	if rel.MaintenanceActivated() && !rel.MaintenanceEnabled() {
-		return true
-	}
-
-	if !rel.MaintenanceActivated() && (rel.MaintenanceEnabled() ||
-		apimeta.IsStatusConditionPresentAndEqual(*rel.Object().GetConditions(), helmv1alpha1.ConditionTypeManaged, metav1.ConditionUnknown)) {
-		return true
-	}
-
-	return false
+	return rel.MaintenanceActivated() != rel.MaintenanceEnabled()
 }
 
 func (s *Maintenance) updateHelmReleaseSuspendState(ctx context.Context, names contract.ReleaseNames, suspend bool) error {
