@@ -53,18 +53,20 @@ type Catalog interface {
 	// TRANSITIONAL: remove once every cluster has reconciled each repository once
 	// under the current scheme.
 	MigrateNames(ctx context.Context, repo Repository) error
+	// MarkForReexamination records on every version the catalog holds for the
+	// repository that its verdict is no longer trusted, which is what forcing a
+	// refresh asks for. It is the durable form of that request: the annotation
+	// carrying it is consumed by the pass that acts on it, so the request has to be
+	// in the catalog before the registry is contacted, or a read that fails takes the
+	// whole refresh with it and the re-pushed tag it was asked for is never looked at
+	// again. Every later pass — forced or not — re-examines a marked version and
+	// clears the mark by answering it.
+	MarkForReexamination(ctx context.Context, repo Repository) error
 	// Reconcile writes the fetched charts into the catalog and prunes objects the
 	// repository no longer lists, keeping any version a consumer still references.
 	// The result names the charts it could not publish; it is filled in as far as
 	// the pass got, so it is meaningful next to an error too.
-	//
-	// forced says the charts come from a read that ignored every recorded verdict.
-	// The catalog is where that request outlives the pass: a forced read cut short by
-	// its budget marks the versions it did not reach as owing a fresh verdict, and the
-	// passes that follow examine them. It is passed rather than read off the repository
-	// so the write records the same pass the read was made under, whatever happens to
-	// the force annotation in between.
-	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart, forced bool) (CatalogResult, error)
+	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart) (CatalogResult, error)
 	// InUseVersions reports the versions of one chart still referenced by the
 	// consumers of this family. An empty chart name yields no versions.
 	InUseVersions(ctx context.Context, repo Repository, chartName string) (map[string]struct{}, error)

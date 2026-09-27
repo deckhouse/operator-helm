@@ -1232,3 +1232,73 @@ func TestReconcileConsumesAForceRequestWhoseReadFailed(t *testing.T) {
 		t.Fatal("a forced read that failed must still consume the request, or the repository forces forever")
 	}
 }
+
+// TestReconcileKeepsAForceRequestItCouldNotRecord is the bound on the rule above. The
+// request is consumed on the attempt because the attempt has already written it into
+// the catalog, where the passes that follow pick it up; a pass that could not write it
+// has nothing to hand over, so consuming the annotation there would drop the refresh
+// entirely and the re-pushed tag it was asked for would never be examined again. Such a
+// pass must not reach the registry either: contacting it would make the attempt look
+// like the one that carried the request out.
+func TestReconcileKeepsAForceRequestItCouldNotRecord(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1"), MediaType: "application/tar+gzip"}},
+	}}}
+
+	// Only the marking write fails: the catalog write of the pass that established the
+	// versions has to succeed first, or there is nothing to mark.
+	marking := false
+	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
+		SubResourcePatch: func(
+			ctx context.Context,
+			cl client.Client,
+			sub string,
+			obj client.Object,
+			patch client.Patch,
+			opts ...client.SubResourcePatchOption,
+		) error {
+			if _, ok := obj.(*helmv1alpha1.HelmClusterAddonChart); ok && marking {
+				return errors.New("synthetic chart status patch failure")
+			}
+
+			return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	}, stub, repo)
+
+	forcedRepository(t, r, c, repo)
+
+	marking = true
+	reads := len(stub.options)
+
+	// The failure travels to the work queue as an error; what it must not do is spend
+	// the request.
+	_, _ = r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	})
+
+	if len(stub.options) != reads {
+		t.Fatalf("fetch options = %+v, want the registry left alone until the request is recorded", stub.options)
+	}
+	if !forceAnnotationPresent(t, c, repo.Name) {
+		t.Fatal("a request that could not be recorded must stay on the object: nothing else carries the refresh")
+	}
+
+	// The retry finds the catalog writable and carries the request out, which is what
+	// makes keeping it worth anything.
+	marking = false
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if len(stub.options) != reads+1 || !stub.options[reads].Full {
+		t.Fatalf("fetch options = %+v, want the retry to have produced one forced read", stub.options)
+	}
+	if forceAnnotationPresent(t, c, repo.Name) {
+		t.Fatal("the pass that recorded the request must consume it")
+	}
+}

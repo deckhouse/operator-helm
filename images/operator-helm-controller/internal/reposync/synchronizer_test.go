@@ -269,6 +269,193 @@ func TestSynchronizerSyncRequestsFullPassOnForceReconcile(t *testing.T) {
 	}
 }
 
+// TestSynchronizerSyncRecordsAForcedRefreshBeforeTheRegistryIsRead covers the failure
+// a forced refresh used to disappear into. The annotation is consumed by the pass that
+// attempts the read, so if the read is all that carries the request, a registry that is
+// briefly unreachable ends the refresh: the annotation is gone, no version is marked,
+// and every pass after that skips the versions whose media type is recorded — including
+// the re-pushed tag the refresh was asked for — while the repository reports one
+// successful synchronization after another. The request is written into the catalog
+// before the registry is contacted, so the failed read costs the refresh nothing.
+func TestSynchronizerSyncRecordsAForcedRefreshBeforeTheRegistryIsRead(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	forced := testRepository()
+	forced.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+	chart := existingChart(forced.Name, "podinfo",
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: mediaType},
+	)
+
+	service, c := newSynchronizer(t, stubRepoClient{err: errors.New("dial tcp: connection refused")}, forced, chart)
+
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(forced), chartsource.OCI)
+	if outcome.Fetch.Err == nil {
+		t.Fatal("the fixture must reach a failed forced read")
+	}
+	if !outcome.ForceRequestRecorded {
+		t.Fatal("the request was recorded before the read: the caller may consume the annotation")
+	}
+
+	marked := chartStatus(t, c, forced.Name, "podinfo").Versions
+	if len(marked) != 1 || !marked[0].ReexaminationRequired {
+		t.Fatalf("recorded versions = %+v, want the forced refresh written onto them", marked)
+	}
+
+	// The next pass is an ordinary one — the annotation was consumed by the failed pass —
+	// and it must still re-examine the version the refresh was asked for.
+	ordinary := testRepository()
+	stub := &recordingRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{ociVersion("6.7.1", "application/tar+gzip")},
+	}}}
+	service.clientFactory = func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
+		return stub, nil
+	}
+
+	if outcome := service.Sync(context.Background(), adapter.NewAddonRepository(ordinary), chartsource.OCI); outcome.Fetch.Err != nil {
+		t.Fatalf("the ordinary pass failed: %v", outcome.Fetch.Err)
+	}
+
+	if stub.opts.Full {
+		t.Fatal("the fixture must drive an ordinary pass, or it proves nothing about the mark")
+	}
+	if !stub.opts.NeedsExamination("podinfo", "6.7.1") {
+		t.Fatal("the pass after a failed forced one must re-examine the recorded version")
+	}
+	if got := chartStatus(t, c, forced.Name, "podinfo").Versions; len(got) != 1 || got[0].ReexaminationRequired {
+		t.Fatalf("versions after the refresh = %+v, want the mark cleared by the pass that answered it", got)
+	}
+}
+
+// budgetedRepoClient is a repository client with a budget, as the OCI one has: it
+// examines at most budget of the versions that still need examining and reports the
+// rest as unexamined, carrying forward the recorded verdict of every version it is
+// allowed to skip. mediaType is what the registry holds now — every tag was re-pushed —
+// so a version that was examined is distinguishable from one that was only carried.
+type budgetedRepoClient struct {
+	chartName string
+	tags      []string
+	mediaType string
+	budget    int
+}
+
+func (b *budgetedRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, opts repoclient.FetchOptions) ([]repoclient.Chart, error) {
+	chart := repoclient.Chart{Name: b.chartName}
+	left := b.budget
+
+	for _, tag := range b.tags {
+		known, recorded := opts.Known[b.chartName][tag]
+
+		switch {
+		case !opts.NeedsExamination(b.chartName, tag):
+			chart.Versions = append(chart.Versions, repoclient.ChartVersion{
+				Version:            semver.MustParse(tag),
+				MediaType:          known.MediaType,
+				UnavailableReason:  known.UnavailableReason,
+				UnavailableMessage: known.UnavailableMessage,
+			})
+		case left == 0:
+			if !recorded {
+				// A version nothing is recorded for and nothing was observed about
+				// carries no entry at all, exactly as the real client leaves it.
+				continue
+			}
+
+			chart.UnexaminedVersions = append(chart.UnexaminedVersions, tag)
+		default:
+			left--
+
+			chart.Versions = append(chart.Versions, repoclient.ChartVersion{
+				Version:   semver.MustParse(tag),
+				MediaType: b.mediaType,
+			})
+		}
+	}
+
+	return []repoclient.Chart{chart}, nil
+}
+
+// TestSynchronizerSyncFinishesAForcedRefreshOverSeveralIncompletePasses runs the whole
+// mechanism end to end against the production catalog: a forced pass that does not get
+// through the repository, then ordinary passes under the same budget, each rebuilding
+// what it knows from the catalog objects the previous one wrote. Every pass but the
+// last is incomplete, so the refresh is carried entirely by what the catalog records,
+// and it has to end exactly where one unbounded forced pass would have ended: every
+// version re-examined, nothing left marked.
+func TestSynchronizerSyncFinishesAForcedRefreshOverSeveralIncompletePasses(t *testing.T) {
+	const (
+		recorded = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+		repushed = "application/tar+gzip"
+	)
+
+	tags := []string{"6.7.2", "6.7.1", "6.7.0"}
+
+	forced := testRepository()
+	forced.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+
+	versions := make([]helmv1alpha1.ChartVersion, 0, len(tags))
+	for _, tag := range tags {
+		versions = append(versions, helmv1alpha1.ChartVersion{Version: tag, MediaType: recorded})
+	}
+
+	service, c := newSynchronizer(t, stubRepoClient{}, forced, existingChart(forced.Name, "podinfo", versions...))
+	// One version per pass: three passes are needed, and none of them sees the whole
+	// repository.
+	service.clientFactory = func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
+		return &budgetedRepoClient{chartName: "podinfo", tags: tags, mediaType: repushed, budget: 1}, nil
+	}
+
+	ordinary := testRepository()
+	passes := []struct {
+		name string
+		repo *helmv1alpha1.HelmClusterAddonRepository
+		// examined is how many versions carry the re-pushed media type once the pass
+		// has been written into the catalog.
+		examined int
+	}{
+		{name: "the forced pass", repo: forced, examined: 1},
+		{name: "the first ordinary pass after it", repo: ordinary, examined: 2},
+		{name: "the pass that finishes the refresh", repo: ordinary, examined: 3},
+	}
+
+	for _, pass := range passes {
+		outcome := service.Sync(context.Background(), adapter.NewAddonRepository(pass.repo), chartsource.OCI)
+		if outcome.Fetch.Err != nil {
+			t.Fatalf("%s failed: %v", pass.name, outcome.Fetch.Err)
+		}
+		if outcome.Catalog.Err != nil {
+			t.Fatalf("%s failed to write the catalog: %v", pass.name, outcome.Catalog.Err)
+		}
+
+		stored := chartStatus(t, c, forced.Name, "podinfo").Versions
+		if len(stored) != len(tags) {
+			t.Fatalf("%s left %+v, want all %d versions recorded", pass.name, stored, len(tags))
+		}
+
+		examined := 0
+		for _, version := range stored {
+			switch version.MediaType {
+			case repushed:
+				examined++
+
+				if version.ReexaminationRequired {
+					t.Fatalf("%s left %s marked after examining it: the refresh would never end", pass.name, version.Version)
+				}
+			case recorded:
+				if !version.ReexaminationRequired {
+					t.Fatalf("%s dropped the refresh %s still owes: no later pass would re-examine it", pass.name, version.Version)
+				}
+			default:
+				t.Fatalf("%s recorded %s with media type %q", pass.name, version.Version, version.MediaType)
+			}
+		}
+
+		if examined != pass.examined {
+			t.Fatalf("%s left %d versions re-examined, want %d: %+v", pass.name, examined, pass.examined, stored)
+		}
+	}
+}
+
 func TestSynchronizerSyncRetainsReferencedVersionRemovedFromRepository(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",

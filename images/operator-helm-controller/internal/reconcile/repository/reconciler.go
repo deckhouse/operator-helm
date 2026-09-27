@@ -132,6 +132,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// new name still has an empty status, and writing the fetched versions into it
 	// would make the next pass skip the status carry-over and delete the old object,
 	// taking with it the only copy of a version a consumer still holds.
+	// forceRecorded says the request may be taken off the object: the catalog now
+	// carries it, so the refresh survives whatever happens to the annotation. A pass
+	// that never got as far as recording it leaves this false and keeps the request.
+	forceRecorded := false
+
 	if in.MigrateErr == nil && in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
 		ShouldAttempt(in.Current, in.Generation, in.Now, in.Forced) {
 		if err := r.markSyncInProgress(ctx, repo, in.Forced); err != nil {
@@ -139,6 +144,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 
 		outcome := r.deps.Catalogs.Sync(ctx, repo, repoType)
+		forceRecorded = outcome.ForceRequestRecorded
 
 		// Read after the synchronization, not before it: the schedule is a pause between
 		// attempts, and in.Now was captured before an attempt that may have taken its
@@ -156,17 +162,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		in.Catalog = &outcome.Catalog
 	}
 
-	return r.finish(ctx, repo, in, in.Attempted)
+	return r.finish(ctx, repo, in, in.Attempted && forceRecorded)
 }
 
-// finish applies the decision and consumes the force annotation when an attempt
-// actually ran. The annotation is removed after the status patch so a conflict
-// does not lose the request.
+// finish applies the decision and consumes the force annotation once an attempt has
+// run and recorded the request in the catalog. The annotation is removed after the
+// status patch so a conflict does not lose the request.
 func (r *Reconciler) finish(
 	ctx context.Context,
 	repo contract.Repository,
 	in Inputs,
-	attempted bool,
+	consumeForce bool,
 ) (reconcile.Result, error) {
 	decision := Evaluate(in)
 
@@ -182,7 +188,7 @@ func (r *Reconciler) finish(
 		return reconcile.Result{}, err
 	}
 
-	if attempted {
+	if consumeForce {
 		// A force request reaches a consumer's artifact only through the consumer's
 		// own internal OCIRepository, and any repository can have those: an oci:// one
 		// for every consumer, a helm one for every version its index publishes in a
@@ -196,6 +202,10 @@ func (r *Reconciler) finish(
 			}
 		}
 
+		// The request is consumed by the attempt that recorded it, even one whose read
+		// failed: the catalog now carries it (see Synchronizer.Sync), so the refresh is
+		// finished by the ordinary passes that follow, while keeping the annotation would
+		// pin an unreachable repository into forcing on every pass forever.
 		if err := pass.ConsumeForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(repo.Object()), r.deps.NewRepository().Object()); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 		}

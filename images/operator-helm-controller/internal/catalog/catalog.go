@@ -122,11 +122,59 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (rep
 	return known, nil
 }
 
+// MarkForReexamination marks every verdict the catalog holds for the repository as
+// owing a fresh one. It is how a forced refresh survives the pass that triggered it:
+// the annotation is consumed by that pass, so unless the request is written down
+// first, a read that never reaches the registry — or a catalog write that fails —
+// leaves nothing behind, every later pass skips the versions whose media type is
+// recorded, and the re-pushed tag the refresh was asked for is never examined again.
+//
+// The mark is not a verdict: an entry keeps its media type and stays deployable while
+// it carries one, so nothing a release resolves changes between the mark and the pass
+// that answers it. A version the repository no longer offers is left alone — it is kept
+// only because a consumer still references it, no pass can ever examine it again, and a
+// mark nothing can clear would make the repository re-examine it forever.
+//
+// Objects that already carry the mark everywhere are not patched, so forcing a refresh
+// on an unreachable registry twice in a row costs one write, not two.
+func (t *typed[C, CL]) MarkForReexamination(ctx context.Context, repo contract.Repository) error {
+	charts, err := t.list(ctx, repo)
+	if err != nil {
+		return err
+	}
+
+	for _, chart := range charts {
+		base := chart.DeepCopyObject().(C)
+		status := t.cfg.Status(chart)
+
+		marked := false
+		for i := range status.Versions {
+			if status.Versions[i].ReexaminationRequired ||
+				status.Versions[i].UnavailableReason == helmv1alpha1.UnavailableReasonRemovedFromRepository {
+				continue
+			}
+
+			status.Versions[i].ReexaminationRequired = true
+			marked = true
+		}
+
+		if !marked {
+			continue
+		}
+
+		if err := t.client.Status().Patch(ctx, chart, client.MergeFrom(base)); err != nil {
+			return fmt.Errorf("marking the versions of chart %s for re-examination: %w",
+				describeKey(client.ObjectKeyFromObject(chart)), err)
+		}
+	}
+
+	return nil
+}
+
 func (t *typed[C, CL]) Reconcile(
 	ctx context.Context,
 	repo contract.Repository,
 	charts []repoclient.Chart,
-	forced bool,
 ) (contract.CatalogResult, error) {
 	logger := log.FromContext(ctx)
 
@@ -209,7 +257,7 @@ func (t *typed[C, CL]) Reconcile(
 		if len(chart.Versions) > 0 {
 			status.IconURL = chart.Versions[0].IconURL
 		}
-		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions, forced)
+		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions)
 
 		if err := t.client.Status().Patch(ctx, existing, client.MergeFrom(base)); err != nil {
 			return result, fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)

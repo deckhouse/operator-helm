@@ -934,13 +934,27 @@ func TestFetchChartsOCIOrdersAForcedPassByWhatIsRecorded(t *testing.T) {
 	}
 }
 
+// markAll is what forcing a refresh writes into the catalog before anything is asked
+// of the registry (contract.Catalog.MarkForReexamination): every recorded verdict is
+// now owed a fresh one.
+func markAll(known KnownVersions) KnownVersions {
+	marked := make(KnownVersions, len(known))
+	for tag, version := range known {
+		version.ReexaminationRequired = true
+		marked[tag] = version
+	}
+
+	return marked
+}
+
 // nextKnown is the state the next pass starts from, the way the catalog builds it:
 // every version this pass reached carries its fresh verdict and no mark, every version
-// it did not reach keeps the recorded one and is marked when the pass was forced.
+// it did not reach keeps what was recorded for it, mark included.
 // internal/catalog/merge.go owns this rule — TestAForcedPassMarksTheVersionsItDidNotReach-
-// ForReexamination pins it there — and it is restated here only so the two passes of
-// the scenario below can be run against a real registry.
-func nextKnown(previous KnownVersions, chart Chart, forced bool) KnownVersions {
+// ForReexamination pins it there, and TestSynchronizerSyncFinishesAForcedRefreshOverSeveral-
+// IncompletePasses drives the real merge over a whole refresh — and it is restated here
+// only so the two passes of the scenario below can be run against a real registry.
+func nextKnown(previous KnownVersions, chart Chart) KnownVersions {
 	next := make(KnownVersions, len(previous))
 
 	for _, version := range chart.Versions {
@@ -953,7 +967,6 @@ func nextKnown(previous KnownVersions, chart Chart, forced bool) KnownVersions {
 
 	for _, tag := range chart.UnexaminedVersions {
 		if recorded, ok := previous[tag]; ok {
-			recorded.ReexaminationRequired = recorded.ReexaminationRequired || forced
 			next[tag] = recorded
 		}
 	}
@@ -1004,6 +1017,10 @@ func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing
 	}
 	reg.reset()
 
+	// Forcing the refresh records the request on every verdict the catalog holds, and
+	// only then is the registry read.
+	known = markAll(known)
+
 	forced := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}, Full: true})
 
 	if !slices.Contains(forced.UnexaminedVersions, repushedTag) {
@@ -1011,7 +1028,7 @@ func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing
 			repushedTag, forced.UnexaminedVersions)
 	}
 
-	known = nextKnown(known, forced, true)
+	known = nextKnown(known, forced)
 
 	// The second pass is an ordinary one: the force annotation was consumed by the pass
 	// above, and everything that is left to do is in the recorded state.
@@ -1027,7 +1044,7 @@ func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing
 		t.Fatalf("%s media type is %q, want %q: the refresh must reach the tag it was asked for",
 			repushedTag, got, currentChartMediaType)
 	}
-	if nextKnown(known, second, false)[repushedTag].ReexaminationRequired {
+	if nextKnown(known, second)[repushedTag].ReexaminationRequired {
 		t.Fatal("the pass that examined the re-pushed tag must clear the mark, or the refresh never ends")
 	}
 }

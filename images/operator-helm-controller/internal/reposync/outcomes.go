@@ -56,6 +56,13 @@ type CatalogOutcome struct {
 // and would report a repository read failure as a read success.
 type SyncOutcome struct {
 	FetchAttempted bool
-	Fetch          FetchOutcome
-	Catalog        CatalogOutcome
+	// ForceRequestRecorded says a force request, if there was one, is now written into
+	// the catalog and the annotation carrying it may be dropped. It is false only when
+	// that write failed, which is the one case where the annotation is all that is left
+	// of the request: consuming it then would drop the refresh on the floor, and the
+	// repository would go on reporting successful synchronizations without ever
+	// re-examining the versions the user forced the refresh for.
+	ForceRequestRecorded bool
+	Fetch                FetchOutcome
+	Catalog              CatalogOutcome
 }

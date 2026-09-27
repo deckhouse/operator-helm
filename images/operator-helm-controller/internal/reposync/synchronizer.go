@@ -65,38 +65,55 @@ func (s *Synchronizer) MigrateNames(ctx context.Context, repo contract.Repositor
 // Sync reads the repository catalog and reconciles the chart catalog objects that
 // mirror it. The two phases are reported separately: a fetch failure is about the
 // remote, a catalog failure is about this cluster.
+//
+// A forced pass starts by writing the request into the catalog, before anything is
+// asked of the registry. The force annotation is consumed by the pass that attempts
+// the read, so this write is the only thing that makes the request outlive it: without
+// it a registry that is briefly unreachable ends with the annotation gone and no
+// version marked, and every pass after that skips the recorded verdicts — including
+// the re-pushed tag the refresh was asked for. Failing to write it is reported before
+// the fetch precisely so the caller keeps the annotation and retries the whole thing.
 func (s *Synchronizer) Sync(
 	ctx context.Context,
 	repo contract.Repository,
 	repoType chartsource.Kind,
 ) SyncOutcome {
+	forced := repo.ForceReconcileRequired()
+
+	if forced {
+		if err := s.catalog.MarkForReexamination(ctx, repo); err != nil {
+			// ForceRequestRecorded stays false: nothing holds the request but the
+			// annotation, and dropping it here would lose the refresh entirely.
+			return SyncOutcome{Catalog: CatalogOutcome{Err: err}}
+		}
+	}
+
 	known, err := s.catalog.Known(ctx, repo)
 	if err != nil {
 		// The registry was never contacted: FetchAttempted stays false so the
 		// caller does not mistake this cluster-side read failure for a fetch that
 		// ran (let alone succeeded).
-		return SyncOutcome{Catalog: CatalogOutcome{Err: err}}
+		return SyncOutcome{ForceRequestRecorded: true, Catalog: CatalogOutcome{Err: err}}
 	}
 
-	forced := repo.ForceReconcileRequired()
-
+	// Full asks the registry for what the marks above already record, rather than
+	// relying on reading them back: the catalog is read through the controller's cache,
+	// which is not guaranteed to show this pass its own write yet.
 	charts, fetch := s.fetchCharts(ctx, repo, repoType, repoclient.FetchOptions{
 		Known: known,
 		Full:  forced,
 	})
 	if fetch.Err != nil {
-		return SyncOutcome{FetchAttempted: true, Fetch: fetch}
+		return SyncOutcome{ForceRequestRecorded: true, FetchAttempted: true, Fetch: fetch}
 	}
 
-	// The same flag the read was made under: the catalog records which versions a
-	// forced read left without a fresh verdict, and reading the annotation a second
-	// time could disagree with what was actually asked of the registry.
-	result, err := s.catalog.Reconcile(ctx, repo, charts, forced)
+	result, err := s.catalog.Reconcile(ctx, repo, charts)
 
 	return SyncOutcome{
-		FetchAttempted: true,
-		Fetch:          fetch,
-		Catalog:        CatalogOutcome{Err: err, SkippedCharts: result.SkippedCharts},
+		ForceRequestRecorded: true,
+		FetchAttempted:       true,
+		Fetch:                fetch,
+		Catalog:              CatalogOutcome{Err: err, SkippedCharts: result.SkippedCharts},
 	}
 }
 

@@ -193,7 +193,7 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 // number of passes, and the stalling ones are re-probed with whatever budget is left
 // after them rather than instead of them. A tag whose recorded verdict is marked for
 // re-examination goes between the two, for the same reason: the mark is cleared by the
-// pass that examines the tag and set by nothing but a forced pass, so that set only
+// pass that examines the tag and set by nothing but forcing a refresh, so that set only
 // shrinks too, while a stalling tag is asked again for as long as it keeps stalling.
 //
 // resolveChartVersions returns an error in three cases, none of them a per-tag verdict,
@@ -266,9 +266,11 @@ func resolveChartVersions(
 	//
 	// The groups are read off what is recorded, never off whether this pass examines a
 	// tag: under Full every tag needs a request, and ordering by that would put the whole
-	// listing in one group and leave the order to the registry. A forced pass that runs
-	// out of its budget would then publish an arbitrary prefix, and the pass after it
-	// would start from the same prefix.
+	// listing in one group and leave the order to the registry. Reading them off the
+	// recorded state is what keeps the three kinds of work apart even then — discovering
+	// the versions no pass has ever recorded, then the refresh a forced pass still owes,
+	// then the retries a stalling tag keeps asking for — so a forced pass that runs out of
+	// its budget stops somewhere in that order rather than somewhere in the registry's.
 	//
 	// The candidates themselves are left in listing order: they index resolved and
 	// examined below, and the versions this function returns are built from them.
