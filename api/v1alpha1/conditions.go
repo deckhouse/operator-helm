@@ -154,8 +154,14 @@ const (
 	// ReasonInvalidCACertificate marks a spec.caCertificate that carries no
 	// PEM encoded certificate. It is kept apart from the transport failures the
 	// certificate would otherwise cause — a verification error names the remote,
-	// while this names the field that has to be corrected — and from the retriable
-	// ones, because no attempt can parse those bytes.
+	// while this names the field that has to be corrected.
+	//
+	// Terminal in the sense every stalled repository is: the failure counter
+	// saturates, so the repository is re-examined on the longest backoff and makes
+	// no request to the remote while the bytes stay unparsable. It is deliberately
+	// not stopped outright, because the certificate may be reached through a secret,
+	// and correcting a secret does not change the repository's generation — that
+	// periodic re-examination is the only thing that would ever notice.
 	ReasonInvalidCACertificate = "InvalidCACertificate"
 	// ReasonChartVersionRemoved marks an addon whose chart version is still recorded in
 	// the catalog but is no longer offered by the repository.

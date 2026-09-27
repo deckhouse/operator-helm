@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -145,6 +146,62 @@ func TestTerminalFetchSaturatesCounter(t *testing.T) {
 	}
 	if got.RequeueAfter != MaxSyncBackoff {
 		t.Fatalf("requeue after %s, want %s", got.RequeueAfter, MaxSyncBackoff)
+	}
+}
+
+// TestTerminalCACertificateFailureStaysScheduled pins the deliberate half of what
+// "terminal" means for an unparsable ca certificate: the pass makes no request to
+// the remote, but the repository is still re-examined on the longest backoff, and a
+// pass that then succeeds lifts the condition.
+//
+// Stopping outright would be wrong. The certificate can be reached through a
+// secret, and correcting a secret does not change the repository's generation, so
+// nothing but that periodic re-examination would ever notice the fix.
+func TestTerminalCACertificateFailureStaysScheduled(t *testing.T) {
+	stalled := Evaluate(Inputs{
+		Generation:         1,
+		Now:                testNow,
+		Current:            helmv1alpha1.RepositoryStatus{ObservedGeneration: 1},
+		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
+		Attempted:          true,
+		Fetch: &reposync.FetchOutcome{
+			Err: errors.New("spec.caCertificate holds no PEM encoded certificate"), Terminal: true,
+			Reason:  helmv1alpha1.ReasonInvalidCACertificate,
+			Message: "spec.caCertificate holds no PEM encoded certificate",
+		},
+	})
+
+	if stalled.RequeueAfter != MaxSyncBackoff {
+		t.Fatalf("requeue after %s, want %s: the fix arrives without a spec change", stalled.RequeueAfter, MaxSyncBackoff)
+	}
+	if stalled.Status.NextSyncTime == nil {
+		t.Fatal("nextSyncTime must stay set: it is the only thing that brings the repository back")
+	}
+	if cond := apimeta.FindStatusCondition(stalled.Status.Conditions, helmv1alpha1.ConditionTypeStalled); cond == nil ||
+		cond.Reason != helmv1alpha1.ReasonInvalidCACertificate {
+		t.Fatalf("Stalled is %+v, want it set with the certificate reason", cond)
+	}
+
+	// The secret was corrected. The next scheduled pass reads the repository and
+	// the repository is well again, without anything having touched its spec.
+	recovered := Evaluate(Inputs{
+		Generation:         1,
+		Now:                testNow.Add(MaxSyncBackoff),
+		Current:            stalled.Status,
+		InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
+		Attempted:          true,
+		Fetch:              &reposync.FetchOutcome{},
+		Catalog:            &reposync.CatalogOutcome{},
+	})
+
+	if cond := apimeta.FindStatusCondition(recovered.Status.Conditions, helmv1alpha1.ConditionTypeStalled); cond != nil {
+		t.Fatalf("Stalled is %+v, want it lifted", cond)
+	}
+	if recovered.Status.ConsecutiveFetchFailures != 0 {
+		t.Fatalf("failures are %d, want the saturated counter cleared", recovered.Status.ConsecutiveFetchFailures)
+	}
+	if recovered.Status.LastSyncedGeneration != 1 {
+		t.Fatalf("lastSyncedGeneration is %d, want 1: the catalog was published", recovered.Status.LastSyncedGeneration)
 	}
 }
 
