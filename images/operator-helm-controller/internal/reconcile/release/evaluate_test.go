@@ -19,6 +19,7 @@ package release
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -1323,6 +1324,61 @@ func TestEvaluateFailedReleaseWriteBehindAFailingSourceIsHandedToTheWorkQueue(t 
 	}
 	if decision.Reported != nil {
 		t.Fatalf("Reported = %+v, want none: the reported verdict carries no error of its own", decision.Reported)
+	}
+}
+
+// TestEvaluateFailedReleaseWriteIsQueuedWhateverSourceServesTheChart pins the same
+// rule on the other source kind: which internal object the version is served from is
+// a property of the repository, not of the write that failed behind it.
+func TestEvaluateFailedReleaseWriteIsQueuedWhateverSourceServesTheChart(t *testing.T) {
+	cause := errors.New("etcdserver: request timed out")
+
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal: ServedByOCIRepository{Result: internalobj.OCIRepoOutcome{
+			Artifact: &meta.Artifact{Revision: "6.7.1@sha256:" + strings.Repeat("a", 64)},
+			Internal: internalobj.InternalObjectState{
+				Observed: true,
+				Status:   metav1.ConditionFalse,
+				Reason:   helmv1alpha1.ReasonChartFetchFailed,
+				Message:  "failed to pull the chart",
+			},
+		}},
+		Release: &internalobj.ReleaseOutcome{Err: cause},
+	}
+
+	decision := Evaluate(in)
+
+	if !errors.Is(decision.Err, cause) {
+		t.Fatalf("Err = %v, want it to wrap %v", decision.Err, cause)
+	}
+}
+
+// TestEvaluateStalledSourceKeepsAFailedReleaseWriteOutOfTheQueue pins the guard the
+// rule above must not break. A source that gave up waits for a new spec, and nothing
+// a retry does changes that; queueing the release write that was attempted behind it
+// would spin the object at the rate limiter for as long as the spec stands.
+func TestEvaluateStalledSourceKeepsAFailedReleaseWriteOutOfTheQueue(t *testing.T) {
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{
+			Artifact: &meta.Artifact{Revision: "6.7.1"},
+			Internal: internalobj.InternalObjectState{
+				Observed: true,
+				Stalled:  true,
+				Status:   metav1.ConditionFalse,
+				Reason:   helmv1alpha1.ReasonChartFetchFailed,
+				Message:  "no chart version found for podinfo-9.9.9",
+			},
+		}},
+		Release: &internalobj.ReleaseOutcome{Err: errors.New("etcdserver: request timed out")},
+	}
+
+	decision := Evaluate(in)
+
+	if decision.Err != nil || decision.RequeueAfter != 0 {
+		t.Fatalf("Err = %v, RequeueAfter = %v, want nothing scheduled: a stalled source waits for a new spec",
+			decision.Err, decision.RequeueAfter)
 	}
 }
 
