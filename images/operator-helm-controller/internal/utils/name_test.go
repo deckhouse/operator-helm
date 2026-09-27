@@ -128,9 +128,39 @@ func TestDerivedName(t *testing.T) {
 			want:      "hapr-abcdefghijklmnopq-stable-1846a7b21e01",
 		},
 		{
+			// Twin of the case of the same name in
+			// TestApplicationServiceAccountName
+			// (tests/e2e/internal/naming/naming_test.go). The shape is covered
+			// above for a repository, but the pair that must break together is
+			// this one: the e2e side derives the account name for a
+			// HelmApplication, and only a case with those arguments fails on
+			// both sides when one of them moves.
+			name:      "long application parts are truncated to 18 characters each",
+			prefix:    "hap",
+			kind:      "HelmApplication",
+			namespace: "very-long-namespace-name-exceeding",
+			object:    "very-long-application-name-exceeding",
+			want:      "hap-very-long-namespac-very-long-applicat-35f137b7281e",
+		},
+		{
+			// Twin of the case of the same name in
+			// TestApplicationServiceAccountName
+			// (tests/e2e/internal/naming/naming_test.go).
+			name:      "an application truncation that ends in a dash drops it",
+			prefix:    "hap",
+			kind:      "HelmApplication",
+			namespace: "abcdefghijklmnopq-x",
+			object:    "stable",
+			want:      "hap-abcdefghijklmnopq-stable-2b3b33a25854",
+		},
+		{
 			// A resource name is a DNS subdomain, so it may carry dots. Keeping
 			// one at the cut would put the joining dash at the start of a label
 			// and the API server would reject every object named this way.
+			//
+			// Twin of the case of the same name in
+			// TestApplicationServiceAccountName
+			// (tests/e2e/internal/naming/naming_test.go).
 			name:      "a truncation that ends in a dot drops it",
 			prefix:    "hap",
 			kind:      "HelmApplication",
