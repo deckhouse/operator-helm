@@ -31,6 +31,10 @@ import (
 // that set their own budget exercise the accounting.
 const testBudget = int64(16 << 20)
 
+// testDigest stands in for the artifact revision an entry is written with, for the
+// tests that are about something else; the ones about the revision name their own.
+const testDigest = "sha256:0123456789abcdef"
+
 func TestPutGetRoundTrip(t *testing.T) {
 	c := New(t.TempDir(), testBudget)
 
@@ -39,7 +43,7 @@ func TestPutGetRoundTrip(t *testing.T) {
 	}
 
 	want := []byte("replicaCount: 1\n")
-	if err := c.Put("cv-abc", want); err != nil {
+	if err := c.Put("cv-abc", "sha256:abc", want); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 
@@ -70,7 +74,7 @@ func TestConcurrentSameKey(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			if err := c.Put(key, want); err != nil {
+			if err := c.Put(key, "sha256:concurrent", want); err != nil {
 				t.Errorf("put: %v", err)
 			}
 		}()
@@ -126,7 +130,7 @@ func TestPutRefusesAnEntryThatDoesNotFitTheBudget(t *testing.T) {
 			dir := t.TempDir()
 			c := New(dir, tt.budget)
 
-			err := c.Put("cv-fit", content)
+			err := c.Put("cv-fit", testDigest, content)
 			if tt.wantStored {
 				if err != nil {
 					t.Fatalf("put: %v", err)
@@ -160,10 +164,10 @@ func TestPutKeepsServingEarlierEntriesOnceTheBudgetIsExhausted(t *testing.T) {
 	// which leaves n free — not the 2n the next write needs.
 	c := New(t.TempDir(), 2*blockSize)
 
-	if err := c.Put("cv-first", content); err != nil {
+	if err := c.Put("cv-first", testDigest, content); err != nil {
 		t.Fatalf("first put: %v", err)
 	}
-	if err := c.Put("cv-second", content); !errors.Is(err, ErrBudgetExhausted) {
+	if err := c.Put("cv-second", testDigest, content); !errors.Is(err, ErrBudgetExhausted) {
 		t.Fatalf("second put = %v, want ErrBudgetExhausted", err)
 	}
 
@@ -180,7 +184,7 @@ func TestOverwritingAnEntryCountsItOnce(t *testing.T) {
 	c := New(t.TempDir(), 2*blockSize)
 
 	for i := range 5 {
-		if err := c.Put("cv-same", content); err != nil {
+		if err := c.Put("cv-same", testDigest, content); err != nil {
 			t.Fatalf("put %d: %v", i, err)
 		}
 	}
@@ -197,10 +201,10 @@ func TestDeleteGivesTheSpaceBackToTheBudget(t *testing.T) {
 	content := bytes.Repeat([]byte("q"), 512)
 	c := New(t.TempDir(), 2*blockSize)
 
-	if err := c.Put("cv-old", content); err != nil {
+	if err := c.Put("cv-old", testDigest, content); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if err := c.Put("cv-new", content); !errors.Is(err, ErrBudgetExhausted) {
+	if err := c.Put("cv-new", testDigest, content); !errors.Is(err, ErrBudgetExhausted) {
 		t.Fatalf("put into a full cache = %v, want ErrBudgetExhausted", err)
 	}
 
@@ -208,7 +212,7 @@ func TestDeleteGivesTheSpaceBackToTheBudget(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	if err := c.Put("cv-new", content); err != nil {
+	if err := c.Put("cv-new", testDigest, content); err != nil {
 		t.Fatalf("put after delete: %v", err)
 	}
 
@@ -216,7 +220,7 @@ func TestDeleteGivesTheSpaceBackToTheBudget(t *testing.T) {
 	if err := c.Delete("cv-old"); err != nil {
 		t.Fatalf("delete of a missing entry: %v", err)
 	}
-	if err := c.Put("cv-third", content); !errors.Is(err, ErrBudgetExhausted) {
+	if err := c.Put("cv-third", testDigest, content); !errors.Is(err, ErrBudgetExhausted) {
 		t.Fatalf("put = %v, want ErrBudgetExhausted: deleting nothing frees nothing", err)
 	}
 }
@@ -233,7 +237,7 @@ func TestNewAccountsForEntriesAlreadyOnDisk(t *testing.T) {
 	}
 
 	// Enough for the pre-existing entry and for one more write (2n while it runs).
-	if err := New(dir, 3*blockSize).Put("cv-fresh", content); err != nil {
+	if err := New(dir, 3*blockSize).Put("cv-fresh", testDigest, content); err != nil {
 		t.Fatalf("put with room for both: %v", err)
 	}
 	if err := os.Remove(filepath.Join(dir, "cv-fresh")); err != nil {
@@ -241,7 +245,7 @@ func TestNewAccountsForEntriesAlreadyOnDisk(t *testing.T) {
 	}
 
 	// One byte short of that, which only shows if the pre-existing file is counted.
-	if err := New(dir, 3*blockSize-1).Put("cv-fresh", content); !errors.Is(err, ErrBudgetExhausted) {
+	if err := New(dir, 3*blockSize-1).Put("cv-fresh", testDigest, content); !errors.Is(err, ErrBudgetExhausted) {
 		t.Fatalf("put = %v, want ErrBudgetExhausted: files found at startup must be charged to the budget", err)
 	}
 }
@@ -263,7 +267,7 @@ func TestNewSweepsTempFilesLeftByACrash(t *testing.T) {
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatalf("stat of the leftover temp file = %v, want it removed", err)
 	}
-	if err := c.Put("cv-after-crash", content); err != nil {
+	if err := c.Put("cv-after-crash", testDigest, content); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 }
@@ -273,7 +277,9 @@ func TestNewSweepsTempFilesLeftByACrash(t *testing.T) {
 // different keys stage their temp files side by side and the budget is the only
 // thing keeping their sum off the volume's sizeLimit.
 func TestConcurrentPutsOfDifferentKeysStayWithinTheBudget(t *testing.T) {
-	content := bytes.Repeat([]byte("k"), 4096)
+	// Short of a block, so that one entry — content plus the line naming its
+	// revision — still costs the budget exactly one.
+	content := bytes.Repeat([]byte("k"), 2048)
 
 	const writers = 16
 	// Room for four entries once settled, for two writes at their peak.
@@ -291,7 +297,7 @@ func TestConcurrentPutsOfDifferentKeysStayWithinTheBudget(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			err := c.Put(fmt.Sprintf("cv-%d", i), content)
+			err := c.Put(fmt.Sprintf("cv-%d", i), testDigest, content)
 			switch {
 			case err == nil:
 				stored.Add(1)
@@ -365,7 +371,7 @@ func TestPutAndDeleteOfOneKeyLeaveTheAccountingMatchingTheDisk(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			putErr = c.Put("cv-contended", content)
+			putErr = c.Put("cv-contended", testDigest, content)
 		}()
 		go func() {
 			defer wg.Done()
@@ -401,5 +407,160 @@ func TestPutAndDeleteOfOneKeyLeaveTheAccountingMatchingTheDisk(t *testing.T) {
 			t.Fatalf("entry on the volume: %t, but used = %d and sizes = %d, want %d for both",
 				present, charged, recorded, want)
 		}
+	}
+}
+
+// TestAnEntryNamesTheArtifactRevisionItWasExtractedFrom is the fact this cache
+// exists to record. Values alone cannot be judged later: a pass that fails to
+// replace an entry has to know whether what is there came from the revision that is
+// current now, and everything else it could compare is a guess. The digest travels
+// in the entry file, so it survives the rename that publishes the values and the
+// restart that finds them again.
+func TestAnEntryNamesTheArtifactRevisionItWasExtractedFrom(t *testing.T) {
+	values := []byte("replicaCount: 1\n# a comment that is not a header\n")
+
+	tests := []struct {
+		name string
+		// seed writes what is on the volume before the reader opens it; nil means
+		// the entry is written through the cache itself.
+		seed       func(t *testing.T, dir string)
+		digest     string
+		wantValues []byte
+		wantDigest string
+	}{
+		{
+			name:       "a digest written with the values reads back with them",
+			digest:     "sha256:c0ffee",
+			wantValues: values,
+			wantDigest: "sha256:c0ffee",
+		},
+		{
+			name:       "values whose own first line looks like a comment keep their digest",
+			digest:     "sha256:deadbeef",
+			wantValues: []byte("# values.yaml\nreplicaCount: 3\n"),
+			wantDigest: "sha256:deadbeef",
+		},
+		{
+			name: "an entry left by a previous version of this container has no revision on record",
+			seed: func(t *testing.T, dir string) {
+				t.Helper()
+
+				if err := os.WriteFile(filepath.Join(dir, "cv-legacy"), values, 0o644); err != nil {
+					t.Fatalf("seeding a pre-format entry: %v", err)
+				}
+			},
+			wantValues: values,
+			wantDigest: DigestUnknown,
+		},
+		{
+			name:       "a digest that could forge a header line is refused into unknown",
+			digest:     "sha256:one\n" + entryHeaderPrefix + "sha256:two",
+			wantValues: values,
+			wantDigest: DigestUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			key := "cv-legacy"
+
+			if tt.seed != nil {
+				tt.seed(t, dir)
+			} else {
+				if err := New(dir, testBudget).Put(key, tt.digest, tt.wantValues); err != nil {
+					t.Fatalf("put: %v", err)
+				}
+			}
+
+			// A second cache over the same directory is what a restarted container
+			// opens: nothing about the entry may live in the process that wrote it.
+			entry, ok := New(dir, testBudget).GetEntry(key)
+			if !ok {
+				t.Fatal("the entry was not found after reopening the directory")
+			}
+			if !bytes.Equal(entry.Values, tt.wantValues) {
+				t.Fatalf("values = %q, want %q", entry.Values, tt.wantValues)
+			}
+			if entry.Digest != tt.wantDigest {
+				t.Fatalf("digest = %q, want %q", entry.Digest, tt.wantDigest)
+			}
+
+			// Get answers the request path, which wants the values and nothing else.
+			got, ok := New(dir, testBudget).Get(key)
+			if !ok || !bytes.Equal(got, tt.wantValues) {
+				t.Fatalf("get = (%q, %v), want (%q, true)", got, ok, tt.wantValues)
+			}
+		})
+	}
+}
+
+// TestTheBudgetChargesTheRecordedRevisionAlongWithTheValues keeps the accounting
+// honest about what the volume actually holds now that an entry carries a line of
+// its own: a budget that charged for the values alone would admit entries whose
+// files are larger than anything it counted.
+func TestTheBudgetChargesTheRecordedRevisionAlongWithTheValues(t *testing.T) {
+	// Content that fills a block on its own, so the line naming the revision is what
+	// pushes the file into a second one: if it were not charged, the cache would
+	// admit twice the entries the budget is meant to allow.
+	content := bytes.Repeat([]byte("v"), blockSize)
+
+	dir := t.TempDir()
+	budget := int64(16 * blockSize)
+	c := New(dir, budget)
+
+	stored := 0
+	for i := range 32 {
+		err := c.Put(fmt.Sprintf("cv-%d", i), testDigest, content)
+		if errors.Is(err, ErrBudgetExhausted) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("put %d: %v", i, err)
+		}
+		stored++
+	}
+
+	if stored == 0 {
+		t.Fatal("no entry was admitted at all")
+	}
+
+	c.mu.Lock()
+	charged, reserved := c.used, c.reserved
+	c.mu.Unlock()
+
+	if reserved != 0 {
+		t.Fatalf("reserved = %d once every write settled, want 0", reserved)
+	}
+	if charged > budget {
+		t.Fatalf("charged %d against a budget of %d", charged, budget)
+	}
+
+	// What the volume holds, counted the way the budget counts it.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading cache dir: %v", err)
+	}
+
+	var occupied int64
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatalf("stat %s: %v", e.Name(), err)
+		}
+		if info.Size() <= int64(len(content)) {
+			t.Fatalf("entry %s holds %d bytes, want the values plus the line naming their revision", e.Name(), info.Size())
+		}
+		occupied += onDisk(info.Size())
+	}
+
+	if occupied != charged {
+		t.Fatalf("the volume holds %d bytes' worth of blocks while the budget is charged %d", occupied, charged)
+	}
+
+	// And the next write is refused because the budget is genuinely full, not
+	// because the accounting drifted.
+	if err := c.Put("cv-one-more", testDigest, content); !errors.Is(err, ErrBudgetExhausted) {
+		t.Fatalf("put into the full cache = %v, want ErrBudgetExhausted", err)
 	}
 }

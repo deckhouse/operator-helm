@@ -17,6 +17,7 @@ limitations under the License.
 package cache
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -44,6 +45,67 @@ func onDisk(n int64) int64 {
 // previous pod and is swept, otherwise it would occupy the volume forever without
 // ever being readable.
 const tempPrefix = ".tmp-"
+
+// entryHeaderPrefix opens the one line an entry file carries ahead of the values:
+// the digest of the artifact those values were extracted from. The revision is kept
+// inside the entry file rather than beside it because it is the fact that makes the
+// bytes interpretable — a reader must never see values with somebody else's digest,
+// nor a digest without its values, and only one file can be published by one rename.
+// Storing it in the file name instead would key an entry on two things at once and
+// leave the previous name behind on every revision change.
+//
+// A values.yaml is a comment away from this line, so the marker is written by this
+// cache only; a file that does not start with it was written by a container image
+// from before entries recorded their revision, and its digest reads as unknown.
+const entryHeaderPrefix = "#chart-values-cache/v1 digest="
+
+// DigestUnknown is the revision of an entry that does not say which artifact it came
+// from: one left on the volume by a previous version of this container. It is not a
+// digest any artifact can have, so it never compares equal to a current one.
+const DigestUnknown = ""
+
+// Entry is what is stored under a key: the extracted values.yaml together with the
+// digest of the artifact revision they were extracted from. The digest is what lets
+// a later pass tell an entry that is still current from one the artifact has moved
+// off, without downloading the artifact again to compare.
+type Entry struct {
+	Values []byte
+	Digest string
+}
+
+// encodeEntry lays out the pair as the single file a rename publishes atomically.
+// A digest carrying a newline would forge a header, so it is refused into unknown
+// rather than stored: an unknown revision is handled, a forged one is not.
+func encodeEntry(digest string, content []byte) []byte {
+	if strings.ContainsAny(digest, "\r\n") {
+		digest = DigestUnknown
+	}
+
+	out := make([]byte, 0, len(entryHeaderPrefix)+len(digest)+1+len(content))
+	out = append(out, entryHeaderPrefix...)
+	out = append(out, digest...)
+	out = append(out, '\n')
+
+	return append(out, content...)
+}
+
+// decodeEntry reads the pair back, treating a file without the header as values of
+// an unknown revision: that is exactly what an entry written before this format
+// looks like, and reporting it as unknown keeps it readable instead of unreadable.
+func decodeEntry(raw []byte) Entry {
+	if !bytes.HasPrefix(raw, []byte(entryHeaderPrefix)) {
+		return Entry{Values: raw, Digest: DigestUnknown}
+	}
+
+	rest := raw[len(entryHeaderPrefix):]
+
+	line := bytes.IndexByte(rest, '\n')
+	if line < 0 {
+		return Entry{Values: raw, Digest: DigestUnknown}
+	}
+
+	return Entry{Values: rest[line+1:], Digest: string(rest[:line])}
+}
 
 // ErrBudgetExhausted is returned by Put when storing an entry would take the
 // directory over its budget. It is not a request failure: the values have already
@@ -154,12 +216,24 @@ func (c *Cache) path(key string) string {
 
 // Get returns the cached content for a key, or ok=false on a miss.
 func (c *Cache) Get(key string) ([]byte, bool) {
-	data, err := os.ReadFile(c.path(key))
-	if err != nil {
+	entry, ok := c.GetEntry(key)
+	if !ok {
 		return nil, false
 	}
 
-	return data, true
+	return entry.Values, true
+}
+
+// GetEntry returns the cached content for a key together with the artifact revision
+// it was extracted from, or ok=false on a miss. The digest is DigestUnknown for an
+// entry a previous version of this container left on the volume.
+func (c *Cache) GetEntry(key string) (Entry, bool) {
+	raw, err := os.ReadFile(c.path(key))
+	if err != nil {
+		return Entry{}, false
+	}
+
+	return decodeEntry(raw), true
 }
 
 // reserve admits a write of n bytes and returns what it claimed. A write peaks at
@@ -191,16 +265,27 @@ func (c *Cache) release(claim int64) {
 	c.reserved -= claim
 }
 
-// Put stores content for a key, writing atomically via a unique temp file +
-// rename. Concurrent writers of the same key each use their own temp file, so no
-// external locking is needed: the atomic rename publishes a whole file and, for a
-// given key, the content is identical (same artifact digest) regardless of order.
+// Put stores content for a key together with the digest of the artifact revision it
+// was extracted from, writing atomically via a unique temp file + rename. The two
+// facts travel in one file, so the rename publishes both or neither and a reader
+// never sees values attributed to the wrong revision. Concurrent writers of the same
+// key each use their own temp file, so no external locking is needed: the atomic
+// rename publishes a whole file and, for a given key, the content is identical (same
+// artifact digest) regardless of order.
+//
+// Every caller passes the digest it fetched, so an entry written by this code always
+// names its revision; only a file inherited from an older container image reads back
+// as DigestUnknown.
 //
 // Over budget it returns ErrBudgetExhausted without touching the disk. The caller
 // already holds the values it was going to cache, so nothing but the next
 // request's latency is lost.
-func (c *Cache) Put(key string, content []byte) error {
-	size := int64(len(content))
+func (c *Cache) Put(key, digest string, content []byte) error {
+	// The header is part of what the volume holds, so the budget is charged for the
+	// bytes that are actually written, not for the values alone.
+	stored := encodeEntry(digest, content)
+
+	size := int64(len(stored))
 	name := c.fileName(key)
 
 	claim, ok := c.reserve(name, size)
@@ -210,9 +295,9 @@ func (c *Cache) Put(key string, content []byte) error {
 
 	// Releases the claim on every path that does not reach the rename below; the
 	// one that does records the entry itself, under the lock it renames beneath.
-	stored := false
+	committed := false
 	defer func() {
-		if !stored {
+		if !committed {
 			c.release(claim)
 		}
 	}()
@@ -229,7 +314,7 @@ func (c *Cache) Put(key string, content []byte) error {
 	// Best-effort cleanup: harmless no-op once the temp file has been renamed.
 	defer func() { _ = os.Remove(tmpName) }()
 
-	if _, err := tmp.Write(content); err != nil {
+	if _, err := tmp.Write(stored); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("writing cache entry: %w", err)
 	}
@@ -254,7 +339,7 @@ func (c *Cache) Put(key string, content []byte) error {
 	c.reserved -= claim
 	c.used += size - c.sizes[name]
 	c.sizes[name] = size
-	stored = true
+	committed = true
 
 	return nil
 }

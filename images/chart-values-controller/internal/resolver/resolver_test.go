@@ -482,7 +482,7 @@ func TestClusterScopedRequestsIgnoreAStrayNamespace(t *testing.T) {
 			req := Request{Kind: kind, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
 			name := cvnaming.AuxResourceName(string(kind), "",
 				req.RepositoryName, req.Chart, req.Version, identityOf(meta))
-			if err := r.cache.Put(name, []byte("replicaCount: 1\n")); err != nil {
+			if err := r.cache.Put(name, "sha256:seeded", []byte("replicaCount: 1\n")); err != nil {
 				t.Fatalf("seeding cache: %v", err)
 			}
 
@@ -628,7 +628,7 @@ func TestAReplacedRepositoryIsNotServedFromTheOldEntry(t *testing.T) {
 
 			stale := cvnaming.AuxResourceName(string(RepositoryKindHelmClusterAddon), "",
 				repoName, chart, version, identityOf(previous))
-			if err := r.cache.Put(stale, []byte("replicaCount: 1\n")); err != nil {
+			if err := r.cache.Put(stale, "sha256:seeded", []byte("replicaCount: 1\n")); err != nil {
 				t.Fatalf("seeding cache: %v", err)
 			}
 
@@ -668,7 +668,7 @@ func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
 
 	name := cvnaming.AuxResourceName(string(RepositoryKindHelmClusterAddon), "",
 		repoName, chart, version, identityOf(repo.ObjectMeta))
-	if err := r.cache.Put(name, []byte("replicaCount: 1\n")); err != nil {
+	if err := r.cache.Put(name, "sha256:seeded", []byte("replicaCount: 1\n")); err != nil {
 		t.Fatalf("seeding cache: %v", err)
 	}
 
@@ -892,5 +892,45 @@ func TestAFullCacheStillAnswersTheRequest(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("cache holds %d entries, want none: nothing may be written past the budget", len(entries))
+	}
+}
+
+// TestTheEntryCachedOnAMissNamesTheRevisionItCameFrom is what keeps the controller
+// from having to guess at entries it did not write. The resolver caches on every
+// miss, so most of what is on the volume is its writes; an entry that did not say
+// which artifact revision it holds would have to be judged by comparing bytes, or
+// thrown away on every refresh the controller could not complete.
+func TestTheEntryCachedOnAMissNamesTheRevisionItCameFrom(t *testing.T) {
+	archive := buildValuesArchive(t, "replicaCount: 1\n")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
+	r := &Resolver{
+		cache:            cache.New(t.TempDir(), testCacheBudget),
+		httpClient:       srv.Client(),
+		maxArtifactBytes: 1 << 20,
+	}
+
+	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest})
+	if err != nil {
+		t.Fatalf("readValues returned %v", err)
+	}
+	if got.Outcome != OutcomeReady {
+		t.Fatalf("got %+v, want the values served", got)
+	}
+
+	entry, ok := r.cache.GetEntry("entry")
+	if !ok {
+		t.Fatal("the values served were not cached at all")
+	}
+	if string(entry.Values) != "replicaCount: 1\n" {
+		t.Fatalf("cached values = %q, want the ones served", entry.Values)
+	}
+	if entry.Digest != digest {
+		t.Fatalf("the entry records %q, want the artifact revision it was extracted from %q", entry.Digest, digest)
 	}
 }

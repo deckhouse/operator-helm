@@ -17,7 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -153,17 +152,24 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 		if !errors.Is(err, artifact.ErrValuesNotFound) {
 			log.FromContext(ctx).Error(err, "failed to refresh cached values.yaml", "name", name)
 		}
+
+		// The artifact moved and this pass could not read the new revision — the
+		// network, a refused size, or a republish that dropped values.yaml. What is
+		// under the key is then judged exactly as it is on a refused write: the
+		// failure says nothing about the entry, only that it was not replaced.
+		r.invalidateOutdated(ctx, name, art.Digest)
+
 		return
 	}
 
-	if err := r.cache.Put(name, values); err != nil {
+	if err := r.cache.Put(name, art.Digest, values); err != nil {
 		if errors.Is(err, cache.ErrBudgetExhausted) {
 			log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
 		} else {
 			log.FromContext(ctx).Error(err, "failed to write cache entry", "name", name)
 		}
 
-		r.invalidateOutdated(ctx, name, art.Digest, values)
+		r.invalidateOutdated(ctx, name, art.Digest)
 
 		return
 	}
@@ -171,25 +177,27 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 	r.setLastDigest(name, art.Digest)
 }
 
-// invalidateOutdated settles what stays under a key whose refresh could not be
-// written. The entry there was cached for some earlier moment of this chart and
-// version; the artifact has moved since, so it may hold the values of a revision
-// that is no longer current. Serving those answers a request for the chart's
-// values with somebody else's, and the response carries nothing that would let the
-// caller notice. Dropping the entry costs the next request a download — it misses,
-// the resolver prepares the artifact and the client is either served the current
-// values or told to retry — which is the honest answer, and it gives the budget
-// back the room the refused write needed.
+// invalidateOutdated settles what stays under one key whose refresh could not be
+// completed, whatever stopped it. The artifact has moved off whatever the entry
+// holds unless the entry itself says otherwise, so serving it would answer a request
+// for the chart's values with an earlier revision's, and the response carries nothing
+// that would let the caller notice. Dropping the entry costs the next request a
+// download — it misses, the resolver prepares the artifact and the client is either
+// served the current values or told to retry — which is the honest answer, and it
+// gives the budget back the room the write needed.
 //
-// The revision the entry holds is not recorded anywhere (the key is the
-// repository/chart/version triple, and the resolver, which caches on every miss,
-// keeps no digests), but the values of the current revision are in hand here, so
-// the entry can simply be compared against them. Equal content is the resolver's
-// write of this very revision: it is current, it stays, and the digest is recorded
-// so later passes stop trying to rewrite what is already there — without that, a
-// tight budget would have every pass delete the entry the previous request cached.
-func (r *reconciler) invalidateOutdated(ctx context.Context, name, digest string, values []byte) {
-	if cached, ok := r.cache.Get(name); ok && bytes.Equal(cached, values) {
+// Which revision the entry holds is not guessed: the entry records the digest it was
+// extracted from, and both writers (this controller and the resolver, which caches on
+// every miss) record it. An entry already holding the revision being refreshed is
+// current, so it stays and its digest is remembered, or a tight budget would have
+// every pass throw away what the previous request cached.
+//
+// An entry whose digest is unknown can only come from a container image older than
+// this format, since every write since records one. Nothing attributes it to the
+// current revision and nothing short of a download could, so it goes: once, after
+// which the next request has the resolver write it back with its revision named.
+func (r *reconciler) invalidateOutdated(ctx context.Context, name, digest string) {
+	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest != cache.DigestUnknown && entry.Digest == digest {
 		r.setLastDigest(name, digest)
 		return
 	}

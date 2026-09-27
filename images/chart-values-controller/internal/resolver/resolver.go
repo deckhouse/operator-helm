@@ -266,7 +266,12 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 
 	// Fast path: the cache (keyed by the auxiliary resource name) is kept fresh by
 	// the auxiliary-resource controller via a watch with a revision-change predicate,
-	// so a hit is served without touching the catalog or the source objects.
+	// so a hit is served without touching the catalog or the source objects. The
+	// entry's recorded digest is deliberately not checked against anything here:
+	// knowing the current revision means reading the source object, which is the round
+	// trip this path exists to avoid. Freshness is the controller's statement — it
+	// either replaces an entry whose revision moved or removes it — so what is left
+	// under a key is what may be served.
 	if values, ok := r.cache.Get(name); ok {
 		return Result{Outcome: OutcomeReady, Values: values}, nil
 	}
@@ -353,7 +358,12 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 		// already in hand and are returned whether or not they could be kept. A full
 		// cache is an expected state (the budget is deliberately smaller than the
 		// volume), so it is reported as information, not as a failure.
-		if err := r.cache.Put(name, values); err != nil {
+		//
+		// The entry names the revision it came from. That is what keeps the controller
+		// from having to guess at an entry it did not write: a refresh it cannot
+		// complete leaves this one alone when it is the current revision, and drops it
+		// when it is not.
+		if err := r.cache.Put(name, art.Digest, values); err != nil {
 			if errors.Is(err, cache.ErrBudgetExhausted) {
 				log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
 			} else {

@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -183,7 +185,7 @@ func TestReconcileDeletesOnlyTheExpiredObjectItRead(t *testing.T) {
 				Build()
 
 			r := newTestReconciler(t, c)
-			if err := r.cache.Put(testName, []byte("replicaCount: 1\n")); err != nil {
+			if err := r.cache.Put(testName, "sha256:cafe", []byte("replicaCount: 1\n")); err != nil {
 				t.Fatalf("seeding cache: %v", err)
 			}
 			r.setLastDigest(testName, "sha256:cafe")
@@ -286,7 +288,7 @@ func TestReconcileTreatsAnAlreadyDeletedObjectAsCollected(t *testing.T) {
 		Build()
 
 	r := newTestReconciler(t, c)
-	if err := r.cache.Put(testName, []byte("replicaCount: 1\n")); err != nil {
+	if err := r.cache.Put(testName, "sha256:cafe", []byte("replicaCount: 1\n")); err != nil {
 		t.Fatalf("seeding cache: %v", err)
 	}
 
@@ -302,129 +304,226 @@ func TestReconcileTreatsAnAlreadyDeletedObjectAsCollected(t *testing.T) {
 	}
 }
 
-// TestARefusedRefreshNeverLeavesAnEarlierRevisionUnderTheKey pins what a pass
-// whose cache write was refused leaves behind. The entry under the key was cached
-// for some earlier moment of this chart and version, and the artifact has moved
-// since; answering a request for the chart's default values with the previous
-// revision's is worse than not answering with values at all, because the response
-// says nothing that would let the caller tell. A miss costs one more round trip
-// and is either served the current values or told to retry.
-//
-// The exception is the entry that already holds the very revision being refreshed
-// — the resolver caches one on every miss and keeps no digests — which is current
-// and must survive, or a tight budget would have every pass throw away what the
-// previous request cached.
-func TestARefusedRefreshNeverLeavesAnEarlierRevisionUnderTheKey(t *testing.T) {
-	current := []byte("replicaCount: 2\n")
-	earlier := []byte("replicaCount: 1\n")
+// refreshStop is one way a pass that found the artifact revision moved can end
+// without replacing what is cached under the key. They are held together because
+// none of them says anything about the entry: whether the download was refused by
+// the budget, by the network, by the size limit or by a republish that dropped
+// values.yaml, the entry is equally unreplaced and has to be judged the same way.
+type refreshStop struct {
+	name string
+	// build is a reconciler whose refresh of testName cannot complete, and the
+	// digest of the artifact revision that refresh is moving to.
+	build func(t *testing.T, current []byte) (*reconciler, string)
+	// seal runs once the entry to be judged is on the volume, for the stop that is
+	// a property of the cache rather than of the artifact.
+	seal func(t *testing.T, r *reconciler, dir string)
+}
 
-	cases := []struct {
-		name string
-		// cached is what is on the volume when the refused pass runs.
-		cached []byte
-		// knownDigest is what this controller remembers having written there, empty
-		// for the entry it did not write: the resolver's, or one a restarted
-		// container found on the volume with its map empty.
-		knownDigest string
-		// wantCached is what a read after the pass must find, nil for a miss.
-		wantCached []byte
-	}{
+func refreshStops(t *testing.T) []refreshStop {
+	t.Helper()
+
+	return []refreshStop{
 		{
-			name:        "an entry this controller wrote for a revision the artifact has moved off",
-			cached:      earlier,
-			knownDigest: "sha256:the-previous-revision",
-			wantCached:  nil,
+			name:  "the cache refuses the write",
+			build: newRefreshFixture,
+			seal: func(t *testing.T, r *reconciler, dir string) {
+				t.Helper()
+
+				// Reopened over the same directory with room for the seeded entry
+				// alone: the write stages a temp file beside it, a second block
+				// that does not fit.
+				r.cache = cache.New(dir, cacheBlock)
+			},
 		},
 		{
-			name:       "an entry of unknown provenance holding values that are not the current ones",
-			cached:     earlier,
-			wantCached: nil,
-		},
-		{
-			name:       "an entry of unknown provenance already holding the revision being refreshed",
-			cached:     current,
-			wantCached: current,
-		},
-	}
+			name: "the artifact cannot be downloaded",
+			build: func(t *testing.T, _ []byte) (*reconciler, string) {
+				t.Helper()
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r, digest := newRefreshFixture(t, current)
-
-			// Seeded with room to spare, then reopened over the same directory with
-			// room for that entry alone: the refresh stages a temp file beside it,
-			// which is a second block and does not fit, so the write is refused.
-			dir := t.TempDir()
-			r.cache = cache.New(dir, 4*cacheBlock)
-			if err := r.cache.Put(testName, tc.cached); err != nil {
-				t.Fatalf("seeding the entry: %v", err)
-			}
-			r.cache = cache.New(dir, cacheBlock)
-
-			if tc.knownDigest != "" {
-				r.setLastDigest(testName, tc.knownDigest)
-			}
-
-			if _, err := reconcileOnce(t, r); err != nil {
-				t.Fatalf("a refused cache write is not a failure of the pass, got: %v", err)
-			}
-
-			got, ok := r.cache.Get(testName)
-			switch {
-			case tc.wantCached == nil:
-				if ok {
-					t.Fatalf("a read after the refused refresh is answered with %q; it must miss so the client is prepared for or told to retry", got)
+				handler := func(w http.ResponseWriter, _ *http.Request) {
+					http.Error(w, "storage is unavailable", http.StatusInternalServerError)
 				}
-				if remembered := r.lastDigest(testName); remembered != "" {
-					t.Fatalf("digest %q remembered for a key holding nothing: a later pass has to write it again", remembered)
-				}
-			case !ok:
-				t.Fatal("the entry holding the revision being refreshed was thrown away")
-			case !bytes.Equal(got, tc.wantCached):
-				t.Fatalf("entry = %q, want %q", got, tc.wantCached)
-			case r.lastDigest(testName) != digest:
-				t.Fatal("the revision that entry holds must be remembered, or every pass under a tight budget refuses and judges it again")
-			}
-		})
+
+				// Nothing reads the artifact, so its digest is only the revision the
+				// chart's status now names.
+				return newArtifactFixture(t, handler, "sha256:the-current-revision", 1<<20), "sha256:the-current-revision"
+			},
+		},
+		{
+			name: "the artifact is larger than the limit",
+			build: func(t *testing.T, current []byte) (*reconciler, string) {
+				t.Helper()
+
+				archive := buildArchive(t, "podinfo/values.yaml", current)
+				digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
+
+				return newArtifactFixture(t, serveBytes(archive), digest, 1), digest
+			},
+		},
+		{
+			name: "the republished artifact carries no values.yaml",
+			build: func(t *testing.T, _ []byte) (*reconciler, string) {
+				t.Helper()
+
+				archive := buildArchive(t, "podinfo/README.md", []byte("no values here\n"))
+				digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
+
+				return newArtifactFixture(t, serveBytes(archive), digest, 1<<20), digest
+			},
+		},
 	}
 }
 
-// TestARefusedRefreshLeavesTheEntryOfAnotherChartAlone guards the dropping above
-// against reaching past the key it is about: the budget is a property of the whole
-// directory, so a refusal here is routinely caused by entries of other charts, and
-// those entries are current and belong to requests of their own.
-func TestARefusedRefreshLeavesTheEntryOfAnotherChartAlone(t *testing.T) {
+// TestARefreshThatCannotBeCompletedNeverLeavesAnEarlierRevisionUnderTheKey pins
+// what a pass leaves behind when the artifact has moved and the refresh did not
+// land. The entry under the key was extracted from some earlier moment of this
+// chart and version; answering a request for the chart's default values with that
+// revision's is worse than not answering with values at all, because the response
+// says nothing that would let the caller tell. A miss costs one more round trip and
+// is either served the current values or told to retry.
+//
+// The exception is the entry that already holds the very revision being refreshed —
+// typically the resolver's write on the miss before — which is current and must
+// survive, or a tight budget would have every pass throw away what the previous
+// request cached. Which of the two an entry is, is read off the entry: it records
+// the digest it was extracted from.
+func TestARefreshThatCannotBeCompletedNeverLeavesAnEarlierRevisionUnderTheKey(t *testing.T) {
+	current := []byte("replicaCount: 2\n")
+	earlier := []byte("replicaCount: 1\n")
+
+	entries := []struct {
+		name string
+		// seed puts the entry to be judged on the volume, given the revision the
+		// pass is refreshing to.
+		seed func(t *testing.T, r *reconciler, dir, digest string)
+		// wantKept is what a read after the pass must find, nil for a miss.
+		wantKept []byte
+	}{
+		{
+			name: "recorded at a revision the artifact has moved off",
+			seed: func(t *testing.T, r *reconciler, _, _ string) {
+				t.Helper()
+
+				if err := r.cache.Put(testName, "sha256:the-previous-revision", earlier); err != nil {
+					t.Fatalf("seeding the entry: %v", err)
+				}
+			},
+			wantKept: nil,
+		},
+		{
+			name: "left by a container image from before entries recorded their revision",
+			seed: func(t *testing.T, _ *reconciler, dir, _ string) {
+				t.Helper()
+
+				// Written straight onto the volume, which is exactly what the older
+				// image left there: values with nothing saying where they came from.
+				if err := os.WriteFile(filepath.Join(dir, testName), earlier, 0o644); err != nil {
+					t.Fatalf("seeding a pre-format entry: %v", err)
+				}
+			},
+			wantKept: nil,
+		},
+		{
+			name: "recorded at the very revision being refreshed",
+			seed: func(t *testing.T, r *reconciler, _, digest string) {
+				t.Helper()
+
+				if err := r.cache.Put(testName, digest, current); err != nil {
+					t.Fatalf("seeding the entry: %v", err)
+				}
+			},
+			wantKept: current,
+		},
+	}
+
+	for _, stop := range refreshStops(t) {
+		for _, entry := range entries {
+			t.Run(stop.name+"/"+entry.name, func(t *testing.T) {
+				r, digest := stop.build(t, current)
+
+				dir := t.TempDir()
+				r.cache = cache.New(dir, 8*cacheBlock)
+				entry.seed(t, r, dir, digest)
+				// Reopened so that whatever was seeded is charged to the budget,
+				// including a file written past the cache.
+				r.cache = cache.New(dir, 8*cacheBlock)
+
+				if stop.seal != nil {
+					stop.seal(t, r, dir)
+				}
+
+				if _, err := reconcileOnce(t, r); err != nil {
+					t.Fatalf("a refresh that cannot complete is not a failure of the pass, got: %v", err)
+				}
+
+				got, ok := r.cache.GetEntry(testName)
+				switch {
+				case entry.wantKept == nil:
+					if ok {
+						t.Fatalf("a read after the pass is answered with %q; it must miss so the client is served the current values or told to retry", got.Values)
+					}
+					if remembered := r.lastDigest(testName); remembered != "" {
+						t.Fatalf("digest %q remembered for a key holding nothing: a later pass has to write it again", remembered)
+					}
+				case !ok:
+					t.Fatal("the entry holding the revision being refreshed was thrown away")
+				case !bytes.Equal(got.Values, entry.wantKept):
+					t.Fatalf("entry = %q, want %q", got.Values, entry.wantKept)
+				case got.Digest != digest:
+					t.Fatalf("the surviving entry records %q, want the revision being refreshed %q", got.Digest, digest)
+				case r.lastDigest(testName) != digest:
+					t.Fatal("the revision that entry holds must be remembered, or every pass under a tight budget judges it again")
+				}
+			})
+		}
+	}
+}
+
+// TestARefreshThatCannotBeCompletedLeavesTheEntryOfAnotherChartAlone guards the
+// dropping above against reaching past the key it is about: the budget is a
+// property of the whole directory, so a refusal here is routinely caused by entries
+// of other charts, and those entries are current and belong to requests of their
+// own. A failed download is about one artifact for the same reason.
+func TestARefreshThatCannotBeCompletedLeavesTheEntryOfAnotherChartAlone(t *testing.T) {
 	current := []byte("replicaCount: 2\n")
 	other := []byte("replicaCount: 9\n")
 
-	r, _ := newRefreshFixture(t, current)
+	for _, stop := range refreshStops(t) {
+		t.Run(stop.name, func(t *testing.T) {
+			r, _ := stop.build(t, current)
 
-	dir := t.TempDir()
-	r.cache = cache.New(dir, 8*cacheBlock)
-	if err := r.cache.Put(testName, []byte("replicaCount: 1\n")); err != nil {
-		t.Fatalf("seeding the entry being refreshed: %v", err)
-	}
-	if err := r.cache.Put(otherTestName, other); err != nil {
-		t.Fatalf("seeding another chart's entry: %v", err)
-	}
-	// Room for the two entries and nothing more, so the refresh is refused.
-	r.cache = cache.New(dir, 2*cacheBlock)
-	r.setLastDigest(testName, "sha256:the-previous-revision")
+			dir := t.TempDir()
+			r.cache = cache.New(dir, 8*cacheBlock)
+			if err := r.cache.Put(testName, "sha256:the-previous-revision", []byte("replicaCount: 1\n")); err != nil {
+				t.Fatalf("seeding the entry being refreshed: %v", err)
+			}
+			if err := r.cache.Put(otherTestName, "sha256:another-chart", other); err != nil {
+				t.Fatalf("seeding another chart's entry: %v", err)
+			}
 
-	if _, err := reconcileOnce(t, r); err != nil {
-		t.Fatalf("a refused cache write is not a failure of the pass, got: %v", err)
-	}
+			// Room for the two entries and nothing more, which is itself the refusal
+			// the cache stop is about; the other stops do not get that far anyway.
+			r.cache = cache.New(dir, 2*cacheBlock)
 
-	if got, ok := r.cache.Get(testName); ok {
-		t.Fatalf("the refreshed key still answers with %q", got)
-	}
+			if _, err := reconcileOnce(t, r); err != nil {
+				t.Fatalf("a refresh that cannot complete is not a failure of the pass, got: %v", err)
+			}
 
-	got, ok := r.cache.Get(otherTestName)
-	if !ok {
-		t.Fatal("another chart's entry was dropped by a refusal it had nothing to do with")
-	}
-	if !bytes.Equal(got, other) {
-		t.Fatalf("another chart's entry = %q, want %q", got, other)
+			if got, ok := r.cache.Get(testName); ok {
+				t.Fatalf("the refreshed key still answers with %q", got)
+			}
+
+			entry, ok := r.cache.GetEntry(otherTestName)
+			if !ok {
+				t.Fatal("another chart's entry was dropped by a failure it had nothing to do with")
+			}
+			if !bytes.Equal(entry.Values, other) {
+				t.Fatalf("another chart's entry = %q, want %q", entry.Values, other)
+			}
+			if entry.Digest != "sha256:another-chart" {
+				t.Fatalf("another chart's entry records %q, want its own revision", entry.Digest)
+			}
+		})
 	}
 }
 
@@ -436,7 +535,7 @@ func TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves(t *testing.T) {
 	current := []byte("replicaCount: 2\n")
 
 	r, digest := newRefreshFixture(t, current)
-	if err := r.cache.Put(testName, []byte("replicaCount: 1\n")); err != nil {
+	if err := r.cache.Put(testName, "sha256:the-previous-revision", []byte("replicaCount: 1\n")); err != nil {
 		t.Fatalf("seeding the previous revision's entry: %v", err)
 	}
 	r.setLastDigest(testName, "sha256:the-previous-revision")
@@ -445,12 +544,15 @@ func TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves(t *testing.T) {
 		t.Fatalf("refresh pass: %v", err)
 	}
 
-	got, ok := r.cache.Get(testName)
+	got, ok := r.cache.GetEntry(testName)
 	if !ok {
 		t.Fatal("the refreshed values were not cached")
 	}
-	if !bytes.Equal(got, current) {
-		t.Fatalf("entry = %q, want the current revision's values %q", got, current)
+	if !bytes.Equal(got.Values, current) {
+		t.Fatalf("entry = %q, want the current revision's values %q", got.Values, current)
+	}
+	if got.Digest != digest {
+		t.Fatalf("the entry records %q, want the revision it was extracted from %q", got.Digest, digest)
 	}
 	if r.lastDigest(testName) != digest {
 		t.Fatalf("lastDigest = %q, want the revision just written %q", r.lastDigest(testName), digest)
@@ -465,20 +567,33 @@ func newRefreshFixture(t *testing.T, values []byte) (*reconciler, string) {
 	t.Helper()
 
 	archive := buildValuesArchive(t, values)
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(archive)
-	}))
+	return newArtifactFixture(t, serveBytes(archive), digest, 1<<20), digest
+}
+
+// newArtifactFixture is a reconciler pointed at a chart whose artifact is published
+// and ready — what makes a pass attempt a refresh at all — at the given revision,
+// served by the given handler.
+func newArtifactFixture(t *testing.T, handler http.HandlerFunc, digest string, maxArtifactBytes int64) *reconciler {
+	t.Helper()
+
+	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
 	chart := readyChartWithArtifact(srv.URL, digest)
 
 	r := newTestReconciler(t, fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(chart).Build())
 	r.httpClient = srv.Client()
-	r.maxArtifactBytes = 1 << 20
+	r.maxArtifactBytes = maxArtifactBytes
 
-	return r, digest
+	return r
+}
+
+func serveBytes(body []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}
 }
 
 // TestARefusedRefreshDeletesAtMostOnce follows the sequence the deletion above
@@ -505,7 +620,7 @@ func TestARefusedRefreshDeletesAtMostOnce(t *testing.T) {
 
 	dir := t.TempDir()
 	r.cache = cache.New(dir, 4*cacheBlock)
-	if err := r.cache.Put(testName, []byte("replicaCount: 1\n")); err != nil {
+	if err := r.cache.Put(testName, "sha256:the-previous-revision", []byte("replicaCount: 1\n")); err != nil {
 		t.Fatalf("seeding the stale entry: %v", err)
 	}
 	r.cache = cache.New(dir, cacheBlock)
@@ -523,7 +638,7 @@ func TestARefusedRefreshDeletesAtMostOnce(t *testing.T) {
 	// the entry, so this is the budget with the space the deletion freed; it is
 	// then reopened at the tight one, which is where the next pass runs.
 	r.cache = cache.New(dir, 2*cacheBlock)
-	if err := r.cache.Put(testName, values); err != nil {
+	if err := r.cache.Put(testName, fmt.Sprintf("sha256:%x", sha256.Sum256(archive)), values); err != nil {
 		t.Fatalf("the resolver could not cache the current values: %v", err)
 	}
 	r.cache = cache.New(dir, cacheBlock)
@@ -562,18 +677,26 @@ func readyChartWithArtifact(url, digest string) *sourcev1.HelmChart {
 func buildValuesArchive(t *testing.T, values []byte) []byte {
 	t.Helper()
 
+	return buildArchive(t, "podinfo/values.yaml", values)
+}
+
+// buildArchive packs one named file, so an archive that is a chart artifact in
+// every way except that it carries no values.yaml can be built too.
+func buildArchive(t *testing.T, name string, content []byte) []byte {
+	t.Helper()
+
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 
 	if err := tw.WriteHeader(&tar.Header{
-		Name: "podinfo/values.yaml",
+		Name: name,
 		Mode: 0o644,
-		Size: int64(len(values)),
+		Size: int64(len(content)),
 	}); err != nil {
 		t.Fatalf("writing archive header: %v", err)
 	}
-	if _, err := tw.Write(values); err != nil {
+	if _, err := tw.Write(content); err != nil {
 		t.Fatalf("writing archive entry: %v", err)
 	}
 	if err := tw.Close(); err != nil {
