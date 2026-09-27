@@ -296,7 +296,8 @@ func evaluate(in Inputs) Decision {
 func evaluateStepFailed(in Inputs, decision Decision, outcome StepFailed) Decision {
 	decision.set(in, helmv1alpha1.ConditionTypeReady, failureState(outcome.Failure))
 
-	if outcome.Failure.Terminal {
+	switch {
+	case outcome.Failure.Terminal:
 		decision.setAbnormal(in, helmv1alpha1.ConditionTypeStalled, outcome.Failure)
 		// Dropped rather than processed, as a release settling into maintenance drops
 		// one: the stamp means the request was acted on, so it stays untouched, while
@@ -306,7 +307,17 @@ func evaluateStepFailed(in Inputs, decision Decision, outcome StepFailed) Decisi
 		// so fire no event at all, which is exactly how someone who corrected the cause
 		// would ask to be retried.
 		decision.ConsumeForce = true
-	} else {
+	case outcome.Failure.AwaitsWatch:
+		// Nothing is scheduled for this one: the failure is kept off the work queue
+		// because a watch, or the timer the step asked for, brings the release back when
+		// what it waits for arrives. Saying "retrying" here would promise an attempt
+		// nobody made. The plain Reconciling reason keeps the release readable as work
+		// still in flight — which it is, from outside — without that promise.
+		decision.setAbnormal(in, helmv1alpha1.ConditionTypeReconciling, Failure{
+			Reason:  helmv1alpha1.ReasonReconciling,
+			Message: "Waiting for what the failed step needs",
+		})
+	default:
 		decision.setAbnormal(in, helmv1alpha1.ConditionTypeReconciling, Failure{
 			Reason:  helmv1alpha1.ReasonProgressingWithRetry,
 			Message: "Retrying the step that failed",

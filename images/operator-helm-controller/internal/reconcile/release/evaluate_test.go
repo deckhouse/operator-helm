@@ -251,6 +251,33 @@ func TestEvaluateStepFailureOwnsReadyAlone(t *testing.T) {
 	}
 }
 
+// TestEvaluateStepFailureAwaitingAWatchPromisesNoRetry is the other half of the
+// rule above: the same step failure, but one nothing was scheduled for — the
+// release is parked until a watch fires or the timer the step asked for runs out.
+// Reporting it as a retry would name an attempt no pass is making, which is how a
+// release applied before its repository's first sync reads to whoever looks at it.
+func TestEvaluateStepFailureAwaitingAWatchPromisesNoRetry(t *testing.T) {
+	in := baseInputs()
+	in.Outcome = StepFailed{Failure{
+		Reason:       helmv1alpha1.ReasonChartFetchFailed,
+		Message:      "Failed to resolve the desired chart version",
+		Err:          errors.New("repository has not synced yet"),
+		AwaitsWatch:  true,
+		RequeueAfter: time.Minute,
+	}}
+
+	decision := Evaluate(in)
+
+	progress := condition(t, decision, helmv1alpha1.ConditionTypeReconciling)
+	if progress.Status != metav1.ConditionTrue || progress.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("Reconciling = %s/%s, want True/%s: nothing is being retried",
+			progress.Status, progress.Reason, helmv1alpha1.ReasonReconciling)
+	}
+	if decision.Err != nil {
+		t.Fatalf("Err = %v, want none: a watch brings the release back", decision.Err)
+	}
+}
+
 // TestEvaluateReportsWorkInFlight pins the progress condition on the ordinary path:
 // an internal object that has not yet reported on the spec it was given is work in
 // flight, and the release says so with that object's own words rather than a fixed

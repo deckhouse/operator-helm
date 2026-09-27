@@ -2183,9 +2183,11 @@ func TestReconcileRejectedNamespaceNameIsNotRetried(t *testing.T) {
 
 // TestBadInputIsNotLoggedAsAControllerError guards the e2e log gate as much as the
 // log itself. The suite fails the run on any error line a controller emits that is
-// not explicitly excluded (tests/e2e/default_config.yaml), and a release naming a
-// chart version its repository does not offer is answered in its status — the
-// controller did nothing wrong and has nothing to retry.
+// not explicitly excluded (tests/e2e/default_config.yaml), and neither a release
+// naming a chart version its repository does not offer nor one waiting on a
+// repository that has not synced yet is a defect — both are answered in the status,
+// the controller did nothing wrong and has nothing to retry. The wait is the louder
+// of the two: it repeats on its timer for as long as it lasts.
 func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -2199,6 +2201,27 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 				Message:  "Version 9.9.9 of chart podinfo is not in the catalog of repository repo",
 				Err:      errChartVersionNotFound,
 				BadInput: true,
+			},
+			wantAtError: false,
+		},
+		{
+			name: "a wait for the repository's first sync is reported at info",
+			failure: Failure{
+				Reason:      helmv1alpha1.ReasonChartFetchFailed,
+				Message:     "Failed to resolve the desired chart version",
+				Err:         errCatalogAwaited,
+				AwaitsWatch: true,
+				RetryAfter:  awaitSyncInterval,
+			},
+			wantAtError: false,
+		},
+		{
+			name: "a repository that is not there yet is reported at info",
+			failure: Failure{
+				Reason:      helmv1alpha1.ReasonFailed,
+				Message:     "Failed to get internal repository",
+				Err:         errors.New("getting internal repository: not found"),
+				AwaitsWatch: true,
 			},
 			wantAtError: false,
 		},

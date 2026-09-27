@@ -430,11 +430,14 @@ func (r *Reconciler) finish(
 		// the way past; one that is not ends the pass quietly, and this is then the one
 		// place its cause is written down.
 		//
-		// Bad input is logged at info: the release names a chart version its repository
-		// does not offer, which is answered in its status and is no fault of this
-		// controller. Reporting it as a controller error would also fail the e2e suite,
-		// which treats any error line as a defect.
-		if decision.Reported.BadInput {
+		// Bad input and a wait are logged at info: neither is a fault of this controller
+		// and neither has a retry to report. Bad input is the release's own spec — a
+		// chart version its repository does not offer — answered in its status; a
+		// failure that awaits a watch is an ordinary wait for something that is on its
+		// way, such as a release applied before its repository's first sync, which
+		// repeats for as long as the wait lasts. Reporting either as a controller error
+		// would also fail the e2e suite, which treats any error line as a defect.
+		if decision.Reported.BadInput || decision.Reported.AwaitsWatch {
 			log.FromContext(ctx).Info(decision.Reported.Message,
 				"reason", decision.Reported.Reason, "cause", decision.Reported.Err)
 		} else {
