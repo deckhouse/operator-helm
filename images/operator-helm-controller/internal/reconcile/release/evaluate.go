@@ -49,6 +49,13 @@ type Failure struct {
 	// retried — a step that failed on the way to a write left nothing for a watch to
 	// fire on.
 	AwaitsWatch bool
+	// RetryAfter schedules the next pass itself, for a failure that neither a watch
+	// nor the work queue covers. Waiting on the repository's first sync is the case:
+	// the catalog object of the chart may never appear — a mistyped name has none —
+	// and the sync time lands on the repository's status, which the release's own
+	// watch on the repository filters out by generation. Without a timer the release
+	// would wait for an event nobody sends.
+	RetryAfter time.Duration
 	// BadInput marks a failure of the spec the release was given rather than of the
 	// work towards it: what the spec asks for is not there. It is not Terminal — the
 	// thing asked for may be published later, and a watch brings the release back
@@ -405,6 +412,9 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 	decision.ApplyChart = installable && release.Ready() && outcome.ChartInfoOutdated
 	decision.ApplyValues = release.Ready() && valuesDeployed(outcome)
 	decision.RequeueAfter = probeRequeueAfter(outcome.Internal)
+	if decision.RequeueAfter == 0 {
+		decision.RequeueAfter = verdict.Failure.RetryAfter
+	}
 
 	if !stalled && decision.RequeueAfter == 0 {
 		// A verdict this pass produced itself — a write to an internal object that did

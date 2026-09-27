@@ -287,6 +287,7 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 		versions     []helmv1alpha1.ChartVersion
 		noCatalog    bool
 		synced       bool
+		staleSync    bool
 		wantReason   string
 		wantBadInput bool
 		// wantRetried is whether the failure goes to the work queue. The three cases
@@ -342,6 +343,32 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetried:  false,
 		},
 		{
+			// The repository has a catalog, but of the spec it carried before the url
+			// was edited. Reading a chart's absence from it as final would answer
+			// about a repository the release no longer points at.
+			name:         "a catalog from before a spec change is not the repository's answer",
+			noCatalog:    true,
+			staleSync:    true,
+			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput: false,
+			wantRetried:  false,
+		},
+		{
+			// A version the repository lists without having reached a verdict on how
+			// it is published. It may well become deployable, and the write that says
+			// so is to the catalog object the release already watches.
+			name: "a version still being resolved is progress, not bad input",
+			versions: []helmv1alpha1.ChartVersion{{
+				Version:            "6.7.1",
+				UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
+				UnavailableMessage: "the manifest request failed",
+			}},
+			synced:       true,
+			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput: false,
+			wantRetried:  false,
+		},
+		{
 			// The version is listed, and the repository published it at a reference
 			// that cannot be addressed. Only a republish changes that, and the catalog
 			// watches deliver it; the work queue would spin on an unchanged input.
@@ -372,6 +399,10 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			repo := helmRepositoryFixture()
 			if tt.synced {
 				repo = syncedRepositoryFixture()
+			}
+			if tt.staleSync {
+				repo = syncedRepositoryFixture()
+				repo.Generation++
 			}
 
 			_, _, failure := r.resolveSource(
@@ -436,6 +467,9 @@ func helmRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 func syncedRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 	repo := helmRepositoryFixture()
 	repo.Status.LastSuccessfulSyncTime = &metav1.Time{Time: time.Now().UTC()}
+	// The sync described the spec the repository carries now; a lagging
+	// observedGeneration would mean the catalog belongs to the previous one.
+	repo.Status.ObservedGeneration = repo.Generation
 
 	return repo
 }
@@ -2178,5 +2212,91 @@ func TestReconcileAnswersAVersionTheCatalogLacksWithoutPromisingARetry(t *testin
 	if stalled := apimeta.FindStatusCondition(got.Status.Conditions, helmv1alpha1.ConditionTypeStalled); stalled != nil &&
 		stalled.Status == metav1.ConditionTrue {
 		t.Fatal("Stalled must stay off: publishing the version to the repository brings the release back")
+	}
+}
+
+// TestReconcileSchedulesItselfWhileTheRepositoryHasNotSyncedYet covers the one wait
+// nothing wakes the release from. A release created before its repository first
+// syncs — or one naming a chart the repository does not have, which never gets a
+// catalog object and so never a catalog event — learns that the sync finished only
+// from the repository's status, and the release watches repositories by generation,
+// which a status write does not bump. Without a timer of its own the release would
+// sit claiming progress until something unrelated disturbed it.
+func TestReconcileSchedulesItselfWhileTheRepositoryHasNotSyncedYet(t *testing.T) {
+	addon := testAddon()
+	addon.Finalizers = []string{helmv1alpha1.FinalizerName}
+
+	// The repository exists and has never finished a sync: no catalog object for
+	// the chart, nothing for a watch to fire on.
+	r, c := newFullReconciler(t, nil, interceptor.Funcs{}, addon, helmRepositoryFixture())
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(addon),
+	})
+	if err != nil {
+		t.Fatalf("waiting on a sync is not a failure of the pass, got: %v", err)
+	}
+	if result.RequeueAfter <= 0 {
+		t.Fatal("the release scheduled no pass of its own: nothing else brings it back")
+	}
+
+	var got helmv1alpha1.HelmClusterAddon
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(addon), &got); err != nil {
+		t.Fatalf("reading the addon back: %v", err)
+	}
+
+	ready := apimeta.FindStatusCondition(got.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready = %+v, want False", ready)
+	}
+	if ready.Reason == helmv1alpha1.ReasonChartVersionNotFound {
+		t.Fatal("an unsynced repository must not be reported as a fault of the spec")
+	}
+}
+
+// TestReconcileAnswersAnApplicationTheSameWayAsAnAddon proves the verdict is a
+// property of the shared reconciler rather than of the addon adapter: the namespaced
+// family asks a repository in its own namespace, through different adapters, and has
+// to get the same straight answer for a version the catalog does not list.
+func TestReconcileAnswersAnApplicationTheSameWayAsAnAddon(t *testing.T) {
+	app := testApplication()
+	app.Finalizers = []string{helmv1alpha1.FinalizerName}
+	app.Spec.Chart.Version = "9.9.9"
+
+	fixtures := applicationFixtures()
+	repo, ok := fixtures[0].(*helmv1alpha1.HelmApplicationRepository)
+	if !ok {
+		t.Fatalf("the first application fixture is %T, want a repository", fixtures[0])
+	}
+	// The repository has answered in full for the spec it carries, which is what
+	// makes the catalog's silence about 9.9.9 final rather than early.
+	repo.Status.LastSuccessfulSyncTime = &metav1.Time{Time: time.Now().UTC()}
+	repo.Status.ObservedGeneration = repo.Generation
+
+	r, c := newApplicationFullReconciler(t, nil, append(fixtures, app)...)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: app.Namespace, Name: app.Name},
+	})
+	if err != nil {
+		t.Fatalf("a version the catalog lacks must not be handed to the work queue, got: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("RequeueAfter = %v, want none: no timer brings a better answer", result.RequeueAfter)
+	}
+
+	var got helmv1alpha1.HelmApplication
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(app), &got); err != nil {
+		t.Fatalf("reading the application back: %v", err)
+	}
+
+	ready := apimeta.FindStatusCondition(got.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonChartVersionNotFound {
+		t.Fatalf("Ready = %+v, want False with reason %q", ready, helmv1alpha1.ReasonChartVersionNotFound)
+	}
+
+	if reconciling := apimeta.FindStatusCondition(got.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); reconciling != nil &&
+		reconciling.Status == metav1.ConditionTrue {
+		t.Fatalf("Reconciling = %+v, want absent or False", reconciling)
 	}
 }

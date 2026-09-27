@@ -333,12 +333,35 @@ func (r *Reconciler) resolveSource(
 			Err:      err,
 			BadInput: true,
 		}
-	case err != nil:
+	case errors.Is(err, errVersionResolvePending):
+		// The version is in the catalog and the repository has yet to reach a verdict
+		// on it. Reaching one is a write to that catalog object, which enqueues the
+		// release through its catalog watch: no timer of our own is needed.
 		return src, chartVersion, &Failure{
 			Reason:      helmv1alpha1.ReasonChartFetchFailed,
 			Message:     "Failed to resolve the desired chart version",
 			Err:         err,
-			AwaitsWatch: errors.Is(err, errCatalogAwaited),
+			AwaitsWatch: true,
+		}
+	case errors.Is(err, errCatalogAwaited):
+		// Waiting on the repository's first sync of its current spec, which nothing
+		// wakes the release from: a mistyped chart name has no catalog object and so
+		// no watch event at all, and the sync time that would settle the question is
+		// written to the repository's status, which the release's watch on the
+		// repository filters out by generation. Hence a timer rather than the work
+		// queue — the wait is expected, and the queue would log it as a fault.
+		return src, chartVersion, &Failure{
+			Reason:      helmv1alpha1.ReasonChartFetchFailed,
+			Message:     "Failed to resolve the desired chart version",
+			Err:         err,
+			AwaitsWatch: true,
+			RetryAfter:  awaitSyncInterval,
+		}
+	case err != nil:
+		return src, chartVersion, &Failure{
+			Reason:  helmv1alpha1.ReasonChartFetchFailed,
+			Message: "Failed to resolve the desired chart version",
+			Err:     err,
 		}
 	}
 
@@ -635,11 +658,17 @@ func (r *Reconciler) getChartVersion(
 ) (client.Object, *helmv1alpha1.ChartVersion, error) {
 	ref := rel.ChartRef()
 
-	// Whether the repository has ever finished a sync is what makes the catalog's
-	// silence mean anything. Before the first one, an absent or empty catalog says
-	// only that the repository controller has not got there yet. After it, the
-	// catalog is the repository's full answer, and silence is the answer.
-	synced := repo.Status().LastSuccessfulSyncTime != nil
+	// Whether the repository has finished a sync of the spec it currently carries is
+	// what makes the catalog's silence mean anything. Before that, an absent or empty
+	// catalog says only that the repository controller has not got there yet; after
+	// it, the catalog is the repository's full answer, and silence is the answer.
+	//
+	// The generation is part of the question because the sync time is never cleared:
+	// after the url is edited it still describes the catalog of the previous one, and
+	// reading a chart's absence from that catalog as final would answer about a
+	// repository the release no longer points at.
+	synced := repo.Status().LastSuccessfulSyncTime != nil &&
+		repo.Status().ObservedGeneration == repo.Generation()
 
 	obj, catalogStatus, err := catalog.Lookup(ctx, repo, ref.Chart)
 	if err != nil {
@@ -664,6 +693,16 @@ func (r *Reconciler) getChartVersion(
 			continue
 		}
 
+		if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending {
+			// The repository could not read the manifest and reached no verdict, so the
+			// version may well be deployable once the next sync gets an answer. That is
+			// a catalog write, which the release's catalog watch delivers.
+			return nil, nil, fmt.Errorf(
+				"chart version %q is not resolved yet: %s: %w",
+				version.Version, versionUnavailableDetail(*version), errVersionResolvePending,
+			)
+		}
+
 		if version.UnavailableReason == helmv1alpha1.UnavailableReasonInvalidChartReference {
 			// The index publishes this version in a registry at a reference that
 			// cannot be addressed. Without this the version would fall back to the
@@ -680,9 +719,9 @@ func (r *Reconciler) getChartVersion(
 		}
 
 		if repoType == chartsource.OCI && version.OCIRef == "" && version.MediaType == "" {
-			// The catalog has not learnt enough about this version to build a source
-			// from it. Which of the two it is — still being resolved, or resolved to
-			// something unusable — the repository is the only one who can move it.
+			// The catalog lists the version but knows nothing this operator can build a
+			// source from. A verdict of its own — an unsupported media type, say — is
+			// the repository's final word; no verdict at all is handled above.
 			return nil, nil, fmt.Errorf(
 				"chart version %q cannot be deployed: %s: %w",
 				version.Version, versionUnavailableDetail(*version), errVersionUnusable,
@@ -731,6 +770,17 @@ var errCatalogAwaited = errors.New("chart catalog not written yet")
 // errChartNotFound is the chart-level counterpart of errChartVersionNotFound: the
 // repository has answered in full and offers no chart under that name at all.
 var errChartNotFound = errors.New("chart not found")
+
+// errVersionResolvePending marks a version the catalog lists without a verdict on
+// how it is published. The repository reaches one by writing to the catalog object,
+// which the release watches, so this wait is woken and needs no timer.
+var errVersionResolvePending = errors.New("chart version not resolved yet")
+
+// awaitSyncInterval is how often a release re-reads a repository it is waiting on
+// the first sync of. It is a poll, so it is deliberately coarse: the case it covers
+// lasts as long as one sync of one repository, and every other path back into a
+// pass is event-driven.
+const awaitSyncInterval = 30 * time.Second
 
 // errVersionUnusable marks a version the catalog lists but cannot be deployed from,
 // because of what the repository published rather than what the spec asked for. It
