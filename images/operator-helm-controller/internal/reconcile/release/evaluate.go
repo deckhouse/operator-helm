@@ -443,7 +443,15 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 		// are already scheduled: a stalled verdict waits for a new spec, and a failure the
 		// artifact probe put on a timer would lose that timer, because an error returned
 		// beside a requeue takes precedence over it.
-		decision.Err = retryErr(verdict.Failure)
+		//
+		// Every state the pass produced is offered, not just the one the status reports.
+		// The displayed verdict is the first step that did not succeed, and a later step
+		// may still have been attempted and failed behind it: a source that kept its
+		// artifact is not ready and yet the internal HelmRelease was written from it. That
+		// write is the only thing that would have woken the release — the source keeps
+		// failing identically, so its watch stays silent — so losing its error leaves the
+		// pass with nothing scheduled at all and the edit never applied.
+		decision.Err = retryErr(chart.Failure, release.Failure)
 	}
 
 	return decision
@@ -653,12 +661,23 @@ func reported(state conditionState) *Failure {
 // back. The exceptions say so themselves: a terminal failure retrying cannot change,
 // one the release is woken from by a watch, and one whose cause is the spec itself. A
 // failure carrying no error of its own rides the timer the step asked for instead.
-func retryErr(failure Failure) error {
-	if failure.Terminal || failure.AwaitsWatch || failure.BadInput {
-		return nil
+//
+// It takes every failure the pass produced and answers with the first retryable one,
+// in the order the steps ran. A pass may attempt more than one write while reporting
+// a single verdict, and the queue has to hear about any of them that did not land;
+// which of them the user is shown is a separate question, decided by decide.
+func retryErr(failures ...Failure) error {
+	for _, failure := range failures {
+		if failure.Terminal || failure.AwaitsWatch || failure.BadInput {
+			continue
+		}
+
+		if failure.Err != nil {
+			return failure.Err
+		}
 	}
 
-	return failure.Err
+	return nil
 }
 
 // artifactRevision is the revision the release would be installed from, whether that

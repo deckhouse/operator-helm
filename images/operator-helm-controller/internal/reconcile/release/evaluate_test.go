@@ -1273,6 +1273,59 @@ func failureCause(outcome Outcome) error {
 	return nil
 }
 
+// TestEvaluateFailedReleaseWriteBehindAFailingSourceIsHandedToTheWorkQueue pins the
+// one pass that would otherwise be scheduled by nothing at all. The source kept the
+// artifact of the previous spec and reported a failure on the current one, so the
+// internal HelmRelease was still written from that artifact — and that write did not
+// land. The source's verdict is what the release reports, because it is the first
+// step that did not succeed, but it carries no error of its own: the watch on the
+// source is what wakes a release from it, and that watch stays silent while the
+// source keeps failing identically. Only the write that was attempted behind the
+// verdict can bring the pass back, so its error has to reach the work queue even
+// though the status never mentions it.
+//
+// The mirror — a source error lost behind a winning release verdict — is not
+// constructible: a source that failed to be written has no artifact, so the release
+// step never runs, and a source failure is never ready and therefore always wins.
+func TestEvaluateFailedReleaseWriteBehindAFailingSourceIsHandedToTheWorkQueue(t *testing.T) {
+	cause := errors.New("etcdserver: request timed out")
+
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{
+			Artifact: &meta.Artifact{Revision: "6.7.1"},
+			Internal: internalobj.InternalObjectState{
+				Observed: true,
+				Status:   metav1.ConditionFalse,
+				Reason:   helmv1alpha1.ReasonChartFetchFailed,
+				Message:  "failed to pull the chart",
+			},
+		}},
+		Release: &internalobj.ReleaseOutcome{Err: cause},
+	}
+
+	decision := Evaluate(in)
+
+	if decision.Err == nil && decision.RequeueAfter == 0 {
+		t.Fatal("the pass scheduled nothing: neither the source's watch nor the untouched release brings it back")
+	}
+	if !errors.Is(decision.Err, cause) {
+		t.Fatalf("Err = %v, want it to wrap %v", decision.Err, cause)
+	}
+
+	// Scheduling is the only thing that changes here: which verdict the user is shown
+	// stays the first step that did not succeed.
+	for _, conditionType := range in.ConditionTypes {
+		cond := condition(t, decision, conditionType)
+		if cond.Status != metav1.ConditionFalse || cond.Reason != helmv1alpha1.ReasonChartFetchFailed {
+			t.Fatalf("%s = %s/%s, want the failing source's verdict", conditionType, cond.Status, cond.Reason)
+		}
+	}
+	if decision.Reported != nil {
+		t.Fatalf("Reported = %+v, want none: the reported verdict carries no error of its own", decision.Reported)
+	}
+}
+
 // TestEvaluateMissingChartVersionIsNotWorkInProgress pins how a release reports a
 // version that is not in the catalog: not ready, under its own reason, and without
 // the promise of a retry — nothing this controller does produces a version the
