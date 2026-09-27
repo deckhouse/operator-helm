@@ -286,6 +286,7 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 		name         string
 		versions     []helmv1alpha1.ChartVersion
 		noCatalog    bool
+		synced       bool
 		wantReason   string
 		wantBadInput bool
 		// wantRetried is whether the failure goes to the work queue. The three cases
@@ -296,22 +297,61 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 		wantRetried bool
 	}{
 		{
-			name:         "a catalog object that does not exist yet is still progressing",
+			name:         "before the first sync an absent catalog object is still progressing",
 			noCatalog:    true,
+			synced:       false,
 			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
 			wantBadInput: false,
 			wantRetried:  false,
 		},
 		{
-			name:         "a catalog that has not been synced yet is still progressing",
+			name:         "before the first sync an empty catalog is still progressing",
 			versions:     nil,
+			synced:       false,
 			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
 			wantBadInput: false,
+			wantRetried:  false,
+		},
+		{
+			// The repository answered in full and offers no chart under that name: a
+			// typo in the chart name, which used to look exactly like a slow sync.
+			name:         "after a sync an absent catalog object is a fault of the spec",
+			noCatalog:    true,
+			synced:       true,
+			wantReason:   helmv1alpha1.ReasonChartVersionNotFound,
+			wantBadInput: true,
+			wantRetried:  false,
+		},
+		{
+			// A chart every one of whose entries the index marks removed, or publishes
+			// under a version this operator cannot address, is recorded with no
+			// versions and stays that way until the repository changes.
+			name:         "after a sync an empty catalog is durable, not transient",
+			versions:     nil,
+			synced:       true,
+			wantReason:   helmv1alpha1.ReasonChartVersionNotFound,
+			wantBadInput: true,
 			wantRetried:  false,
 		},
 		{
 			name:         "a populated catalog without the version is a fault of the spec",
 			versions:     []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
+			synced:       true,
+			wantReason:   helmv1alpha1.ReasonChartVersionNotFound,
+			wantBadInput: true,
+			wantRetried:  false,
+		},
+		{
+			// The version is listed, and the repository published it at a reference
+			// that cannot be addressed. Only a republish changes that, and the catalog
+			// watches deliver it; the work queue would spin on an unchanged input.
+			name: "a version the repository published unusably is not retried either",
+			versions: []helmv1alpha1.ChartVersion{{
+				Version:            "6.7.1",
+				UnavailableReason:  helmv1alpha1.UnavailableReasonInvalidChartReference,
+				UnavailableMessage: "the url does not address a chart",
+			}},
+			synced:       true,
 			wantReason:   helmv1alpha1.ReasonChartVersionNotFound,
 			wantBadInput: true,
 			wantRetried:  false,
@@ -329,10 +369,15 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 
 			r, c := newTestReconciler(t, objects...)
 
+			repo := helmRepositoryFixture()
+			if tt.synced {
+				repo = syncedRepositoryFixture()
+			}
+
 			_, _, failure := r.resolveSource(
 				context.Background(),
 				adapter.NewAddonRelease(addon),
-				adapter.NewAddonRepository(helmRepositoryFixture()),
+				adapter.NewAddonRepository(repo),
 				adapter.NewAddonCatalog(c),
 				chartsource.Helm,
 			)
@@ -383,6 +428,16 @@ func helmRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
 		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
+}
+
+// syncedRepositoryFixture is the same repository after it has finished a sync at
+// least once. That is what makes its catalog a complete answer rather than a
+// half-built one, and several verdicts turn on the difference.
+func syncedRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
+	repo := helmRepositoryFixture()
+	repo.Status.LastSuccessfulSyncTime = &metav1.Time{Time: time.Now().UTC()}
+
+	return repo
 }
 
 func newForceTestReconciler(
@@ -2028,8 +2083,13 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var atError bool
+			// funcr writes an "error"= key for Error and never for Info, so the key is
+			// what tells the two levels apart in the rendered line.
+			var atError, logged bool
+			var line string
 			logger := funcr.New(func(prefix, args string) {
+				logged = true
+				line = args
 				if strings.Contains(args, `"error"=`) {
 					atError = true
 				}
@@ -2051,6 +2111,18 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 
 			if atError != tt.wantAtError {
 				t.Fatalf("logged at error level = %v, want %v", atError, tt.wantAtError)
+			}
+
+			// Not logging at all would pass the check above and lose the one record of
+			// why the release is not ready.
+			if !logged {
+				t.Fatal("the failure was not logged at any level")
+			}
+			if !strings.Contains(line, tt.failure.Message) {
+				t.Fatalf("logged line %q does not carry the message %q", line, tt.failure.Message)
+			}
+			if !strings.Contains(line, tt.failure.Err.Error()) {
+				t.Fatalf("logged line %q does not carry the cause %q", line, tt.failure.Err)
 			}
 		})
 	}

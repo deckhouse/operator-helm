@@ -301,6 +301,16 @@ func (r *Reconciler) resolveSource(
 	}
 
 	switch {
+	case errors.Is(err, errChartNotFound):
+		// The name itself is wrong, which the version-level message would misreport as
+		// a version that is merely missing.
+		return src, chartVersion, &Failure{
+			Reason: helmv1alpha1.ReasonChartVersionNotFound,
+			Message: fmt.Sprintf("Chart %s is not in the catalog of repository %s",
+				rel.ChartRef().Chart, repo.Name()),
+			Err:      err,
+			BadInput: true,
+		}
 	case errors.Is(err, errChartVersionNotFound):
 		// The catalog is populated and the version the spec names is not in it, which
 		// is what a typo looks like. It is reported as a fault of the spec rather than
@@ -308,6 +318,17 @@ func (r *Reconciler) resolveSource(
 		return src, chartVersion, &Failure{
 			Reason: helmv1alpha1.ReasonChartVersionNotFound,
 			Message: fmt.Sprintf("Version %s of chart %s is not in the catalog of repository %s",
+				rel.ChartRef().Version, rel.ChartRef().Chart, repo.Name()),
+			Err:      err,
+			BadInput: true,
+		}
+	case errors.Is(err, errVersionUnusable):
+		// The version is listed but the repository published it in a way this operator
+		// cannot deploy from. Retrying resolves nothing — the catalog would have to
+		// change, and its watches bring the release back when it does.
+		return src, chartVersion, &Failure{
+			Reason: helmv1alpha1.ReasonChartVersionNotFound,
+			Message: fmt.Sprintf("Version %s of chart %s cannot be deployed from repository %s",
 				rel.ChartRef().Version, rel.ChartRef().Chart, repo.Name()),
 			Err:      err,
 			BadInput: true,
@@ -614,12 +635,24 @@ func (r *Reconciler) getChartVersion(
 ) (client.Object, *helmv1alpha1.ChartVersion, error) {
 	ref := rel.ChartRef()
 
+	// Whether the repository has ever finished a sync is what makes the catalog's
+	// silence mean anything. Before the first one, an absent or empty catalog says
+	// only that the repository controller has not got there yet. After it, the
+	// catalog is the repository's full answer, and silence is the answer.
+	synced := repo.Status().LastSuccessfulSyncTime != nil
+
 	obj, catalogStatus, err := catalog.Lookup(ctx, repo, ref.Chart)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// The repository controller writes the catalog object, and the release is
-			// watching for it. Until it lands there is nothing here to retry against.
-			return nil, nil, fmt.Errorf("getting chart catalog entry: %w: %w", err, errCatalogAwaited)
+			if !synced {
+				// The repository controller writes the catalog object, and the release is
+				// watching for it. Until it lands there is nothing here to retry against.
+				return nil, nil, fmt.Errorf("getting chart catalog entry: %w: %w", err, errCatalogAwaited)
+			}
+
+			return nil, nil, fmt.Errorf(
+				"chart %q is not in repository %q: %w", ref.Chart, repo.Name(), errChartNotFound,
+			)
 		}
 
 		return nil, nil, fmt.Errorf("getting chart catalog entry: %w", err)
@@ -636,16 +669,23 @@ func (r *Reconciler) getChartVersion(
 			// cannot be addressed. Without this the version would fall back to the
 			// helm path and fail on the very same url, reported by the source
 			// controller as an opaque fetch error.
+			//
+			// Nothing this controller does changes it: the reference is what the
+			// repository published, and it takes a republish — which the catalog
+			// watches deliver — to make the version deployable.
 			return nil, nil, fmt.Errorf(
-				"chart version %q cannot be deployed: %s",
-				version.Version, versionUnavailableDetail(*version),
+				"chart version %q cannot be deployed: %s: %w",
+				version.Version, versionUnavailableDetail(*version), errVersionUnusable,
 			)
 		}
 
 		if repoType == chartsource.OCI && version.OCIRef == "" && version.MediaType == "" {
+			// The catalog has not learnt enough about this version to build a source
+			// from it. Which of the two it is — still being resolved, or resolved to
+			// something unusable — the repository is the only one who can move it.
 			return nil, nil, fmt.Errorf(
-				"chart version %q cannot be deployed: %s",
-				version.Version, versionUnavailableDetail(*version),
+				"chart version %q cannot be deployed: %s: %w",
+				version.Version, versionUnavailableDetail(*version), errVersionUnusable,
 			)
 		}
 
@@ -653,10 +693,21 @@ func (r *Reconciler) getChartVersion(
 	}
 
 	if len(catalogStatus.Versions) == 0 {
-		// The repository controller has not written the catalog of this chart yet, so
-		// the absence says nothing about the version the release asks for. It is the
-		// repository that is behind, not the spec that is wrong.
-		return nil, nil, fmt.Errorf("chart catalog has no versions yet: %w", errCatalogAwaited)
+		if !synced {
+			// The catalog object is created before the versions are written onto it, so
+			// an empty one before the first sync is a half-built catalog.
+			return nil, nil, fmt.Errorf("chart catalog has no versions yet: %w", errCatalogAwaited)
+		}
+
+		// After a sync an empty catalog is durable, not transient: a chart whose every
+		// entry the index marks removed, or publishes under a version this operator
+		// cannot address, is recorded with no versions and stays that way until the
+		// repository itself changes. Waiting on it forever would leave the release
+		// claiming progress that nothing is making.
+		return nil, nil, fmt.Errorf(
+			"chart %q in repository %q has no usable versions: %w",
+			ref.Chart, repo.Name(), errChartVersionNotFound,
+		)
 	}
 
 	return nil, nil, fmt.Errorf("chart catalog does not have version %q: %w", ref.Version, errChartVersionNotFound)
@@ -676,6 +727,16 @@ var errChartVersionNotFound = errors.New("chart version not found")
 // queue as well would spend the rate limiter re-running a pass whose input has not
 // moved, and log a controller error for a state that is merely early.
 var errCatalogAwaited = errors.New("chart catalog not written yet")
+
+// errChartNotFound is the chart-level counterpart of errChartVersionNotFound: the
+// repository has answered in full and offers no chart under that name at all.
+var errChartNotFound = errors.New("chart not found")
+
+// errVersionUnusable marks a version the catalog lists but cannot be deployed from,
+// because of what the repository published rather than what the spec asked for. It
+// is reported the same way as a missing version: the release says so and waits for
+// the catalog to change, which its watches deliver.
+var errVersionUnusable = errors.New("chart version cannot be deployed")
 
 // rejectedByAPIServer reports whether an API error is the server refusing the
 // object it was handed, rather than failing to deal with it right now. The two
