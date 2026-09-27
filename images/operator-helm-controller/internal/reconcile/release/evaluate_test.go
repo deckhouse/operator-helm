@@ -1311,3 +1311,30 @@ func TestEvaluateMissingChartVersionIsNotWorkInProgress(t *testing.T) {
 		t.Fatal("Stalled must stay off: the version may be published without any edit to the spec")
 	}
 }
+
+// TestEvaluateDoesNotRecordAChartAppliedFromAKeptArtifact is the other way the record
+// of the applied chart can run ahead of reality. A source that fails to fetch reports
+// that failure under the current generation and keeps the artifact of the spec before
+// it, so the release may well be Ready - it is still running the chart from that
+// artifact - while the chart it is now asked for has never been fetched at all.
+func TestEvaluateDoesNotRecordAChartAppliedFromAKeptArtifact(t *testing.T) {
+	keptArtifact := internalobj.InternalObjectState{
+		Observed: true,
+		Status:   metav1.ConditionFalse,
+		Reason:   helmv1alpha1.ReasonChartFetchFailed,
+		Message:  "no chart version found for podinfo-6.7.2",
+	}
+
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal:          ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: keptArtifact}},
+		Release:           &internalobj.ReleaseOutcome{Internal: readyInternal(), ChartDeployed: true},
+		ChartInfoOutdated: true,
+	}
+
+	decision := Evaluate(in)
+
+	if decision.ApplyChart {
+		t.Fatal("a chart that was never fetched must not be recorded as the applied one")
+	}
+}

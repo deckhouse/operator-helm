@@ -419,8 +419,12 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 		// still running, and the pass that sees the release settle removes it.
 	}
 
-	_, installable := artifactRevision(outcome.Internal)
-	decision.ApplyChart = installable && release.Ready() && outcome.ChartInfoOutdated
+	// The chart is recorded as applied only against an artifact of the spec asking for
+	// it. A source that kept the artifact of the previous spec after a failed fetch has
+	// one the release may well be running happily, and recording the new chart against
+	// it would claim a rollout that never happened.
+	_, current, resolved := artifactRevision(outcome.Internal)
+	decision.ApplyChart = resolved && current && release.Ready() && outcome.ChartInfoOutdated
 	decision.ApplyValues = release.Ready() && valuesDeployed(outcome)
 	decision.RequeueAfter = probeRequeueAfter(outcome.Internal)
 	if decision.RequeueAfter == 0 {
@@ -655,27 +659,35 @@ func retryErr(failure Failure) error {
 	return failure.Err
 }
 
-// artifactRevision is the revision the release would be installed from, and whether
-// there is one at all. An artifact only counts once the object that produced it has
-// reported on the spec it was given: until then the revision on it is the previous
-// one, and installing from it would roll the release back to the chart it is
-// already running.
-func artifactRevision(src InternalSource) (string, bool) {
+// artifactRevision is the revision the release would be installed from, whether that
+// artifact is the one the current spec asks for, and whether there is an artifact at
+// all. An artifact only counts once the object that produced it has reported on the
+// spec it was given: until then the revision on it is the previous one, and installing
+// from it would roll the release back to the chart it is already running.
+//
+// Having reported is not the same as having succeeded. A fetch that fails leaves the
+// artifact of the previous spec in place and says so under the current generation, so
+// the spec the artifact answers for is the one the object last reconciled: only a
+// source that calls itself ready for the spec it was given has an artifact that is
+// the artifact of that spec. The revision is still returned for a source that failed
+// - the release's own spec is kept in step regardless of whether its chart can be
+// fetched today - but it is no longer evidence about which chart is deployed.
+func artifactRevision(src InternalSource) (revision string, current, ok bool) {
 	switch source := src.(type) {
 	case ServedByHelmChart:
 		if source.Result.Artifact == nil || !source.Result.Internal.Observed {
-			return "", false
+			return "", false, false
 		}
 
-		return source.Result.Artifact.Revision, true
+		return source.Result.Artifact.Revision, source.Result.Internal.Ready(), true
 	case ServedByOCIRepository:
 		if source.Result.Artifact == nil || !source.Result.Internal.Observed {
-			return "", false
+			return "", false, false
 		}
 
-		return source.Result.Artifact.Revision, true
+		return source.Result.Artifact.Revision, source.Result.Internal.Ready(), true
 	default:
-		return "", false
+		return "", false, false
 	}
 }
 

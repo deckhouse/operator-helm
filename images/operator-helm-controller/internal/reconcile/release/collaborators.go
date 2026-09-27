@@ -110,8 +110,12 @@ type Releases interface {
 	Ensure(
 		ctx context.Context,
 		rel contract.Release,
-		src chartsource.Source,
+		sourceKind chartsource.Kind,
 		artifactRevision string,
+		// artifactCurrent reports whether that revision is the one the release's
+		// current spec asks for, or an artifact the source kept after failing to
+		// fetch the one it was last given.
+		artifactCurrent bool,
 	) internalobj.ReleaseOutcome
 	Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error)
 	// SyncSpec keeps a release that is being deleted in step with its spec, so

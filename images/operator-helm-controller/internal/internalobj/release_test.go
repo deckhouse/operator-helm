@@ -53,7 +53,7 @@ func newReleases(t *testing.T, objects ...client.Object) (*Releases, client.Clie
 func ensureRelease(t *testing.T, service *Releases, c client.Client, rel contract.Release) *helmv2.HelmRelease {
 	t.Helper()
 
-	if res := service.Ensure(context.Background(), rel, chartsource.Source{Kind: chartsource.Helm}, ""); res.Err != nil {
+	if res := service.Ensure(context.Background(), rel, chartsource.Helm, "", true); res.Err != nil {
 		t.Fatalf("Ensure returned %v", res.Err)
 	}
 
@@ -140,7 +140,6 @@ func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 	cases := []struct {
 		name             string
 		version          string
-		desiredTag       string
 		artifactRevision string
 		status           string
 		snapshot         helmv2.Snapshot
@@ -148,8 +147,7 @@ func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 	}{
 		{
 			name:             "a tag spelled differently from the chart version",
-			version:          "6.7.1",
-			desiredTag:       "v6.7.1",
+			version:          "v6.7.1",
 			artifactRevision: "v6.7.1@" + digest,
 			status:           "deployed",
 			snapshot:         helmv2.Snapshot{OCIDigest: digest, ChartVersion: "6.7.1+0123456789ab"},
@@ -158,7 +156,6 @@ func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 		{
 			name:             "a tag equal to the chart version",
 			version:          "6.7.1",
-			desiredTag:       "6.7.1",
 			artifactRevision: "6.7.1@" + digest,
 			status:           "deployed",
 			snapshot:         helmv2.Snapshot{OCIDigest: digest, ChartVersion: "6.7.1+0123456789ab"},
@@ -169,7 +166,6 @@ func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 			// whole revision, tag included, as the digest of the deployed artifact.
 			name:             "a recorded digest that kept the tag in front of it",
 			version:          "stable",
-			desiredTag:       "stable",
 			artifactRevision: "stable@" + digest,
 			status:           "deployed",
 			snapshot:         helmv2.Snapshot{OCIDigest: "stable@" + digest, ChartVersion: "6.7.1+0123456789ab"},
@@ -178,7 +174,6 @@ func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 		{
 			name:             "another artifact under the same tag",
 			version:          "6.7.1",
-			desiredTag:       "6.7.1",
 			artifactRevision: "6.7.1@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
 			status:           "deployed",
 			snapshot:         helmv2.Snapshot{OCIDigest: digest, ChartVersion: "6.7.1+0123456789ab"},
@@ -187,22 +182,8 @@ func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 		{
 			name:             "the artifact is deployed but the release failed",
 			version:          "6.7.1",
-			desiredTag:       "6.7.1",
 			artifactRevision: "6.7.1@" + digest,
 			status:           "failed",
-			snapshot:         helmv2.Snapshot{OCIDigest: digest, ChartVersion: "6.7.1+0123456789ab"},
-			want:             false,
-		},
-		{
-			// The release was moved to another tag and the fetch of it failed. A failed
-			// fetch leaves the artifact of the previous tag on the source object, reported
-			// under the current generation, and the release still runs the chart out of it:
-			// the digest matches and answers a question about a tag nobody asked for.
-			name:             "the artifact left behind by a failed fetch of another tag",
-			version:          "6.7.2",
-			desiredTag:       "6.7.2",
-			artifactRevision: "6.7.1@" + digest,
-			status:           "deployed",
 			snapshot:         helmv2.Snapshot{OCIDigest: digest, ChartVersion: "6.7.1+0123456789ab"},
 			want:             false,
 		},
@@ -217,9 +198,9 @@ func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 			latest := tc.snapshot
 			latest.Status = tc.status
 
-			if got := isDesiredChartDeployed(rel, &latest, tc.artifactRevision, tc.desiredTag); got != tc.want {
-				t.Fatalf("isDesiredChartDeployed(_, %+v, %q, %q) = %v, want %v",
-					latest, tc.artifactRevision, tc.desiredTag, got, tc.want)
+			if got := isDesiredChartDeployed(rel, &latest, tc.artifactRevision); got != tc.want {
+				t.Fatalf("isDesiredChartDeployed(_, %+v, %q) = %v, want %v",
+					latest, tc.artifactRevision, got, tc.want)
 			}
 		})
 	}
@@ -261,7 +242,7 @@ func TestIsDesiredChartDeployedComparesVersionsForAnArchiveChart(t *testing.T) {
 			app.Spec.Chart.Version = tc.version
 			rel := adapter.NewApplicationRelease(app)
 
-			if got := isDesiredChartDeployed(rel, &tc.latest, "6.7.1", ""); got != tc.want {
+			if got := isDesiredChartDeployed(rel, &tc.latest, "6.7.1"); got != tc.want {
 				t.Fatalf("isDesiredChartDeployed(_, %+v, _) = %v, want %v", tc.latest, got, tc.want)
 			}
 		})
@@ -293,8 +274,60 @@ func TestIsDesiredChartDeployedSurvivesASourceKindFlip(t *testing.T) {
 				ChartVersion: "6.7.1+0123456789ab",
 			}
 
-			if isDesiredChartDeployed(rel, latest, tc.artifactRevision, "6.7.1") {
-				t.Fatalf("isDesiredChartDeployed(_, _, %q, _) = true, want false", tc.artifactRevision)
+			if isDesiredChartDeployed(rel, latest, tc.artifactRevision) {
+				t.Fatalf("isDesiredChartDeployed(_, _, %q) = true, want false", tc.artifactRevision)
+			}
+		})
+	}
+}
+
+// TestReleasesEnsureReportsNothingDeployedFromAnArtifactOfAnotherSpec pins the gate
+// in front of the digest comparison. A source that fails to fetch keeps the artifact
+// of the spec before, and reports that failure under the current generation: the
+// digest on it is then the digest of the chart the release is still running, and
+// every comparison against it says "deployed" about a chart nobody has fetched. The
+// revision alone cannot show this - a repository moved to another path under the
+// same tag produces the same revision string - so what the artifact is evidence
+// about is decided by the source, and handed in.
+func TestReleasesEnsureReportsNothingDeployedFromAnArtifactOfAnotherSpec(t *testing.T) {
+	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	app := testApplication()
+	app.Spec.Chart.Version = "6.7.1"
+	rel := adapter.NewApplicationRelease(app)
+
+	internal := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       rel.InternalNames().HelmRelease,
+			Namespace:  testNamespace,
+			Generation: 1,
+		},
+		Status: helmv2.HelmReleaseStatus{
+			History: helmv2.Snapshots{{
+				Status:       "deployed",
+				OCIDigest:    digest,
+				ChartVersion: "6.7.1+0123456789ab",
+			}},
+		},
+	}
+
+	for _, tc := range []struct {
+		name    string
+		current bool
+		want    bool
+	}{
+		{"the artifact is the one this spec asks for", true, true},
+		{"the artifact is what the source kept after failing this spec", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, _ := newReleases(t, internal.DeepCopy())
+
+			res := service.Ensure(context.Background(), rel, chartsource.OCI, "6.7.1@"+digest, tc.current)
+			if res.Err != nil {
+				t.Fatalf("Ensure returned %v", res.Err)
+			}
+			if res.ChartDeployed != tc.want {
+				t.Fatalf("ChartDeployed = %v, want %v", res.ChartDeployed, tc.want)
 			}
 		})
 	}

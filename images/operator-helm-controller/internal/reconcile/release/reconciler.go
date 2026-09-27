@@ -278,8 +278,8 @@ func (r *Reconciler) reconcileChart(
 		}}
 	}
 
-	if revision, ok := artifactRevision(outcome.Internal); ok {
-		result := r.deps.Releases.Ensure(ctx, rel, src, revision)
+	if revision, current, ok := artifactRevision(outcome.Internal); ok {
+		result := r.deps.Releases.Ensure(ctx, rel, src.Kind, revision, current)
 		outcome.Release = &result
 	}
 
