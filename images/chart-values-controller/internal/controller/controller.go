@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -143,8 +144,7 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 		return
 	}
 
-	known := r.lastDigest(name)
-	if known == art.Digest {
+	if r.lastDigest(name) == art.Digest {
 		return
 	}
 
@@ -156,9 +156,6 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 		return
 	}
 
-	// A refused write leaves the remembered digest alone on purpose: the entry is
-	// not there, so a later pass must try again rather than believe the cache is
-	// already up to date with this revision.
 	if err := r.cache.Put(name, values); err != nil {
 		if errors.Is(err, cache.ErrBudgetExhausted) {
 			log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
@@ -166,34 +163,44 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 			log.FromContext(ctx).Error(err, "failed to write cache entry", "name", name)
 		}
 
-		// An entry known to belong to an older revision has to go: serving it would
-		// answer with the values of a chart that has since been republished, under
-		// the version that was asked for. Dropping it also gives the budget back the
-		// room the replacement needs.
-		//
-		// Only a revision this controller itself wrote is known to be older. An
-		// unknown digest — the entry was written by the resolver, which keeps no
-		// digests, or this container restarted and found the entry on the volume —
-		// says nothing about what is stored, and is the ordinary case rather than
-		// the exception. Deleting on that would have the controller throw away every
-		// entry the resolver caches as soon as the budget is tight.
-		if known != "" {
-			if err := r.cache.Delete(name); err != nil {
-				log.FromContext(ctx).Error(err, "failed to drop a stale cache entry", "name", name)
-			}
-
-			// The entry that digest described is gone, so this controller no longer
-			// knows what is under the key — and the resolver will cache the current
-			// values there on the next miss. Keeping the digest would make that entry
-			// look stale to the next refused pass, which would delete it: the same
-			// thrash, one pass further along.
-			r.forgetDigest(name)
-		}
+		r.invalidateOutdated(ctx, name, art.Digest, values)
 
 		return
 	}
 
 	r.setLastDigest(name, art.Digest)
+}
+
+// invalidateOutdated settles what stays under a key whose refresh could not be
+// written. The entry there was cached for some earlier moment of this chart and
+// version; the artifact has moved since, so it may hold the values of a revision
+// that is no longer current. Serving those answers a request for the chart's
+// values with somebody else's, and the response carries nothing that would let the
+// caller notice. Dropping the entry costs the next request a download — it misses,
+// the resolver prepares the artifact and the client is either served the current
+// values or told to retry — which is the honest answer, and it gives the budget
+// back the room the refused write needed.
+//
+// The revision the entry holds is not recorded anywhere (the key is the
+// repository/chart/version triple, and the resolver, which caches on every miss,
+// keeps no digests), but the values of the current revision are in hand here, so
+// the entry can simply be compared against them. Equal content is the resolver's
+// write of this very revision: it is current, it stays, and the digest is recorded
+// so later passes stop trying to rewrite what is already there — without that, a
+// tight budget would have every pass delete the entry the previous request cached.
+func (r *reconciler) invalidateOutdated(ctx context.Context, name, digest string, values []byte) {
+	if cached, ok := r.cache.Get(name); ok && bytes.Equal(cached, values) {
+		r.setLastDigest(name, digest)
+		return
+	}
+
+	if err := r.cache.Delete(name); err != nil {
+		log.FromContext(ctx).Error(err, "failed to drop an outdated cache entry", "name", name)
+	}
+
+	// Nothing is known about the key any more, and the refused revision must not be
+	// remembered as cached: the next pass has to attempt the write again.
+	r.forgetDigest(name)
 }
 
 func (r *reconciler) lastDigest(name string) string {
