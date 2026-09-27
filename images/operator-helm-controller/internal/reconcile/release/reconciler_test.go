@@ -331,22 +331,26 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 		// them to the rate limiter as well would re-run a pass whose input has not
 		// moved and log a controller error for a state that is merely early.
 		wantRetried bool
+		// wantRetryAfter is the timer the failure asks for, zero for none.
+		wantRetryAfter time.Duration
 	}{
 		{
-			name:         "before the first sync an absent catalog object is still progressing",
-			noCatalog:    true,
-			synced:       false,
-			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput: false,
-			wantRetried:  false,
+			name:           "before the first sync an absent catalog object is still progressing",
+			noCatalog:      true,
+			synced:         false,
+			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:   false,
+			wantRetried:    false,
+			wantRetryAfter: awaitSyncInterval,
 		},
 		{
-			name:         "before the first sync an empty catalog is still progressing",
-			versions:     nil,
-			synced:       false,
-			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput: false,
-			wantRetried:  false,
+			name:           "before the first sync an empty catalog is still progressing",
+			versions:       nil,
+			synced:         false,
+			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:   false,
+			wantRetried:    false,
+			wantRetryAfter: awaitSyncInterval,
 		},
 		{
 			// The repository answered in full and offers no chart under that name: a
@@ -381,12 +385,13 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			// The repository has a catalog, but of the spec it carried before the url
 			// was edited. Reading a chart's absence from it as final would answer
 			// about a repository the release no longer points at.
-			name:         "a catalog from before a spec change is not the repository's answer",
-			noCatalog:    true,
-			staleSync:    true,
-			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput: false,
-			wantRetried:  false,
+			name:           "a catalog from before a spec change is not the repository's answer",
+			noCatalog:      true,
+			staleSync:      true,
+			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:   false,
+			wantRetried:    false,
+			wantRetryAfter: awaitSyncInterval,
 		},
 		{
 			// A transient failure on a healthy repository turns Synced False without
@@ -404,27 +409,31 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			// The catalog is full, but of the previous url. A version the new url
 			// offers is absent from it, and calling that a fault of the spec would be
 			// wrong for as long as the resync takes.
-			name:         "a populated catalog from before a spec change is not the answer either",
-			versions:     []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
-			staleSync:    true,
-			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput: false,
-			wantRetried:  false,
+			name:           "a populated catalog from before a spec change is not the answer either",
+			versions:       []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
+			staleSync:      true,
+			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:   false,
+			wantRetried:    false,
+			wantRetryAfter: awaitSyncInterval,
 		},
 		{
 			// A version the repository lists without having reached a verdict on how
 			// it is published. It may well become deployable, and the write that says
-			// so is to the catalog object the release already watches.
+			// so is to the catalog object the release already watches. The wait also
+			// carries a timer: a registry that keeps failing the same way leaves the
+			// entry unchanged, so no watch event follows.
 			name: "a version still being resolved is progress, not bad input",
 			versions: []helmv1alpha1.ChartVersion{{
 				Version:            "6.7.1",
 				UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
 				UnavailableMessage: "the manifest request failed",
 			}},
-			synced:       true,
-			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput: false,
-			wantRetried:  false,
+			synced:         true,
+			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:   false,
+			wantRetried:    false,
+			wantRetryAfter: awaitSyncInterval,
 		},
 		{
 			// The version is listed, and the repository published it at a reference
@@ -488,6 +497,9 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 
 			if failure == nil {
 				t.Fatal("expected the version resolution to fail")
+			}
+			if failure.RetryAfter != tt.wantRetryAfter {
+				t.Fatalf("retryAfter = %v, want %v", failure.RetryAfter, tt.wantRetryAfter)
 			}
 			if failure.Reason != tt.wantReason {
 				t.Fatalf("reason = %q, want %q", failure.Reason, tt.wantReason)

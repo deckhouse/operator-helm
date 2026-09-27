@@ -198,11 +198,12 @@ spec:
               lastSyncedGeneration:
                 description: |-
                   LastSyncedGeneration is the generation of the spec whose catalog is the one
-                  published now. It is written only by a pass that brought the catalog fully up
-                  to date, and keeps its value through later failures, which is what tells a
-                  published catalog apart from one that is merely not being updated at the
-                  moment. Releases read it to know whether this repository has already answered
-                  about the chart they name.
+                  published now. It is written by every pass that published a catalog, including
+                  one left with tags the registry has not answered about, because the catalog
+                  still lists every version that exists. It keeps its value through later
+                  failures, which is what tells a published catalog apart from one that is
+                  merely not being updated at the moment. Releases read it to know whether this
+                  repository has already answered about the chart they name.
                 format: int64
                 type: integer
               nextSyncTime:

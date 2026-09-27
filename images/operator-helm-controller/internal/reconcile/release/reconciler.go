@@ -335,13 +335,16 @@ func (r *Reconciler) resolveSource(
 		}
 	case errors.Is(err, errVersionResolvePending):
 		// The version is in the catalog and the repository has yet to reach a verdict
-		// on it. Reaching one is a write to that catalog object, which enqueues the
-		// release through its catalog watch: no timer of our own is needed.
+		// on it. Reaching one is a write to the catalog object the release watches,
+		// but only a write that changes something: a registry that keeps failing the
+		// same way leaves the entry byte for byte as it was, and no event follows. The
+		// timer is what makes the release pick up the verdict when it does land.
 		return src, chartVersion, &Failure{
 			Reason:      helmv1alpha1.ReasonChartFetchFailed,
 			Message:     "Failed to resolve the desired chart version",
 			Err:         err,
 			AwaitsWatch: true,
+			RetryAfter:  awaitSyncInterval,
 		}
 	case errors.Is(err, errCatalogAwaited):
 		// Waiting on the repository's first sync of its current spec, which nothing
@@ -815,7 +818,8 @@ func hasVersion(catalogStatus *helmv1alpha1.ChartCatalogStatus, version string) 
 
 // errVersionResolvePending marks a version the catalog lists without a verdict on
 // how it is published. The repository reaches one by writing to the catalog object,
-// which the release watches, so this wait is woken and needs no timer.
+// which the release watches — but a repeated identical failure writes nothing, so
+// the wait carries a timer rather than relying on the watch alone.
 var errVersionResolvePending = errors.New("chart version not resolved yet")
 
 // awaitSyncInterval is how often a release re-reads a repository it is waiting on
