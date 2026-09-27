@@ -1448,3 +1448,105 @@ func TestEvaluateDoesNotRecordAChartAppliedFromAKeptArtifact(t *testing.T) {
 		t.Fatal("a chart that was never fetched must not be recorded as the applied one")
 	}
 }
+
+// TestEvaluateRecordsValuesAppliedFromAKeptArtifact pins where the strictness about
+// the chart stops. The registry is down, so the source cannot fetch the version the
+// spec asks for and keeps the artifact it already has; helm-controller applies a
+// values edit from that artifact, because it needs an observed, non-stalled source
+// with an artifact and not a ready one. Those values are live, and the record has to
+// say so however long the registry stays away — while the chart, whose provenance
+// this pass cannot vouch for, is left unrecorded and the release goes on reporting
+// the fetch that failed.
+func TestEvaluateRecordsValuesAppliedFromAKeptArtifact(t *testing.T) {
+	keptArtifact := internalobj.InternalObjectState{
+		Observed: true,
+		Status:   metav1.ConditionFalse,
+		Reason:   helmv1alpha1.ReasonChartFetchFailed,
+		Message:  "no chart version found for podinfo-6.7.2",
+	}
+
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: keptArtifact}},
+		Release: &internalobj.ReleaseOutcome{
+			Internal:      readyInternal(),
+			ChartDeployed: false,
+			History:       helmv2.Snapshots{{Status: "deployed", ConfigDigest: "sha256:edited"}},
+		},
+		ChartInfoOutdated: true,
+		ValuesDigest:      "sha256:edited",
+	}
+
+	decision := Evaluate(in)
+
+	if !decision.ApplyValues {
+		t.Fatal("values the deployed revision carries must be recorded whatever the source makes of the chart")
+	}
+	if decision.ApplyChart {
+		t.Fatal("a chart that was never fetched must not be recorded as the applied one")
+	}
+
+	ready := condition(t, decision, helmv1alpha1.ConditionTypeReady)
+	if ready.Status != metav1.ConditionFalse || ready.Reason != helmv1alpha1.ReasonChartFetchFailed {
+		t.Fatalf("Ready = %s/%s, want the failed fetch still reported", ready.Status, ready.Reason)
+	}
+	if apimeta.FindStatusCondition(decision.Conditions, helmv1alpha1.ConditionTypeReconciling) == nil {
+		t.Fatal("a release whose chart is not the one asked for is still work in flight")
+	}
+}
+
+// TestEvaluateDoesNotRecordValuesOfTheReleaseBeingReplaced pins the guard on the
+// other side of the same rule. A new chart version is rolling out: the source reached
+// it, the internal HelmRelease still reports the revision it is replacing ready, and
+// that revision was installed with the values the spec has since moved off. Nothing
+// about the edit has happened yet, so neither record may advance — the digest of the
+// deployed revision is what says so, because a digest belongs to the revision
+// carrying it.
+func TestEvaluateDoesNotRecordValuesOfTheReleaseBeingReplaced(t *testing.T) {
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.2"}, Internal: readyInternal()}},
+		Release: &internalobj.ReleaseOutcome{
+			Internal:      readyInternal(),
+			ChartDeployed: false,
+			History:       helmv2.Snapshots{{Status: "deployed", ConfigDigest: "sha256:previous"}},
+		},
+		ChartInfoOutdated: true,
+		ValuesDigest:      "sha256:edited",
+	}
+
+	decision := Evaluate(in)
+
+	if decision.ApplyValues {
+		t.Fatal("values the release being replaced was installed with must not be recorded as the applied ones")
+	}
+	if decision.ApplyChart {
+		t.Fatal("the record of what was applied must not advance ahead of the rollout")
+	}
+}
+
+// TestEvaluateDoesNotRecordValuesAReleaseThatFailedWasGiven pins that reporting is
+// not the same as succeeding. The internal HelmRelease observed the edited spec and
+// failed on it; the newest deployed revision is the one before the edit, so the
+// digest does not match and nothing is recorded.
+func TestEvaluateDoesNotRecordValuesAReleaseThatFailedWasGiven(t *testing.T) {
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}},
+		Release: &internalobj.ReleaseOutcome{
+			Internal: internalobj.InternalObjectState{
+				Observed: true,
+				Status:   metav1.ConditionFalse,
+				Reason:   helmv1alpha1.ReasonReleaseFailed,
+				Message:  "upgrade retries exhausted",
+			},
+			ChartDeployed: true,
+			History:       helmv2.Snapshots{{Status: "deployed", ConfigDigest: "sha256:previous"}},
+		},
+		ValuesDigest: "sha256:edited",
+	}
+
+	if Evaluate(in).ApplyValues {
+		t.Fatal("values a failed release never got as far as deploying must not be recorded")
+	}
+}

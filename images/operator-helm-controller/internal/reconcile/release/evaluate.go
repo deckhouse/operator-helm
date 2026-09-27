@@ -427,7 +427,14 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 	// this function's own inputs from being the place the two can disagree.
 	_, current, resolved := artifactRevision(outcome.Internal)
 	decision.ApplyChart = resolved && current && release.Ready() && outcome.ChartInfoOutdated
-	decision.ApplyValues = release.Ready() && valuesDeployed(outcome)
+	// Which values are live is a different fact from which chart is, so it rests on
+	// different evidence: the internal HelmRelease reporting on the spec it was given,
+	// and its deployed revision carrying the digest of the values that spec asks for.
+	// The chart's provenance says nothing about it — helm-controller applies a values
+	// edit from an artifact the source is merely still holding, so values do go live
+	// while the registry is down — and the verdict above cannot be reused here, because
+	// evaluateRelease has already folded the chart question into it.
+	decision.ApplyValues = releaseReported(outcome.Release) && valuesDeployed(outcome)
 	decision.RequeueAfter = probeRequeueAfter(outcome.Internal)
 	if decision.RequeueAfter == 0 {
 		decision.RequeueAfter = verdict.Failure.RetryAfter
@@ -712,6 +719,20 @@ func artifactRevision(src InternalSource) (revision string, current, ok bool) {
 	}
 }
 
+// releaseReported is the internal HelmRelease's own verdict, before the chart
+// provenance evaluateRelease folds into it: it observed the spec that was written
+// and calls itself ready for it, which is the whole of what proves that the work
+// that spec asked for was carried out.
+func releaseReported(out *internalobj.ReleaseOutcome) bool {
+	return out != nil && out.Internal.Ready()
+}
+
+// valuesDeployed reports that the values the spec asks for are the ones the release
+// is running. The digest belongs to the revision carrying it, so a deployed revision
+// answering to the requested digest was installed with exactly those values — which
+// is also what keeps a rollout in flight from recording them: while a new chart
+// version is being applied, the newest deployed revision is still the previous one,
+// and it answers to the values that were current when it was installed.
 func valuesDeployed(outcome ChartReached) bool {
 	if outcome.Release == nil {
 		return false
