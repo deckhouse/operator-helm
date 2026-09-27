@@ -1338,3 +1338,61 @@ func TestEvaluateCompletesTheGenerationOnceNothingIsLeftUnexamined(t *testing.T)
 		t.Fatalf("requeueAfter = %v, want the normal interval", decision.RequeueAfter)
 	}
 }
+
+// TestEvaluateSchedulesTheNextPassFromTheEndOfTheRead pins what the wait between two
+// incomplete passes is measured from. Now is captured before the read, and a read that
+// ran out of its own budget spent minutes: measured from Now, the one-minute wait is
+// already in the past when the pass ends, nextSyncTime is stale on arrival, and the
+// catalog write that enqueues the repository starts the next full-budget pass
+// immediately — the pause the delay exists for never happens, and the repository holds
+// a worker back to back while the ones queued behind it wait.
+func TestEvaluateSchedulesTheNextPassFromTheEndOfTheRead(t *testing.T) {
+	// A read far longer than the delay it is followed by: this is the ordinary shape
+	// of an incomplete pass, which by definition used its whole budget.
+	const readDuration = 3 * time.Minute
+
+	syncEnd := testNow.Add(readDuration)
+
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        testNow,
+		SyncEnd:    syncEnd,
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{Charts: 1, Unexamined: 400},
+		Catalog:    &reposync.CatalogOutcome{},
+		Current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 1},
+	})
+
+	if decision.Status.NextSyncTime == nil || !decision.Status.NextSyncTime.After(syncEnd) {
+		t.Fatalf("nextSyncTime = %v, want it after the end of the read at %v",
+			decision.Status.NextSyncTime, syncEnd)
+	}
+	if got := decision.Status.NextSyncTime.Sub(syncEnd); got > IncompleteSyncDelay {
+		t.Fatalf("nextSyncTime is %v after the read, want at most the %v delay", got, IncompleteSyncDelay)
+	}
+	if decision.RequeueAfter < IncompleteSyncDelay/2 {
+		t.Fatalf("requeueAfter = %v, want the pause the delay promises, not what is left of it after the read",
+			decision.RequeueAfter)
+	}
+}
+
+// TestEvaluateSchedulesFromNowWhenNoAttemptRan is the other side: a pass that read
+// nothing has no end of its own, so the schedule it reports is still measured from the
+// instant the pass was stamped with.
+func TestEvaluateSchedulesFromNowWhenNoAttemptRan(t *testing.T) {
+	next := testNow.Add(2 * time.Minute)
+
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        testNow,
+		Current: helmv1alpha1.RepositoryStatus{
+			ObservedGeneration: 1,
+			NextSyncTime:       &metav1.Time{Time: next},
+		},
+	})
+
+	if got := decision.RequeueAfter; got != next.Sub(testNow) {
+		t.Fatalf("requeueAfter = %v, want %v: the schedule of a pass that read nothing is unchanged",
+			got, next.Sub(testNow))
+	}
+}

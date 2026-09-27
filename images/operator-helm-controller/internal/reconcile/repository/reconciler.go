@@ -140,6 +140,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		outcome := r.deps.Catalogs.Sync(ctx, repo, repoType)
 
+		// Read after the synchronization, not before it: the schedule is a pause between
+		// attempts, and in.Now was captured before an attempt that may have taken its
+		// whole budget.
+		in.SyncEnd = time.Now().UTC()
+
 		in.Attempted = true
 		if outcome.FetchAttempted {
 			// A cluster-side failure before the fetch (see Synchronizer.Sync)

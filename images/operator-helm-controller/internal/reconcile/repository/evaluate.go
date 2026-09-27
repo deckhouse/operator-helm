@@ -63,6 +63,18 @@ type Inputs struct {
 	Attempted bool
 	Fetch     *reposync.FetchOutcome
 	Catalog   *reposync.CatalogOutcome
+
+	// SyncEnd is when the synchronization attempt finished, and is zero on a pass that
+	// attempted none. The next attempt is scheduled from it rather than from Now,
+	// because Now is captured before the attempt and an attempt can take minutes: a
+	// read that spent its whole three-minute budget would otherwise be given a next
+	// sync time two minutes in the past, and the catalog write that enqueues the
+	// repository would start the next full-budget pass with no pause at all.
+	//
+	// Only the schedule uses it. The timestamps that record when this pass ran - the
+	// condition transition times, lastForceReconcileTime, lastSuccessfulSyncTime - stay
+	// on Now, which is the one instant the whole pass is stamped with.
+	SyncEnd time.Time
 }
 
 // Decision is the full desired status plus the scheduling verdict. Removing a
@@ -202,13 +214,13 @@ func Evaluate(in Inputs) Decision {
 			delay = IncompleteSyncDelay
 		}
 
-		next := in.Now.Add(withJitter(delay, in.Jitter))
+		next := scheduleBase(in).Add(withJitter(delay, in.Jitter))
 		status.NextSyncTime = &metav1.Time{Time: next}
 	}
 
 	requeueAfter := time.Duration(0)
 	if in.ConfigErr == nil && status.NextSyncTime != nil {
-		requeueAfter = status.NextSyncTime.Sub(in.Now)
+		requeueAfter = status.NextSyncTime.Sub(scheduleBase(in))
 		if requeueAfter < minRequeue {
 			requeueAfter = minRequeue
 		}
@@ -219,6 +231,18 @@ func Evaluate(in Inputs) Decision {
 		RequeueAfter: requeueAfter,
 		Err:          firstErr(in.SecretsErr, in.InternalRepositoryErr, in.MigrateErr, catalogErr(in)),
 	}
+}
+
+// scheduleBase is the instant the wait until the next attempt is measured from: the
+// end of the attempt this pass made, or Now when it made none. The delay says how long
+// to leave the repository alone after a read, and a read that took longer than the
+// delay has already served it.
+func scheduleBase(in Inputs) time.Time {
+	if in.Attempted && !in.SyncEnd.IsZero() {
+		return in.SyncEnd
+	}
+
+	return in.Now
 }
 
 func evaluateReady(
