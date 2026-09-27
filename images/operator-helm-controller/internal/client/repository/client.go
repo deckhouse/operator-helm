@@ -21,7 +21,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -141,6 +143,15 @@ type RepoConfig struct {
 // field, and is classified as an ordinary read failure and retried forever against
 // bytes no attempt can parse. The error is terminal for that reason — only an edit
 // of the repository can resolve it.
+//
+// The timeouts mirror go-containerregistry's remote.DefaultTransport, which this
+// transport replaces for a repository that configures TLS: without them a repository
+// that merely pins a CA would be strictly worse off than one that does not, because a
+// bare &http.Transport{} bounds nothing at all — not even the dial. ResponseHeaderTimeout
+// is the one addition: the default transport leaves it unset, and it is the gap a
+// registry that accepts the connection and then goes silent falls through. The calls
+// themselves carry deadlines too (see oci.go), but those cannot bound a connection
+// that is reused for the next request.
 func BuildTLSTransport(config *RepoConfig) (*http.Transport, error) {
 	tlsConfig := &tls.Config{}
 
@@ -161,5 +172,30 @@ func BuildTLSTransport(config *RepoConfig) (*http.Transport, error) {
 		tlsConfig.RootCAs = caCertPool
 	}
 
-	return &http.Transport{TLSClientConfig: tlsConfig}, nil
+	return &http.Transport{
+		TLSClientConfig: tlsConfig,
+		Proxy:           http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			// A registry whose address does not accept connections must not hold a
+			// reconcile worker for longer than it takes to learn that.
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2: true,
+		MaxIdleConns:      100,
+		// Two hosts at most (the registry and its token service), so the idle pool is
+		// split between them, as the default transport does.
+		MaxIdleConnsPerHost: 50,
+		IdleConnTimeout:     90 * time.Second,
+		// A TLS handshake that stalls after the TCP connect is the failure a pinned CA
+		// or a misconfigured registry produces most often.
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// Not in the default transport, and the reason this whole block exists: a
+		// registry that completes the handshake and then never sends a status line
+		// holds the request until something else gives up. Thirty seconds is above any
+		// manifest or tag-listing latency worth waiting for and below every call budget
+		// in this package, so the call's own deadline stays the thing that decides.
+		ResponseHeaderTimeout: 30 * time.Second,
+	}, nil
 }

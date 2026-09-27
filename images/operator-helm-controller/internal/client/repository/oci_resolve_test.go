@@ -19,7 +19,9 @@ package repository
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/random"
@@ -133,5 +135,37 @@ func TestResolveChartArtifactUnparsableReferenceIsTerminal(t *testing.T) {
 	_, err := OCIChartResolverDefault.ResolveChartArtifact(context.Background(), "oci://BAD_HOST//:::", nil)
 	if _, ok := AsTerminal(err); !ok {
 		t.Fatalf("error %v must be terminal: the reference will not become valid by retrying", err)
+	}
+}
+
+// TestResolveChartArtifactAbandonsARegistryThatNeverAnswers pins that the probe is
+// bounded. It serves one release whose reconcile is already open, and neither the
+// reconcile context nor go-containerregistry's transport bounds the wait for a
+// response, so a registry that accepts the request and then says nothing would hold
+// that reconcile — and the worker running it — indefinitely.
+func TestResolveChartArtifactAbandonsARegistryThatNeverAnswers(t *testing.T) {
+	budgetBefore := chartArtifactProbeBudget
+	chartArtifactProbeBudget = 300 * time.Millisecond
+	t.Cleanup(func() { chartArtifactProbeBudget = budgetBefore })
+
+	host := hangingRegistryHost(t)
+
+	start := time.Now()
+	_, err := OCIChartResolverDefault.ResolveChartArtifact(
+		context.Background(), "oci://"+host+"/podinfo:1.0.0", nil,
+	)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a registry that never answers must fail the probe")
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("the probe took %v: the budget did not bound it", elapsed)
+	}
+	if _, ok := AsTerminal(err); ok {
+		t.Fatalf("error %v must stay retriable: the artifact was never examined", err)
+	}
+	if !strings.Contains(err.Error(), "reading the manifest") {
+		t.Fatalf("error %v must say which call was abandoned", err)
 	}
 }

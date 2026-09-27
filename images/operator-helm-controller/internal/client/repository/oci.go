@@ -49,6 +49,41 @@ const chartResolveConcurrency = 8
 // unavailableMessageLimit keeps a registry error from bloating the chart status.
 const unavailableMessageLimit = 256
 
+// The bounds below are variables rather than constants for the same reason as the
+// ones in helm.go: the tests that pin them would otherwise have to wait out real
+// minutes. Nothing outside this package writes them.
+//
+// They exist because neither the reconcile context nor go-containerregistry supplies
+// a deadline of its own: the default transport bounds the dial and the TLS handshake
+// but not the wait for a response, so a registry that accepts the connection and then
+// says nothing holds one of the repository controller's two workers forever, with the
+// repository already reporting a synchronization in progress.
+var (
+	// tagListBudget bounds the whole listing: remote.List is one logical read that
+	// may page, and it retries internally (three steps, ~1s+3s of backoff), so the
+	// budget has to cover the pages, the attempts and the pauses together — which is
+	// why it is a budget and not a per-request timeout. A minute matches
+	// indexFetchBudget: this is the OCI equivalent of reading index.yaml, it runs
+	// once per SyncInterval (5 minutes), and a listing still unfinished after a
+	// minute is a remote worth failing and retrying rather than waiting on.
+	tagListBudget = time.Minute
+	// chartProbeTimeout bounds one manifest request. A manifest is a few kilobytes
+	// that a healthy registry answers in milliseconds; fifteen seconds is the same
+	// allowance indexAttemptTimeout makes for a single request, and a tag that needs
+	// more is recorded as pending and examined again by the next pass.
+	chartProbeTimeout = 15 * time.Second
+	// chartResolvePassBudget bounds the examination pass as a whole. It has to exist
+	// separately from chartProbeTimeout: with chartResolveConcurrency probes in
+	// flight and hundreds of tags queued behind them, per-probe deadlines alone still
+	// multiply into hours. It also has to be generous, because a pass that expires is
+	// a failed pass — nothing it examined is published — so a bound that a large
+	// repository cannot meet would mean it never converges. Three minutes is that
+	// compromise: against a registry answering in milliseconds it admits tens of
+	// thousands of tags, while against a stalled one it gives up well inside the
+	// 5-minute SyncInterval instead of starving the repositories behind this worker.
+	chartResolvePassBudget = 3 * time.Minute
+)
+
 func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig, opts FetchOptions) ([]Chart, error) {
 	url = trimSchemaPrefixes(url)
 	url = strings.TrimSuffix(url, "/")
@@ -106,7 +141,16 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 		options = append(options, remote.WithTransport(tlsTransport))
 	}
 
-	tags, err := remote.List(repo, options...)
+	listCtx, cancelList := context.WithTimeout(ctx, tagListBudget)
+	defer cancelList()
+
+	// A fresh slice: the listing's deadline must not leak into the options the
+	// per-tag puller is built from. The later WithContext wins.
+	listOptions := make([]remote.Option, 0, len(options)+1)
+	listOptions = append(listOptions, options...)
+	listOptions = append(listOptions, remote.WithContext(listCtx))
+
+	tags, err := remote.List(repo, listOptions...)
 	if err != nil {
 		return nil, classifyRemoteError(err, url)
 	}
@@ -135,9 +179,10 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 //   - a per-tag request is rejected with 401/403: credentials rejected for one tag are
 //     rejected for all of them, so resolveChartVersion escalates it to a terminal
 //     error instead of a ResolvePending verdict, and group.Wait propagates it here;
-//   - the parent context is cancelled while tags are still in flight, which would
-//     otherwise make every in-flight remote.Get fail and be misreported as a pass full
-//     of fabricated ResolvePending verdicts instead of the abandoned pass it is.
+//   - the pass runs out of time, or the parent context is cancelled, while tags are
+//     still in flight, which would otherwise make every in-flight remote.Get fail and
+//     be misreported as a pass full of fabricated ResolvePending verdicts instead of
+//     the abandoned pass it is.
 func resolveChartVersions(
 	ctx context.Context,
 	repo name.Repository,
@@ -175,7 +220,12 @@ func resolveChartVersions(
 
 	resolved := make([]*ChartVersion, len(candidates))
 
-	group, groupCtx := errgroup.WithContext(ctx)
+	// passCtx, not groupCtx, is the one consulted after group.Wait: errgroup cancels
+	// its own context as Wait returns, so groupCtx always reports an error there.
+	passCtx, cancelPass := context.WithTimeout(ctx, chartResolvePassBudget)
+	defer cancelPass()
+
+	group, groupCtx := errgroup.WithContext(passCtx)
 	group.SetLimit(chartResolveConcurrency)
 
 	// A fresh slice per pass: appending to the shared options slice from several
@@ -210,7 +260,13 @@ func resolveChartVersions(
 				return nil
 			}
 
-			version, err := resolveChartVersion(groupCtx, puller, repo.Tag(c.tag), c.version)
+			// One tag that stalls must cost only its own deadline: without this the
+			// slot it holds is unavailable to every tag still queued behind it, and
+			// chartResolveConcurrency of them would stall the pass until its budget.
+			probeCtx, cancelProbe := context.WithTimeout(groupCtx, chartProbeTimeout)
+			defer cancelProbe()
+
+			version, err := resolveChartVersion(probeCtx, puller, repo.Tag(c.tag), c.version)
 			if err != nil {
 				return err
 			}
@@ -224,12 +280,15 @@ func resolveChartVersions(
 		return nil, err
 	}
 
-	// A cancelled parent context makes every remote.Get fail without surfacing as a
-	// transport error, so every goroutine above would otherwise return a fabricated
-	// ResolvePending verdict instead of an error. That is indistinguishable from a real
-	// registry failure and must not be reported as a completed pass.
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	// An expired pass budget or a cancelled parent context makes every remote.Get fail
+	// without surfacing as a transport error, so every goroutine above would otherwise
+	// return a fabricated ResolvePending verdict instead of an error. That is
+	// indistinguishable from a real registry failure and must not be reported as a
+	// completed pass: the repository has to report a failed synchronization and retry,
+	// not publish a catalog in which every version is pending. The error is deliberately
+	// not a TerminalError — a registry that stalled once is worth asking again.
+	if err := passCtx.Err(); err != nil {
+		return nil, fmt.Errorf("examining the versions of %s: %w", chartName, err)
 	}
 
 	versions := make([]ChartVersion, 0, len(resolved))

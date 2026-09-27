@@ -23,8 +23,53 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
+
+// TestBuildTLSTransportKeepsTheBoundsOfTheDefaultTransport pins that configuring TLS
+// on a repository does not silently remove every timeout the registry client would
+// otherwise have had: a bare &http.Transport{} bounds neither the dial nor the
+// handshake, so a repository with a pinned CA would hang where the same repository
+// without one would fail. ResponseHeaderTimeout is asserted separately because the
+// default transport does not set it and it is the bound that a registry accepting the
+// connection and then going silent runs into.
+func TestBuildTLSTransportKeepsTheBoundsOfTheDefaultTransport(t *testing.T) {
+	built, err := BuildTLSTransport(&RepoConfig{Insecure: true})
+	if err != nil {
+		t.Fatalf("BuildTLSTransport returned %v", err)
+	}
+
+	standard, ok := remote.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Fatalf("remote.DefaultTransport is %T, the comparison below assumes *http.Transport", remote.DefaultTransport)
+	}
+
+	// A nil DialContext means the zero-value dialer, which never gives up on a
+	// connect; the default transport carries a dialer with a 30s timeout.
+	if built.DialContext == nil {
+		t.Fatal("a custom-TLS transport must dial through a bounded dialer, not the zero-value one")
+	}
+
+	if built.TLSHandshakeTimeout != standard.TLSHandshakeTimeout {
+		t.Fatalf("TLSHandshakeTimeout = %v, want the default transport's %v", built.TLSHandshakeTimeout, standard.TLSHandshakeTimeout)
+	}
+	if built.IdleConnTimeout != standard.IdleConnTimeout {
+		t.Fatalf("IdleConnTimeout = %v, want the default transport's %v", built.IdleConnTimeout, standard.IdleConnTimeout)
+	}
+	if built.ExpectContinueTimeout != standard.ExpectContinueTimeout {
+		t.Fatalf("ExpectContinueTimeout = %v, want the default transport's %v", built.ExpectContinueTimeout, standard.ExpectContinueTimeout)
+	}
+	if built.MaxIdleConns != standard.MaxIdleConns || built.MaxIdleConnsPerHost != standard.MaxIdleConnsPerHost {
+		t.Fatalf("idle pool = %d/%d, want the default transport's %d/%d",
+			built.MaxIdleConns, built.MaxIdleConnsPerHost, standard.MaxIdleConns, standard.MaxIdleConnsPerHost)
+	}
+
+	if built.ResponseHeaderTimeout == 0 {
+		t.Fatal("a silent registry must be abandoned by the transport as well: ResponseHeaderTimeout is unset")
+	}
+}
 
 // TestNeedsExaminationPerRecordedVerdict pins which recorded entries are a verdict
 // the next pass may trust and which are not. The pending-with-a-media-type case is

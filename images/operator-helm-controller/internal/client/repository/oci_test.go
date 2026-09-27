@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -118,6 +119,10 @@ type fakeRegistry struct {
 	mu     sync.Mutex
 	gets   map[string]int
 	forced map[string]int
+	// stalling makes manifest reads hang until stall is closed, which models the
+	// registry that accepts the request and then says nothing.
+	stalling bool
+	stall    chan struct{}
 }
 
 func newFakeRegistry(t *testing.T) (*fakeRegistry, string) {
@@ -127,9 +132,13 @@ func newFakeRegistry(t *testing.T) (*fakeRegistry, string) {
 		inner:  registry.New(registry.Logger(log.New(io.Discard, "", 0))),
 		gets:   map[string]int{},
 		forced: map[string]int{},
+		stall:  make(chan struct{}),
 	}
 	server := httptest.NewServer(f)
 	t.Cleanup(server.Close)
+	// Registered last and therefore run first: a stalled handler outlives the request
+	// that started it, and httptest waits for its handlers before closing.
+	t.Cleanup(func() { close(f.stall) })
 
 	return f, strings.TrimPrefix(server.URL, "http://")
 }
@@ -139,7 +148,17 @@ func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.gets[tag]++
 		status := f.forced[tag]
+		stalling := f.stalling
 		f.mu.Unlock()
+
+		if stalling {
+			select {
+			case <-f.stall:
+			case <-r.Context().Done():
+			}
+
+			return
+		}
 
 		if status != 0 {
 			w.WriteHeader(status)
@@ -168,6 +187,14 @@ func manifestTag(r *http.Request) (string, bool) {
 	}
 
 	return ref, true
+}
+
+// stallManifests makes every later manifest read hang. Tag listing keeps working, so
+// a pass reaches the per-tag probes and then finds nothing answering them.
+func (f *fakeRegistry) stallManifests() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stalling = true
 }
 
 func (f *fakeRegistry) force(tag string, status int) {
@@ -501,5 +528,146 @@ func TestTruncateLeavesAShortMessageUnchanged(t *testing.T) {
 
 	if got := truncate(message); got != message {
 		t.Fatalf("truncate(%q) = %q, want it unchanged", message, got)
+	}
+}
+
+// shortenOCILimits replaces the registry call bounds for one test, so the behaviour
+// they guard can be exercised without waiting out real minutes.
+func shortenOCILimits(t *testing.T, list, probe, pass time.Duration) {
+	t.Helper()
+
+	listBefore, probeBefore, passBefore := tagListBudget, chartProbeTimeout, chartResolvePassBudget
+
+	tagListBudget, chartProbeTimeout, chartResolvePassBudget = list, probe, pass
+
+	t.Cleanup(func() {
+		tagListBudget, chartProbeTimeout, chartResolvePassBudget = listBefore, probeBefore, passBefore
+	})
+}
+
+// hangingRegistryHost starts a server that accepts every request and never answers
+// it, which is the failure no transport-level timeout of go-containerregistry catches:
+// the dial and the TLS handshake both succeed. It returns the host to address it by.
+func hangingRegistryHost(t *testing.T) string {
+	t.Helper()
+
+	// The handlers outlive their requests on purpose and are released before the
+	// server is closed, since httptest waits for its handlers.
+	hang := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hang:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() {
+		close(hang)
+		server.Close()
+	})
+
+	return strings.TrimPrefix(server.URL, "http://")
+}
+
+// TestFetchChartsOCIAbandonsARegistryThatNeverAnswersTheListing pins that the tag
+// listing is bounded. Without a budget the call inherits the reconcile context, which
+// has no deadline, and go-containerregistry's transport bounds the dial and the
+// handshake but not the wait for a response: one such repository holds a worker of
+// the repository controller — which runs two — until the process restarts.
+func TestFetchChartsOCIAbandonsARegistryThatNeverAnswersTheListing(t *testing.T) {
+	shortenOCILimits(t, 300*time.Millisecond, chartProbeTimeout, chartResolvePassBudget)
+
+	host := hangingRegistryHost(t)
+
+	start := time.Now()
+	charts, err := OCIRepositoryDefaultClient.FetchCharts(
+		context.Background(), "oci://"+host+"/podinfo", nil, FetchOptions{},
+	)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("a registry that never answers must fail the listing, got %d charts", len(charts))
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("the listing took %v: the budget did not bound it", elapsed)
+	}
+	if _, ok := AsTerminal(err); ok {
+		t.Fatalf("error %v must stay retriable: a stalled registry may answer next time", err)
+	}
+	if !strings.Contains(err.Error(), "listing image tags") {
+		t.Fatalf("error %v must say which call was abandoned", err)
+	}
+}
+
+// TestFetchChartsOCIFailsThePassWhenManifestReadsStall is the classification half of
+// the bound: when the pass runs out of time every in-flight probe fails with the
+// pass's own context error, which resolveChartVersion cannot tell from a registry
+// failure and records as ResolvePending. Publishing that would mean a catalog whose
+// every version is pending for a reason nothing observed — so the pass has to fail,
+// and fail retriably, leaving the previous catalog in place.
+func TestFetchChartsOCIFailsThePassWhenManifestReadsStall(t *testing.T) {
+	// The probe timeout is deliberately far above the pass budget: this test is
+	// about the whole pass expiring, not about one tag doing so.
+	shortenOCILimits(t, tagListBudget, 10*time.Second, 300*time.Millisecond)
+
+	reg, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.0.1", helmConfigMediaType, currentChartMediaType)
+	reg.stallManifests()
+
+	start := time.Now()
+	charts, err := OCIRepositoryDefaultClient.FetchCharts(
+		context.Background(), "oci://"+host+"/podinfo", nil, FetchOptions{},
+	)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("an expired pass must fail, got %d chart(s): %+v", len(charts), charts)
+	}
+	if charts != nil {
+		t.Fatalf("no catalog may be published alongside the failure, got %+v", charts)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("the pass took %v: the budget did not bound it", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error %v must report the expired deadline", err)
+	}
+	if _, ok := AsTerminal(err); ok {
+		t.Fatalf("error %v must stay retriable: a stalled registry may answer next time", err)
+	}
+}
+
+// TestFetchChartsOCIRecordsASingleStalledTagAsPending is the other side of the same
+// boundary: one tag that stalls is a verdict about that tag, not a failed pass. The
+// probe timeout expires well inside the pass budget, so the remaining tags are
+// published and the stalled one is examined again by the next synchronization.
+func TestFetchChartsOCIRecordsASingleStalledTagAsPending(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 300*time.Millisecond, 30*time.Second)
+
+	reg, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.0.1", helmConfigMediaType, currentChartMediaType)
+	reg.stallManifests()
+
+	start := time.Now()
+	charts, err := OCIRepositoryDefaultClient.FetchCharts(
+		context.Background(), "oci://"+host+"/podinfo", nil, FetchOptions{},
+	)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("a stalled tag is a verdict, not a failed pass, got %v", err)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("the probes took %v: the per-probe timeout did not bound them", elapsed)
+	}
+	if len(charts) != 1 {
+		t.Fatalf("expected one chart, got %d", len(charts))
+	}
+	for _, version := range charts[0].Versions {
+		if version.UnavailableReason != helmv1alpha1.UnavailableReasonResolvePending {
+			t.Fatalf("version %s reason = %q, want %q",
+				version.Version, version.UnavailableReason, helmv1alpha1.UnavailableReasonResolvePending)
+		}
 	}
 }
