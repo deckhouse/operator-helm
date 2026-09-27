@@ -181,6 +181,18 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 // converge — every pass would die at the same point, having published nothing, so every
 // next pass would start from the same empty known state.
 //
+// Publishing what a pass reached is only half of that convergence; the other half is the
+// order the tags are examined in, which is why it is not the listing order. A tag nobody
+// has a verdict for has never been asked, while a tag recorded as ResolvePending was
+// asked and did not answer — and NeedsExamination asks it again on every pass. Taken in
+// listing order, a block of permanently stalling tags at the head of the listing is
+// re-probed first by every pass and spends the whole budget before the tags behind it
+// are reached even once, so those tags are never examined however often the pass is
+// repeated. Examining the never-seen tags first bounds that: the set of tags with no
+// verdict only shrinks, so every tag the repository offers is examined within a finite
+// number of passes, and the stalling ones are re-probed with whatever budget is left
+// after them rather than instead of them.
+//
 // resolveChartVersions returns an error in three cases, none of them a per-tag verdict,
 // and all of them a failure of the whole pass rather than of one tag:
 //   - building the shared puller fails: a transport/auth setup step that happens once
@@ -204,6 +216,11 @@ func resolveChartVersions(
 		tag     string
 		version *semver.Version
 		known   *KnownVersion
+		// recorded says a previous pass wrote a verdict for this tag, whatever that
+		// verdict was. It is not the same question as known != nil: a ResolvePending
+		// entry is recorded and still has to be examined again, and it is exactly that
+		// combination the examination order has to put last.
+		recorded bool
 	}
 
 	candidates := make([]candidate, 0, len(tags))
@@ -218,13 +235,36 @@ func resolveChartVersions(
 			continue
 		}
 
-		c := candidate{tag: tag, version: semVersion}
+		known, recorded := opts.Known[chartName][tag]
+
+		c := candidate{tag: tag, version: semVersion, recorded: recorded}
 		if !opts.NeedsExamination(chartName, tag) {
-			known := opts.Known[chartName][tag]
 			c.known = &known
 		}
 
 		candidates = append(candidates, c)
+	}
+
+	// probeOrder is the order the tags that need a request are asked in: the ones no
+	// pass has a verdict for first, the ones a previous pass left without an answer
+	// after them. Within each group the listing order is kept, so two passes over an
+	// unchanged repository ask in the same order — the convergence must not depend on
+	// which tags a pass happened to get to.
+	//
+	// The candidates themselves are left in listing order: they index resolved and
+	// examined below, and the versions this function returns are built from them.
+	probeOrder := make([]int, 0, len(candidates))
+
+	for i := range candidates {
+		if candidates[i].known == nil && !candidates[i].recorded {
+			probeOrder = append(probeOrder, i)
+		}
+	}
+
+	for i := range candidates {
+		if candidates[i].known == nil && candidates[i].recorded {
+			probeOrder = append(probeOrder, i)
+		}
 	}
 
 	resolved := make([]*ChartVersion, len(candidates))
@@ -266,19 +306,19 @@ func resolveChartVersions(
 		return nil, nil, fmt.Errorf("building the registry puller: %w", err)
 	}
 
+	// Carried outside the group: a recorded verdict costs no request, and a pass whose
+	// budget expires must still publish every one of them. A carry queued behind stalled
+	// probes would be left undone, its verdict would drop out of the catalog, and the
+	// next pass would have to examine that tag from scratch — the incremental state
+	// would shrink instead of growing.
 	for i := range candidates {
-		index, c := i, candidates[i]
-
-		// Carried here rather than inside the group: a recorded verdict costs no
-		// request, and a pass whose budget expires must still publish every one of them.
-		// A carry queued behind stalled probes would be left undone, its verdict would
-		// drop out of the catalog, and the next pass would have to examine that tag from
-		// scratch — the incremental state would shrink instead of growing.
-		if c.known != nil {
-			resolved[index], examined[index] = carryKnown(c.version, *c.known), true
-
-			continue
+		if candidates[i].known != nil {
+			resolved[i], examined[i] = carryKnown(candidates[i].version, *candidates[i].known), true
 		}
+	}
+
+	for _, index := range probeOrder {
+		c := candidates[index]
 
 		group.Go(func() error {
 			// The budget is already spent: every probe from here on would fail on a
@@ -312,10 +352,13 @@ func resolveChartVersions(
 			// A probe cut short by our own budget (or by the parent context) fails inside
 			// remote.Get without any transport error, so resolveChartVersion cannot tell it
 			// from a registry that answered badly and builds a ResolvePending entry for it.
-			// Recording that would publish our own timeout as the registry's answer, and
-			// ResolvePending is carried forward by the known state, so the lie would outlive
-			// the pass that told it. Only a pending verdict is suspect: a tag that answered
-			// just before the budget expired was genuinely examined and is kept.
+			// Recording that would publish our own timeout as the registry's answer: the
+			// catalog would show, and the status would count, a version the registry was
+			// never given the time to say anything about. Reporting it as unexamined is the
+			// honest answer and the one the next pass acts on — a tag with no verdict at all
+			// is examined ahead of the tags that already have one. Only a pending verdict is
+			// suspect: a tag that answered just before the budget expired was genuinely
+			// examined and is kept.
 			if version != nil &&
 				version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending &&
 				passCtx.Err() != nil {

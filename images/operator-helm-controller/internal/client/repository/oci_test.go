@@ -19,10 +19,12 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -624,8 +626,9 @@ func TestFetchChartsOCIAbandonsARegistryThatNeverAnswersTheListing(t *testing.T)
 // The stalled one is the delicate case — its probe fails on the pass's own context,
 // which resolveChartVersion cannot tell from a registry failure and turns into a
 // ResolvePending entry. Publishing that would be our own timeout recorded as the
-// registry's answer, and the known state carries ResolvePending forward, so it must
-// be reported as unexamined instead: no entry at all.
+// registry's answer — a verdict shown to users and counted in the status for a tag the
+// registry was never given the time to answer about — so it must be reported as
+// unexamined instead: no entry at all.
 func TestFetchChartsOCIPublishesWhatAnExpiredPassExamined(t *testing.T) {
 	// The probe timeout is deliberately far above the pass budget: this test is
 	// about the whole pass expiring, not about one tag doing so.
@@ -753,5 +756,82 @@ func TestFetchChartsOCIRecordsASingleStalledTagAsPending(t *testing.T) {
 	}
 	if got := reasons["1.0.1"]; got != helmv1alpha1.UnavailableReasonResolvePending {
 		t.Fatalf("the stalled tag reason = %q, want %q", got, helmv1alpha1.UnavailableReasonResolvePending)
+	}
+}
+
+// TestFetchChartsOCIExaminesANeverSeenTagAheadOfAStalledOne pins the examination
+// order, which is what makes repeated passes converge. Publishing what a pass reached
+// is not enough on its own: a tag recorded as ResolvePending is examined again by
+// every pass, so a block of permanently stalling tags at the head of the listing is
+// re-probed first every time and spends the whole budget before the tags behind it are
+// reached even once. Those tags would never be examined, however often the
+// synchronization ran, and the published prefix would be exactly the part that keeps
+// being re-probed.
+//
+// A tag with no recorded verdict has never been asked, while a pending one was asked
+// and did not answer, so the never-asked ones go first: the set of tags nobody has a
+// verdict for only shrinks, which is the guarantee that every tag is examined
+// eventually. The second half of the test is the other side of it — the pending tags
+// are not dropped from the pass, they are probed with the budget left after the new
+// ones.
+func TestFetchChartsOCIExaminesANeverSeenTagAheadOfAStalledOne(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
+
+	reg, host := newFakeRegistry(t)
+
+	// More stalling tags than one budget can probe: eight concurrent probes of 200ms
+	// each get through some forty of them in a second, so a tag listed behind all
+	// eighty is out of reach of any pass that asks them first.
+	const (
+		stallingTags = 80
+		healthyTag   = "9.0.0"
+	)
+
+	stalled := make([]string, 0, stallingTags)
+
+	for i := range stallingTags {
+		tag := fmt.Sprintf("0.0.%d", i+1)
+		pushChart(t, host, tag, helmConfigMediaType, currentChartMediaType)
+		stalled = append(stalled, tag)
+	}
+
+	pushChart(t, host, healthyTag, helmConfigMediaType, currentChartMediaType)
+
+	// Stalled only after the fixtures are pushed: remote.Write reads manifests too.
+	for _, tag := range stalled {
+		reg.stallTag(tag)
+	}
+
+	// The first pass has no recorded verdict for anything, so every tag is a new one
+	// and the listing order decides: the healthy tag sits behind eighty stalling ones
+	// and is left unexamined. This is the situation the order has to get out of.
+	first := fetchOne(t, host, FetchOptions{})
+	if !slices.Contains(first.UnexaminedVersions, healthyTag) {
+		t.Fatalf("the first pass was expected to run out of budget before %s; unexamined = %v",
+			healthyTag, first.UnexaminedVersions)
+	}
+
+	// What the passes that probed the stalling tags left behind: a pending verdict
+	// each, which NeedsExamination asks about again.
+	known := make(KnownVersions, len(stalled))
+	for _, tag := range stalled {
+		known[tag] = KnownVersion{UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending}
+	}
+
+	reg.reset()
+
+	second := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}})
+
+	if got := versionByTag(t, second, healthyTag).MediaType; got != currentChartMediaType {
+		t.Fatalf("%s media type is %q, want %q: a never seen tag must be examined before the stalled ones",
+			healthyTag, got, currentChartMediaType)
+	}
+
+	probed := 0
+	for _, tag := range stalled {
+		probed += reg.manifestGets(tag)
+	}
+	if probed == 0 {
+		t.Fatal("the pending tags must still be re-examined with the budget left after the new ones")
 	}
 }
