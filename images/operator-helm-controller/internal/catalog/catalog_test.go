@@ -791,3 +791,72 @@ func TestReconcileReportsEveryChartItCannotPublish(t *testing.T) {
 		})
 	}
 }
+
+// TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass closes the loop that
+// left a transiently unreachable version pending forever: the merge carries the
+// recorded media type onto the failed probe of a version still in use (without it the
+// running application's internal OCIRepository could not be built), and the next pass
+// reads that same catalog back as its known state. If a carried media type counted as
+// an examined tag, the tag would never be probed again, its stale ResolvePending would
+// be republished every pass, and the repository would never report a successful sync
+// again. The known state here is built by the catalog itself, the way the
+// synchronizer builds it, so the assertion is about production's own state and not
+// about a hand-written map.
+func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	c := newClient(t)
+	cat := adapter.NewApplicationCatalog(c)
+	repo := applicationRepo("team-a", "stable")
+
+	app := &helmv1alpha1.HelmApplication{
+		ObjectMeta: metav1.ObjectMeta{Name: "podinfo", Namespace: "team-a"},
+		Spec: helmv1alpha1.HelmApplicationSpec{
+			Chart: helmv1alpha1.HelmApplicationChartRef{Name: "podinfo", Repository: "stable", Version: "6.7.1"},
+		},
+	}
+	if err := c.Create(context.Background(), app); err != nil {
+		t.Fatalf("creating the application using the version: %v", err)
+	}
+
+	resolved := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
+	}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{resolved}); err != nil {
+		t.Fatalf("the resolving pass returned %v", err)
+	}
+
+	// The next pass cannot reach the registry for that tag: no media type, no
+	// reference, only the transport failure.
+	pending := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{{
+		Version:            semver.MustParse("6.7.1"),
+		UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
+		UnavailableMessage: "GET https://registry.example.invalid/v2/: dial tcp: i/o timeout",
+	}}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{pending}); err != nil {
+		t.Fatalf("the failing pass returned %v", err)
+	}
+
+	stored := &helmv1alpha1.HelmApplicationChart{}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	if err := c.Get(context.Background(), key, stored); err != nil {
+		t.Fatalf("reading the catalog object: %v", err)
+	}
+	if len(stored.Status.Versions) != 1 {
+		t.Fatalf("versions = %+v, want exactly one", stored.Status.Versions)
+	}
+	if got := stored.Status.Versions[0]; got.MediaType != mediaType ||
+		got.UnavailableReason != helmv1alpha1.UnavailableReasonResolvePending {
+		t.Fatalf("recorded version = %+v, want the carried media type next to the pending reason", got)
+	}
+
+	known, err := cat.Known(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("Known returned %v", err)
+	}
+
+	opts := repoclient.FetchOptions{Known: known, Full: repo.ForceReconcileRequired()}
+	if !opts.NeedsExamination("podinfo", "6.7.1") {
+		t.Fatal("a version left pending by a failed probe must be examined again on the next pass")
+	}
+}

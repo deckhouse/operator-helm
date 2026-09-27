@@ -26,6 +26,61 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
+// TestNeedsExaminationPerRecordedVerdict pins which recorded entries are a verdict
+// the next pass may trust and which are not. The pending-with-a-media-type case is
+// the one production actually produces: the catalog merge carries the previous media
+// type onto a failed probe of a version still in use, so the media type alone cannot
+// mean "examined".
+func TestNeedsExaminationPerRecordedVerdict(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	tests := []struct {
+		name  string
+		known KnownVersions
+		full  bool
+		want  bool
+	}{
+		{name: "a tag no pass has seen", known: KnownVersions{}, want: true},
+		{name: "a resolved tag", known: KnownVersions{"1.0.0": {MediaType: mediaType}}, want: false},
+		{
+			name:  "an unsupported artifact",
+			known: KnownVersions{"1.0.0": {UnavailableReason: helmv1alpha1.UnavailableReasonUnsupportedMediaType}},
+			want:  false,
+		},
+		{
+			name:  "a failed probe",
+			known: KnownVersions{"1.0.0": {UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending}},
+			want:  true,
+		},
+		{
+			name: "a failed probe on a version in use, whose media type the merge carried forward",
+			known: KnownVersions{"1.0.0": {
+				MediaType:          mediaType,
+				UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
+				UnavailableMessage: "GET https://registry.example.invalid/v2/: dial tcp: i/o timeout",
+			}},
+			want: true,
+		},
+		{name: "an entry written before media types were recorded", known: KnownVersions{"1.0.0": {}}, want: true},
+		{
+			name:  "a full pass ignores every verdict",
+			known: KnownVersions{"1.0.0": {MediaType: mediaType}},
+			full:  true,
+			want:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opts := FetchOptions{Known: KnownCharts{"podinfo": test.known}, Full: test.full}
+
+			if got := opts.NeedsExamination("podinfo", "1.0.0"); got != test.want {
+				t.Fatalf("NeedsExamination = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 // testServerCACertificate returns the PEM encoding of the certificate a TLS test
 // server presents, which is the shape a repository's spec.caCertificate carries.
 func testServerCACertificate(t *testing.T, server *httptest.Server) string {

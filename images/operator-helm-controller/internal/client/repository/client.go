@@ -71,10 +71,14 @@ type FetchOptions struct {
 	Full  bool
 }
 
-// NeedsExamination reports whether a listed tag has to be examined again. A recorded
+// NeedsExamination reports whether a listed tag has to be examined again. A pending
+// entry is examined whatever else it records: ResolvePending is not a verdict but the
+// absence of one, and the media type next to it is the one the catalog merge carries
+// forward to keep a version still in use deployable, so reading it as "already
+// examined" would freeze the probe that never reached a verdict. Otherwise a recorded
 // media type is authoritative; an unsupported artifact is a verdict and is not
-// re-examined until a full pass; anything else — never seen, seen without a verdict
-// (an entry written before media types were recorded), or left pending — is examined.
+// re-examined until a full pass; anything else — never seen, or seen without a verdict
+// (an entry written before media types were recorded) — is examined.
 func (o FetchOptions) NeedsExamination(chartName, tag string) bool {
 	if o.Full {
 		return true
@@ -83,6 +87,8 @@ func (o FetchOptions) NeedsExamination(chartName, tag string) bool {
 	known, recorded := o.Known[chartName][tag]
 	switch {
 	case !recorded:
+		return true
+	case known.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending:
 		return true
 	case known.MediaType != "":
 		return false
