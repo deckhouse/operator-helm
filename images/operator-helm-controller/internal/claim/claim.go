@@ -232,16 +232,24 @@ func (s *Claims) takeOver(ctx context.Context, lease *coordinationv1.Lease, rel 
 	return s.client.Update(ctx, lease)
 }
 
-// isHolderStale reports whether the recorded holder no longer keeps this claim: it
-// either no longer exists or its current spec points at a different chart, in which
-// case the Lease is an orphan left behind by a deletion or a chart change.
-func (s *Claims) isHolderStale(ctx context.Context, holder, leaseName string) (bool, error) {
+// isHolderStale reports whether the recorded holder no longer keeps this claim,
+// which it does only by ceasing to exist. A Lease left behind by a deletion is an
+// orphan nobody else would ever clear, so it is taken over here.
+//
+// A holder that is still there keeps its claim, whatever its spec now says. Giving
+// it up is the holder's own act — DropStale removes the Leases it holds for pairs it
+// no longer names, and Drop removes them all when it is deleted — and reading its
+// spec here instead would hand the pair out twice. The holder does not write to the
+// Lease when it finds itself already recorded in it, so an addon that moves off this
+// chart and back leaves the Lease untouched, and the optimistic update below is
+// happy to overwrite it: two addons would each believe they had the claim, and one
+// of them would have been told so after the other had resumed using it.
+func (s *Claims) isHolderStale(ctx context.Context, holder, _ string) (bool, error) {
 	if holder == "" {
 		return true, nil
 	}
 
-	other := &helmv1alpha1.HelmClusterAddon{}
-	err := s.reader.Get(ctx, types.NamespacedName{Name: holder}, other)
+	err := s.reader.Get(ctx, types.NamespacedName{Name: holder}, &helmv1alpha1.HelmClusterAddon{})
 	if apierrors.IsNotFound(err) {
 		return true, nil
 	}
@@ -249,11 +257,7 @@ func (s *Claims) isHolderStale(ctx context.Context, holder, leaseName string) (b
 		return false, fmt.Errorf("getting chart claim holder: %w", err)
 	}
 
-	holderLease := utils.GetChartClaimLeaseName(
-		other.Spec.Chart.HelmClusterAddonRepository, other.Spec.Chart.HelmClusterAddonChartName,
-	)
-
-	return holderLease != leaseName, nil
+	return false, nil
 }
 
 func (s *Claims) leaseKey(rel contract.Release) types.NamespacedName {

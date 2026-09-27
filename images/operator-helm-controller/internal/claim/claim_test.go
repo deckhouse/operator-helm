@@ -160,9 +160,13 @@ func TestAcquireReportsTheHolderOfATakenPair(t *testing.T) {
 	}
 }
 
-// TestAcquireTakesOverAClaimNoOneKeeps pins the two ways a Lease outlives its
-// holder — the addon was deleted, or its spec moved to another chart — and the one
-// way it never does: an empty holder identity is as stale as a missing addon.
+// TestAcquireTakesOverAClaimNoOneKeeps pins the one way a Lease outlives its
+// holder — the addon is gone — and that an empty holder identity is as stale as a
+// missing addon.
+//
+// An addon that merely moved to another chart is deliberately not among them: it is
+// still there, and giving up a claim is its own act, done by DropStale on its next
+// pass. See TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway.
 func TestAcquireTakesOverAClaimNoOneKeeps(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -171,13 +175,6 @@ func TestAcquireTakesOverAClaimNoOneKeeps(t *testing.T) {
 		{
 			name:    "the holder was deleted",
 			objects: []client.Object{claimFor("stable", "podinfo", "gone", "gone")},
-		},
-		{
-			name: "the holder moved to another chart",
-			objects: []client.Object{
-				claimingAddon("moved", "other-chart"),
-				claimFor("stable", "podinfo", "moved", "moved"),
-			},
 		},
 		{
 			name:    "the lease records no holder at all",
@@ -453,5 +450,46 @@ func TestDropStaleIgnoresClaimsOfOtherAddons(t *testing.T) {
 
 	if got := claimHolder(t, c, "other-repo", "other-chart"); got != "another-addon" {
 		t.Fatalf("holder = %q, want another addon's claim untouched", got)
+	}
+}
+
+// TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway pins the claim against being
+// handed out twice around an addon that moves off a chart and back.
+//
+// Reading the holder's spec to decide the Lease is an orphan cannot be made safe:
+// the holder does not write to the Lease when it finds itself already recorded in
+// it, so between that read and the takeover it can resume the pair without leaving
+// a trace the optimistic update would collide with. The interleaving below is the
+// one the review described — A moves away, B judges the claim stale, A moves back
+// and is told it holds the claim, B writes the Lease anyway — and it ends with both
+// addons believing they own one chart.
+func TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway(t *testing.T) {
+	moved := claimingAddon("first", "other-chart")
+	second := claimingAddon("second", "podinfo")
+	claims, c := newClaims(t, moved, second, claimFor("stable", "podinfo", "first", "first"))
+
+	// A is back on the pair before B writes: its own Acquire is a no-op on the
+	// Lease, which is exactly why B cannot detect it.
+	back := claimingAddon("first", "podinfo")
+	acquired, holder, err := claims.Acquire(context.Background(), adapter.NewAddonRelease(back))
+	if err != nil {
+		t.Fatalf("Acquire for the returning holder returned %v", err)
+	}
+	if !acquired || holder != "first" {
+		t.Fatalf("the recorded holder was refused its own claim: %v/%q", acquired, holder)
+	}
+
+	acquired, holder, err = claims.Acquire(context.Background(), adapter.NewAddonRelease(second))
+	if err != nil {
+		t.Fatalf("Acquire returned %v", err)
+	}
+	if acquired {
+		t.Fatal("the pair was handed to a second addon while its holder was still there")
+	}
+	if holder != "first" {
+		t.Fatalf("holder = %q, want the addon that holds the lease", holder)
+	}
+	if got := claimHolder(t, c, "stable", "podinfo"); got != "first" {
+		t.Fatalf("holder on the lease = %q, want it untouched", got)
 	}
 }
