@@ -482,6 +482,60 @@ func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 	}
 }
 
+// TestFetchChartsOCISaysWhichVerdictsItOnlyCarried pins the difference the catalog merge
+// reads the re-examination mark against. A carried entry and a freshly probed one look
+// identical in every field a verdict is made of, and the merge clears the mark on a
+// version this pass answered — so without the flag a pass that skipped a tag would end
+// a forced refresh it never did any work for. The client is the only place that knows:
+// it is the one that decided, per tag, whether to ask the registry.
+func TestFetchChartsOCISaysWhichVerdictsItOnlyCarried(t *testing.T) {
+	reg, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.0.1", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.0.2", helmConfigMediaType, currentChartMediaType)
+	reg.reset()
+
+	// 1.0.0 has a recorded verdict nothing questions; 1.0.1 has one a forced refresh
+	// marked; 1.0.2 has none at all.
+	known := KnownCharts{"podinfo": KnownVersions{
+		"1.0.0": {MediaType: legacyChartMediaType},
+		"1.0.1": {MediaType: legacyChartMediaType, ReexaminationRequired: true},
+	}}
+
+	chart := fetchOne(t, host, FetchOptions{Known: known})
+
+	tests := []struct {
+		name        string
+		tag         string
+		wantCarried bool
+	}{
+		{name: "a tag whose recorded verdict this pass skipped is reported as carried", tag: "1.0.0", wantCarried: true},
+		{name: "a tag whose mark this pass answered is reported as examined", tag: "1.0.1", wantCarried: false},
+		{name: "a tag no pass had a verdict for is reported as examined", tag: "1.0.2", wantCarried: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			version := versionByTag(t, chart, test.tag)
+			if version.Carried != test.wantCarried {
+				t.Fatalf("%s carried = %v, want %v", test.tag, version.Carried, test.wantCarried)
+			}
+
+			// What the flag has to agree with: a carry costs no request, an examination is
+			// exactly one.
+			wantRequests := 1
+			if test.wantCarried {
+				wantRequests = 0
+			}
+
+			if got := reg.manifestGets(test.tag); got != wantRequests {
+				t.Fatalf("%s was requested %d times, want %d: the flag must describe what the pass actually did",
+					test.tag, got, wantRequests)
+			}
+		})
+	}
+}
+
 func TestFetchChartsOCIFullIgnoresKnown(t *testing.T) {
 	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)

@@ -59,6 +59,15 @@ type ChartVersion struct {
 	// deployed and are empty for a usable one.
 	UnavailableReason  string
 	UnavailableMessage string
+	// Carried says this entry is the verdict a previous pass recorded, reused without
+	// asking the registry anything, because NeedsExamination answered no for the tag.
+	// It is there so the catalog goes on publishing the verdict, not because this pass
+	// established it, and the distinction is invisible in the fields above — a carried
+	// entry and a freshly probed one that reached the same verdict are identical. The
+	// catalog merge needs it to tell an answer from an echo: the re-examination mark is
+	// cleared by an answer only. This is a client-side field with no counterpart in the
+	// API types; nothing about it is ever written to the cluster.
+	Carried bool
 }
 
 // KnownVersion is the verdict a previous pass reached for one tag.

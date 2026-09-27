@@ -71,6 +71,27 @@ import (
 // must not go on claiming work in a status a user reads. Should the tag be pushed again,
 // the pass that lists it examines it on the strength of that reason alone
 // (FetchOptions.NeedsExamination), mark or no mark.
+//
+// Being among the fetched entries is not the same as having been examined, which is why
+// only a version this pass actually probed has its mark cleared. A pass that did not have
+// to examine a version carries the recorded verdict forward without asking the registry
+// anything and reports it here like any other (repoclient.ChartVersion.Carried); the
+// entry exists so the catalog keeps publishing the verdict, and a carry answers no
+// question. Clearing a mark on one would end a refresh nobody did, and that is reachable
+// rather than theoretical: an ordinary pass decides what to skip against the Known
+// snapshot it was built from, which comes from the same lagging cache as the read below,
+// so a snapshot taken before a marking write leaves the version skippable for that pass
+// while the read this merge is computed from may already carry the mark. A carried entry
+// therefore keeps whatever that read recorded instead of clearing it.
+//
+// That converges rather than pinning the mark. If the read carries no mark, preserving
+// "no mark" writes the entry exactly as it already was — a no-op. If it carries one, the
+// mark survives this pass, and the next pass builds its Known from a read that has caught
+// up (the write it lagged behind is a whole synchronization interval old by then), so
+// NeedsExamination sees the mark, the version is probed, and the mark is cleared by an
+// answer. Nothing in this merge can put a mark on, so a version cannot be kept marked by
+// this rule alone; only MarkForReexamination writes one, and only a probe, a confirmed
+// absence or a drop takes it off.
 func mergeChartVersions(
 	fetched []repoclient.ChartVersion,
 	current []helmv1alpha1.ChartVersion,
@@ -95,6 +116,14 @@ func mergeChartVersions(
 		name := version.Version.Original()
 		listed[name] = struct{}{}
 
+		old, recorded := currentByVersion[name]
+
+		// A carry is not an answer: the mark stays exactly as the read found it. A forced
+		// pass never gets here — it asks for every tag (FetchOptions.Full), so nothing it
+		// fetches is carried — which is why the set the marking reported is not consulted
+		// for a fetched version the way it is for a deferred one.
+		reexaminationRequired := version.Carried && recorded && old.ReexaminationRequired
+
 		mediaType := version.MediaType
 		// The carry-forward only makes sense for a version that still resolves to an
 		// archive: a fresh entry that now carries an OCIRef must probe its own layer
@@ -103,18 +132,19 @@ func mergeChartVersions(
 		// fail forever with no way to correct it.
 		if mediaType == "" && version.OCIRef == "" {
 			if _, referenced := inUse[name]; referenced {
-				if old, recorded := currentByVersion[name]; recorded && old.MediaType != "" {
+				if recorded && old.MediaType != "" {
 					mediaType = old.MediaType
 				}
 			}
 		}
 
 		merged = append(merged, helmv1alpha1.ChartVersion{
-			Version:            name,
-			OCIRef:             version.OCIRef,
-			MediaType:          mediaType,
-			UnavailableReason:  version.UnavailableReason,
-			UnavailableMessage: version.UnavailableMessage,
+			Version:               name,
+			OCIRef:                version.OCIRef,
+			MediaType:             mediaType,
+			UnavailableReason:     version.UnavailableReason,
+			UnavailableMessage:    version.UnavailableMessage,
+			ReexaminationRequired: reexaminationRequired,
 		})
 	}
 

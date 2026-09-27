@@ -57,7 +57,7 @@ func (s *recordingRepoClient) FetchCharts(_ context.Context, _ string, _ *repocl
 	return s.charts, nil
 }
 
-func newSynchronizer(t *testing.T, stub stubRepoClient, objects ...client.Object) (*Synchronizer, client.Client) {
+func newSynchronizer(t *testing.T, stub repoclient.ClientInterface, objects ...client.Object) (*Synchronizer, client.Client) {
 	t.Helper()
 
 	return newSynchronizerWithInterceptor(t, stub, interceptor.Funcs{}, objects...)
@@ -65,7 +65,7 @@ func newSynchronizer(t *testing.T, stub stubRepoClient, objects ...client.Object
 
 func newSynchronizerWithInterceptor(
 	t *testing.T,
-	stub stubRepoClient,
+	stub repoclient.ClientInterface,
 	funcs interceptor.Funcs,
 	objects ...client.Object,
 ) (*Synchronizer, client.Client) {
@@ -592,6 +592,10 @@ func TestSynchronizerSyncReportsAForcedRefreshRecordedWhenTheKnownListingFails(t
 // rest as unexamined, carrying forward the recorded verdict of every version it is
 // allowed to skip. mediaType is what the registry holds now — every tag was re-pushed —
 // so a version that was examined is distinguishable from one that was only carried.
+//
+// A carried entry is flagged as carried, exactly as the real client flags it: it is the
+// only thing that tells the merge the registry was never asked about the version, and a
+// stand-in that dropped the flag would let the merge clear marks nothing answered.
 type budgetedRepoClient struct {
 	chartName string
 	tags      []string
@@ -613,6 +617,7 @@ func (b *budgetedRepoClient) FetchCharts(_ context.Context, _ string, _ *repocli
 				MediaType:          known.MediaType,
 				UnavailableReason:  known.UnavailableReason,
 				UnavailableMessage: known.UnavailableMessage,
+				Carried:            true,
 			})
 		case left == 0:
 			if !recorded {
@@ -713,6 +718,118 @@ func TestSynchronizerSyncFinishesAForcedRefreshOverSeveralIncompletePasses(t *te
 		if examined != pass.examined {
 			t.Fatalf("%s left %d versions re-examined, want %d: %+v", pass.name, examined, pass.examined, stored)
 		}
+	}
+}
+
+// TestSynchronizerSyncKeepsAMarkAnOrdinaryPassOnlyCarriedPast reproduces the one way a
+// forced refresh is still lost after everything above it. The forced pass marked the
+// version and then failed to read the registry; the annotation is consumed by that pass
+// (SyncOutcome.ForceRequestRecorded), so the mark is now the only record of the request.
+// The ordinary pass that follows builds its Known from a cached list that has not caught
+// up with the marking write, so NeedsExamination sees a recorded media type and no mark
+// and the client carries the verdict forward without asking the registry anything — while
+// the read the merge patch is computed from goes through a cache that has caught up and
+// does carry the mark. A merge that read "fetched" as "examined" would clear it, and the
+// version would stay skippable with the verdict of an artifact that may no longer exist,
+// with nothing left anywhere to ask for it again.
+//
+// The second case is the other half of the argument, and the reason preserving the mark
+// does not pin it: as soon as the snapshot a pass is built from carries the mark, the
+// version is probed and the mark is cleared by an answer.
+func TestSynchronizerSyncKeepsAMarkAnOrdinaryPassOnlyCarriedPast(t *testing.T) {
+	const (
+		recorded = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+		repushed = "application/tar+gzip"
+	)
+
+	tests := []struct {
+		name string
+		// staleKnown makes every list answer with the version list as it was before the
+		// mark was written, which is what the pass's Known is built from. The object
+		// itself keeps the mark, so the merge's own read still sees it.
+		staleKnown    bool
+		wantProbed    bool
+		wantMediaType string
+		wantMarked    bool
+	}{
+		{
+			name:          "the known snapshot predates the marking write, so the pass only carries the verdict",
+			staleKnown:    true,
+			wantProbed:    false,
+			wantMediaType: recorded,
+			wantMarked:    true,
+		},
+		{
+			name:          "the next pass reads the mark and answers it",
+			staleKnown:    false,
+			wantProbed:    true,
+			wantMediaType: repushed,
+			wantMarked:    false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := testRepository()
+			marked := existingChart(repo.Name, "podinfo",
+				helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: recorded, ReexaminationRequired: true},
+			)
+
+			funcs := interceptor.Funcs{
+				List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if err := cl.List(ctx, list, opts...); err != nil {
+						return err
+					}
+
+					charts, ok := list.(*helmv1alpha1.HelmClusterAddonChartList)
+					if !ok || !test.staleKnown {
+						return nil
+					}
+
+					for i := range charts.Items {
+						for j := range charts.Items[i].Status.Versions {
+							charts.Items[i].Status.Versions[j].ReexaminationRequired = false
+						}
+					}
+
+					return nil
+				},
+			}
+
+			// The repository carries no force annotation: this is an ordinary pass, so it
+			// marks nothing itself and hands the merge no set of its own.
+			service, c := newSynchronizerWithInterceptor(t,
+				&budgetedRepoClient{chartName: "podinfo", tags: []string{"6.7.1"}, mediaType: repushed, budget: 1},
+				funcs, repo, marked)
+
+			outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
+			if outcome.Fetch.Err != nil {
+				t.Fatalf("fetch failed: %v", outcome.Fetch.Err)
+			}
+			if outcome.Catalog.Err != nil {
+				t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
+			}
+
+			stored := chartStatus(t, c, repo.Name, "podinfo").Versions
+			if len(stored) != 1 || stored[0].Version != "6.7.1" {
+				t.Fatalf("recorded versions = %+v, want the single version the fixture records", stored)
+			}
+
+			probed := stored[0].MediaType == repushed
+			if probed != test.wantProbed || stored[0].MediaType != test.wantMediaType {
+				t.Fatalf("media type = %q, want %q: the pass was expected %s",
+					stored[0].MediaType, test.wantMediaType,
+					map[bool]string{true: "to examine the version", false: "to carry the recorded verdict"}[test.wantProbed])
+			}
+
+			if stored[0].ReexaminationRequired != test.wantMarked {
+				if test.wantMarked {
+					t.Fatal("a version this pass only carried must keep its mark: nothing asked the registry, and the force annotation is already consumed")
+				}
+
+				t.Fatal("a version this pass examined must have its mark cleared: the refresh has been answered")
+			}
+		})
 	}
 }
 

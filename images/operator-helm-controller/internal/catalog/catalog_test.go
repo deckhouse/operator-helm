@@ -1449,6 +1449,96 @@ func TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved(t *te
 	}
 }
 
+// TestAFailedAbsenceWriteIsReportedAndRetried pins the failure half of the answer a
+// chart the repository stopped offering gets. Writing that answer is the only thing that
+// stops the retained versions from going on publishing the media type of an artifact the
+// repository no longer holds, and it is a status patch like any other: it can be rejected
+// by a conflict, a webhook or an unavailable API server. Swallowing that would leave the
+// pass reporting a successful synchronization over a catalog that still says the chart is
+// fine, with the next pass no more likely to notice — nothing else reconciles an unlisted
+// chart. So the error has to reach the caller, the status it could not write has to be
+// left exactly as it was rather than half-applied, and the pass that runs after the
+// failure has to finish the work.
+func TestAFailedAbsenceWriteIsReportedAndRetried(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	absentName := naming.ApplicationChartName("stable", "legacy")
+	failAbsenceWrite := false
+
+	// The fault is aimed at the retained chart's status alone: a fault that failed every
+	// status patch would be answered by the fetched charts' own writes, several steps
+	// before the absence is ever recorded.
+	c := newClientWithInterceptor(t, interceptor.Funcs{
+		SubResourcePatch: func(
+			ctx context.Context,
+			cl client.Client,
+			sub string,
+			obj client.Object,
+			patch client.Patch,
+			opts ...client.SubResourcePatchOption,
+		) error {
+			if failAbsenceWrite && obj.GetName() == absentName {
+				return errors.New("the api server rejected the status patch")
+			}
+
+			return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	})
+	cat := adapter.NewApplicationCatalog(c)
+	repo := applicationRepo("team-a", "stable")
+	key := client.ObjectKey{Namespace: "team-a", Name: absentName}
+
+	app := &helmv1alpha1.HelmApplication{
+		ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-a"},
+		Spec: helmv1alpha1.HelmApplicationSpec{
+			Chart: helmv1alpha1.HelmApplicationChartRef{Name: "legacy", Repository: "stable", Version: "1.0.0"},
+		},
+	}
+	if err := c.Create(context.Background(), app); err != nil {
+		t.Fatalf("creating the application pinning the chart: %v", err)
+	}
+
+	pinned := repoclient.Chart{Name: "legacy", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("1.0.0"), MediaType: mediaType, OCIRef: "registry.example.invalid/legacy:1.0.0"},
+	}}
+	offered := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
+		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
+	}}
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{pinned, offered}, nil); err != nil {
+		t.Fatalf("the steady-state pass returned %v", err)
+	}
+
+	before := versionsByName(t, c, key)
+	if got := before["1.0.0"]; got.UnavailableReason != "" || got.MediaType != mediaType {
+		t.Fatalf("recorded version = %+v, want the fixture to start from a healthy verdict", got)
+	}
+
+	failAbsenceWrite = true
+
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{offered}, nil); err == nil {
+		t.Fatal("a failed absence write must be reported: the pass would otherwise claim a synchronization that never recorded the chart is gone")
+	}
+
+	unchanged := versionsByName(t, c, key)
+	if got := unchanged["1.0.0"]; got != before["1.0.0"] {
+		t.Fatalf("recorded version = %+v, want it untouched by the failed write (%+v)", got, before["1.0.0"])
+	}
+
+	failAbsenceWrite = false
+
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{offered}, nil); err != nil {
+		t.Fatalf("the pass retrying the absence write returned %v", err)
+	}
+
+	recorded := versionsByName(t, c, key)
+	if got := recorded["1.0.0"].UnavailableReason; got != helmv1alpha1.UnavailableReasonRemovedFromRepository {
+		t.Fatalf("unavailability reason = %q, want the retry to record the absence the failed pass owed", got)
+	}
+	if got := recorded["1.0.0"]; got.MediaType != mediaType || got.OCIRef != "registry.example.invalid/legacy:1.0.0" {
+		t.Fatalf("kept version = %+v, want the artifact information intact: the application still deploys it", got)
+	}
+}
+
 // TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked pins the one entry the
 // request is not written onto, and it is left out because it already asks for
 // everything the mark would ask for: a version whose probe failed is re-examined by
