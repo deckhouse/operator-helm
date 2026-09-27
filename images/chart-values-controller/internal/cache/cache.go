@@ -269,9 +269,13 @@ func (c *Cache) release(claim int64) {
 // was extracted from, writing atomically via a unique temp file + rename. The two
 // facts travel in one file, so the rename publishes both or neither and a reader
 // never sees values attributed to the wrong revision. Concurrent writers of the same
-// key each use their own temp file, so no external locking is needed: the atomic
-// rename publishes a whole file and, for a given key, the content is identical (same
-// artifact digest) regardless of order.
+// key each use their own temp file, so no external locking is needed for the write
+// itself: the atomic rename publishes a whole file, never a mixture of two.
+//
+// Which of them ends up under the key is decided by the order the renames happen in,
+// though, and two writers of one key can hold different revisions — a download that
+// started earlier finishes later. A writer that must not lose that race publishes
+// through PutUnless instead.
 //
 // Every caller passes the digest it fetched, so an entry written by this code always
 // names its revision; only a file inherited from an older container image reads back
@@ -285,7 +289,8 @@ func (c *Cache) Put(key, digest string, content []byte) error {
 }
 
 // ErrSuperseded is returned by PutUnless when the guard refused the entry between
-// the temp file and the rename. Nothing was written and the budget is untouched.
+// the temp file and the rename. Nothing was published — the temp file is removed —
+// and the budget is left as it was.
 var ErrSuperseded = errors.New("cache entry superseded")
 
 // PutUnless is Put with a last word on whether the entry still deserves to be
@@ -298,8 +303,10 @@ var ErrSuperseded = errors.New("cache entry superseded")
 // the lock; the guard runs with the lock held, so between its answer and the rename
 // no other writer of this cache can intervene.
 //
-// The guard must not touch this cache, and should be a read of something already in
-// memory: it runs with every other writer of every key waiting on it.
+// The guard must not touch this cache, and must not be anything that can go to the
+// network: it runs with every other writer of every key waiting on it. A read of an
+// informer's store is the intended shape, and only of an object this caller has
+// already read once, so the informer behind it is known to be started and synced.
 func (c *Cache) PutUnless(key, digest string, content []byte, guard func() bool) error {
 	// The header is part of what the volume holds, so the budget is charged for the
 	// bytes that are actually written, not for the values alone.
