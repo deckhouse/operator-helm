@@ -2648,6 +2648,22 @@ func TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminati
 		t.Fatal("the finalizer must stay while the internal release is still there")
 	}
 
+	// The repair of a still-present release's identity must not undo this. A
+	// terminating namespace stays terminating for as long as its contents are being
+	// collected, so the pass above is followed by more of exactly its kind, with the
+	// internal release still there and the account already gone: if the repair ran on
+	// those, it would put back the very account whose absence is what lets the
+	// uninstall be skipped, and the wait would never end.
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("second Reconcile returned %v", err)
+	}
+	if objectExists(t, c, accountKey, &corev1.ServiceAccount{}) {
+		t.Fatal("a later pass of the same teardown put the service account back")
+	}
+	if !objectExists(t, c, releaseKey, &helmv2.HelmRelease{}) {
+		t.Fatal("the internal release must still be there: the pass must still be the waiting one")
+	}
+
 	// With the account gone helm-controller skips the uninstall and lets the
 	// HelmRelease go, and the namespace controller takes the binding with the
 	// namespace. The teardown then finishes on its own.
@@ -2661,7 +2677,7 @@ func TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminati
 	}
 
 	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
-		t.Fatalf("second Reconcile returned %v", err)
+		t.Fatalf("final Reconcile returned %v", err)
 	}
 
 	if objectExists(t, c, key, &helmv1alpha1.HelmApplication{}) {
