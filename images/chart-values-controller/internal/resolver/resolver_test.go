@@ -768,10 +768,12 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 
 			var fetches atomic.Int64
 			release := make(chan struct{})
+			downloading := make(chan struct{}, callers)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				fetches.Add(1)
-				// Hold the response until every caller has had its chance to join
-				// the download in flight.
+				downloading <- struct{}{}
+				// Hold the response until every caller that is meant to join this
+				// download has joined it.
 				<-release
 				_, _ = w.Write(archive)
 			}))
@@ -785,7 +787,16 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 				maxArtifactBytes: 1 << 20,
 			}
 
-			entered := make(chan struct{}, callers)
+			// A caller that shares its key with one already downloading reports
+			// from inside the group, at the point where it can no longer start a
+			// download of its own; a caller under its own key never gets there and
+			// announces itself by reaching the server instead. Waiting for both
+			// counts puts every caller past the decision before anything returns,
+			// which is what makes the download count below mean anything.
+			var joined sync.WaitGroup
+			joined.Add(callers - int(tt.wantFetches))
+			r.downloads.onJoin = joined.Done
+
 			results := make([]Result, callers)
 
 			var wg sync.WaitGroup
@@ -794,7 +805,6 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 				go func() {
 					defer wg.Done()
 
-					entered <- struct{}{}
 					got, err := r.readValues(context.Background(), tt.key(i), art, stillAt(art.Digest))
 					if err != nil {
 						t.Errorf("caller %d: readValues returned %v", i, err)
@@ -804,10 +814,10 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 				}()
 			}
 
-			for range callers {
-				<-entered
+			for range tt.wantFetches {
+				<-downloading
 			}
-			time.Sleep(entryWindow)
+			joined.Wait()
 			close(release)
 			wg.Wait()
 

@@ -26,13 +26,10 @@ import (
 	"time"
 )
 
-// entryWindow is how long a test lets the callers that are meant to join an
-// in-flight call reach it. They announce themselves before calling do, but the
-// registration itself happens under the group's lock, so the window covers the
-// scheduling gap between the two. It is a tolerance, not a synchronization
-// point: a caller arriving after it would run its own call, which is exactly
-// what these tests fail on.
-const entryWindow = 50 * time.Millisecond
+// waiterBudget is the budget a waiter is given in the deadline test. It is the
+// thing under test there — how long the waiter is willing to wait — and not a
+// window for another goroutine to reach some point in the code.
+const waiterBudget = 50 * time.Millisecond
 
 // TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall pins the behaviour the
 // polling API needs: N consoles asking for the same chart at the same moment all
@@ -45,7 +42,15 @@ func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 	var calls atomic.Int64
 
 	release := make(chan struct{})
-	entered := make(chan struct{}, callers)
+
+	// Every caller but the one that wins the key joins the call it is running, and
+	// each of them reports having joined from inside do, at the point where it can
+	// no longer run a call of its own. Only once all of them have is the leader
+	// released, so the count below measures coalescing and not which goroutine the
+	// scheduler happened to run first.
+	var joined sync.WaitGroup
+	joined.Add(callers - 1)
+	g.onJoin = joined.Done
 
 	type outcome struct {
 		values []byte
@@ -60,12 +65,11 @@ func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			entered <- struct{}{}
 			values, shared, err := g.do(context.Background(), "chart-key", func() ([]byte, error) {
 				calls.Add(1)
-				// Whoever leads stays in flight until every caller has had its
-				// chance to join, so the test measures coalescing rather than a
-				// race the leader happened to win alone.
+				// Whoever leads stays in flight until every other caller has
+				// joined, so the test measures coalescing rather than a race the
+				// leader happened to win alone.
 				<-release
 
 				return []byte("replicaCount: 1\n"), nil
@@ -74,10 +78,7 @@ func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 		}()
 	}
 
-	for range callers {
-		<-entered
-	}
-	time.Sleep(entryWindow)
+	joined.Wait()
 	close(release)
 	wg.Wait()
 
@@ -187,6 +188,13 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 			entered := make(chan struct{})
 			waiterErr := make(chan error, 1)
 
+			// The waiter reports from inside do, once it has found the call in
+			// flight and can no longer start one of its own. The leader is held
+			// until then, so the failure the waiter is meant to inherit cannot
+			// happen before it is there to inherit it.
+			joined := make(chan struct{})
+			g.onJoin = func() { close(joined) }
+
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
@@ -217,7 +225,7 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 				waiterErr <- err
 			}()
 
-			time.Sleep(entryWindow)
+			<-joined
 			close(release)
 
 			if err := <-waiterErr; !errors.Is(err, test.wantErr) {
@@ -260,33 +268,36 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 // takes.
 func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 	tests := []struct {
+		// ctx builds the waiter's context and, with it, what ends that context.
+		// The second return value is run at the moment the waiter has joined the
+		// call in flight: cancelling from there ends a request that is provably
+		// already waiting, which a timer could only approximate. A case that needs
+		// nothing done at that moment returns nil.
 		name    string
-		ctx     func(t *testing.T) context.Context
+		ctx     func(t *testing.T) (context.Context, func())
 		wantErr error
 	}{
 		{
 			name: "a cancelled request",
-			ctx: func(t *testing.T) context.Context {
+			ctx: func(t *testing.T) (context.Context, func()) {
 				t.Helper()
 				ctx, cancel := context.WithCancel(context.Background())
-				go func() {
-					time.Sleep(entryWindow)
-					cancel()
-				}()
 				t.Cleanup(cancel)
 
-				return ctx
+				return ctx, cancel
 			},
 			wantErr: context.Canceled,
 		},
 		{
+			// The budget runs out on its own while the waiter waits; nothing has
+			// to be timed against it.
 			name: "a request out of budget",
-			ctx: func(t *testing.T) context.Context {
+			ctx: func(t *testing.T) (context.Context, func()) {
 				t.Helper()
-				ctx, cancel := context.WithTimeout(context.Background(), entryWindow)
+				ctx, cancel := context.WithTimeout(context.Background(), waiterBudget)
 				t.Cleanup(cancel)
 
-				return ctx
+				return ctx, nil
 			},
 			wantErr: context.DeadlineExceeded,
 		},
@@ -295,6 +306,9 @@ func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var g inflight
+
+			ctx, onJoin := test.ctx(t)
+			g.onJoin = onJoin
 
 			// The leader is held for far longer than the waiter's budget and is
 			// released only when the test is over, so a waiter that waited for it
@@ -317,7 +331,7 @@ func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 
 			<-entered
 
-			values, shared, err := g.do(test.ctx(t), "chart-key", func() ([]byte, error) {
+			values, shared, err := g.do(ctx, "chart-key", func() ([]byte, error) {
 				return nil, errors.New("the waiter must not run its own call")
 			})
 			if !errors.Is(err, test.wantErr) {

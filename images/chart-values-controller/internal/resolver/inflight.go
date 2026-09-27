@@ -42,6 +42,15 @@ var errCallAborted = errors.New("the in-flight call did not complete")
 type inflight struct {
 	mu    sync.Mutex
 	calls map[string]*inflightCall
+
+	// onJoin, when set, is called once by every caller that has found a call for
+	// its key already running and is therefore committed to waiting for it rather
+	// than starting its own. It exists for tests, which have no other way to know
+	// that a caller has passed that point — joining leaves no trace in the group —
+	// and would otherwise have to guess with a sleep before releasing the leader.
+	// Production never sets it, and an unset hook is not called at all, so it adds
+	// nothing to the path a request takes.
+	onJoin func()
 }
 
 type inflightCall struct {
@@ -65,6 +74,10 @@ func (g *inflight) do(ctx context.Context, key string, fn func() ([]byte, error)
 	g.mu.Lock()
 	if call, ok := g.calls[key]; ok {
 		g.mu.Unlock()
+
+		if g.onJoin != nil {
+			g.onJoin()
+		}
 
 		select {
 		case <-call.done:
