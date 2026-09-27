@@ -32,6 +32,14 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
+// internalChartInterval is how often source-controller re-checks the chart against
+// the HelmRepository it is built from. spec.interval is required upstream, and an
+// unset one is sent as "0s": GetRequeueAfter then returns zero, controller-runtime
+// reads that as "do not requeue", and the chart is left with no pass of its own -
+// it moves only when a watch on its source fires. It matches the repository's own
+// index interval, which is what its artifact can change on.
+const internalChartInterval = InternalRepositoryInterval
+
 var helmChartErrorRules = []ErrorConditionRule{
 	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartFetchFailed},
 	{Type: "StorageOperationFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartStorageFailed},
@@ -111,6 +119,7 @@ func applyHelmChartSpec(rel contract.Release, repo contract.Repository, existing
 	ref := rel.ChartRef()
 	existing.Spec.Chart = ref.Chart
 	existing.Spec.Version = ref.Version
+	existing.Spec.Interval = metav1.Duration{Duration: internalChartInterval}
 
 	existing.Spec.SourceRef = sourcev1.LocalHelmChartSourceReference{
 		Kind: sourcev1.HelmRepositoryKind,

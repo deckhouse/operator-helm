@@ -176,3 +176,27 @@ func TestChartsEnsureDropsTheCatalogLabelOfThePreviousRepositoryKind(t *testing.
 		t.Fatalf("labels = %v, want the foreign label preserved", chart.Labels)
 	}
 }
+
+// TestChartsEnsureGivesTheChartAPassOfItsOwn pins spec.interval. Upstream marks the
+// field required, and an unset one is serialized as "0s", which HelmChart.GetRequeueAfter
+// hands to controller-runtime as "do not requeue": the chart would then only ever move
+// when a watch on its HelmRepository fires, with no pass of its own to fall back on.
+func TestChartsEnsureGivesTheChartAPassOfItsOwn(t *testing.T) {
+	addon := testAddon()
+	service, c := newCharts(t, addon)
+
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(chartTestRepository()))
+
+	chart := &sourcev1.HelmChart{}
+	key := client.ObjectKey{Name: utils.GetInternalHelmChartName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, chart); err != nil {
+		t.Fatalf("helm chart was not created: %v", err)
+	}
+
+	if chart.Spec.Interval.Duration <= 0 {
+		t.Fatalf("interval = %v: a chart without one is never reconciled on its own", chart.Spec.Interval.Duration)
+	}
+	if chart.Spec.Interval.Duration != internalChartInterval {
+		t.Fatalf("interval = %v, want %v", chart.Spec.Interval.Duration, internalChartInterval)
+	}
+}
