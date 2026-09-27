@@ -21,6 +21,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -355,5 +356,74 @@ func TestHelmRepositoriesEnsureKeepsForeignLabels(t *testing.T) {
 		if got.Labels[key] != want {
 			t.Fatalf("label %q = %q, want %q", key, got.Labels[key], want)
 		}
+	}
+}
+
+// TestHelmRepositoriesEnsureClearsPassCredentialsWithTheSecretItBelongsTo pins the
+// field to the reference that justifies it. spec.passCredentials tells
+// source-controller to keep sending the repository's credentials when a request is
+// redirected to another host; it is only ever meaningful next to a secretRef. A
+// repository whose auth is taken away has its secretRef cleared on the same pass, and
+// leaving the permission behind would hand it to whatever credentials the repository
+// is given next.
+func TestHelmRepositoriesEnsureClearsPassCredentialsWithTheSecretItBelongsTo(t *testing.T) {
+	repo := testRepository()
+	internal := &sourcev1.HelmRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalHelmRepositoryName(repo.Name),
+			Namespace: testNamespace,
+		},
+		Spec: sourcev1.HelmRepositorySpec{
+			SecretRef:       &meta.LocalObjectReference{Name: "left-over"},
+			PassCredentials: true,
+		},
+	}
+
+	scheme := sourceScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(repo, internal).Build()
+	service := NewHelmRepositories(c, testNamespace)
+
+	if _, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo)); err != nil {
+		t.Fatalf("Ensure returned %v", err)
+	}
+
+	got := &sourcev1.HelmRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(internal), got); err != nil {
+		t.Fatalf("getting helm repository: %v", err)
+	}
+
+	if got.Spec.SecretRef != nil {
+		t.Fatalf("secretRef = %v, want it cleared with the auth it came from", got.Spec.SecretRef)
+	}
+	if got.Spec.PassCredentials {
+		t.Fatal("passCredentials outlived the secretRef it belongs to")
+	}
+}
+
+// TestHelmRepositoriesEnsureSetsPassCredentialsWithTheAuthSecret is the other side:
+// the field is still set for a repository that does carry credentials.
+func TestHelmRepositoriesEnsureSetsPassCredentialsWithTheAuthSecret(t *testing.T) {
+	repo := testRepository()
+	repo.Spec.Auth = &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"}
+
+	scheme := sourceScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(repo).Build()
+	service := NewHelmRepositories(c, testNamespace)
+
+	if _, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo)); err != nil {
+		t.Fatalf("Ensure returned %v", err)
+	}
+
+	got := &sourcev1.HelmRepository{}
+	key := client.ObjectKey{Namespace: testNamespace, Name: utils.GetInternalHelmRepositoryName(repo.Name)}
+	if err := c.Get(context.Background(), key, got); err != nil {
+		t.Fatalf("getting helm repository: %v", err)
+	}
+
+	if got.Spec.SecretRef == nil {
+		t.Fatal("secretRef must name the mirrored auth secret")
+	}
+	if !got.Spec.PassCredentials {
+		t.Fatal("passCredentials must be set for a repository that carries credentials")
 	}
 }

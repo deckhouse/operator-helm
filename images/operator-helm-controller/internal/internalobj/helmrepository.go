@@ -151,6 +151,11 @@ func applyHelmRepositorySpec(repo contract.Repository, existing *sourcev1.HelmRe
 	existing.Spec.Insecure = repo.InsecureSkipVerify()
 	existing.Spec.CertSecretRef = nil
 	existing.Spec.SecretRef = nil
+	// Reset with the reference it belongs to. Credentials that survive the secret
+	// they came with are a promise to keep sending them across a redirect to another
+	// host, made by a repository that no longer has any - and the next time this
+	// repository is given credentials, it would carry that promise from before.
+	existing.Spec.PassCredentials = false
 
 	if repo.Auth() != nil {
 		existing.Spec.SecretRef = &meta.LocalObjectReference{
