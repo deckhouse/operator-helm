@@ -27,6 +27,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/rbac"
+	"github.com/deckhouse/operator-helm/internal/status"
 )
 
 // The collaborators of one reconcile pass, declared where they are used rather than
@@ -65,7 +66,10 @@ type Namespaces interface {
 // on the HelmRelease; the addon family applies charts as helm-controller itself.
 type Identity interface {
 	Ensure(ctx context.Context, rel contract.Release) rbac.IdentityOutcome
-	Cleanup(ctx context.Context, rel contract.Release) error
+	// Cleanup returns the identity object still present, so the caller can wait for
+	// it to actually go away before the release drops its finalizer, exactly as it
+	// does for the internal objects below.
+	Cleanup(ctx context.Context, rel contract.Release) (status.DeletingResource, error)
 }
 
 // Charts owns the internal HelmChart of a release, the source object of a
@@ -138,4 +142,6 @@ func (NoIdentity) Ensure(context.Context, contract.Release) rbac.IdentityOutcome
 	return rbac.IdentityOutcome{}
 }
 
-func (NoIdentity) Cleanup(context.Context, contract.Release) error { return nil }
+func (NoIdentity) Cleanup(context.Context, contract.Release) (status.DeletingResource, error) {
+	return nil, nil
+}

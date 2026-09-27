@@ -507,7 +507,7 @@ func TestIdentityCleanupRefusesToDeleteARoleBindingSwappedAfterTheOwnershipTest(
 		}).
 		Build()
 
-	err := NewIdentity(c, testNamespace).Cleanup(context.Background(), rel)
+	_, err := NewIdentity(c, testNamespace).Cleanup(context.Background(), rel)
 	if !*swapped {
 		t.Fatal("the test did not exercise a delete of the role binding")
 	}
@@ -619,7 +619,7 @@ func TestIdentityCleanupRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T)
 	if out := service.Ensure(context.Background(), rel); out.Err != nil {
 		t.Fatalf("Ensure returned %v", out.Err)
 	}
-	if err := service.Cleanup(context.Background(), rel); err != nil {
+	if _, err := service.Cleanup(context.Background(), rel); err != nil {
 		t.Fatalf("Cleanup returned %v", err)
 	}
 
@@ -634,8 +634,12 @@ func TestIdentityCleanupRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T)
 		t.Fatalf("the role must survive the application: %v", err)
 	}
 
-	if err := service.Cleanup(context.Background(), rel); err != nil {
+	pending, err := service.Cleanup(context.Background(), rel)
+	if err != nil {
 		t.Fatalf("second Cleanup returned %v", err)
+	}
+	if pending != nil {
+		t.Fatalf("nothing is left to wait for, got %T %s", pending, client.ObjectKeyFromObject(pending))
 	}
 }
 
@@ -653,8 +657,12 @@ func TestIdentityCleanupLeavesAForeignRoleBindingAlone(t *testing.T) {
 	}
 	service, c := newIdentity(t, foreign)
 
-	if err := service.Cleanup(context.Background(), rel); err != nil {
+	pending, err := service.Cleanup(context.Background(), rel)
+	if err != nil {
 		t.Fatalf("Cleanup returned %v", err)
+	}
+	if pending != nil {
+		t.Fatalf("a binding that is not ours must not be waited on, got %s", client.ObjectKeyFromObject(pending))
 	}
 
 	stored := &rbacv1.RoleBinding{}
@@ -663,5 +671,97 @@ func TestIdentityCleanupLeavesAForeignRoleBindingAlone(t *testing.T) {
 	}
 	if stored.RoleRef != foreign.RoleRef {
 		t.Fatalf("roleRef = %+v, want it untouched", stored.RoleRef)
+	}
+}
+
+// TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer pins what a Delete
+// actually promises: the object is marked for deletion, not gone. A finalizer put
+// on the account or the binding by someone else (another operator, a policy
+// controller) keeps it Terminating, and neither object carries an ownerReference
+// to collect it later — so cleanup has to keep reporting it and the release has to
+// keep its own finalizer until it really disappears. The shared Role is not part of
+// that wait: it belongs to the namespace, not to this application.
+func TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer(t *testing.T) {
+	const foreignFinalizer = "policy.example.com/protect"
+
+	rel := adapter.NewApplicationRelease(testApplication())
+	name := rel.InternalNames().ServiceAccount
+
+	account := func(finalizers ...string) *corev1.ServiceAccount {
+		return &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: testNamespace, Finalizers: finalizers,
+		}}
+	}
+	binding := func(finalizers ...string) *rbacv1.RoleBinding {
+		return &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "team-a", Labels: applicationRBACLabels(), Finalizers: finalizers,
+			},
+			RoleRef: applicationRoleRef(),
+		}
+	}
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
+		Name: ApplicationRoleName, Namespace: "team-a", Labels: applicationRBACLabels(),
+	}}
+
+	tests := []struct {
+		name string
+		held client.Object
+		free client.Object
+	}{
+		{name: "the service account is held", held: account(foreignFinalizer), free: binding()},
+		{name: "the role binding is held", held: binding(foreignFinalizer), free: account()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			heldKey := client.ObjectKeyFromObject(tt.held)
+			service, c := newIdentity(t, tt.held, tt.free, role)
+
+			// The first pass issues both deletes and reports whichever object it found,
+			// as a delete that was issued is not a delete that finished; the passes after
+			// it narrow onto the one a finalizer still holds. None of them may report the
+			// cleanup as finished.
+			for pass := 1; pass <= 3; pass++ {
+				pending, err := service.Cleanup(context.Background(), rel)
+				if err != nil {
+					t.Fatalf("pass %d: Cleanup returned %v", pass, err)
+				}
+				if pending == nil {
+					t.Fatalf("pass %d: cleanup reported done while %s is still terminating", pass, heldKey)
+				}
+				if pass == 1 {
+					continue
+				}
+				if got := client.ObjectKeyFromObject(pending); got != heldKey {
+					t.Fatalf("pass %d: waiting on %s, want %s", pass, got, heldKey)
+				}
+				if pending.GetDeletionTimestamp().IsZero() {
+					t.Fatalf("pass %d: the object waited on was never asked to go away", pass)
+				}
+			}
+
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(role), &rbacv1.Role{}); err != nil {
+				t.Fatalf("the shared role must be neither deleted nor waited on: %v", err)
+			}
+
+			// Whoever owns the finalizer finally releases it.
+			if err := c.Get(context.Background(), heldKey, tt.held); err != nil {
+				t.Fatalf("getting the held object: %v", err)
+			}
+			tt.held.SetFinalizers(nil)
+			if err := c.Update(context.Background(), tt.held); err != nil {
+				t.Fatalf("releasing the foreign finalizer: %v", err)
+			}
+
+			pending, err := service.Cleanup(context.Background(), rel)
+			if err != nil {
+				t.Fatalf("Cleanup returned %v once the object was gone", err)
+			}
+			if pending != nil {
+				t.Fatalf("cleanup must be done once %s is gone, still waiting on %s",
+					heldKey, client.ObjectKeyFromObject(pending))
+			}
+		})
 	}
 }

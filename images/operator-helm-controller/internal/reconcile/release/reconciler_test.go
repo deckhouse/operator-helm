@@ -56,6 +56,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/namespace"
 	"github.com/deckhouse/operator-helm/internal/rbac"
+	"github.com/deckhouse/operator-helm/internal/reconcile/pass"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -991,7 +992,9 @@ func (failingIdentity) Ensure(context.Context, contract.Release) rbac.IdentityOu
 	}
 }
 
-func (failingIdentity) Cleanup(context.Context, contract.Release) error { return nil }
+func (failingIdentity) Cleanup(context.Context, contract.Release) (status.DeletingResource, error) {
+	return nil, nil
+}
 
 // TestReconcileApplicationReportsRBACSetupFailure pins that the pass stops at the
 // identity. A release applied without one would run as helm-controller itself,
@@ -1050,7 +1053,7 @@ func (a *intermittentIdentity) Ensure(ctx context.Context, rel contract.Release)
 	return a.real.Ensure(ctx, rel)
 }
 
-func (a *intermittentIdentity) Cleanup(ctx context.Context, rel contract.Release) error {
+func (a *intermittentIdentity) Cleanup(ctx context.Context, rel contract.Release) (status.DeletingResource, error) {
 	return a.real.Cleanup(ctx, rel)
 }
 
@@ -1201,8 +1204,8 @@ func (accessCleanupFails) Ensure(context.Context, contract.Release) rbac.Identit
 	return rbac.IdentityOutcome{}
 }
 
-func (accessCleanupFails) Cleanup(context.Context, contract.Release) error {
-	return errors.New("role binding deletion forbidden")
+func (accessCleanupFails) Cleanup(context.Context, contract.Release) (status.DeletingResource, error) {
+	return nil, errors.New("role binding deletion forbidden")
 }
 
 // TestReconcileDeleteReportsRBACCleanupFailure pins that a failed Cleanup
@@ -2385,5 +2388,97 @@ func TestReconcileAnswersAnApplicationTheSameWayAsAnAddon(t *testing.T) {
 	if reconciling := apimeta.FindStatusCondition(got.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); reconciling != nil &&
 		reconciling.Status == metav1.ConditionTrue {
 		t.Fatalf("Reconciling = %+v, want absent or False", reconciling)
+	}
+}
+
+// TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone pins the end of the
+// deletion path against the one thing a Delete does not promise: that the object
+// is gone. A foreign finalizer on the RoleBinding keeps it Terminating, and the
+// binding carries no ownerReference — dropping the application's finalizer then
+// would leave it behind for good, and the next application of the namespace would
+// find it under the same derived name and stall on it as foreign. The application
+// therefore keeps its finalizer and comes back, exactly as it does for an internal
+// resource that is still being deleted.
+func TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone(t *testing.T) {
+	now := metav1.Now()
+	app := &helmv1alpha1.HelmApplication{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app",
+			Namespace:         "team-a",
+			Generation:        1,
+			Finalizers:        []string{helmv1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: testApplication().Spec,
+	}
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	binding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       names.ServiceAccount,
+			Namespace:  app.Namespace,
+			Labels:     map[string]string{helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue},
+			Finalizers: []string{"policy.example.com/protect"},
+		},
+		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: rbac.ApplicationRoleName},
+	}
+	account := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace,
+	}}
+	sharedRole := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
+		Name:      rbac.ApplicationRoleName,
+		Namespace: app.Namespace,
+		Labels:    map[string]string{helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue},
+	}}
+
+	r, c := newApplicationFullReconciler(t, nil, app, binding, account, sharedRole)
+
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+	ctx := context.Background()
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		if err != nil {
+			t.Fatalf("attempt %d: Reconcile returned %v", attempt, err)
+		}
+		if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
+			t.Fatalf("attempt %d: requeueAfter = %v, want %v",
+				attempt, result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+		}
+
+		settled := &helmv1alpha1.HelmApplication{}
+		if err := c.Get(ctx, key, settled); err != nil {
+			t.Fatalf("attempt %d: getting application: %v", attempt, err)
+		}
+		if !controllerutil.ContainsFinalizer(settled, helmv1alpha1.FinalizerName) {
+			t.Fatalf("attempt %d: the finalizer must stay while the role binding is terminating", attempt)
+		}
+	}
+
+	if err := c.Get(ctx, client.ObjectKeyFromObject(sharedRole), &rbacv1.Role{}); err != nil {
+		t.Fatalf("the shared role must survive the application: %v", err)
+	}
+
+	// Whoever owns the finalizer releases it, and the binding finally goes away.
+	held := &rbacv1.RoleBinding{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(binding), held); err != nil {
+		t.Fatalf("getting the terminating role binding: %v", err)
+	}
+	held.Finalizers = nil
+	if err := c.Update(ctx, held); err != nil {
+		t.Fatalf("releasing the foreign finalizer: %v", err)
+	}
+
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("final Reconcile returned %v", err)
+	}
+
+	if err := c.Get(ctx, key, &helmv1alpha1.HelmApplication{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the application must be gone once its identity is, got %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{
+		Namespace: helmv1alpha1.TargetNamespace, Name: names.ServiceAccount,
+	}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the service account must be gone, got %v", err)
 	}
 }

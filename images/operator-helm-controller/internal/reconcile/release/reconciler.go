@@ -559,13 +559,23 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 
 	// The identity goes last: helm-controller uninstalls as that account, so it
 	// has to outlive the HelmRelease.
-	if err := r.deps.Identity.Cleanup(ctx, rel); err != nil {
+	identity, err := r.deps.Identity.Cleanup(ctx, rel)
+	if err != nil {
 		// By this point the internal release and sources are already gone, so
 		// nothing else on the object would explain why the finalizer is still
 		// there. The write is best-effort, same as the internal-resource waits
 		// above: the returned error is what gets this retried.
 		_ = r.deps.Status.MarkDeletionFailed(ctx, rel.Object(), "release identity", err)
 		return reconcile.Result{}, fmt.Errorf("cleaning up release identity: %w", err)
+	}
+	if identity != nil {
+		// The identity objects carry no ownerReference — the account lives in another
+		// namespace than the release, where a cross-namespace owner reference does not
+		// work, and the binding is deleted by name here. Nothing would collect them if
+		// this object went away while a finalizer of someone else's still held one of
+		// them Terminating, and the next application of the namespace would then find
+		// it under the same derived name and stall on it as foreign.
+		return pass.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkDeletionPending, rel.Object(), "release identity", identity)
 	}
 
 	// Release the claim only once every downstream resource is gone: releasing it

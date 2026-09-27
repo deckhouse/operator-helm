@@ -34,6 +34,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -175,18 +176,30 @@ func createOrPatchOwned(ctx context.Context, c client.Client, obj client.Object,
 	return c.Patch(ctx, obj, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
 }
 
-// Cleanup removes the account and the binding. The Role stays: it is shared by
-// every application of the namespace, and on its own — with no binding left naming
-// it — it grants nothing.
-func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) error {
+// Cleanup removes the account and the binding and returns whichever of them is
+// still present, so the caller waits for it to actually go away before the
+// release's own finalizer comes off — the same shape the internal flux objects are
+// torn down with (see internalobj.Releases.Cleanup and
+// pass.AwaitInternalResourceDeletion). A Delete only sets a deletion timestamp:
+// a foreign finalizer on the account or the binding keeps it Terminating, and
+// neither object carries an ownerReference, so an application that dropped its
+// finalizer at that point would leave it behind for good — and the next
+// application of the namespace would then find it under the derived name and fail
+// terminally as foreign. It returns nil once both are gone.
+//
+// The Role stays: it is shared by every application of the namespace, and on its
+// own — with no binding left naming it — it grants nothing. Nothing waits on it
+// either, for the same reason: it is not this application's to outlive.
+func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) (status.DeletingResource, error) {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
-		return nil
+		return nil, nil
 	}
 
-	binding := types.NamespacedName{Namespace: rel.TargetNamespace(), Name: name}
-	if err := s.ensureOwnedRoleBindingDeleted(ctx, binding); err != nil {
-		return fmt.Errorf("deleting role binding: %w", err)
+	bindingKey := types.NamespacedName{Namespace: rel.TargetNamespace(), Name: name}
+	binding, err := s.ensureOwnedRoleBindingDeleted(ctx, bindingKey)
+	if err != nil {
+		return nil, fmt.Errorf("deleting role binding: %w", err)
 	}
 
 	// Deleted by name alone, unlike the binding above: the account lives in
@@ -194,13 +207,39 @@ func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) error {
 	// has no access to pre-create anything under our name. There is no foreign
 	// object to protect here, so the ownership check the binding needs does not
 	// apply.
-	account := types.NamespacedName{Namespace: s.targetNamespace, Name: name}
-	if _, err := utils.DeleteIfPresent(ctx, s.client, account, &corev1.ServiceAccount{}); err != nil {
-		return fmt.Errorf("deleting service account: %w", err)
+	account := &corev1.ServiceAccount{}
+	accountKey := types.NamespacedName{Namespace: s.targetNamespace, Name: name}
+
+	accountExists, err := utils.DeleteIfPresent(ctx, s.client, accountKey, account)
+	if err != nil {
+		return nil, fmt.Errorf("deleting service account: %w", err)
 	}
 
-	return nil
+	// Both deletes are issued before either is waited on: they are independent, and
+	// holding the account's delete back until a binding stuck on someone else's
+	// finalizer goes away would stall a deletion that could have made progress.
+	switch {
+	case binding != nil:
+		return pendingDeletion{binding}, nil
+	case accountExists:
+		return pendingDeletion{account}, nil
+	default:
+		return nil, nil
+	}
 }
+
+// pendingDeletion adapts an RBAC object to status.DeletingResource. Unlike the
+// internal flux objects that interface was written for, a ServiceAccount or a
+// RoleBinding has no conditions to report: whatever holds it in Terminating is a
+// finalizer of someone else's, which says nothing about itself on the object. The
+// owner therefore reports it as a deletion still in progress and never as a failed
+// one, which is exactly what status.MarkDeletionPending does without a Ready
+// condition to read.
+type pendingDeletion struct {
+	client.Object
+}
+
+func (pendingDeletion) GetConditions() []metav1.Condition { return nil }
 
 // ensureServiceAccount keeps the account in its desired shape. The account exists
 // only as a subject name — helm-controller impersonates it with headers on top of
@@ -374,23 +413,32 @@ func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, 
 // found under it may belong to someone else — the same ownership test ensureRoleBinding
 // applies before it touches anything. A binding that is not ours is left alone; that
 // is not an error and must not block the rest of the cleanup.
-func (s *Identity) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.NamespacedName) error {
+//
+// It returns the binding while it is still present — a delete that was issued is
+// not a delete that finished — and nil for a binding that is gone or was never
+// ours to remove: neither is something this release waits on.
+func (s *Identity) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.NamespacedName) (*rbacv1.RoleBinding, error) {
 	binding := &rbacv1.RoleBinding{}
 	if err := s.client.Get(ctx, nn, binding); err != nil {
-		return client.IgnoreNotFound(err)
+		return nil, client.IgnoreNotFound(err)
 	}
 
 	if !managedByOperator(binding.Labels) {
-		return nil
+		return nil, nil
 	}
 
 	// Only this exact object at this exact revision: a binding deleted and recreated
 	// by someone else between the read and here would otherwise be deleted on the
 	// strength of a label it never carried. The conflict is transient — the pass that
 	// retries reads the replacement and leaves it alone as foreign.
-	err := s.client.Delete(ctx, binding, client.Preconditions{
+	switch err := s.client.Delete(ctx, binding, client.Preconditions{
 		UID: &binding.UID, ResourceVersion: &binding.ResourceVersion,
-	})
-
-	return client.IgnoreNotFound(err)
+	}); {
+	case apierrors.IsNotFound(err):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	default:
+		return binding, nil
+	}
 }
