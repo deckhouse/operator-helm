@@ -28,6 +28,7 @@ import (
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"github.com/go-logr/logr/funcr"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -2776,5 +2777,96 @@ func TestReconcileDeleteOfAnAddonIgnoresATerminatingTargetNamespace(t *testing.T
 	}
 	if !controllerutil.ContainsFinalizer(settled, helmv1alpha1.FinalizerName) {
 		t.Fatal("the addon must still wait for its internal release, exactly as it always has")
+	}
+}
+
+// TestReconcileReleasesAnAbandonedClaimEvenWhenTheNewPairIsTaken pins the order of
+// the two claim operations. A claim is only ever released by the release holding it,
+// so releasing must not sit behind acquiring, which may not be granted: an addon
+// that moved to a chart somebody else took would otherwise keep its old pair for as
+// long as it kept retrying, and nobody — including the addon waiting for that pair —
+// could do anything about it.
+func TestReconcileReleasesAnAbandonedClaimEvenWhenTheNewPairIsTaken(t *testing.T) {
+	// The addon moved from podinfo to nginx, which another addon already holds.
+	addon := testAddon()
+	addon.Spec.Chart.HelmClusterAddonChartName = "nginx"
+
+	abandoned := claimLease(utils.GetChartClaimLeaseName(addon.Spec.Chart.HelmClusterAddonRepository, "podinfo"), addon.Name, addon.Name)
+	taken := claimLease(utils.GetChartClaimLeaseName(addon.Spec.Chart.HelmClusterAddonRepository, "nginx"), "other", "other")
+
+	r, c := newFullReconciler(t, nil, interceptor.Funcs{}, addon, &helmv1alpha1.HelmClusterAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: "other", Generation: 1},
+	}, abandoned, taken)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: addon.Name},
+	})
+	if err != nil {
+		t.Fatalf("reconcile returned an error: %v", err)
+	}
+	if result.RequeueAfter != chartClaimConflictRequeueInterval {
+		t.Fatalf("requeueAfter is %v, want the claim conflict interval", result.RequeueAfter)
+	}
+
+	// The pair it gave up is free for whoever wants it, although this pass got
+	// nothing it asked for.
+	err = c.Get(context.Background(), types.NamespacedName{Namespace: helmv1alpha1.TargetNamespace, Name: abandoned.Name}, &coordinationv1.Lease{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("the abandoned claim survived a pass that lost the new one: %v", err)
+	}
+
+	// And the one it could not have is left exactly as its holder left it.
+	held := &coordinationv1.Lease{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: helmv1alpha1.TargetNamespace, Name: taken.Name}, held); err != nil {
+		t.Fatalf("reading the contested claim: %v", err)
+	}
+	if holder := held.Spec.HolderIdentity; holder == nil || *holder != "other" {
+		t.Fatalf("holder on the contested lease = %v, want it untouched", holder)
+	}
+}
+
+// claimLease builds a claim Lease held by holder, labelled as that holder's, in the
+// namespace the claims service works in.
+func claimLease(name, holder, labelSource string) *coordinationv1.Lease {
+	return &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: helmv1alpha1.TargetNamespace,
+			Labels: map[string]string{
+				helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
+				helmv1alpha1.HelmClusterAddonLabelSourceName: labelSource,
+			},
+		},
+		Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder},
+	}
+}
+
+// TestReconcileDeleteReleasesTheClaimsItNeverGotToGiveUp pins teardown against a
+// release deleted right after a chart change. Drop frees the pair the spec names;
+// the pair it moved off is held by a Lease whose only possible releaser is this
+// object, and once teardown removes the finalizer there is nobody left who may.
+func TestReconcileDeleteReleasesTheClaimsItNeverGotToGiveUp(t *testing.T) {
+	addon := testAddon()
+	addon.Spec.Chart.HelmClusterAddonChartName = "nginx"
+	addon.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	addon.Finalizers = []string{helmv1alpha1.FinalizerName}
+
+	repo := addon.Spec.Chart.HelmClusterAddonRepository
+	abandoned := claimLease(utils.GetChartClaimLeaseName(repo, "podinfo"), addon.Name, addon.Name)
+	current := claimLease(utils.GetChartClaimLeaseName(repo, "nginx"), addon.Name, addon.Name)
+
+	r, c := newFullReconciler(t, nil, interceptor.Funcs{}, addon, abandoned, current)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: addon.Name},
+	}); err != nil {
+		t.Fatalf("reconcile returned an error: %v", err)
+	}
+
+	for _, lease := range []*coordinationv1.Lease{current, abandoned} {
+		err := c.Get(context.Background(), types.NamespacedName{Namespace: helmv1alpha1.TargetNamespace, Name: lease.Name}, &coordinationv1.Lease{})
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("claim %q outlived the addon that held it: %v", lease.Name, err)
+		}
 	}
 }

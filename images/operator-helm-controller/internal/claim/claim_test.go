@@ -459,10 +459,14 @@ func TestDropStaleIgnoresClaimsOfOtherAddons(t *testing.T) {
 // Reading the holder's spec to decide the Lease is an orphan cannot be made safe:
 // the holder does not write to the Lease when it finds itself already recorded in
 // it, so between that read and the takeover it can resume the pair without leaving
-// a trace the optimistic update would collide with. The interleaving below is the
-// one the review described — A moves away, B judges the claim stale, A moves back
-// and is told it holds the claim, B writes the Lease anyway — and it ends with both
-// addons believing they own one chart.
+// a trace the optimistic update would collide with, and both addons end up believing
+// they own one chart.
+//
+// The two passes below run one after the other rather than interleaved — the
+// property under test is that a live holder is never dispossessed, which is what
+// closes that window, and it holds whatever the order. The returning holder is
+// passed the spec it has moved back to while the stored object still names the one
+// it left, which is the state B would read in the window itself.
 func TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway(t *testing.T) {
 	moved := claimingAddon("first", "other-chart")
 	second := claimingAddon("second", "podinfo")

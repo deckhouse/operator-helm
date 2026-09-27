@@ -104,6 +104,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// because a duplicate that loses the race must not accrue a finalizer it would
 	// otherwise have to clean up: it simply surfaces the conflict on its status and
 	// requeues, recovering on its own once the owner releases the pair.
+	// Before claiming anything, let go of the pairs this release no longer names. A
+	// claim is only ever released by the release that holds it, so this must not sit
+	// behind a claim that may not be granted: an addon whose new pair is taken would
+	// otherwise hold its old one for as long as it kept retrying, and nobody —
+	// including the addon that wants the old pair — could do anything about it.
+	if err := r.deps.Claims.DropStale(ctx, rel); err != nil {
+		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
+	}
+
 	acquired, holder, err := r.deps.Claims.Acquire(ctx, rel)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("acquiring chart claim: %w", err)
@@ -137,10 +146,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// metadata-only change that does not bump generation, so the resulting
 		// update event is dropped by the generation/annotation predicates and
 		// would not trigger a follow-up reconcile.
-	}
-
-	if err := r.deps.Claims.DropStale(ctx, rel); err != nil {
-		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
 	}
 
 	if r.deps.Maintenance.ChangeRequired(rel) {
@@ -591,6 +596,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 	// prevents.
 	if err := r.deps.Claims.Drop(ctx, rel); err != nil {
 		return reconcile.Result{}, fmt.Errorf("releasing chart claim: %w", err)
+	}
+
+	// And the pairs it stopped naming but never got to release: a release deleted
+	// after a chart change, before a pass reached the release above, still holds
+	// them, and after this object is gone nobody is left who may.
+	if err := r.deps.Claims.DropStale(ctx, rel); err != nil {
+		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
 	}
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {

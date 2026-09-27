@@ -90,7 +90,7 @@ func (s *Claims) Acquire(ctx context.Context, rel contract.Release) (acquired bo
 		return true, holder, nil
 	}
 
-	stale, err := s.isHolderStale(ctx, holder, nn.Name)
+	stale, err := s.isHolderStale(ctx, holder)
 	if err != nil {
 		return false, "", err
 	}
@@ -98,7 +98,7 @@ func (s *Claims) Acquire(ctx context.Context, rel contract.Release) (acquired bo
 		return false, holder, nil
 	}
 
-	// The recorded holder is gone or no longer uses this chart; take the Lease over.
+	// The recorded holder is gone; take the orphaned Lease over.
 	// The update is optimistic: if another addon takes it over first, our write is
 	// rejected with a conflict and we report the pair as claimed and requeue.
 	if err := s.takeOver(ctx, lease, rel); err != nil {
@@ -244,7 +244,7 @@ func (s *Claims) takeOver(ctx context.Context, lease *coordinationv1.Lease, rel 
 // chart and back leaves the Lease untouched, and the optimistic update below is
 // happy to overwrite it: two addons would each believe they had the claim, and one
 // of them would have been told so after the other had resumed using it.
-func (s *Claims) isHolderStale(ctx context.Context, holder, _ string) (bool, error) {
+func (s *Claims) isHolderStale(ctx context.Context, holder string) (bool, error) {
 	if holder == "" {
 		return true, nil
 	}
