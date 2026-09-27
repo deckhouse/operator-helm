@@ -770,7 +770,9 @@ func TestReconcileCollectsAnObjectThatExpiredDuringTheRefresh(t *testing.T) {
 	// so the expiry is in the future when the pass reads it and in the past when
 	// the refresh returns — the interleaving the requeue has to survive.
 	artifact := r.artifactOf
+	var refreshed bool
 	r.artifactOf = func(o client.Object) *meta.Artifact {
+		refreshed = true
 		time.Sleep(2500 * time.Millisecond)
 
 		return artifact(o)
@@ -781,6 +783,12 @@ func TestReconcileCollectsAnObjectThatExpiredDuringTheRefresh(t *testing.T) {
 		t.Fatalf("reconcile returned an error: %v", err)
 	}
 
+	// Without this the test would also pass by never reaching the refresh: a setup
+	// slow enough to consume the margin sends the pass down the top-of-pass branch,
+	// which collects the object for an entirely different reason.
+	if !refreshed {
+		t.Fatal("the pass never reached the refresh, so it did not exercise the expiry crossing it")
+	}
 	if result.RequeueAfter < 0 {
 		t.Fatalf("requeueAfter is %v: a negative delay is silently dropped", result.RequeueAfter)
 	}
