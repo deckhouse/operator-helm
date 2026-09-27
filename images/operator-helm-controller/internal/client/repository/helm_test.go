@@ -353,22 +353,33 @@ func TestFetchChartsRejectsAResponseWithoutAnIndex(t *testing.T) {
 // successful fetch of zero charts — the catalog reconciler then prunes correctly,
 // because the repository really did go empty.
 func TestFetchChartsAcceptsAnIndexWithoutCharts(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("apiVersion: v1\nentries: {}\n"))
-	}))
-	defer srv.Close()
+	for name, body := range map[string]string{
+		// The shape helm and chartmuseum publish: the mapping is there and empty.
+		"empty entries mapping": "apiVersion: v1\nentries: {}\n",
+		// The same repository as another server may spell it. The value decodes to nil,
+		// exactly as an absent key would, so only apiVersion tells the two apart.
+		"entries with no value":   "apiVersion: v1\nentries:\n",
+		"explicitly null entries": "apiVersion: v1\nentries: null\n",
+		// No apiVersion, but the document is about charts: a repository answering for
+		// itself, not a proxy answering for the repository.
+		"charts without an api version": "entries:\n  podinfo:\n    - version: 6.7.1\n      urls: [https://example.test/podinfo-6.7.1.tgz]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
 
-	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
-	if err != nil {
-		t.Fatalf("an index that lists no charts must be accepted, got %v", err)
-	}
-	// Non-nil and empty: the caller distinguishes nothing here, it prunes whatever the
-	// catalog holds beyond this list.
-	if charts == nil {
-		t.Fatal("expected an empty chart list, got nil")
-	}
-	if len(charts) != 0 {
-		t.Fatalf("expected no charts, got %d", len(charts))
+			charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+			if err != nil {
+				t.Fatalf("an index that lists no charts must be accepted, got %v", err)
+			}
+			// Non-nil: the caller distinguishes nothing here, it prunes whatever the
+			// catalog holds beyond this list.
+			if charts == nil {
+				t.Fatal("expected a chart list, got nil")
+			}
+		})
 	}
 }
 

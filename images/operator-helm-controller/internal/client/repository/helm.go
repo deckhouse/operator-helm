@@ -72,8 +72,13 @@ var (
 var errIndexTooLarge = errors.New("index.yaml is too large")
 
 type HelmRepositoryIndex struct {
-	APIVersion string                                  `json:"apiVersion"`
-	Entries    map[string][]HelmRepositoryChartVersion `json:"entries"`
+	// The yaml tag is spelled out because this document is decoded by a YAML decoder,
+	// which ignores json tags and matches a field by its lower-cased name: without it
+	// APIVersion would never populate from the key helm writes, and the validity rule
+	// below would have nothing to stand on. Entries needs no tag - its name lower-cases
+	// to the key it carries - but is spelled out for symmetry.
+	APIVersion string                                  `json:"apiVersion" yaml:"apiVersion"`
+	Entries    map[string][]HelmRepositoryChartVersion `json:"entries"    yaml:"entries"`
 }
 
 type HelmRepositoryChartVersion struct {
@@ -188,20 +193,26 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 			return true, fmt.Errorf("cannot decode response: %w", err)
 		}
 
-		// An index.yaml always carries an entries mapping — a repository with no charts
-		// publishes it empty — so a response that parses into no mapping at all did not
-		// carry an index document. yaml.Unmarshal accepts all of those silently: an
-		// empty body (a proxy answering 200 with nothing, a server answering 204, which
-		// TerminalFromStatusCode lets through), a JSON error page, an HTML interstitial.
-		// Each would look like a repository that went empty, and the catalog reconciler
-		// prunes every chart of the repository on exactly that. entries is the only
-		// usable signal here: apiVersion is matched case-sensitively by this decoder and
-		// never populates from the key helm writes.
+		// yaml.Unmarshal accepts documents that are not an index at all without an
+		// error: an empty body (a proxy answering 200 with nothing, a server answering
+		// 204, which TerminalFromStatusCode lets through), a blank document, a JSON
+		// error page. Each leaves both members zero, which reads as a repository that
+		// went empty - and the catalog reconciler prunes every chart of the repository
+		// on exactly that.
+		//
+		// An index is recognised the way helm's own loader recognises one: by its
+		// apiVersion. A document carrying it is an index whatever its entries say, so a
+		// repository that publishes `entries: {}` - or `entries:` with no value, which
+		// decodes to nil just like an absent key - is still a successful fetch of no
+		// charts, and pruning still follows. A document carrying neither member is not
+		// an index; entries alone still counts as one, since a server that omits
+		// apiVersion but lists charts is answering about a repository, not about a
+		// failure.
 		//
 		// Retried rather than reported terminal: nothing about the repository resource
 		// is wrong, it is the remote or something in front of it answering badly, and
 		// the next attempt may well reach a healthy backend.
-		if decoded.Entries == nil {
+		if decoded.APIVersion == "" && decoded.Entries == nil {
 			lastErr = fmt.Errorf("repository %s returned no index document (%d bytes, HTTP %d)", url, len(body), resp.StatusCode)
 
 			return false, nil
