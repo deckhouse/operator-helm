@@ -204,6 +204,53 @@ func TestHashedReleaseNameSeparatesTwoValidNames(t *testing.T) {
 	}
 }
 
+// TestHashedReleaseNameCutsALongName pins what HashedReleaseName produces once the
+// name is past the limit — the branch every application release that needs cutting
+// goes through. TestHashedReleaseNameSeparatesTwoValidNames spells out only a short
+// name, so without these cases a change to the cut or to the characters trimmed off
+// it would pass both this package's tests and the e2e twin.
+func TestHashedReleaseNameCutsALongName(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			// Twin of the "a long name is cut to 40 characters and hashed" case
+			// in TestApplicationReleaseName
+			// (tests/e2e/internal/naming/naming_test.go), which reproduces this
+			// function for "hap-"+name: a change on either side that is not
+			// mirrored on the other breaks one of the two tests.
+			name: "a long name is cut to 40 characters and hashed",
+			in:   "hap-very-long-application-name-that-is-definitely-over-fifty-three-characters-long",
+			want: "hap-very-long-application-name-that-is-d-3080981cd4e1",
+		},
+		{
+			// An application name is a DNS subdomain, so it may carry dots, and a
+			// cut landing on one would leave the hash suffix starting a DNS
+			// label. Helm would reject the release name.
+			name: "a cut that lands on a dot drops it",
+			in:   "hap-very.long.application.name.over.the.helm.limit",
+			want: "hap-very.long.application.name.over.the-5f257e85dfb0",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := HashedReleaseName(tc.in)
+			if got != tc.want {
+				t.Fatalf("HashedReleaseName(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if len(got) > helmReleaseNameLimit {
+				t.Fatalf("%q is %d characters, Helm accepts at most %d", got, len(got), helmReleaseNameLimit)
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid release name: %v", got, errs)
+			}
+		})
+	}
+}
+
 // TestHelmReleaseName pins the release-name rule: Helm rejects names longer than 53
 // characters. A name within the limit passes through untouched — every addon that
 // exists today keeps its release — and a longer one is cut and suffixed with a hash
@@ -219,15 +266,6 @@ func TestHelmReleaseName(t *testing.T) {
 		{"short name is used as is", "podinfo", "podinfo"},
 		{"a name of exactly 53 characters is used as is", strings.Repeat("a", 53), strings.Repeat("a", 53)},
 		{"a longer name is cut to 40 characters and hashed", long, "abcdefghijklmnopqrstuvwxyz-abcdefghijklm-ddc3f43e8c75"},
-		{
-			// Twin of the "a long name is cut to 40 characters and hashed" case in
-			// TestApplicationReleaseName
-			// (tests/e2e/internal/naming/naming_test.go): a change on either side
-			// that is not mirrored on the other breaks one of the two tests.
-			"hap-prefixed name over the limit is cut and hashed",
-			"hap-very-long-application-name-that-is-definitely-over-fifty-three-characters-long",
-			"hap-very-long-application-name-that-is-d-3080981cd4e1",
-		},
 		{
 			// The hash is over the whole name, so two names that survive the cut
 			// identically still get different releases. Without it the second

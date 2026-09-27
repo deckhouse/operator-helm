@@ -73,8 +73,10 @@ func TestApplicationServiceAccountName(t *testing.T) {
 }
 
 // TestApplicationReleaseName pins ApplicationReleaseName's output, including
-// against the value operator-helm-controller's HelmReleaseName produces for the
-// same "hap-"-prefixed input.
+// against the value operator-helm-controller's HashedReleaseName produces for the
+// same "hap-"-prefixed input. That is the function a HelmApplication's release name
+// comes from (adapter.ApplicationRelease.ReleaseName); HelmReleaseName serves the
+// addon family and agrees with it only for names past the limit.
 func TestApplicationReleaseName(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -87,8 +89,8 @@ func TestApplicationReleaseName(t *testing.T) {
 			want:   "hap-e2e-test-app-helm-eaa08759b576",
 		},
 		{
-			// Twin of the "hap-prefixed name over the limit is cut and hashed" case
-			// in TestHelmReleaseName
+			// Twin of the case of the same name in
+			// TestHashedReleaseNameCutsALongName
 			// (images/operator-helm-controller/internal/utils/name_test.go): a
 			// change on either side that is not mirrored on the other breaks one of
 			// the two tests.
