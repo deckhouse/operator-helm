@@ -76,12 +76,15 @@ type ChartVersion struct {
 	// catalog records for that repository except one already awaiting a verdict, which
 	// every pass re-examines anyway. A helm repository is never marked: its index is one
 	// document read in full on every pass, so no verdict there is ever skipped. Forcing
-	// is the only thing that re-examines a version whose media type is already recorded -
-	// a tag that was re-pushed with different content is invisible to an ordinary pass -
-	// so the request is written here to outlive the pass it was asked of. It is cleared
-	// by the pass that examines the version, and by a pass that sees the whole repository
-	// and confirms the version is no longer offered, so the refresh finishes across as
-	// many passes as it needs while the entries themselves stay readable and deployable.
+	// is what re-examines a version the repository still offers and whose media type is
+	// already recorded - a tag re-pushed with different content is otherwise invisible to
+	// an ordinary pass - so the request is written here to outlive the pass it was asked
+	// of. A version recorded as removed from the repository needs no force: the listing
+	// that offers the tag again is itself the evidence that there is new content behind
+	// the verdict, so any pass that lists it examines it. The mark is cleared by the pass
+	// that examines the version, and by a pass that sees the whole repository and confirms
+	// the version is no longer offered, so the refresh finishes across as many passes as
+	// it needs while the entries themselves stay readable and deployable.
 	// +optional
 	ReexaminationRequired bool `json:"reexaminationRequired,omitempty"`
 }
