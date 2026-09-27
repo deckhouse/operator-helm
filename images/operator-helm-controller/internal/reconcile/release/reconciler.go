@@ -314,9 +314,10 @@ func (r *Reconciler) resolveSource(
 		}
 	case err != nil:
 		return src, chartVersion, &Failure{
-			Reason:  helmv1alpha1.ReasonChartFetchFailed,
-			Message: "Failed to resolve the desired chart version",
-			Err:     err,
+			Reason:      helmv1alpha1.ReasonChartFetchFailed,
+			Message:     "Failed to resolve the desired chart version",
+			Err:         err,
+			AwaitsWatch: errors.Is(err, errCatalogAwaited),
 		}
 	}
 
@@ -372,11 +373,21 @@ func (r *Reconciler) finish(
 	decision := Evaluate(in)
 
 	if decision.Reported != nil {
-		// Only the identity failure is handed to the work queue, which logs it on the
-		// way past; every other failure ends the pass quietly, so this is the one
+		// A failure handed to the work queue is logged again by controller-runtime on
+		// the way past; one that is not ends the pass quietly, and this is then the one
 		// place its cause is written down.
-		log.FromContext(ctx).Error(decision.Reported.Err, decision.Reported.Message,
-			"reason", decision.Reported.Reason)
+		//
+		// Bad input is logged at info: the release names a chart version its repository
+		// does not offer, which is answered in its status and is no fault of this
+		// controller. Reporting it as a controller error would also fail the e2e suite,
+		// which treats any error line as a defect.
+		if decision.Reported.BadInput {
+			log.FromContext(ctx).Info(decision.Reported.Message,
+				"reason", decision.Reported.Reason, "cause", decision.Reported.Err)
+		} else {
+			log.FromContext(ctx).Error(decision.Reported.Err, decision.Reported.Message,
+				"reason", decision.Reported.Reason)
+		}
 	}
 
 	if err := r.deps.Status.PatchStatus(ctx, rel.Object(), func() {
@@ -605,6 +616,12 @@ func (r *Reconciler) getChartVersion(
 
 	obj, catalogStatus, err := catalog.Lookup(ctx, repo, ref.Chart)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// The repository controller writes the catalog object, and the release is
+			// watching for it. Until it lands there is nothing here to retry against.
+			return nil, nil, fmt.Errorf("getting chart catalog entry: %w: %w", err, errCatalogAwaited)
+		}
+
 		return nil, nil, fmt.Errorf("getting chart catalog entry: %w", err)
 	}
 
@@ -639,7 +656,7 @@ func (r *Reconciler) getChartVersion(
 		// The repository controller has not written the catalog of this chart yet, so
 		// the absence says nothing about the version the release asks for. It is the
 		// repository that is behind, not the spec that is wrong.
-		return nil, nil, errors.New("chart catalog has no versions yet")
+		return nil, nil, fmt.Errorf("chart catalog has no versions yet: %w", errCatalogAwaited)
 	}
 
 	return nil, nil, fmt.Errorf("chart catalog does not have version %q: %w", ref.Version, errChartVersionNotFound)
@@ -651,6 +668,14 @@ func (r *Reconciler) getChartVersion(
 // message because the caller reports it differently from every other resolution
 // failure — as a bad input, not as progress.
 var errChartVersionNotFound = errors.New("chart version not found")
+
+// errCatalogAwaited marks a resolution failure that the catalog watches undo by
+// themselves: the catalog object of this chart is not there yet, or is there and
+// still empty. Both are the repository controller being behind, and both end the
+// moment it writes — which enqueues the release. Handing such a failure to the work
+// queue as well would spend the rate limiter re-running a pass whose input has not
+// moved, and log a controller error for a state that is merely early.
+var errCatalogAwaited = errors.New("chart catalog not written yet")
 
 // rejectedByAPIServer reports whether an API error is the server refusing the
 // object it was handed, rather than failing to deal with it right now. The two

@@ -285,29 +285,49 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 	tests := []struct {
 		name         string
 		versions     []helmv1alpha1.ChartVersion
+		noCatalog    bool
 		wantReason   string
 		wantBadInput bool
+		// wantRetried is whether the failure goes to the work queue. The three cases
+		// differ in what brings the release back: the two early ones are enqueued by
+		// the catalog watches the moment the repository controller writes, so handing
+		// them to the rate limiter as well would re-run a pass whose input has not
+		// moved and log a controller error for a state that is merely early.
+		wantRetried bool
 	}{
+		{
+			name:         "a catalog object that does not exist yet is still progressing",
+			noCatalog:    true,
+			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput: false,
+			wantRetried:  false,
+		},
 		{
 			name:         "a catalog that has not been synced yet is still progressing",
 			versions:     nil,
 			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
 			wantBadInput: false,
+			wantRetried:  false,
 		},
 		{
 			name:         "a populated catalog without the version is a fault of the spec",
 			versions:     []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
 			wantReason:   helmv1alpha1.ReasonChartVersionNotFound,
 			wantBadInput: true,
+			wantRetried:  false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			chart := addonChartFixture(
+			objects := []client.Object{addonChartFixture(
 				addon.Spec.Chart.HelmClusterAddonRepository, addon.Spec.Chart.HelmClusterAddonChartName, tt.versions...,
-			)
-			r, c := newTestReconciler(t, chart)
+			)}
+			if tt.noCatalog {
+				objects = nil
+			}
+
+			r, c := newTestReconciler(t, objects...)
 
 			_, _, failure := r.resolveSource(
 				context.Background(),
@@ -328,6 +348,9 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			}
 			if failure.Err == nil {
 				t.Fatal("the cause must be carried out, it is the only place it is written down")
+			}
+			if retried := retryErr(*failure) != nil; retried != tt.wantRetried {
+				t.Fatalf("handed to the work queue = %v, want %v", retried, tt.wantRetried)
 			}
 		})
 	}
@@ -1968,5 +1991,120 @@ func TestReconcileRejectedNamespaceNameIsNotRetried(t *testing.T) {
 	ready := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReady)
 	if ready == nil || ready.Status != metav1.ConditionFalse {
 		t.Fatalf("Ready = %+v, want False", ready)
+	}
+}
+
+// TestBadInputIsNotLoggedAsAControllerError guards the e2e log gate as much as the
+// log itself. The suite fails the run on any error line a controller emits that is
+// not explicitly excluded (tests/e2e/default_config.yaml), and a release naming a
+// chart version its repository does not offer is answered in its status — the
+// controller did nothing wrong and has nothing to retry.
+func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
+	tests := []struct {
+		name        string
+		failure     Failure
+		wantAtError bool
+	}{
+		{
+			name: "a version the catalog does not offer is reported at info",
+			failure: Failure{
+				Reason:   helmv1alpha1.ReasonChartVersionNotFound,
+				Message:  "Version 9.9.9 of chart podinfo is not in the catalog of repository repo",
+				Err:      errChartVersionNotFound,
+				BadInput: true,
+			},
+			wantAtError: false,
+		},
+		{
+			name: "a failure of the controller itself stays an error",
+			failure: Failure{
+				Reason:  helmv1alpha1.ReasonHelmChartFailed,
+				Message: "Failed to reconcile the internal chart",
+				Err:     errors.New("connection refused"),
+			},
+			wantAtError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var atError bool
+			logger := funcr.New(func(prefix, args string) {
+				if strings.Contains(args, `"error"=`) {
+					atError = true
+				}
+			}, funcr.Options{})
+
+			addon := testAddon()
+			r, _ := newFullReconciler(t, nil, interceptor.Funcs{}, addon)
+			ctx := log.IntoContext(context.Background(), logger)
+
+			in := Inputs{
+				Generation:     addon.GetGeneration(),
+				Now:            time.Now().UTC(),
+				ConditionTypes: addon.GetConditionTypesForUpdate(),
+			}
+
+			if _, err := r.finish(ctx, adapter.NewAddonRelease(addon), in, StepFailed{tt.failure}); err != nil && !tt.wantAtError {
+				t.Fatalf("finish returned an error: %v", err)
+			}
+
+			if atError != tt.wantAtError {
+				t.Fatalf("logged at error level = %v, want %v", atError, tt.wantAtError)
+			}
+		})
+	}
+}
+
+// TestReconcileAnswersAVersionTheCatalogLacksWithoutPromisingARetry runs the whole
+// pass, not just the verdict, for the shape a typo in the spec takes: the repository
+// answered, its catalog is complete, and the version the release names is not in it.
+// The release has to say that plainly — no Reconciling, nothing on the work queue —
+// while staying reversible, because publishing that version to the repository must
+// bring the release back without anyone touching its spec.
+func TestReconcileAnswersAVersionTheCatalogLacksWithoutPromisingARetry(t *testing.T) {
+	addon := testAddon()
+	addon.Finalizers = []string{helmv1alpha1.FinalizerName}
+
+	repo := helmRepositoryFixture()
+	chart := addonChartFixture(
+		addon.Spec.Chart.HelmClusterAddonRepository,
+		addon.Spec.Chart.HelmClusterAddonChartName,
+		helmv1alpha1.ChartVersion{Version: "6.7.0"},
+	)
+
+	r, c := newFullReconciler(t, nil, interceptor.Funcs{}, addon, repo, chart)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(addon),
+	})
+	if err != nil {
+		t.Fatalf("a version the catalog lacks must not be handed to the work queue, got: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("RequeueAfter = %v, want none: no timer brings a better answer", result.RequeueAfter)
+	}
+
+	var got helmv1alpha1.HelmClusterAddon
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(addon), &got); err != nil {
+		t.Fatalf("reading the addon back: %v", err)
+	}
+
+	ready := apimeta.FindStatusCondition(got.Status.Conditions, helmv1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready = %+v, want False", ready)
+	}
+	if ready.Reason != helmv1alpha1.ReasonChartVersionNotFound {
+		t.Fatalf("Ready reason = %q, want %q", ready.Reason, helmv1alpha1.ReasonChartVersionNotFound)
+	}
+
+	if reconciling := apimeta.FindStatusCondition(got.Status.Conditions, helmv1alpha1.ConditionTypeReconciling); reconciling != nil &&
+		reconciling.Status == metav1.ConditionTrue {
+		t.Fatalf("Reconciling = %+v, want absent or False: nothing is on its way to that version", reconciling)
+	}
+
+	if stalled := apimeta.FindStatusCondition(got.Status.Conditions, helmv1alpha1.ConditionTypeStalled); stalled != nil &&
+		stalled.Status == metav1.ConditionTrue {
+		t.Fatal("Stalled must stay off: publishing the version to the repository brings the release back")
 	}
 }

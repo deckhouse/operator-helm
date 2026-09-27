@@ -55,6 +55,12 @@ type Failure struct {
 	// when it is — but it is not progress either, so the release reports it without
 	// Reconciling and without handing it to the work queue: nothing about a retry
 	// changes what the spec asks for.
+	//
+	// The release is not settled either, so observedGeneration keeps lagging and a
+	// kstatus reader still calls it InProgress. That vocabulary has no term for
+	// "waiting on something the spec named and the repository does not have", and
+	// claiming Stalled instead would be worse: Stalled promises that nothing but a
+	// new spec can move the object, and here a publish to the repository can.
 	BadInput bool
 	// RequeueAfter schedules another pass on a timer, for a cause no watch covers.
 	RequeueAfter time.Duration

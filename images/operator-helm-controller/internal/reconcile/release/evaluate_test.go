@@ -1161,8 +1161,41 @@ func TestEvaluateTransientInternalObjectFailureIsHandedToTheWorkQueue(t *testing
 			if retried := decision.Err != nil; retried != tt.retried {
 				t.Fatalf("Err = %v, want retried = %v", decision.Err, tt.retried)
 			}
+
+			// The queue is given the cause itself, not a summary of it: the message the
+			// object carries is already the summary, and what the rate limiter logs on
+			// the way past has to be diagnosable.
+			if cause := failureCause(tt.outcome); tt.retried && !errors.Is(decision.Err, cause) {
+				t.Fatalf("Err = %v, want it to wrap %v", decision.Err, cause)
+			}
 		})
 	}
+}
+
+// failureCause digs out the error a test's outcome was built around, so the retried
+// cases can assert that exact error reached the queue.
+func failureCause(outcome Outcome) error {
+	switch o := outcome.(type) {
+	case StepFailed:
+		return o.Failure.Err
+	case ChartReached:
+		// The release step runs after the source is up, so its failure is the one that
+		// ends the pass when both could have failed.
+		if o.Release != nil && o.Release.Err != nil {
+			return o.Release.Err
+		}
+
+		switch src := o.Internal.(type) {
+		case SourceUnresolved:
+			return src.Failure.Err
+		case ServedByHelmChart:
+			return src.Result.Err
+		case ServedByOCIRepository:
+			return src.Result.Err
+		}
+	}
+
+	return nil
 }
 
 // TestEvaluateMissingChartVersionIsNotWorkInProgress pins how a release reports a
