@@ -408,6 +408,12 @@ func TestDropLeavesAClaimTakenOverInBetween(t *testing.T) {
 // touched even though the label still names this addon.
 func TestDropStaleDropsTheClaimsTheSpecMovedAwayFrom(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
+	// The move is what makes the other pairs stale, and the status is what reports it.
+	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+		HelmClusterAddonRepository: "stable",
+		HelmClusterAddonChartName:  "podinfo",
+		Version:                    "6.7.1",
+	}
 	claims, c := newClaims(t,
 		addon,
 		claimFor("stable", "podinfo", "metrics", "metrics"),
@@ -498,11 +504,13 @@ func TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway(t *testing.T) {
 	}
 }
 
-// TestDropStaleKeepsThePairTheReleaseIsStillRunning pins the one pair a release may
-// not give up on a spec change: the one its chart is installed under. Until the
-// release actually moves — which the pass that applies the new chart records —
-// handing that pair to another addon would have two releases deploying one chart
-// into one namespace, which is what the claim exists to prevent.
+// TestDropStaleKeepsThePairTheReleaseIsStillRunning pins what a release may not
+// give up while its spec points somewhere its status has not followed: anything.
+// The chart named by the status is installed under this release's name, and the
+// pairs around it cannot be told apart from it by a status that is written after
+// the fact — so until the move is confirmed, every pair is held. Handing one over
+// early would have two releases deploying a chart into one namespace, which is
+// what the claim exists to prevent.
 func TestDropStaleKeepsThePairTheReleaseIsStillRunning(t *testing.T) {
 	addon := claimingAddon("first", "nginx")
 	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
@@ -522,8 +530,26 @@ func TestDropStaleKeepsThePairTheReleaseIsStillRunning(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(deployed), &coordinationv1.Lease{}); err != nil {
 		t.Fatalf("the claim of the chart still deployed was released: %v", err)
 	}
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(forgotten), &coordinationv1.Lease{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("a pair neither named nor deployed survived: %v", err)
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(forgotten), &coordinationv1.Lease{}); err != nil {
+		t.Fatalf("a pair was released while the recorded chart was not the one named: %v", err)
+	}
+}
+
+// TestDropStaleKeepsEverythingUntilTheFirstChartIsRecorded pins the reading of an
+// empty status. It does not mean nothing is deployed: the record is written after
+// the chart is applied, so a release that has just installed something carries none
+// yet. Releasing on that reading would hand away a pair whose chart is running.
+func TestDropStaleKeepsEverythingUntilTheFirstChartIsRecorded(t *testing.T) {
+	addon := claimingAddon("first", "nginx")
+	held := claimFor(claimRepo, "podinfo", "first", "first")
+	claims, c := newClaims(t, addon, held)
+
+	if err := claims.DropStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("DropStale returned %v", err)
+	}
+
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(held), &coordinationv1.Lease{}); err != nil {
+		t.Fatalf("a pair was released on an empty record: %v", err)
 	}
 }
 

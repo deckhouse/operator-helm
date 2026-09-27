@@ -162,18 +162,33 @@ func (s *Claims) Drop(ctx context.Context, rel contract.Release) error {
 // Only the addon's own claims (by HolderIdentity) other than the current one are
 // removed, so a pair taken over by another addon is left intact.
 func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
-	// The pair the cluster is actually running is not stale, whatever the spec now
-	// says. Until the release moves off it, its chart is installed under this
+	// Freeing a pair is only safe once this release is known to have moved onto the
+	// one it names now. Until then its chart may still be installed under this
 	// release's name, and handing the pair to somebody else would have two releases
 	// deploying one chart into one namespace — the collision the claim exists to
-	// prevent. The move itself clears this: the pass that applies the new chart
-	// records it, and the next one lets the old pair go.
-	deployed := ""
-	if last := rel.LastAppliedChart(); last != nil {
-		deployed = utils.GetChartClaimLeaseName(last.Repository.Name, last.Chart)
+	// prevent.
+	//
+	// The status is what says the move happened, and it says it late: it is written
+	// after the chart is applied, so a release that has just installed something may
+	// still carry no record of it at all. An empty record therefore cannot be read as
+	// "nothing is deployed" — it is read as "unknown", and nothing is released.
+	//
+	// This keeps a pair the release cannot move off — a spec pointed at a chart
+	// somebody else holds never reaches the status — until the release is deleted,
+	// when teardown frees everything it holds. That is the cheaper failure: a pair
+	// held too long needs someone to look at it, a pair freed too early corrupts an
+	// installation.
+	last := rel.LastAppliedChart()
+	if last == nil {
+		return nil
 	}
 
-	return s.dropOwned(ctx, rel, s.leaseKey(rel).Name, deployed)
+	current := s.leaseKey(rel).Name
+	if utils.GetChartClaimLeaseName(last.Repository.Name, last.Chart) != current {
+		return nil
+	}
+
+	return s.dropOwned(ctx, rel, current)
 }
 
 // DropAll releases every claim this release holds, the pair it names included. It

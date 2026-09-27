@@ -2781,15 +2781,21 @@ func TestReconcileDeleteOfAnAddonIgnoresATerminatingTargetNamespace(t *testing.T
 }
 
 // TestReconcileReleasesAnAbandonedClaimEvenWhenTheNewPairIsTaken pins the order of
-// the two claim operations. A claim is only ever released by the release holding it,
-// so releasing must not sit behind acquiring, which may not be granted: an addon
-// that moved to a chart somebody else took would otherwise keep its old pair for as
-// long as it kept retrying, and nobody — including the addon waiting for that pair —
-// could do anything about it.
+// the two claim operations against the one condition that lets a pair go. Releasing
+// runs before acquiring, because a claim is only ever released by the release
+// holding it and acquiring may not be granted — but a pass that cannot reach the
+// chart it now names has not moved off the one it is running, so what it releases
+// is everything except that. Here the recorded chart is the one it moved to, so the
+// move is done and the pair it came from is free even though this pass got nothing.
 func TestReconcileReleasesAnAbandonedClaimEvenWhenTheNewPairIsTaken(t *testing.T) {
 	// The addon moved from podinfo to nginx, which another addon already holds.
 	addon := testAddon()
 	addon.Spec.Chart.HelmClusterAddonChartName = "nginx"
+	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+		HelmClusterAddonRepository: addon.Spec.Chart.HelmClusterAddonRepository,
+		HelmClusterAddonChartName:  "nginx",
+		Version:                    "6.7.1",
+	}
 
 	abandoned := claimLease(utils.GetChartClaimLeaseName(addon.Spec.Chart.HelmClusterAddonRepository, "podinfo"), addon.Name, addon.Name)
 	taken := claimLease(utils.GetChartClaimLeaseName(addon.Spec.Chart.HelmClusterAddonRepository, "nginx"), "other", "other")
