@@ -200,6 +200,22 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			wantErrContain: "has not resolved it yet",
 		},
 		{
+			// A pending verdict over metadata an earlier sync did resolve. The version
+			// is deployable from what is recorded, and no later sync will re-examine
+			// it precisely because that metadata is there, so blocking the release on
+			// it would hold it on a registry failure it has already outlived.
+			name: "a pending verdict over resolved metadata does not hold the release",
+			version: helmv1alpha1.ChartVersion{
+				Version:            "6.7.1",
+				OCIRef:             "oci://registry.example/charts/app:6.7.1",
+				MediaType:          "application/vnd.cncf.helm.config.v1+json",
+				UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
+				UnavailableMessage: "the manifest request failed",
+			},
+			repoType: chartsource.OCI,
+			wantErr:  false,
+		},
+		{
 			name:           "a version the addon does not reference is rejected",
 			version:        helmv1alpha1.ChartVersion{Version: "9.9.9"},
 			repoType:       chartsource.OCI,
@@ -239,7 +255,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			)
 			r, c := newTestReconciler(t, chart)
 
-			gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c), adapter.NewAddonRepository(helmRepositoryFixture()), adapter.NewAddonRelease(addon), tt.repoType)
+			gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c), adapter.NewAddonRepository(syncedRepositoryFixture()), adapter.NewAddonRelease(addon), tt.repoType)
 
 			if tt.wantErr {
 				if err == nil {
@@ -288,6 +304,7 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 		noCatalog    bool
 		synced       bool
 		staleSync    bool
+		failedResync bool
 		wantReason   string
 		wantBadInput bool
 		// wantRetried is whether the failure goes to the work queue. The three cases
@@ -354,6 +371,28 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetried:  false,
 		},
 		{
+			// The url was edited and the pass that followed failed. That pass still
+			// advanced the status-level observedGeneration, so only the Synced
+			// condition tells it apart from one that published a catalog.
+			name:         "a failed pass does not make the previous catalog current",
+			versions:     []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
+			failedResync: true,
+			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput: false,
+			wantRetried:  false,
+		},
+		{
+			// The catalog is full, but of the previous url. A version the new url
+			// offers is absent from it, and calling that a fault of the spec would be
+			// wrong for as long as the resync takes.
+			name:         "a populated catalog from before a spec change is not the answer either",
+			versions:     []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
+			staleSync:    true,
+			wantReason:   helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput: false,
+			wantRetried:  false,
+		},
+		{
 			// A version the repository lists without having reached a verdict on how
 			// it is published. It may well become deployable, and the write that says
 			// so is to the catalog object the release already watches.
@@ -403,6 +442,11 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			if tt.staleSync {
 				repo = syncedRepositoryFixture()
 				repo.Generation++
+			}
+			if tt.failedResync {
+				repo = syncedRepositoryFixture()
+				repo.Generation++
+				repo.Status.ObservedGeneration = repo.Generation
 			}
 
 			_, _, failure := r.resolveSource(
@@ -467,9 +511,16 @@ func helmRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 func syncedRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 	repo := helmRepositoryFixture()
 	repo.Status.LastSuccessfulSyncTime = &metav1.Time{Time: time.Now().UTC()}
-	// The sync described the spec the repository carries now; a lagging
-	// observedGeneration would mean the catalog belongs to the previous one.
 	repo.Status.ObservedGeneration = repo.Generation
+	// Synced is the evidence that matters: it is raised only by a pass that
+	// published a catalog, and carries the generation it published for.
+	apimeta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+		Type:               helmv1alpha1.ConditionTypeSynced,
+		Status:             metav1.ConditionTrue,
+		Reason:             helmv1alpha1.ReasonSuccess,
+		ObservedGeneration: repo.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
 
 	return repo
 }
@@ -2172,7 +2223,7 @@ func TestReconcileAnswersAVersionTheCatalogLacksWithoutPromisingARetry(t *testin
 	addon := testAddon()
 	addon.Finalizers = []string{helmv1alpha1.FinalizerName}
 
-	repo := helmRepositoryFixture()
+	repo := syncedRepositoryFixture()
 	chart := addonChartFixture(
 		addon.Spec.Chart.HelmClusterAddonRepository,
 		addon.Spec.Chart.HelmClusterAddonChartName,
@@ -2272,6 +2323,13 @@ func TestReconcileAnswersAnApplicationTheSameWayAsAnAddon(t *testing.T) {
 	// makes the catalog's silence about 9.9.9 final rather than early.
 	repo.Status.LastSuccessfulSyncTime = &metav1.Time{Time: time.Now().UTC()}
 	repo.Status.ObservedGeneration = repo.Generation
+	apimeta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
+		Type:               helmv1alpha1.ConditionTypeSynced,
+		Status:             metav1.ConditionTrue,
+		Reason:             helmv1alpha1.ReasonSuccess,
+		ObservedGeneration: repo.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
 
 	r, c := newApplicationFullReconciler(t, nil, append(fixtures, app)...)
 

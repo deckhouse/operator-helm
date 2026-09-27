@@ -659,16 +659,10 @@ func (r *Reconciler) getChartVersion(
 	ref := rel.ChartRef()
 
 	// Whether the repository has finished a sync of the spec it currently carries is
-	// what makes the catalog's silence mean anything. Before that, an absent or empty
-	// catalog says only that the repository controller has not got there yet; after
-	// it, the catalog is the repository's full answer, and silence is the answer.
-	//
-	// The generation is part of the question because the sync time is never cleared:
-	// after the url is edited it still describes the catalog of the previous one, and
-	// reading a chart's absence from that catalog as final would answer about a
-	// repository the release no longer points at.
-	synced := repo.Status().LastSuccessfulSyncTime != nil &&
-		repo.Status().ObservedGeneration == repo.Generation()
+	// what makes anything the catalog says final. Before that the catalog describes
+	// some earlier spec, or nothing at all, and neither an absence nor a listing in
+	// it answers about the repository the release points at now.
+	synced := catalogIsCurrent(repo)
 
 	obj, catalogStatus, err := catalog.Lookup(ctx, repo, ref.Chart)
 	if err != nil {
@@ -687,16 +681,35 @@ func (r *Reconciler) getChartVersion(
 		return nil, nil, fmt.Errorf("getting chart catalog entry: %w", err)
 	}
 
+	if !synced {
+		// Even a populated catalog is the previous spec's answer until the sync of the
+		// current one lands: a version this release asks for may be offered by the new
+		// url and absent from the old catalog, and calling that a fault of the spec
+		// would be wrong for as long as the resync takes.
+		if !hasVersion(catalogStatus, ref.Version) {
+			return nil, nil, fmt.Errorf(
+				"chart catalog is not current: %w", errCatalogAwaited,
+			)
+		}
+	}
+
 	for i := range catalogStatus.Versions {
 		version := &catalogStatus.Versions[i]
 		if version.Version != ref.Version {
 			continue
 		}
 
-		if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending {
+		if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending &&
+			version.OCIRef == "" && version.MediaType == "" {
 			// The repository could not read the manifest and reached no verdict, so the
 			// version may well be deployable once the next sync gets an answer. That is
 			// a catalog write, which the release's catalog watch delivers.
+			//
+			// A pending verdict over metadata an earlier sync did resolve is a different
+			// thing and is not caught here: the version is still deployable from what is
+			// recorded, and a later sync will not re-examine it precisely because that
+			// metadata is there. Blocking on it would hold the release — its values, its
+			// maintenance mode — on a transient registry failure it has outlived.
 			return nil, nil, fmt.Errorf(
 				"chart version %q is not resolved yet: %s: %w",
 				version.Version, versionUnavailableDetail(*version), errVersionResolvePending,
@@ -770,6 +783,33 @@ var errCatalogAwaited = errors.New("chart catalog not written yet")
 // errChartNotFound is the chart-level counterpart of errChartVersionNotFound: the
 // repository has answered in full and offers no chart under that name at all.
 var errChartNotFound = errors.New("chart not found")
+
+// catalogIsCurrent reports whether the repository's catalog describes the spec the
+// repository carries now.
+//
+// The evidence is the Synced condition rather than the status-level
+// observedGeneration, which is advanced on every pass including failed ones: after
+// a url is edited, one failed fetch would otherwise be enough to make the previous
+// url's catalog look like the current answer. Synced is raised only by a pass that
+// published a catalog, and carries the generation of the spec it published for.
+func catalogIsCurrent(repo contract.Repository) bool {
+	synced := apimeta.FindStatusCondition(repo.Status().Conditions, helmv1alpha1.ConditionTypeSynced)
+
+	return synced != nil &&
+		synced.Status == metav1.ConditionTrue &&
+		synced.ObservedGeneration == repo.Generation()
+}
+
+// hasVersion reports whether the catalog lists a version under that exact name.
+func hasVersion(catalogStatus *helmv1alpha1.ChartCatalogStatus, version string) bool {
+	for i := range catalogStatus.Versions {
+		if catalogStatus.Versions[i].Version == version {
+			return true
+		}
+	}
+
+	return false
+}
 
 // errVersionResolvePending marks a version the catalog lists without a verdict on
 // how it is published. The repository reaches one by writing to the catalog object,
