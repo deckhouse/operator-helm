@@ -110,7 +110,7 @@ type Releases interface {
 	Ensure(
 		ctx context.Context,
 		rel contract.Release,
-		sourceKind chartsource.Kind,
+		src chartsource.Source,
 		artifactRevision string,
 	) internalobj.ReleaseOutcome
 	Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error)

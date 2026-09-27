@@ -53,7 +53,7 @@ func NewReleases(client client.Client, targetNamespace string) *Releases {
 	return &Releases{client: client, targetNamespace: targetNamespace}
 }
 
-func (s *Releases) Ensure(ctx context.Context, rel contract.Release, sourceKind chartsource.Kind, artifactRevision string) ReleaseOutcome {
+func (s *Releases) Ensure(ctx context.Context, rel contract.Release, src chartsource.Source, artifactRevision string) ReleaseOutcome {
 	logger := log.FromContext(ctx)
 
 	existing := &helmv2.HelmRelease{
@@ -64,7 +64,7 @@ func (s *Releases) Ensure(ctx context.Context, rel contract.Release, sourceKind 
 	}
 
 	op, err := controllerutil.CreateOrPatch(ctx, s.client, existing, func() error {
-		return applyHelmReleaseSpec(rel, existing, sourceKind, s.targetNamespace)
+		return applyHelmReleaseSpec(rel, existing, src.Kind, s.targetNamespace)
 	})
 	if err != nil {
 		return ReleaseOutcome{Err: fmt.Errorf("reconciling helm release: %w", err)}
@@ -76,7 +76,7 @@ func (s *Releases) Ensure(ctx context.Context, rel contract.Release, sourceKind 
 	// object, so it is reported rather than acted on here: a chart-version change
 	// updates the referenced HelmChart artifact without touching the HelmRelease spec
 	// or generation, so the object can go on reporting the previous revision ready.
-	deployed := isDesiredChartDeployed(rel, existing.Status.History.Latest(), artifactRevision)
+	deployed := isDesiredChartDeployed(rel, existing.Status.History.Latest(), artifactRevision, src.Tag)
 
 	if internal.Ready() && deployed {
 		logger.Info("Successfully reconciled helm release", "operation", op,
@@ -188,7 +188,7 @@ func applyHelmReleaseSpec(rel contract.Release, existing *helmv2.HelmRelease, so
 	return nil
 }
 
-func isDesiredChartDeployed(rel contract.Release, latest *helmv2.Snapshot, artifactRevision string) bool {
+func isDesiredChartDeployed(rel contract.Release, latest *helmv2.Snapshot, artifactRevision, desiredTag string) bool {
 	if latest == nil || latest.Status != "deployed" {
 		return false
 	}
@@ -199,18 +199,24 @@ func isDesiredChartDeployed(rel contract.Release, latest *helmv2.Snapshot, artif
 		// archive is resolved through a HelmChart, whose revision is a bare version
 		// with no digest to compare against. That is a chart other than the deployed
 		// one, not a reason to index into a revision that has no digest part.
-		_, latestDigest, ok := strings.Cut(artifactRevision, "@")
+		revisionTag, latestDigest, ok := strings.Cut(artifactRevision, "@")
 		if !ok {
 			return false
 		}
 
-		// The digest settles it on its own: the revision comes from the internal source
-		// object built for exactly the tag this release asks for, and it is only read
-		// once that object has observed the spec carrying that tag, so an artifact with
-		// this digest is the artifact the release wants. The chart version cannot stand
-		// in for the tag: helm-controller records the version out of the packaged
-		// Chart.yaml, and a registry is free to publish that chart under a tag spelled
-		// differently (v1.2.3 for chart version 1.2.3, say).
+		// The artifact still on the source object need not be the one this release now
+		// asks for: a failed fetch of a newly requested tag leaves the previous artifact
+		// in place, reported under the current generation, so the tag it was pulled for
+		// is what says whether it answers the question at all.
+		if revisionTag != desiredTag {
+			return false
+		}
+
+		// Past that the digest settles it, and the chart version cannot stand in for it:
+		// helm-controller records the version out of the packaged Chart.yaml, and a
+		// registry is free to publish that chart under a tag spelled differently
+		// (v1.2.3 for chart version 1.2.3, say), which kept a perfectly deployed release
+		// reported as still progressing for good.
 		return recordedOCIDigest(latest.OCIDigest) == latestDigest
 	}
 
