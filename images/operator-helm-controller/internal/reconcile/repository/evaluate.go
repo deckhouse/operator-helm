@@ -83,10 +83,6 @@ type Decision struct {
 	Status       helmv1alpha1.RepositoryStatus
 	RequeueAfter time.Duration
 	Err          error
-	// ConsumeForce says whether the force reconcile request may be taken off the
-	// object now. It is false on a pass that attempted no synchronization, and on one
-	// whose forced read did not get through the repository: see forceOutstanding.
-	ConsumeForce bool
 }
 
 type abnormalCondition struct {
@@ -248,37 +244,7 @@ func Evaluate(in Inputs) Decision {
 		Status:       status,
 		RequeueAfter: requeueAfter,
 		Err:          firstErr(in.SecretsErr, in.InternalRepositoryErr, in.MigrateErr, catalogErr(in)),
-		ConsumeForce: in.Attempted && !forceOutstanding(in, fetchIncomplete),
 	}
-}
-
-// forceOutstanding reports whether a force request still has work the pass it
-// triggered did not get to.
-//
-// A forced pass reads the repository in full, ignoring every verdict a previous pass
-// recorded, and a pass that ran out of its budget applied that only to the versions it
-// reached. Consuming the request there loses the rest silently: the next pass runs
-// unforced, the catalog merge kept the old media type of every version this one never
-// examined, and NeedsExamination then reads them as already answered — so someone who
-// repushed a tag and forced a refresh would never get that tag looked at again.
-//
-// The request is therefore left on the object while the forced read is unfinished, and
-// the passes it keeps triggering are bounded by their own progress: it is carried only
-// while each pass leaves strictly less unexamined than the catalog held before it. A
-// repository too large for one budget is refreshed over several passes and the request
-// is consumed by the one that covers it; a repository whose passes stop shrinking the
-// remainder consumes the request instead of forcing forever. A failed forced read is
-// not outstanding work either: it is a failure, reported by Synced and retried on the
-// backoff, and holding the request across it would turn an unreachable registry into a
-// permanently forced repository.
-func forceOutstanding(in Inputs, fetchIncomplete bool) bool {
-	if !in.Forced || !fetchIncomplete {
-		return false
-	}
-
-	before := in.Current.UnexaminedVersions
-
-	return before == 0 || int32(in.Fetch.Unexamined) < before
 }
 
 // scheduleBase is the instant the wait until the next attempt is measured from: the
