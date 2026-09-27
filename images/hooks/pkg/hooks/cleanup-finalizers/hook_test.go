@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/deckhouse/module-sdk/pkg"
+	"github.com/deckhouse/module-sdk/pkg/jq"
 	"github.com/deckhouse/module-sdk/testing/mock"
 
 	"hooks/pkg/settings"
@@ -35,7 +36,7 @@ import (
 
 // patchCall records one collected patch so a test can compare the whole set at once.
 type patchCall struct {
-	patch      any
+	filter     string
 	apiVersion string
 	kind       string
 	namespace  string
@@ -43,18 +44,19 @@ type patchCall struct {
 }
 
 // newInput wires a hook input whose snapshots hold the given resources keyed by snapshot
-// name and whose namespace looks free of workloads. Only PatchWithMerge is mocked, so a
-// JSON patch would hit an unmocked method and fail the test; the patch type is not an
-// implementation detail here, see TestCleanupFinalizersNullsFinalizersWithAMergePatch.
+// name and whose namespace looks free of workloads. Only PatchWithJQ is mocked, so a
+// merge or JSON patch would hit an unmocked method and fail the test; the patch type is
+// not an implementation detail here, see
+// TestCleanupFinalizersRemovesOnlyTheModuleFinalizerAndLeavesForeignOnesInPlace.
 func newInput(t *testing.T, snapshots map[string][]resource, workloads ...*unstructured.Unstructured) (*pkg.HookInput, *[]patchCall) {
 	t.Helper()
 
 	calls := make([]patchCall, 0)
 
 	patchCollector := mock.NewPatchCollectorMock(t)
-	patchCollector.PatchWithMergeMock.Optional().Set(
-		func(patch any, apiVersion, kind, namespace, name string, _ ...pkg.PatchCollectorOption) {
-			calls = append(calls, patchCall{patch, apiVersion, kind, namespace, name})
+	patchCollector.PatchWithJQMock.Optional().Set(
+		func(filter, apiVersion, kind, namespace, name string, _ ...pkg.PatchCollectorOption) {
+			calls = append(calls, patchCall{filter, apiVersion, kind, namespace, name})
 		},
 	)
 
@@ -132,8 +134,58 @@ func fakeDynamicClient(t *testing.T, objects ...*unstructured.Unstructured) dyna
 	return dynamicClient
 }
 
-func nullFinalizersPatch() map[string]any {
-	return map[string]any{"metadata": map[string]any{"finalizers": nil}}
+// applyFilter runs a collected jq filter over an object the way shell-operator does
+// when it executes the patch: the object as stored is fed to the same gojq engine and
+// the result is what would be written back.
+func applyFilter(t *testing.T, filter string, object map[string]any) map[string]any {
+	t.Helper()
+
+	query, err := jq.NewQuery(filter)
+	if err != nil {
+		t.Fatalf("filter %s does not compile: %v", filter, err)
+	}
+
+	result, err := query.FilterObject(context.Background(), object)
+	if err != nil {
+		t.Fatalf("filter %s failed on %v: %v", filter, object, err)
+	}
+
+	filtered := map[string]any{}
+	if err := json.Unmarshal([]byte(result.String()), &filtered); err != nil {
+		t.Fatalf("filter %s produced %s, which is not an object: %v", filter, result, err)
+	}
+
+	return filtered
+}
+
+// objectWithFinalizers is the stored object a collected filter is replayed against.
+func objectWithFinalizers(finalizers ...string) map[string]any {
+	metadata := map[string]any{"name": "object"}
+	if finalizers != nil {
+		list := make([]any, 0, len(finalizers))
+		for _, finalizer := range finalizers {
+			list = append(list, finalizer)
+		}
+
+		metadata["finalizers"] = list
+	}
+
+	return map[string]any{"metadata": metadata}
+}
+
+// finalizersOf reads the member back, telling an empty list from an absent one.
+func finalizersOf(object map[string]any) any {
+	metadata, ok := object["metadata"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	finalizers, present := metadata["finalizers"]
+	if !present {
+		return "absent"
+	}
+
+	return finalizers
 }
 
 func TestCleanupFinalizersStripsFinalizersFromInternalAndPublicKindsOfBothFamilies(t *testing.T) {
@@ -157,7 +209,10 @@ func TestCleanupFinalizersStripsFinalizersFromInternalAndPublicKindsOfBothFamili
 			Namespace:  namespace,
 		}
 		snapshots[watched.snapshot] = []resource{res}
-		want = append(want, patchCall{nullFinalizersPatch(), res.APIVersion, res.Kind, res.Namespace, res.Name})
+		want = append(want, patchCall{
+			removeFinalizerFilter(watched.finalizer),
+			res.APIVersion, res.Kind, res.Namespace, res.Name,
+		})
 	}
 
 	input, calls := newInput(t, snapshots)
@@ -219,56 +274,100 @@ func TestCleanupFinalizersPatchesNamespacedPublicObjectsInTheirOwnNamespace(t *t
 		t.Fatalf("cleanupFinalizer returned an error: %v", err)
 	}
 
-	want := []patchCall{{nullFinalizersPatch(), publicAPIVersion, "HelmApplication", "user-ns", "app"}}
+	want := []patchCall{{removeFinalizerFilter(publicFinalizer), publicAPIVersion, "HelmApplication", "user-ns", "app"}}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Fatalf("patched objects:\n got %+v\nwant %+v", *calls, want)
 	}
 }
 
-// TestCleanupFinalizersNullsFinalizersWithAMergePatch pins the shape of the patch, not
-// its effect: the collector hands patches to the API server after the hook returns, so
-// nothing here can observe an API server rejecting one. What can be checked is that the
-// hook sends an RFC 7396 merge patch nulling metadata.finalizers — which an object that
-// has no finalizers left accepts as a no-op, the property a teardown running the hook
-// twice depends on — and never the RFC 6902 "remove" of /metadata/finalizers, which the
-// API server rejects once that path is gone.
-func TestCleanupFinalizersNullsFinalizersWithAMergePatch(t *testing.T) {
-	snapshots := map[string][]resource{
-		"helmClusterAddonSnapshot": {
-			{APIVersion: publicAPIVersion, Kind: "HelmClusterAddon", Name: "addon"},
+// TestCleanupFinalizersRemovesOnlyTheModuleFinalizerAndLeavesForeignOnesInPlace replays
+// the collected filter against the object it would be applied to. The collector hands
+// patches to the API server only after the hook returns, so nothing here observes the
+// write itself; what the filter does to the stored object is the behaviour that matters.
+// A HelmApplication lives in a user namespace where a backup or policy operator may hold
+// its own finalizer, and the module being torn down says nothing about whether that
+// operator has finished.
+func TestCleanupFinalizersRemovesOnlyTheModuleFinalizerAndLeavesForeignOnesInPlace(t *testing.T) {
+	tests := []struct {
+		name   string
+		stored map[string]any
+		want   any
+	}{
+		{
+			name:   "a foreign finalizer next to ours survives",
+			stored: objectWithFinalizers("backup.example.com/protect", publicFinalizer, "policy.example.com/guard"),
+			want:   []any{"backup.example.com/protect", "policy.example.com/guard"},
 		},
+		{
+			name:   "ours alone leaves an empty list",
+			stored: objectWithFinalizers(publicFinalizer),
+			want:   []any{},
+		},
+		{
+			name:   "an object with no finalizers at all is left untouched",
+			stored: objectWithFinalizers(),
+			want:   "absent",
+		},
+		{
+			name:   "a second run over an already stripped object changes nothing",
+			stored: objectWithFinalizers("backup.example.com/protect"),
+			want:   []any{"backup.example.com/protect"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshots := map[string][]resource{
+				"helmApplicationSnapshot": {
+					{APIVersion: publicAPIVersion, Kind: "HelmApplication", Name: "object", Namespace: "user-ns"},
+				},
+			}
+
+			input, calls := newInput(t, snapshots)
+
+			if err := cleanupFinalizer(context.Background(), input); err != nil {
+				t.Fatalf("cleanupFinalizer returned an error: %v", err)
+			}
+
+			if len(*calls) != 1 {
+				t.Fatalf("expected one patch, got %+v", *calls)
+			}
+
+			got := finalizersOf(applyFilter(t, (*calls)[0].filter, test.stored))
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("finalizers after the patch:\n got %#v\nwant %#v", got, test.want)
+			}
+		})
+	}
+}
+
+// TestCleanupFinalizersStripsTheRewrittenFluxFinalizerFromInternalObjects guards the one
+// string the hook cannot borrow from the api module: the kube-api-rewriter stores flux's
+// finalizers.fluxcd.io under the internal domain, and the hook bypasses the rewriter.
+func TestCleanupFinalizersStripsTheRewrittenFluxFinalizerFromInternalObjects(t *testing.T) {
+	snapshots := map[string][]resource{
+		"internalHelmReleaseSnapshot": {{
+			APIVersion: "helm.internal.operator-helm.deckhouse.io/v2",
+			Kind:       "InternalNelmOperatorHelmRelease",
+			Name:       "object",
+			Namespace:  settings.ModuleNamespace,
+		}},
 	}
 
 	input, calls := newInput(t, snapshots)
-
-	patchCollector, ok := input.PatchCollector.(*mock.PatchCollectorMock)
-	if !ok {
-		t.Fatalf("unexpected patch collector %T", input.PatchCollector)
-	}
-	patchCollector.PatchWithJSONMock.Optional().Set(
-		func(patch any, _, kind, _, name string, _ ...pkg.PatchCollectorOption) {
-			t.Errorf("%s/%s was patched with a JSON patch %v, which fails on an object "+
-				"that has no finalizers left", kind, name, patch)
-		},
-	)
 
 	if err := cleanupFinalizer(context.Background(), input); err != nil {
 		t.Fatalf("cleanupFinalizer returned an error: %v", err)
 	}
 
 	if len(*calls) != 1 {
-		t.Fatalf("expected one merge patch, got %+v", *calls)
+		t.Fatalf("expected one patch, got %+v", *calls)
 	}
 
-	metadata, ok := (*calls)[0].patch.(map[string]any)["metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("the patch must carry a metadata object, got %+v", (*calls)[0].patch)
-	}
-
-	finalizers, present := metadata["finalizers"]
-	if !present || finalizers != nil {
-		t.Fatalf("metadata.finalizers must be present and null, got %#v (present %v)",
-			finalizers, present)
+	stored := objectWithFinalizers("finalizers.internal.operator-helm.deckhouse.io", "backup.example.com/protect")
+	got := finalizersOf(applyFilter(t, (*calls)[0].filter, stored))
+	if want := []any{"backup.example.com/protect"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("finalizers after the patch:\n got %#v\nwant %#v", got, want)
 	}
 }
 

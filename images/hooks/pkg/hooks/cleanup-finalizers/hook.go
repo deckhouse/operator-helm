@@ -33,14 +33,24 @@ import (
 
 // publicAPIVersion carries the module's own kinds. They are guarded by the
 // helm.deckhouse.io/cleanup finalizer, which only our controller ever removes; the
-// internal flux objects listed below instead carry flux's own finalizers, which only
+// internal flux objects listed below instead carry flux's own finalizer, which only
 // the flux controllers ever remove. Once the module is gone neither of those is
-// running, so nothing is left to take either finalizer off and the hook has to. One
-// operation serves both groups: the patch nulls the whole finalizers member, so it
-// does not have to know which finalizer a given object carries.
+// running, so nothing is left to take either finalizer off and the hook has to.
 const publicAPIVersion = "helm.deckhouse.io/v1alpha1"
 
-// watchedKind is one kind the hook strips finalizers from. A kind is either
+const (
+	// publicFinalizer is v1alpha1.FinalizerName; the hooks module does not depend on
+	// the api module, so the string is repeated here.
+	publicFinalizer = "helm.deckhouse.io/cleanup"
+	// internalFinalizer is flux's own finalizers.fluxcd.io under the name it is
+	// actually stored with: the kube-api-rewriter sidecar renames finalizers into the
+	// internal domain on the way to the API server (see the Finalizers rule in
+	// images/kube-api-rewriter/pkg/operatornelm/operatornelm_rules.go). This hook talks
+	// to the API server directly, without the sidecar, so it must use the stored name.
+	internalFinalizer = "finalizers.internal.operator-helm.deckhouse.io"
+)
+
+// watchedKind is one kind the hook strips a finalizer from. A kind is either
 // confined to the module namespace (the internal flux objects, which are always
 // created there) or unconfined: cluster-scoped kinds have no namespace at all and
 // the namespaced public kinds live in arbitrary user namespaces.
@@ -48,6 +58,9 @@ type watchedKind struct {
 	snapshot   string
 	apiVersion string
 	kind       string
+	// finalizer is the one finalizer this module is responsible for on the kind.
+	// Everything else on the object belongs to somebody else and stays.
+	finalizer string
 	// moduleNamespaceOnly narrows the binding to settings.ModuleNamespace.
 	moduleNamespaceOnly bool
 }
@@ -57,31 +70,35 @@ var watchedKinds = []watchedKind{
 		snapshot:            "internalHelmReleaseSnapshot",
 		apiVersion:          "helm.internal.operator-helm.deckhouse.io/v2",
 		kind:                "InternalNelmOperatorHelmRelease",
+		finalizer:           internalFinalizer,
 		moduleNamespaceOnly: true,
 	},
 	{
 		snapshot:            "internalHelmChartSnapshot",
 		apiVersion:          "source.internal.operator-helm.deckhouse.io/v1",
 		kind:                "InternalNelmOperatorHelmChart",
+		finalizer:           internalFinalizer,
 		moduleNamespaceOnly: true,
 	},
 	{
 		snapshot:            "internalHelmRepositorySnapshot",
 		apiVersion:          "source.internal.operator-helm.deckhouse.io/v1",
 		kind:                "InternalNelmOperatorHelmRepository",
+		finalizer:           internalFinalizer,
 		moduleNamespaceOnly: true,
 	},
 	{
 		snapshot:            "internalOCIRepositorySnapshot",
 		apiVersion:          "source.internal.operator-helm.deckhouse.io/v1",
 		kind:                "InternalNelmOperatorOCIRepository",
+		finalizer:           internalFinalizer,
 		moduleNamespaceOnly: true,
 	},
-	{snapshot: "helmApplicationSnapshot", apiVersion: publicAPIVersion, kind: "HelmApplication"},
-	{snapshot: "helmApplicationRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmApplicationRepository"},
-	{snapshot: "helmClusterAddonSnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterAddon"},
-	{snapshot: "helmClusterAddonRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterAddonRepository"},
-	{snapshot: "helmClusterApplicationRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterApplicationRepository"},
+	{snapshot: "helmApplicationSnapshot", apiVersion: publicAPIVersion, kind: "HelmApplication", finalizer: publicFinalizer},
+	{snapshot: "helmApplicationRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmApplicationRepository", finalizer: publicFinalizer},
+	{snapshot: "helmClusterAddonSnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterAddon", finalizer: publicFinalizer},
+	{snapshot: "helmClusterAddonRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterAddonRepository", finalizer: publicFinalizer},
+	{snapshot: "helmClusterApplicationRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterApplicationRepository", finalizer: publicFinalizer},
 }
 
 // resource is the snapshot projection: enough to address the object in a patch.
@@ -143,15 +160,21 @@ func cleanupFinalizer(ctx context.Context, input *pkg.HookInput) error {
 		return fmt.Errorf("namespace %s still has running deployments or pods, retrying before removing finalizers", settings.ModuleNamespace)
 	}
 
-	// A merge patch (RFC 7396) that nulls the member removes every finalizer and stays
-	// a no-op on an object that has none. A JSON patch "remove" of /metadata/finalizers
-	// would instead fail on such an object, and WithIgnoreMissingObject only forgives a
-	// missing object, not a missing path. The hook may well run twice — a teardown can be
-	// retried after a transient failure, and the first pass leaves objects it patched but
-	// could not observe being deleted — so it has to survive a repeat.
-	removeFinalizers := func(res resource) {
-		input.PatchCollector.PatchWithMerge(
-			map[string]any{"metadata": map[string]any{"finalizers": nil}},
+	// Only the module's own finalizer may go: the public kinds live in user namespaces
+	// and may well carry a backup or policy operator's finalizer, and our Deployments
+	// being stopped says nothing about whether that operator is done. A merge patch
+	// (RFC 7396) cannot express "drop one element", it can only null the whole member,
+	// and a JSON patch "remove" of an index needs one — racy — and fails outright on an
+	// object that has no finalizers left, while WithIgnoreMissingObject forgives only a
+	// missing object, not a missing path. The jq filter is read-modify-write under an
+	// optimistic lock: shell-operator gets the object, applies the filter, skips the
+	// write when nothing changed and retries the whole cycle on conflict. That keeps the
+	// operation idempotent — the hook may well run twice, a teardown can be retried after
+	// a transient failure, and the first pass leaves objects it patched but could not
+	// observe being deleted — and safe against a concurrent edit of the same list.
+	removeFinalizer := func(res resource, finalizer string) {
+		input.PatchCollector.PatchWithJQ(
+			removeFinalizerFilter(finalizer),
 			res.APIVersion,
 			res.Kind,
 			res.Namespace,
@@ -167,9 +190,16 @@ func cleanupFinalizer(ctx context.Context, input *pkg.HookInput) error {
 		}
 
 		for _, res := range resources {
-			removeFinalizers(res)
+			removeFinalizer(res, watched.finalizer)
 		}
 	}
 
 	return nil
+}
+
+// removeFinalizerFilter builds the jq program dropping one finalizer. The guard keeps
+// an object that never had finalizers untouched: mapping over an absent member is an
+// error in jq, and writing an empty list back would be a pointless update.
+func removeFinalizerFilter(finalizer string) string {
+	return fmt.Sprintf(`if .metadata.finalizers then .metadata.finalizers -= [%q] else . end`, finalizer)
 }
