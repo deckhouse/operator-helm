@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
@@ -64,10 +65,11 @@ func TestSecretsEnsureCreatesAuthAndTLS(t *testing.T) {
 	if err := c.Get(context.Background(), authKey, auth); err != nil {
 		t.Fatalf("auth secret was not created: %v", err)
 	}
-	// The fake client stores what the controller wrote: unlike the API server it
-	// does not fold StringData into Data.
-	if got := auth.StringData["username"]; got != "user" {
+	if got := string(auth.Data["username"]); got != "user" {
 		t.Fatalf("auth secret username is %q, want %q", got, "user")
+	}
+	if got := string(auth.Data["password"]); got != "secret" {
+		t.Fatalf("auth secret password is %q, want %q", got, "secret")
 	}
 
 	tls := &corev1.Secret{}
@@ -128,11 +130,11 @@ func TestSecretsEnsureUsesDockerConfigForOCIRepositories(t *testing.T) {
 		t.Fatalf("auth secret type is %q, want %q", auth.Type, corev1.SecretTypeDockerConfigJson)
 	}
 
-	config, found := auth.StringData[corev1.DockerConfigJsonKey]
+	config, found := auth.Data[corev1.DockerConfigJsonKey]
 	if !found {
-		t.Fatalf("auth secret has no %q key, got keys %v", corev1.DockerConfigJsonKey, auth.StringData)
+		t.Fatalf("auth secret has no %q key, got keys %v", corev1.DockerConfigJsonKey, auth.Data)
 	}
-	if !strings.Contains(config, "ghcr.io") {
+	if !strings.Contains(string(config), "ghcr.io") {
 		t.Fatalf("docker config does not mention the registry host: %s", config)
 	}
 }
@@ -164,4 +166,104 @@ func TestSecretsCleanupRemovesBothSecrets(t *testing.T) {
 			t.Fatalf("secret %s must be deleted, got %v", name, err)
 		}
 	}
+}
+
+// TestSecretsEnsureIsSilentOnASecondPassWithTheSameInputs pins that a repository
+// whose credentials have not changed costs no write at all. The secrets are written
+// through CreateOrPatch, which compares the object it read against what the mutation
+// left: writing the credentials into StringData made that comparison always differ,
+// because the API server folds StringData into Data and never returns it, so every
+// reconcile of every repository with credentials sent a patch. The pass that stores
+// Data is the only one that can come back equal.
+func TestSecretsEnsureIsSilentOnASecondPassWithTheSameInputs(t *testing.T) {
+	cases := []struct {
+		name     string
+		url      string
+		repoType chartsource.Kind
+	}{
+		{name: "helm repository with basic auth", url: "https://example.invalid/charts", repoType: chartsource.Helm},
+		{name: "oci repository with a docker config", url: "oci://ghcr.io/example/podinfo", repoType: chartsource.OCI},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &helmv1alpha1.HelmClusterAddonRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "example"},
+				Spec: helmv1alpha1.RepositorySpec{
+					URL:           tc.url,
+					Auth:          &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"},
+					CACertificate: "-----BEGIN CERTIFICATE-----",
+				},
+			}
+
+			var writes []string
+			c := fake.NewClientBuilder().
+				WithScheme(testScheme(t)).
+				WithObjects(repo).
+				WithInterceptorFuncs(interceptor.Funcs{
+					// The fake client stores what it is given; the API server folds
+					// StringData into Data and hands back Data alone. Without that
+					// fold the write below could never be seen as redundant, and the
+					// test would pass over the very bug it is about.
+					Create: func(
+						ctx context.Context, wc client.WithWatch, obj client.Object,
+						opts ...client.CreateOption,
+					) error {
+						if secret, ok := obj.(*corev1.Secret); ok {
+							foldStringDataIntoData(secret)
+						}
+
+						return wc.Create(ctx, obj, opts...)
+					},
+					Patch: func(
+						ctx context.Context, wc client.WithWatch, obj client.Object,
+						patch client.Patch, opts ...client.PatchOption,
+					) error {
+						writes = append(writes, "patch "+obj.GetName())
+
+						return wc.Patch(ctx, obj, patch, opts...)
+					},
+					Update: func(
+						ctx context.Context, wc client.WithWatch, obj client.Object, opts ...client.UpdateOption,
+					) error {
+						writes = append(writes, "update "+obj.GetName())
+
+						return wc.Update(ctx, obj, opts...)
+					},
+				}).
+				Build()
+
+			service := NewSecrets(c, testNamespace)
+
+			if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), tc.repoType); err != nil {
+				t.Fatalf("the first Ensure returned %v", err)
+			}
+
+			// Only the second pass is under test: the first one creates the secrets,
+			// and a create is not counted here.
+			writes = nil
+
+			if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), tc.repoType); err != nil {
+				t.Fatalf("the second Ensure returned %v", err)
+			}
+
+			if len(writes) > 0 {
+				t.Fatalf("an unchanged repository must write nothing, got %v", writes)
+			}
+		})
+	}
+}
+
+// foldStringDataIntoData reproduces what the API server does to a secret on write:
+// every StringData entry is stored in Data and StringData is dropped, so a later
+// read never sees it.
+func foldStringDataIntoData(secret *corev1.Secret) {
+	for key, value := range secret.StringData {
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+		secret.Data[key] = []byte(value)
+	}
+
+	secret.StringData = nil
 }

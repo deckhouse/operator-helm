@@ -86,10 +86,10 @@ func (s *Secrets) Ensure(
 // auth.
 func (s *Secrets) reconcileBasicAuthSecret(ctx context.Context, repo contract.Repository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeOpaque,
-		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
-			return map[string]string{
-				"username": auth.Username,
-				"password": auth.Password,
+		func(auth *helmv1alpha1.RepositoryAuth) (map[string][]byte, error) {
+			return map[string][]byte{
+				"username": []byte(auth.Username),
+				"password": []byte(auth.Password),
 			}, nil
 		},
 	)
@@ -100,13 +100,13 @@ func (s *Secrets) reconcileBasicAuthSecret(ctx context.Context, repo contract.Re
 // its spec.secretRef.
 func (s *Secrets) reconcileDockerConfigAuthSecret(ctx context.Context, repo contract.Repository) error {
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeDockerConfigJson,
-		func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error) {
+		func(auth *helmv1alpha1.RepositoryAuth) (map[string][]byte, error) {
 			config, err := utils.BuildDockerConfigJSON(repo.URL(), auth.Username, auth.Password)
 			if err != nil {
 				return nil, fmt.Errorf("building docker config: %w", err)
 			}
 
-			return map[string]string{corev1.DockerConfigJsonKey: config}, nil
+			return map[string][]byte{corev1.DockerConfigJsonKey: []byte(config)}, nil
 		},
 	)
 }
@@ -115,7 +115,7 @@ func (s *Secrets) reconcileAuthSecret(
 	ctx context.Context,
 	repo contract.Repository,
 	secretType corev1.SecretType,
-	buildData func(auth *helmv1alpha1.RepositoryAuth) (map[string]string, error),
+	buildData func(auth *helmv1alpha1.RepositoryAuth) (map[string][]byte, error),
 ) error {
 	secretName := repo.InternalNames().AuthSecret
 	nn := types.NamespacedName{Name: secretName, Namespace: s.targetNamespace}
@@ -127,7 +127,11 @@ func (s *Secrets) reconcileAuthSecret(
 		return nil
 	}
 
-	stringData, err := buildData(repo.Auth())
+	// The data is built in its stored form rather than as StringData: the API server
+	// folds StringData into Data and never gives it back, so a mutation writing it
+	// would differ from what was read on every pass and send a patch on every
+	// reconcile of every repository with credentials.
+	data, err := buildData(repo.Auth())
 	if err != nil {
 		return fmt.Errorf("building auth secret data: %w", err)
 	}
@@ -145,8 +149,8 @@ func (s *Secrets) reconcileAuthSecret(
 			Namespace: s.targetNamespace,
 			Labels:    labels,
 		},
-		Type:       secretType,
-		StringData: stringData,
+		Type: secretType,
+		Data: data,
 	}
 
 	if staleRemoved {
@@ -163,10 +167,9 @@ func (s *Secrets) reconcileAuthSecret(
 	if _, err := controllerutil.CreateOrPatch(ctx, s.client, authSecret, func() error {
 		authSecret.Labels = labels
 		authSecret.Type = secretType
-		// Drop the keys already stored so that credentials removed from the desired
+		// Assigned rather than merged, so that credentials removed from the desired
 		// data do not linger in the secret.
-		authSecret.Data = nil
-		authSecret.StringData = stringData
+		authSecret.Data = data
 
 		return nil
 	}); err != nil {
@@ -233,8 +236,10 @@ func (s *Secrets) reconcileTLSSecret(ctx context.Context, repo contract.Reposito
 	if _, err := controllerutil.CreateOrPatch(ctx, s.client, tlsSecret, func() error {
 		tlsSecret.Labels = repo.SourceLabels()
 
-		tlsSecret.StringData = map[string]string{
-			"ca.crt": repo.CACertificate(),
+		// Data, not StringData, for the reason given in reconcileAuthSecret: only Data
+		// comes back from a read, so only Data can compare equal to what is stored.
+		tlsSecret.Data = map[string][]byte{
+			"ca.crt": []byte(repo.CACertificate()),
 		}
 
 		return nil
