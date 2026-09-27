@@ -70,4 +70,14 @@ type ChartVersion struct {
 	// UnavailableMessage carries human readable detail for UnavailableReason.
 	// +optional
 	UnavailableMessage string `json:"unavailableMessage,omitempty"`
+	// ReexaminationRequired says the verdict recorded for this version is stale and
+	// must be established again against the repository. A forced refresh sets it on
+	// every recorded version it did not reach before its budget expired, because a
+	// force is the only thing that re-examines a version whose media type is already
+	// recorded - a tag that was re-pushed with different content is invisible to an
+	// ordinary pass. The following passes examine the flagged versions and clear it,
+	// so the refresh finishes across as many passes as it needs while the entries
+	// themselves stay readable and deployable.
+	// +optional
+	ReexaminationRequired bool `json:"reexaminationRequired,omitempty"`
 }
