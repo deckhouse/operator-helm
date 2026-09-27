@@ -859,4 +859,23 @@ func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 	if !opts.NeedsExamination("podinfo", "6.7.1") {
 		t.Fatal("a version left pending by a failed probe must be examined again on the next pass")
 	}
+
+	// Being examined again is only half of it: the pass that reaches the registry has
+	// to leave nothing of the failure behind, or the repository would keep counting a
+	// pending version and never report a successful sync.
+	if _, err := cat.Reconcile(context.Background(), repo, []repoclient.Chart{resolved}); err != nil {
+		t.Fatalf("the recovering pass returned %v", err)
+	}
+
+	recovered := &helmv1alpha1.HelmApplicationChart{}
+	if err := c.Get(context.Background(), key, recovered); err != nil {
+		t.Fatalf("reading the catalog object after recovery: %v", err)
+	}
+	if len(recovered.Status.Versions) != 1 {
+		t.Fatalf("versions after recovery = %+v, want exactly one", recovered.Status.Versions)
+	}
+	if got := recovered.Status.Versions[0]; got.MediaType != mediaType ||
+		got.UnavailableReason != "" || got.UnavailableMessage != "" {
+		t.Fatalf("recovered version = %+v, want the media type alone with nothing of the failure left", got)
+	}
 }
