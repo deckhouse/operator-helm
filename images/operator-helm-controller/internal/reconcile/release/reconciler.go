@@ -594,15 +594,11 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 	// earlier would let another release start reconciling the same chart while this
 	// one's HelmRelease is still being uninstalled — exactly the collision the claim
 	// prevents.
-	if err := r.deps.Claims.Drop(ctx, rel); err != nil {
-		return reconcile.Result{}, fmt.Errorf("releasing chart claim: %w", err)
-	}
-
-	// And the pairs it stopped naming but never got to release: a release deleted
-	// after a chart change, before a pass reached the release above, still holds
-	// them, and after this object is gone nobody is left who may.
-	if err := r.deps.Claims.DropStale(ctx, rel); err != nil {
-		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
+	// Every pair, not only the one the spec names: a release deleted after a chart
+	// change still holds the one it moved off, and once this object is gone nobody
+	// is left who may release it.
+	if err := r.deps.Claims.DropAll(ctx, rel); err != nil {
+		return reconcile.Result{}, fmt.Errorf("releasing chart claims: %w", err)
 	}
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {

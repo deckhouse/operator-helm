@@ -50,10 +50,14 @@ type Claims interface {
 	// not, holder names the release that does.
 	Acquire(ctx context.Context, rel contract.Release) (acquired bool, holder string, err error)
 	// DropStale frees claims this release still holds on pairs it no longer
-	// references.
+	// references and is no longer running.
 	DropStale(ctx context.Context, rel contract.Release) error
 	// Drop frees the claim on the release's current pair.
 	Drop(ctx context.Context, rel contract.Release) error
+	// DropAll frees every claim this release holds. It is for teardown, where
+	// nothing of the release is deployed any more and no later pass of anybody's
+	// would be allowed to free what it left behind.
+	DropAll(ctx context.Context, rel contract.Release) error
 }
 
 // Namespaces makes sure the namespace a release deploys into exists, and answers
@@ -133,6 +137,8 @@ func (NoClaims) Acquire(_ context.Context, rel contract.Release) (bool, string, 
 func (NoClaims) DropStale(context.Context, contract.Release) error { return nil }
 
 func (NoClaims) Drop(context.Context, contract.Release) error { return nil }
+
+func (NoClaims) DropAll(context.Context, contract.Release) error { return nil }
 
 // NoIdentity is the Identity of a family that does not impersonate.
 type NoIdentity struct{}

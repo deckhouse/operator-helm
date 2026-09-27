@@ -497,3 +497,66 @@ func TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway(t *testing.T) {
 		t.Fatalf("holder on the lease = %q, want it untouched", got)
 	}
 }
+
+// TestDropStaleKeepsThePairTheReleaseIsStillRunning pins the one pair a release may
+// not give up on a spec change: the one its chart is installed under. Until the
+// release actually moves — which the pass that applies the new chart records —
+// handing that pair to another addon would have two releases deploying one chart
+// into one namespace, which is what the claim exists to prevent.
+func TestDropStaleKeepsThePairTheReleaseIsStillRunning(t *testing.T) {
+	addon := claimingAddon("first", "nginx")
+	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+		HelmClusterAddonRepository: claimRepo,
+		HelmClusterAddonChartName:  "podinfo",
+		Version:                    "6.7.1",
+	}
+
+	deployed := claimFor(claimRepo, "podinfo", "first", "first")
+	forgotten := claimFor(claimRepo, "redis", "first", "first")
+	claims, c := newClaims(t, addon, deployed, forgotten)
+
+	if err := claims.DropStale(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("DropStale returned %v", err)
+	}
+
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(deployed), &coordinationv1.Lease{}); err != nil {
+		t.Fatalf("the claim of the chart still deployed was released: %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(forgotten), &coordinationv1.Lease{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("a pair neither named nor deployed survived: %v", err)
+	}
+}
+
+// TestDropAllReleasesEverythingIncludingTheRunningPair is the teardown counterpart:
+// by then nothing of the release is deployed, so the pair DropStale protects has
+// nothing left to protect, and no later pass of anybody's would be allowed to free
+// what this release left behind.
+func TestDropAllReleasesEverythingIncludingTheRunningPair(t *testing.T) {
+	addon := claimingAddon("first", "nginx")
+	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
+		HelmClusterAddonRepository: claimRepo,
+		HelmClusterAddonChartName:  "podinfo",
+		Version:                    "6.7.1",
+	}
+
+	held := []*coordinationv1.Lease{
+		claimFor(claimRepo, "podinfo", "first", "first"),
+		claimFor(claimRepo, "nginx", "first", "first"),
+	}
+	somebodyElses := claimFor(claimRepo, "redis", "second", "first")
+
+	claims, c := newClaims(t, addon, held[0], held[1], somebodyElses)
+
+	if err := claims.DropAll(context.Background(), adapter.NewAddonRelease(addon)); err != nil {
+		t.Fatalf("DropAll returned %v", err)
+	}
+
+	for _, lease := range held {
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(lease), &coordinationv1.Lease{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("claim %q outlived the release that held it: %v", lease.Name, err)
+		}
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(somebodyElses), &coordinationv1.Lease{}); err != nil {
+		t.Fatalf("a claim labelled ours but held by another release was taken away: %v", err)
+	}
+}

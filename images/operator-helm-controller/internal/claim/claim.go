@@ -162,7 +162,39 @@ func (s *Claims) Drop(ctx context.Context, rel contract.Release) error {
 // Only the addon's own claims (by HolderIdentity) other than the current one are
 // removed, so a pair taken over by another addon is left intact.
 func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
-	current := s.leaseKey(rel).Name
+	// The pair the cluster is actually running is not stale, whatever the spec now
+	// says. Until the release moves off it, its chart is installed under this
+	// release's name, and handing the pair to somebody else would have two releases
+	// deploying one chart into one namespace — the collision the claim exists to
+	// prevent. The move itself clears this: the pass that applies the new chart
+	// records it, and the next one lets the old pair go.
+	deployed := ""
+	if last := rel.LastAppliedChart(); last != nil {
+		deployed = utils.GetChartClaimLeaseName(last.Repository.Name, last.Chart)
+	}
+
+	return s.dropOwned(ctx, rel, s.leaseKey(rel).Name, deployed)
+}
+
+// DropAll releases every claim this release holds, the pair it names included. It
+// is the teardown counterpart of DropStale: nothing of this release is deployed any
+// more by the time it runs, so there is no pair left to protect, and no later pass
+// of anybody's would be allowed to free what it left behind.
+func (s *Claims) DropAll(ctx context.Context, rel contract.Release) error {
+	return s.dropOwned(ctx, rel, "", "")
+}
+
+// dropOwned deletes the claim Leases this release holds, except those named by keep.
+func (s *Claims) dropOwned(ctx context.Context, rel contract.Release, keep ...string) error {
+	kept := func(name string) bool {
+		for _, k := range keep {
+			if k != "" && k == name {
+				return true
+			}
+		}
+
+		return false
+	}
 
 	// Direct reader, not the cached client: claim Leases are not watched, so the
 	// informer cache has no data for them (same reason Acquire/Release use reader).
@@ -176,7 +208,7 @@ func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
 
 	for i := range leases.Items {
 		lease := &leases.Items[i]
-		if lease.Name == current || leaseHolder(lease) != rel.Name() {
+		if kept(lease.Name) || leaseHolder(lease) != rel.Name() {
 			continue
 		}
 
