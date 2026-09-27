@@ -128,7 +128,7 @@ func TestDerivedName(t *testing.T) {
 			want:      "hapr-abcdefghijklmnopq-stable-1846a7b21e01",
 		},
 		{
-			// Twin of the case of the same name in
+			// Twin of "long parts are truncated to 18 characters each" in
 			// TestApplicationServiceAccountName
 			// (tests/e2e/internal/naming/naming_test.go). The shape is covered
 			// above for a repository, but the pair that must break together is
@@ -143,7 +143,7 @@ func TestDerivedName(t *testing.T) {
 			want:      "hap-very-long-namespac-very-long-applicat-35f137b7281e",
 		},
 		{
-			// Twin of the case of the same name in
+			// Twin of "a truncation that ends in a dash drops it" in
 			// TestApplicationServiceAccountName
 			// (tests/e2e/internal/naming/naming_test.go).
 			name:      "an application truncation that ends in a dash drops it",

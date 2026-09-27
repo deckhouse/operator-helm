@@ -131,6 +131,16 @@ func TestApplicationRepositoryInternalName(t *testing.T) {
 			object:    "stable",
 			want:      "hapr-team-a-stable-42df68033b1e",
 		},
+		{
+			// Twin of TestDerivedName's "long parts are truncated to 18 characters
+			// each" case: the repository side is derived from the same inputs as
+			// the account side, and only a fixture whose parts are cut shows that
+			// both implementations cut them in the same place.
+			name:      "long parts are truncated to 18 characters each",
+			namespace: "very-long-namespace-name-exceeding",
+			object:    "very-long-repository-name-exceeding",
+			want:      "hapr-very-long-namespac-very-long-reposito-355aadb4a138",
+		},
 	}
 
 	for _, tc := range cases {
