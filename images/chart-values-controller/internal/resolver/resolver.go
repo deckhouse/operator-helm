@@ -413,14 +413,19 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 		// again until the entry expires. So what the source object publishes is read
 		// once more and a revision that moved means the values are served without being
 		// kept.
-		if !r.stillCurrent(ctx, name, current, art.Digest) {
-			return values, nil
-		}
-
-		if err := r.cache.Put(name, art.Digest, values); err != nil {
-			if errors.Is(err, cache.ErrBudgetExhausted) {
+		//
+		// The read is the cache's last word before the rename rather than a check
+		// ahead of the write: the temp file is written outside the cache's lock, so
+		// asking here would leave exactly the same overtaking possible, only narrower.
+		if err := r.cache.PutUnless(name, art.Digest, values, func() bool {
+			return r.stillCurrent(ctx, name, current, art.Digest)
+		}); err != nil {
+			switch {
+			case errors.Is(err, cache.ErrBudgetExhausted):
 				log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
-			} else {
+			case errors.Is(err, cache.ErrSuperseded):
+				// stillCurrent has already said which way it went.
+			default:
 				log.FromContext(ctx).Error(err, "failed to cache values.yaml")
 			}
 		}

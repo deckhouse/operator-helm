@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // testBudget is far above anything the round-trip tests store, so only the tests
@@ -636,5 +637,54 @@ func TestAnEntryFileThatSaysNothingUsableReadsAsUnknownRatherThanAsAnotherRevisi
 				t.Fatalf("get = (%q, %v), want (%q, true)", got, ok, tt.wantValues)
 			}
 		})
+	}
+}
+
+// TestPutUnlessAsksTheGuardWithTheRenameAlreadyHeld pins the property the resolver
+// depends on: a writer that was overtaken while it produced its content must be
+// able to find that out with no room left for another writer to slip in. Checking
+// before calling Put cannot give that — the temp file is written outside the lock —
+// so the guard has to run under the lock the rename happens beneath.
+func TestPutUnlessAsksTheGuardWithTheRenameAlreadyHeld(t *testing.T) {
+	dir := t.TempDir()
+	c := New(dir, 1<<20)
+
+	const key = "chart"
+
+	// A competing writer publishes the newer revision while the guard is running.
+	// It has to block, which is the whole point: if it did not, the guard's answer
+	// would be about a state that no longer holds by the time the rename lands.
+	published := make(chan error, 1)
+	guarded := c.PutUnless(key, "old", []byte("old values\n"), func() bool {
+		go func() { published <- c.Put(key, "new", []byte("new values\n")) }()
+
+		select {
+		case err := <-published:
+			t.Errorf("the competing Put completed while the guard held the lock: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		return false
+	})
+
+	if !errors.Is(guarded, ErrSuperseded) {
+		t.Fatalf("PutUnless returned %v, want ErrSuperseded", guarded)
+	}
+	if err := <-published; err != nil {
+		t.Fatalf("the competing Put failed once the lock was free: %v", err)
+	}
+
+	entry, ok := c.GetEntry(key)
+	if !ok {
+		t.Fatal("the key holds nothing, want the newer revision")
+	}
+	if entry.Digest != "new" || string(entry.Values) != "new values\n" {
+		t.Fatalf("entry is %+v, want the newer revision", entry)
+	}
+
+	// A refused entry must cost nothing lasting: its claim is given back, so a key
+	// of this size still fits afterwards.
+	if err := c.Put("other", "d", make([]byte, 1<<18)); err != nil {
+		t.Fatalf("the budget did not survive a refused entry: %v", err)
 	}
 }

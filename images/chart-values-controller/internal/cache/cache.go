@@ -281,6 +281,26 @@ func (c *Cache) release(claim int64) {
 // already holds the values it was going to cache, so nothing but the next
 // request's latency is lost.
 func (c *Cache) Put(key, digest string, content []byte) error {
+	return c.PutUnless(key, digest, content, nil)
+}
+
+// ErrSuperseded is returned by PutUnless when the guard refused the entry between
+// the temp file and the rename. Nothing was written and the budget is untouched.
+var ErrSuperseded = errors.New("cache entry superseded")
+
+// PutUnless is Put with a last word on whether the entry still deserves to be
+// published, asked under the lock the rename happens beneath.
+//
+// A writer that spent time producing its content — a download — can have been
+// overtaken while it wrote: another writer with a newer revision may already have
+// published under this key, and renaming now would put the older one back. Checking
+// before calling only narrows that window, because the temp file is written outside
+// the lock; the guard runs with the lock held, so between its answer and the rename
+// no other writer of this cache can intervene.
+//
+// The guard must not touch this cache, and should be a read of something already in
+// memory: it runs with every other writer of every key waiting on it.
+func (c *Cache) PutUnless(key, digest string, content []byte, guard func() bool) error {
 	// The header is part of what the volume holds, so the budget is charged for the
 	// bytes that are actually written, not for the values alone.
 	stored := encodeEntry(digest, content)
@@ -330,6 +350,10 @@ func (c *Cache) Put(key, digest string, content []byte) error {
 	// the pod restarts. Writing the temp file, which is the slow part, stays outside.
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if guard != nil && !guard() {
+		return fmt.Errorf("caching %s: %w", key, ErrSuperseded)
+	}
 
 	if err := os.Rename(tmpName, c.path(key)); err != nil {
 		return fmt.Errorf("committing cache entry: %w", err)
