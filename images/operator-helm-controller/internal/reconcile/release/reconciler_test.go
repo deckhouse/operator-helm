@@ -325,6 +325,7 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 		synced       bool
 		staleSync    bool
 		failedResync bool
+		incomplete   bool
 		wantReason   string
 		wantBadInput bool
 		// wantRetried is whether the failure goes to the work queue. The three cases
@@ -390,6 +391,34 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			name:           "a catalog from before a spec change is not the repository's answer",
 			noCatalog:      true,
 			staleSync:      true,
+			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:   false,
+			wantRetried:    false,
+			wantRetryAfter: awaitSyncInterval,
+		},
+		{
+			// A pass that ran out of its budget published the verdicts it reached and
+			// said how many versions it never examined. The catalog belongs to the
+			// current spec — lastSyncedGeneration was released by an earlier, complete
+			// pass — and is still missing versions the repository offers, which is
+			// what makes the absence of this one no answer at all.
+			name:           "a version absent from an incomplete catalog is not the repository's answer",
+			versions:       []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
+			synced:         true,
+			incomplete:     true,
+			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:   false,
+			wantRetried:    false,
+			wantRetryAfter: awaitSyncInterval,
+		},
+		{
+			// The same for a catalog object that holds no version yet: with versions
+			// left unexamined it is not the durable emptiness of a chart the
+			// repository offers nothing usable for.
+			name:           "an empty catalog of an incomplete read is not durable",
+			versions:       nil,
+			synced:         true,
+			incomplete:     true,
 			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
 			wantBadInput:   false,
 			wantRetried:    false,
@@ -474,6 +503,12 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 				repo = syncedRepositoryFixture()
 				repo.Generation++
 				repo.Status.ObservedGeneration = repo.Generation
+			}
+			if tt.incomplete {
+				// The repository read itself, published what it examined and recorded
+				// how much it left: the count is the catalog's own report that it does
+				// not list everything the repository offers.
+				repo.Status.UnexaminedVersions = 400
 			}
 			if tt.failedResync {
 				// A published catalog whose repository's latest pass failed: the

@@ -794,6 +794,11 @@ func (r *Reconciler) getChartVersion(
 	// some earlier spec, or nothing at all, and neither an absence nor a listing in
 	// it answers about the repository the release points at now.
 	synced := catalogIsCurrent(repo)
+	// Whether that answer is the whole answer is a second question. A pass that ran out
+	// of its budget publishes the verdicts it reached and reports the rest as
+	// unexamined, so the catalog can belong to the current spec and still be missing
+	// versions the repository offers — versions nobody has looked at yet.
+	complete := catalogIsComplete(repo)
 
 	obj, catalogStatus, err := catalog.Lookup(ctx, repo, ref.Chart)
 	if err != nil {
@@ -885,6 +890,12 @@ func (r *Reconciler) getChartVersion(
 			return nil, nil, fmt.Errorf("chart catalog has no versions yet: %w", errCatalogAwaited)
 		}
 
+		if !complete {
+			return nil, nil, fmt.Errorf(
+				"chart catalog is incomplete and lists no version yet: %w", errCatalogAwaited,
+			)
+		}
+
 		// After a sync an empty catalog is durable, not transient: a chart whose every
 		// entry the index marks removed, or publishes under a version this operator
 		// cannot address, is recorded with no versions and stays that way until the
@@ -893,6 +904,17 @@ func (r *Reconciler) getChartVersion(
 		return nil, nil, fmt.Errorf(
 			"chart %q in repository %q has no usable versions: %w",
 			ref.Chart, repo.Name(), errChartVersionNotFound,
+		)
+	}
+
+	if !complete {
+		// The version is absent from a catalog the repository itself says is missing
+		// versions it offers. Reporting a fault of the spec would be a guess about a
+		// version nobody has examined; the pass that examines it is already scheduled,
+		// and its catalog write brings the release back.
+		return nil, nil, fmt.Errorf(
+			"chart catalog does not have version %q and is incomplete: %w",
+			ref.Version, errCatalogAwaited,
 		)
 	}
 
@@ -931,6 +953,25 @@ var errChartNotFound = errors.New("chart not found")
 // release on this repository back to waiting.
 func catalogIsCurrent(repo contract.Repository) bool {
 	return repo.Status().LastSyncedGeneration == repo.Generation()
+}
+
+// catalogIsComplete reports whether the published catalog lists every version the
+// repository offers.
+//
+// It is a different question from catalogIsCurrent, and the one lastSyncedGeneration
+// cannot answer: that field is held back only until a generation has synced in full,
+// so an incomplete pass over a generation that already synced leaves it equal to the
+// generation while the catalog is missing versions again — new tags appear in a
+// registry without any edit to the spec. The absence of such a version is not a fault
+// of the release's spec, and must not be reported as one.
+//
+// Only an unexamined version makes the catalog incomplete. Every other way a pass can
+// fall short leaves the version listed — a tag the registry would not answer about is
+// recorded as pending and handled above — or is the repository's final answer, and a
+// failed pass over a complete catalog changes nothing about what is published, which
+// is exactly why the Synced condition cannot stand in for this field.
+func catalogIsComplete(repo contract.Repository) bool {
+	return repo.Status().UnexaminedVersions == 0
 }
 
 // hasVersion reports whether the catalog lists a version under that exact name.

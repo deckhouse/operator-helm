@@ -85,6 +85,21 @@ type RepositoryStatus struct {
 	// repository has already answered about the chart they name.
 	// +optional
 	LastSyncedGeneration int64 `json:"lastSyncedGeneration,omitempty"`
+	// UnexaminedVersions is how many chart versions the repository offers that the
+	// catalog published now says nothing about, because the pass that wrote it ran out
+	// of its own budget before examining them. Zero means the catalog lists every
+	// version the repository offers; a positive value means a version can be missing
+	// from the catalog without the repository having decided anything about it, so a
+	// release asking for one waits for the pass that finds out instead of being told
+	// the repository does not offer it.
+	//
+	// It is a status field rather than a reading of the Synced condition for the same
+	// reason as lastSyncedGeneration: a condition is the verdict of the latest pass,
+	// so a transient read failure over an incomplete catalog would turn it into a
+	// verdict about something else, while this describes the catalog in front of a
+	// reader and is rewritten only by a pass that published one.
+	// +optional
+	UnexaminedVersions int32 `json:"unexaminedVersions,omitempty"`
 	// NextSyncTime is the scheduled time of the next synchronization attempt.
 	// +optional
 	NextSyncTime *metav1.Time `json:"nextSyncTime,omitempty"`

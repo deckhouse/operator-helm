@@ -1396,3 +1396,80 @@ func TestEvaluateSchedulesFromNowWhenNoAttemptRan(t *testing.T) {
 			got, next.Sub(testNow))
 	}
 }
+
+// TestEvaluateReportsAnIncompleteCatalogAfterAGenerationSynced pins the signal a
+// release reads. lastSyncedGeneration protects only the first sync of a generation:
+// once one has synced completely, new tags appear in the registry without any edit to
+// the spec, so a later incomplete pass leaves lastSyncedGeneration equal to the
+// generation and the catalog looks like the repository's full answer while it is
+// missing versions nobody examined. A release asking for one of those would be told
+// the repository does not offer it — a fault of its own spec — instead of waiting for
+// the pass that finds out, which is exactly the case that field is held back for.
+func TestEvaluateReportsAnIncompleteCatalogAfterAGenerationSynced(t *testing.T) {
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        testNow,
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{Charts: 1, Unexamined: 400},
+		Catalog:    &reposync.CatalogOutcome{},
+		Current: helmv1alpha1.RepositoryStatus{
+			ObservedGeneration:   1,
+			LastSyncedGeneration: 1,
+		},
+	})
+
+	if decision.Status.LastSyncedGeneration != 1 {
+		t.Fatalf("lastSyncedGeneration = %d, want it left at 1: this is the case it cannot report",
+			decision.Status.LastSyncedGeneration)
+	}
+	if decision.Status.UnexaminedVersions != 400 {
+		t.Fatalf("unexaminedVersions = %d, want 400: the catalog does not list everything the repository offers",
+			decision.Status.UnexaminedVersions)
+	}
+}
+
+// TestEvaluateClearsTheIncompleteCatalogOnceAPassCoversTheRepository is the other
+// half: the mark is taken away by the pass that examines the rest, or releases would
+// wait on a catalog that is complete.
+func TestEvaluateClearsTheIncompleteCatalogOnceAPassCoversTheRepository(t *testing.T) {
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        testNow,
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{Charts: 1},
+		Catalog:    &reposync.CatalogOutcome{},
+		Current: helmv1alpha1.RepositoryStatus{
+			ObservedGeneration:   1,
+			LastSyncedGeneration: 1,
+			UnexaminedVersions:   400,
+		},
+	})
+
+	if decision.Status.UnexaminedVersions != 0 {
+		t.Fatalf("unexaminedVersions = %d, want 0", decision.Status.UnexaminedVersions)
+	}
+}
+
+// TestEvaluateKeepsTheIncompleteCatalogThroughAFailedPass pins that the mark
+// describes the catalog in front of a reader rather than the latest pass. A read that
+// failed published nothing, so it neither proves the catalog complete nor makes it
+// less so — the same reasoning that keeps lastSyncedGeneration through a failure.
+func TestEvaluateKeepsTheIncompleteCatalogThroughAFailedPass(t *testing.T) {
+	decision := Evaluate(Inputs{
+		Generation: 1,
+		Now:        testNow,
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{Err: errors.New("registry unreachable"), Message: "Failed to read the repository catalog"},
+		Catalog:    &reposync.CatalogOutcome{},
+		Current: helmv1alpha1.RepositoryStatus{
+			ObservedGeneration:   1,
+			LastSyncedGeneration: 1,
+			UnexaminedVersions:   400,
+		},
+	})
+
+	if decision.Status.UnexaminedVersions != 400 {
+		t.Fatalf("unexaminedVersions = %d, want it kept at 400: a failed pass published no catalog",
+			decision.Status.UnexaminedVersions)
+	}
+}

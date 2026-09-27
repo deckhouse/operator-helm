@@ -177,6 +177,20 @@ func Evaluate(in Inputs) Decision {
 			status.ChartCount = ptr.To(int32(in.Fetch.Charts - len(skippedCharts(in))))
 		}
 
+		if fetchSucceeded && !catalogFailed {
+			// Written in both directions by every pass that published a catalog, and left
+			// alone by one that did not: it says what the catalog in front of a reader
+			// holds, so a failed pass — which published nothing — must not clear it.
+			//
+			// It exists because lastSyncedGeneration cannot carry this. That one is held
+			// back by an incomplete pass, which protects only the first sync of a
+			// generation: once a generation has synced completely, new tags appearing in
+			// the registry need no spec change, so a later incomplete pass leaves
+			// lastSyncedGeneration equal to the generation and the catalog looks like the
+			// repository's full answer while it is missing versions nobody examined.
+			status.UnexaminedVersions = int32(in.Fetch.Unexamined)
+		}
+
 		if fetchSucceeded && !catalogFailed && !fetchIncomplete {
 			// Written on every pass that published a catalog for this spec, pending tags
 			// included: a version the registry has not answered about is listed like any
