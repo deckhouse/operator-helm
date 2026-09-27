@@ -126,7 +126,16 @@ type RepoConfig struct {
 	Insecure      bool
 }
 
-func BuildTLSTransport(config *RepoConfig) *http.Transport {
+// BuildTLSTransport builds the transport a repository's TLS settings describe.
+//
+// A caCertificate that holds no certificate is reported instead of being ignored.
+// AppendCertsFromPEM says only whether it added anything, and a pool it added
+// nothing to is a valid, empty trust root: every read then fails with "x509:
+// certificate signed by unknown authority", which names the remote rather than the
+// field, and is classified as an ordinary read failure and retried forever against
+// bytes no attempt can parse. The error is terminal for that reason — only an edit
+// of the repository can resolve it.
+func BuildTLSTransport(config *RepoConfig) (*http.Transport, error) {
 	tlsConfig := &tls.Config{}
 
 	if config.Insecure {
@@ -135,9 +144,16 @@ func BuildTLSTransport(config *RepoConfig) *http.Transport {
 
 	if config.CACertificate != "" {
 		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM([]byte(config.CACertificate))
+		if !caCertPool.AppendCertsFromPEM([]byte(config.CACertificate)) {
+			return nil, &TerminalError{
+				Reason: helmv1alpha1.ReasonInvalidCACertificate,
+				Message: "spec.caCertificate holds no PEM encoded certificate " +
+					`(it is mirrored verbatim into the "ca.crt" key of the repository's internal tls secret)`,
+			}
+		}
+
 		tlsConfig.RootCAs = caCertPool
 	}
 
-	return &http.Transport{TLSClientConfig: tlsConfig}
+	return &http.Transport{TLSClientConfig: tlsConfig}, nil
 }

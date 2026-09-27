@@ -68,7 +68,12 @@ func (r *ociChartResolver) ResolveChartArtifact(ctx context.Context, ref string,
 	}
 
 	if config != nil && (config.CACertificate != "" || config.Insecure) {
-		options = append(options, remote.WithTransport(BuildTLSTransport(config)))
+		tlsTransport, err := BuildTLSTransport(config)
+		if err != nil {
+			return "", err
+		}
+
+		options = append(options, remote.WithTransport(tlsTransport))
 	}
 
 	desc, err := remote.Get(tag, options...)

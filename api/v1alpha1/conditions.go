@@ -151,6 +151,12 @@ const (
 	// ReasonUnsupportedRepositoryType marks a spec.url whose scheme names no
 	// repository type the operator can read.
 	ReasonUnsupportedRepositoryType = "UnsupportedRepositoryType"
+	// ReasonInvalidCACertificate marks a spec.caCertificate that carries no
+	// PEM encoded certificate. It is kept apart from the transport failures the
+	// certificate would otherwise cause — a verification error names the remote,
+	// while this names the field that has to be corrected — and from the retriable
+	// ones, because no attempt can parse those bytes.
+	ReasonInvalidCACertificate = "InvalidCACertificate"
 	// ReasonChartVersionRemoved marks an addon whose chart version is still recorded in
 	// the catalog but is no longer offered by the repository.
 	ReasonChartVersionRemoved = "ChartVersionRemoved"

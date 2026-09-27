@@ -219,8 +219,10 @@ func (s *Secrets) reconcileTLSSecret(ctx context.Context, repo contract.Reposito
 		return nil
 	}
 
-	// TODO: consider adding CA certificate format validation
-
+	// The certificate is written as given. Its format is checked where it is used,
+	// by the repository client building the trust root for a read: a failure there is
+	// terminal and names the field, while a failure here would be an auxiliary
+	// resource failure and retried forever.
 	tlsSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,

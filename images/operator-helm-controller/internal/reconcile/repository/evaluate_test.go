@@ -258,6 +258,26 @@ func TestEvaluateConditions(t *testing.T) {
 			wantStalled: helmv1alpha1.ReasonAuthenticationFailed,
 		},
 		{
+			// An unparsable spec.caCertificate travels as a terminal fetch outcome, so
+			// this is where "not retried" is observable: the repository is Stalled on
+			// the reason that names the field, instead of collecting SyncFailed passes
+			// against bytes no attempt can parse.
+			name: "invalid ca certificate",
+			in: Inputs{
+				Generation: 1, Now: testNow, Current: readyStatus(1),
+				InternalRepository: internalobj.InternalRepositoryState{Present: true, Ready: true},
+				Attempted:          true,
+				Fetch: &reposync.FetchOutcome{
+					Err: fetchErr, Terminal: true,
+					Reason:  helmv1alpha1.ReasonInvalidCACertificate,
+					Message: "spec.caCertificate holds no PEM encoded certificate",
+				},
+			},
+			wantReady: metav1.ConditionFalse, wantReadyReason: helmv1alpha1.ReasonInvalidCACertificate,
+			wantSynced:  metav1.ConditionFalse,
+			wantStalled: helmv1alpha1.ReasonInvalidCACertificate,
+		},
+		{
 			name: "unsupported repository type",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),

@@ -98,7 +98,12 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 	}
 
 	if config != nil && (config.CACertificate != "" || config.Insecure) {
-		options = append(options, remote.WithTransport(BuildTLSTransport(config)))
+		tlsTransport, err := BuildTLSTransport(config)
+		if err != nil {
+			return nil, err
+		}
+
+		options = append(options, remote.WithTransport(tlsTransport))
 	}
 
 	tags, err := remote.List(repo, options...)

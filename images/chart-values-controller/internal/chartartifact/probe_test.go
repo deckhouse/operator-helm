@@ -19,6 +19,7 @@ package chartartifact
 import (
 	"context"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -82,7 +83,10 @@ func TestChartLayerMediaTypeWithCustomTLSSettings(t *testing.T) {
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 
-	rt := Transport(string(certPEM), false)
+	rt, err := Transport(string(certPEM), false)
+	if err != nil {
+		t.Fatalf("building a transport from the registry's own certificate: %v", err)
+	}
 	if rt == nil {
 		t.Fatal("Transport must return a round tripper when a CA certificate is given")
 	}
@@ -100,7 +104,10 @@ func TestChartLayerMediaTypeWithCustomTLSSettings(t *testing.T) {
 // transport built for one probe must carry the configured default's dial and
 // idle-connection timeouts, not the zero values of a bare &http.Transport{}.
 func TestTransportClonesDefaultTimeouts(t *testing.T) {
-	rt := Transport("", true)
+	rt, err := Transport("", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	transport, ok := rt.(*http.Transport)
 	if !ok {
@@ -116,6 +123,42 @@ func TestTransportClonesDefaultTimeouts(t *testing.T) {
 	}
 	if transport.TLSClientConfig == nil || !transport.TLSClientConfig.InsecureSkipVerify {
 		t.Fatal("the clone must still carry the requested TLS configuration")
+	}
+}
+
+// TestTransportRejectsACACertificateWithoutAnyCertificate pins that a repository
+// whose caCertificate carries no certificate is reported instead of silently
+// yielding an empty trust root: an empty pool looks valid and would turn every
+// probe into a verification failure that names the registry rather than the field.
+func TestTransportRejectsACACertificateWithoutAnyCertificate(t *testing.T) {
+	tests := []struct {
+		name          string
+		caCertificate string
+	}{
+		{name: "garbage bytes", caCertificate: "not a certificate at all"},
+		{name: "truncated pem block", caCertificate: "-----BEGIN CERTIFICATE-----\nMIIBhzCCAS2gAwIBAgIQ"},
+		{
+			name: "pem block that is not a certificate",
+			caCertificate: string(pem.EncodeToMemory(&pem.Block{
+				Type:  "PRIVATE KEY",
+				Bytes: []byte("a key where a certificate is expected"),
+			})),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rt, err := Transport(test.caCertificate, false)
+			if err == nil {
+				t.Fatalf("transport %v was built from a CA certificate that carries none", rt)
+			}
+			if !errors.Is(err, ErrInvalidCACertificate) {
+				t.Fatalf("error = %v, want it to wrap ErrInvalidCACertificate", err)
+			}
+			if rt != nil {
+				t.Fatal("no round tripper may be returned alongside the error")
+			}
+		})
 	}
 }
 
@@ -173,7 +216,12 @@ func TestChartLayerMediaTypeClosesTheTransportItWasGiven(t *testing.T) {
 	pushTestChart(t, host, server.Client().Transport)
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
-	spy := &spyTransport{RoundTripper: Transport(string(certPEM), false)}
+	rt, err := Transport(string(certPEM), false)
+	if err != nil {
+		t.Fatalf("building a transport from the registry's own certificate: %v", err)
+	}
+
+	spy := &spyTransport{RoundTripper: rt}
 
 	if _, err := Default.ChartLayerMediaType(context.Background(), "oci://"+host+"/podinfo:1.0.0", spy); err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -146,6 +146,15 @@ func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt ht
 	return "", fmt.Errorf("%w: %s has no supported chart layer", ErrNotAChart, ref)
 }
 
+// ErrInvalidCACertificate means the repository's caCertificate holds no PEM
+// encoded certificate. Like the verdicts above it cannot be resolved by trying
+// again: a pool that accepted nothing is still a valid, empty trust root, so
+// ignoring it would turn the fault into a "certificate signed by unknown
+// authority" on every probe, naming the registry instead of the field at fault.
+var ErrInvalidCACertificate = errors.New(
+	`caCertificate holds no PEM encoded certificate (it is the same value the operator mirrors into the "ca.crt" key of the repository's internal tls secret)`,
+)
+
 // Transport builds the transport settings for reaching a registry the repository
 // itself names. It returns nil when the repository has nothing to say about the
 // transport, which leaves the caller on the default one.
@@ -158,21 +167,24 @@ func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt ht
 // media type is still unresolved — that caching would add a keyed cache and its
 // invalidation for no measurable benefit. Because it is single-use, the caller
 // closes its idle connections once the probe finishes.
-func Transport(caCertificate string, insecure bool) http.RoundTripper {
+func Transport(caCertificate string, insecure bool) (http.RoundTripper, error) {
 	if caCertificate == "" && !insecure {
-		return nil
+		return nil, nil
 	}
 
 	tlsConfig := &tls.Config{InsecureSkipVerify: insecure} //nolint:gosec // opt-in via the repository spec
 
 	if caCertificate != "" {
 		pool := x509.NewCertPool()
-		pool.AppendCertsFromPEM([]byte(caCertificate))
+		if !pool.AppendCertsFromPEM([]byte(caCertificate)) {
+			return nil, ErrInvalidCACertificate
+		}
+
 		tlsConfig.RootCAs = pool
 	}
 
 	rt := http.DefaultTransport.(*http.Transport).Clone()
 	rt.TLSClientConfig = tlsConfig
 
-	return rt
+	return rt, nil
 }

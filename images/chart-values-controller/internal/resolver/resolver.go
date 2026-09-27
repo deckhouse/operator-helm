@@ -514,7 +514,13 @@ func (r *Resolver) ensureHybridOCIRepository(
 	if mediaType == "" {
 		var rt http.RoundTripper
 		if sameHost {
-			rt = chartartifact.Transport(repo.CACertificate, repo.InsecureSkipVerify)
+			rt, err = chartartifact.Transport(repo.CACertificate, repo.InsecureSkipVerify)
+			if err != nil {
+				// The repository cannot be reached over TLS at all until its
+				// caCertificate is corrected, so the client is told the fetch failed
+				// rather than asked to come back for an answer that will not change.
+				return nil, &Result{Outcome: OutcomeFetchFailed, Message: err.Error()}, nil
+			}
 		}
 
 		mediaType, err = r.prober.ChartLayerMediaType(ctx, version.OCIRef, rt)

@@ -97,7 +97,12 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 
 	httpClient := http.DefaultClient
 	if config != nil && (config.CACertificate != "" || config.Insecure) {
-		httpClient = &http.Client{Transport: BuildTLSTransport(config)}
+		tlsTransport, err := BuildTLSTransport(config)
+		if err != nil {
+			return nil, err
+		}
+
+		httpClient = &http.Client{Transport: tlsTransport}
 	}
 
 	backoff := wait.Backoff{
