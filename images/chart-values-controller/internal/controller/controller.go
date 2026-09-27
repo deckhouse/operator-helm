@@ -91,11 +91,20 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	r.refreshCache(ctx, obj, name)
 
-	if hasExpiry {
-		return reconcile.Result{RequeueAfter: time.Until(expiresAt)}, nil
+	if !hasExpiry {
+		return reconcile.Result{}, nil
 	}
 
-	return reconcile.Result{}, nil
+	// The refresh downloads an artifact, which can outlast the expiry this pass
+	// judged to be ahead of it. Asking for a requeue in the past is asking for
+	// nothing: controller-runtime schedules only a positive RequeueAfter. Nothing
+	// else would come either — an unchanged revision is filtered by the predicate —
+	// so the object and its entry would sit there for good.
+	if remaining := time.Until(expiresAt); remaining > 0 {
+		return reconcile.Result{RequeueAfter: remaining}, nil
+	}
+
+	return r.deleteExpired(ctx, obj, name)
 }
 
 // deleteExpired removes the exact auxiliary resource this pass read and judged

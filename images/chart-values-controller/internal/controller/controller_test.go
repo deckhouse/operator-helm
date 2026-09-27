@@ -741,3 +741,55 @@ func TestARefreshRepairsAnEntryLeftAtAnotherRevisionByALateWrite(t *testing.T) {
 		t.Fatalf("the entry records %q, want the revision the source publishes %q", entry.Digest, digest)
 	}
 }
+
+// TestReconcileCollectsAnObjectThatExpiredDuringTheRefresh pins what happens when
+// the download outlasts the expiry the pass judged to be ahead of it. Asking for a
+// requeue in the past asks for nothing — controller-runtime schedules only a
+// positive RequeueAfter — and no event would arrive either, because an unchanged
+// revision is filtered by the predicate. The object and its entry would then sit on
+// the volume for good, which is the one outcome the expiry exists to prevent.
+func TestReconcileCollectsAnObjectThatExpiredDuringTheRefresh(t *testing.T) {
+	// Ahead of the pass when it is read, behind it by the time the refresh returns.
+	// Counted in whole seconds because the annotation is RFC3339 without a fraction:
+	// a sub-second margin is truncated away and can land in the past before the pass
+	// even starts. Two seconds leaves at least one after the truncation.
+	soon := time.Now().Add(2 * time.Second)
+
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(expiredChart(soon)).
+		Build()
+
+	r := newTestReconciler(t, c)
+	if err := r.cache.Put(testName, "sha256:cafe", []byte("replicaCount: 1\n")); err != nil {
+		t.Fatalf("seeding cache: %v", err)
+	}
+
+	// Stands in for the download, which is the slow part of a refresh and the only
+	// reason a pass can outlive an expiry it judged to be ahead of it. Placed here
+	// so the expiry is in the future when the pass reads it and in the past when
+	// the refresh returns — the interleaving the requeue has to survive.
+	artifact := r.artifactOf
+	r.artifactOf = func(o client.Object) *meta.Artifact {
+		time.Sleep(2500 * time.Millisecond)
+
+		return artifact(o)
+	}
+
+	result, err := reconcileOnce(t, r)
+	if err != nil {
+		t.Fatalf("reconcile returned an error: %v", err)
+	}
+
+	if result.RequeueAfter < 0 {
+		t.Fatalf("requeueAfter is %v: a negative delay is silently dropped", result.RequeueAfter)
+	}
+
+	err = c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testName}, &sourcev1.HelmChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("the expired object survived the pass that outlived its expiry: %v", err)
+	}
+	if _, cached := r.cache.Get(testName); cached {
+		t.Fatal("the entry of a collected object stayed on the volume")
+	}
+}
