@@ -188,6 +188,25 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 			return true, fmt.Errorf("cannot decode response: %w", err)
 		}
 
+		// An index.yaml always carries an entries mapping — a repository with no charts
+		// publishes it empty — so a response that parses into no mapping at all did not
+		// carry an index document. yaml.Unmarshal accepts all of those silently: an
+		// empty body (a proxy answering 200 with nothing, a server answering 204, which
+		// TerminalFromStatusCode lets through), a JSON error page, an HTML interstitial.
+		// Each would look like a repository that went empty, and the catalog reconciler
+		// prunes every chart of the repository on exactly that. entries is the only
+		// usable signal here: apiVersion is matched case-sensitively by this decoder and
+		// never populates from the key helm writes.
+		//
+		// Retried rather than reported terminal: nothing about the repository resource
+		// is wrong, it is the remote or something in front of it answering badly, and
+		// the next attempt may well reach a healthy backend.
+		if decoded.Entries == nil {
+			lastErr = fmt.Errorf("repository %s returned no index document (%d bytes, HTTP %d)", url, len(body), resp.StatusCode)
+
+			return false, nil
+		}
+
 		indexFile = decoded
 
 		return true, nil

@@ -298,6 +298,80 @@ func TestFetchChartsHelmRecordsOCIReferences(t *testing.T) {
 	}
 }
 
+// TestFetchChartsRejectsAResponseWithoutAnIndex pins that a response carrying no
+// index document is a failed fetch. yaml accepts every one of these bodies without
+// an error and leaves the entries mapping absent, so reporting success would hand
+// the caller an empty chart list and prune the repository's whole catalog — over a
+// proxy that answered 200 with nothing, a 204 (which is not a terminal status), or
+// an error page. The failure must stay retriable: the repository resource is fine.
+func TestFetchChartsRejectsAResponseWithoutAnIndex(t *testing.T) {
+	cases := []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{"empty body with 200", http.StatusOK, ""},
+		{"no content", http.StatusNoContent, ""},
+		{"blank document", http.StatusOK, "\n  \n"},
+		{"error page instead of the index", http.StatusOK, `{"error":"upstream unavailable"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+			if err == nil {
+				t.Fatalf("expected a response without an index to fail, got %d charts", len(charts))
+			}
+			if charts != nil {
+				t.Fatalf("expected no charts alongside the error, got %d", len(charts))
+			}
+			if _, ok := AsTerminal(err); ok {
+				t.Fatalf("a missing index document must stay retriable, got terminal error: %v", err)
+			}
+			if !strings.Contains(err.Error(), "no index document") {
+				t.Fatalf("expected the reported cause to name the missing index, got %v", err)
+			}
+			if got := requests.Load(); got < 2 {
+				t.Fatalf("expected the fetch to be retried, got %d request(s)", got)
+			}
+		})
+	}
+}
+
+// TestFetchChartsAcceptsAnIndexWithoutCharts is the guard on the check above: a
+// repository is allowed to publish an index that lists nothing, and that is a
+// successful fetch of zero charts — the catalog reconciler then prunes correctly,
+// because the repository really did go empty.
+func TestFetchChartsAcceptsAnIndexWithoutCharts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("apiVersion: v1\nentries: {}\n"))
+	}))
+	defer srv.Close()
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+	if err != nil {
+		t.Fatalf("an index that lists no charts must be accepted, got %v", err)
+	}
+	// Non-nil and empty: the caller distinguishes nothing here, it prunes whatever the
+	// catalog holds beyond this list.
+	if charts == nil {
+		t.Fatal("expected an empty chart list, got nil")
+	}
+	if len(charts) != 0 {
+		t.Fatalf("expected no charts, got %d", len(charts))
+	}
+}
+
 // TestFetchChartsThrottleIsRetriedNotDecoded pins that a throttled read is never
 // mistaken for an empty repository. A throttle is deliberately not terminal, and the
 // body registries send with it is JSON, which decodes into an empty index without
