@@ -61,8 +61,11 @@ func (s *Maintenance) Ensure(ctx context.Context, rel contract.Release) Maintena
 // carried out yet leaves the two disagreeing, and one that has leaves them equal.
 //
 // Managed is only ever true or false here. A third reading, "unknown", used to be
-// treated as a request to lift maintenance; nothing has ever written it to this
-// condition, on this branch or before it, so the case is gone.
+// treated as a request to lift maintenance, and it had a writer: until 55bb8d5 every
+// pass seeded the conditions it was about to fill with Unknown/Initialized, and that
+// branch is how a freshly seeded release reached Managed=True. Nothing has written it
+// since, and any release that carried it was healed by the first pass after 55bb8d5,
+// so the reading is gone and so is the branch.
 func (s *Maintenance) ChangeRequired(rel contract.Release) bool {
 	return rel.MaintenanceActivated() != rel.MaintenanceEnabled()
 }
