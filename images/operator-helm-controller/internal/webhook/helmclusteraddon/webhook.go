@@ -87,7 +87,7 @@ func (v *HelmClusterAddonWebhookValidator) ValidateUpdate(ctx context.Context, o
 }
 
 func (v *HelmClusterAddonWebhookValidator) ValidateDelete(_ context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
-	if addon.Spec.Maintenance == "NoResourceReconciliation" {
+	if addon.MaintenanceModeActivated() {
 		return nil, fmt.Errorf("helmclusteraddon/%s cannot be deleted while maintenance mode is active", addon.Name)
 	}
 

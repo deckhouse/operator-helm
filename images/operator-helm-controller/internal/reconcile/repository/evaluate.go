@@ -84,6 +84,15 @@ type abnormalCondition struct {
 func Evaluate(in Inputs) Decision {
 	var status helmv1alpha1.RepositoryStatus
 	in.Current.DeepCopyInto(&status)
+	// Confirmed on every pass, unlike the release package's observedGeneration, which
+	// is held back until the pass settles. A repository has a second field for the
+	// verdict: lastSyncedGeneration, written only by a pass that published a catalog,
+	// is what says which spec the catalog in front of a reader belongs to, and it is
+	// the one releases read (catalogIsCurrent in internal/reconcile/release). That
+	// leaves observedGeneration to record which spec this pass ran against, which is
+	// what the conditions below and the failure-counter reset compare themselves to:
+	// holding it back would make the previous spec's failures carry over into the new
+	// one and would date every condition this pass writes to a spec that is gone.
 	status.ObservedGeneration = in.Generation
 
 	internal := in.InternalRepository
