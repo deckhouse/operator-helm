@@ -151,13 +151,23 @@ func Evaluate(in Inputs) Decision {
 			status.ChartCount = ptr.To(int32(in.Fetch.Charts - len(skippedCharts(in))))
 		}
 
-		if fetchSucceeded && !catalogFailed && in.Fetch.Pending == 0 {
-			status.LastSuccessfulSyncTime = &metav1.Time{Time: in.Now}
-			// Recorded alongside the time because the time alone does not say which spec
-			// the published catalog belongs to, and the Synced condition does not either:
-			// it is the verdict of the latest pass, so one transient fetch failure turns
-			// it False over a catalog that is still published and still current.
+		if fetchSucceeded && !catalogFailed {
+			// Written on every pass that published a catalog for this spec, pending tags
+			// included: a version the registry has not answered about is listed like any
+			// other, so the catalog is still the repository's full answer as to which
+			// versions exist — which is the only question releases ask it. Holding the
+			// generation back until nothing is pending would never release it at all on a
+			// repository with one permanently unreadable tag.
+			//
+			// The condition cannot carry this: Synced is the verdict of the latest pass,
+			// so a transient fetch failure turns it False over a catalog that is complete
+			// and unchanged. Neither can lastSuccessfulSyncTime, which says when the
+			// repository was last mirrored in full but not which spec that was.
 			status.LastSyncedGeneration = in.Generation
+
+			if in.Fetch.Pending == 0 {
+				status.LastSuccessfulSyncTime = &metav1.Time{Time: in.Now}
+			}
 		}
 
 		next := in.Now.Add(withJitter(syncDelay(failures), in.Jitter))

@@ -658,6 +658,43 @@ func TestEvaluateLastSyncedGenerationSurvivesAFailedPass(t *testing.T) {
 	if decision.Status.LastSyncedGeneration != 1 {
 		t.Fatalf("lastSyncedGeneration is %d, want it left at 1", decision.Status.LastSyncedGeneration)
 	}
+
+	// The same failure after a spec change must not claim the new generation
+	// either: the catalog on record is still the previous url's.
+	edited := Evaluate(Inputs{
+		Generation: 2,
+		Now:        time.Now().UTC(),
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{Err: errors.New("the index request failed")},
+		Current:    published,
+	})
+
+	if edited.Status.LastSyncedGeneration != 1 {
+		t.Fatalf("lastSyncedGeneration is %d, want it left at 1 after a failed resync", edited.Status.LastSyncedGeneration)
+	}
+}
+
+// TestEvaluatePendingTagsStillPublishACatalog pins the distinction between the two
+// fields: a tag the registry has not answered about leaves the repository not fully
+// mirrored, but the catalog still lists every version that exists, which is the
+// only question releases ask of it. A repository with one permanently unreadable
+// tag must not hold every release on it in limbo.
+func TestEvaluatePendingTagsStillPublishACatalog(t *testing.T) {
+	decision := Evaluate(Inputs{
+		Generation: 2,
+		Now:        time.Now().UTC(),
+		Attempted:  true,
+		Fetch:      &reposync.FetchOutcome{Pending: 1},
+		Catalog:    &reposync.CatalogOutcome{},
+		Current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 1, LastSyncedGeneration: 1},
+	})
+
+	if decision.Status.LastSyncedGeneration != 2 {
+		t.Fatalf("lastSyncedGeneration is %d, want 2: the catalog was published", decision.Status.LastSyncedGeneration)
+	}
+	if decision.Status.LastSuccessfulSyncTime != nil {
+		t.Fatal("lastSuccessfulSyncTime must stay unset: the repository is not mirrored in full")
+	}
 }
 
 // TestEvaluateLastSyncedGenerationWaitsForTheCatalog pins the other half: a spec
