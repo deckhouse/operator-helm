@@ -89,10 +89,11 @@ func Evaluate(in Inputs) Decision {
 	// verdict: lastSyncedGeneration, written only by a pass that published a catalog,
 	// is what says which spec the catalog in front of a reader belongs to, and it is
 	// the one releases read (catalogIsCurrent in internal/reconcile/release). That
-	// leaves observedGeneration to record which spec this pass ran against, which is
-	// what the conditions below and the failure-counter reset compare themselves to:
-	// holding it back would make the previous spec's failures carry over into the new
-	// one and would date every condition this pass writes to a spec that is gone.
+	// leaves observedGeneration to record which spec this pass ran against, and the
+	// failure counter below is its only reader: the count resets on the pass that
+	// first sees a new generation. Holding it back would make every pass look like
+	// that first one and reset the count again and again, so consecutive failures
+	// would never add up to the backoff and the stall they are counted for.
 	status.ObservedGeneration = in.Generation
 
 	internal := in.InternalRepository
