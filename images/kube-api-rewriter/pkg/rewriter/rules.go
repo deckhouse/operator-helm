@@ -353,7 +353,8 @@ func (r ExcludeRule) Match(obj []byte, apiVersion, kind string) bool {
 	if objAPIVersion == "" {
 		objAPIVersion = gjson.GetBytes(obj, "apiVersion").String()
 	}
-	// Trim version and delimeter.
+	// Trim version and delimeter. A core object yields its version, not an empty
+	// group, so Groups cannot select the core group.
 	objGroup, _, _ := strings.Cut(objAPIVersion, "/")
 	groupMatch := len(r.Groups) == 0
 	for _, group := range r.Groups {

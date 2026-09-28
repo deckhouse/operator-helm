@@ -66,6 +66,31 @@ func TestShouldRewriteAnyResource(t *testing.T) {
 			true,
 		},
 		{
+			"apis discovery",
+			"/apis",
+			true,
+		},
+		{
+			"group discovery without rule",
+			"/apis/networking.k8s.io/v1",
+			true,
+		},
+		{
+			"core discovery",
+			"/api/v1",
+			true,
+		},
+		{
+			"openapi v2",
+			"/openapi/v2",
+			false,
+		},
+		{
+			"metrics",
+			"/metrics",
+			false,
+		},
+		{
 			"root",
 			"/",
 			false,
