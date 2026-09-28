@@ -59,9 +59,6 @@ func TestRulesMapUpstreamGroups(t *testing.T) {
 	}
 }
 
-// TestRulesServeOneVersionPerKind pins what upstream actually serves at the
-// pinned tags: the beta versions are gone, and declaring one the api server does
-// not know makes discovery answer for a version nothing can serve.
 func TestRulesServeOneVersionPerKind(t *testing.T) {
 	source := OperatorNelmAPIGroupsRules["source.toolkit.fluxcd.io"]
 	if !reflect.DeepEqual(source.GroupRule.Versions, []string{"v1"}) {
@@ -80,17 +77,13 @@ func TestRulesServeOneVersionPerKind(t *testing.T) {
 	}
 }
 
-// TestMetadataRenamesKeepTheStoredSide pins the constraint the whole migration
-// rests on: objects already live in clusters, so what is written into them must
-// not move. Only the left side of the table follows upstream.
 func TestMetadataRenamesKeepTheStoredSide(t *testing.T) {
 	const internal = "internal.operator-helm.deckhouse.io"
 
 	wantAnnotations := map[string]string{
 		"reconcile.fluxcd.io/requestedAt": "reconcile." + internal + "/requestedAt",
 		"reconcile.fluxcd.io/forceAt":     "reconcile." + internal + "/forceAt",
-		// resetAt moves into the internal namespace too; see the rule's comment for why.
-		"reconcile.fluxcd.io/resetAt": "reconcile." + internal + "/resetAt",
+		"reconcile.fluxcd.io/resetAt":     "reconcile." + internal + "/resetAt",
 	}
 	got := map[string]string{}
 	for _, rule := range OperatorNelmRewriteRules.Annotations.Names {
@@ -121,9 +114,6 @@ func TestMetadataRenamesKeepTheStoredSide(t *testing.T) {
 	}
 }
 
-// TestNoShortNamesAndNoCategory pins that the internal kinds claim neither. The
-// upstream short names would take "hr" and "hc" from a real flux in the cluster,
-// and the upstream categories include "all".
 func TestNoShortNamesAndNoCategory(t *testing.T) {
 	if OperatorNelmRewriteRules.ShortNamePrefix != "" {
 		t.Fatalf("short name prefix is %q, want none", OperatorNelmRewriteRules.ShortNamePrefix)

@@ -418,8 +418,6 @@ Host: 127.0.0.1
 }
 
 func TestFilterExcludesListItemsByGroup(t *testing.T) {
-	// Items of a List response carry neither apiVersion nor kind, so the
-	// list's group decides whether original kinds are hidden.
 	rwr := createTestRewriter()
 	list := func(apiVersion string) []byte {
 		return []byte(`{"kind":"SomeResourceList","apiVersion":"` + apiVersion + `","items":[{"metadata":{"name":"a"}},{"metadata":{"name":"b"}}]}`)

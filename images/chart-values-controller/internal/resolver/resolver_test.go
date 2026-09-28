@@ -47,9 +47,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// testCacheBudget is roomy enough that no test here runs into it unless it asks
-// for a smaller cache of its own; the budget itself is exercised in the cache
-// package.
 const testCacheBudget = int64(16 << 20)
 
 func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
@@ -63,10 +60,6 @@ func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 		t.Fatalf("registering helm scheme: %v", err)
 	}
 
-	// The repository kinds carry a status subresource in the cluster, and a test
-	// that writes one has to go through the same door the operator does — on a fake
-	// client without this, a status write is an ordinary update and moves the
-	// generation, which is exactly what such a test is checking does not happen.
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objects...).
@@ -87,10 +80,6 @@ func chartWithVersions(repoName, chartName string, versions ...helmv1alpha1.Char
 	}
 }
 
-// TestOCIMediaType covers the verdict an oci:// repository's version carries. The
-// media type is that repository's only locator, so its absence is a state rather than
-// a value — which is exactly why this judgement must not be applied to a version of a
-// helm repository, where an absent media type is normal.
 func TestOCIMediaType(t *testing.T) {
 	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
 
@@ -131,10 +120,6 @@ func TestOCIMediaType(t *testing.T) {
 	})
 
 	t.Run("a pre-upgrade version with no verdict at all is pending, not values_not_found", func(t *testing.T) {
-		// Neither MediaType nor UnavailableReason set: the shape a version entry of an
-		// oci:// repository had before this controller started recording verdicts. The
-		// migration path (client.KnownVersions) treats this exactly like ResolvePending
-		// and re-resolves it on the next normal synchronization.
 		_, done := ociMediaType(req, &helmv1alpha1.ChartVersion{Version: "6.7.1"})
 		if done == nil || done.Outcome != OutcomePending {
 			t.Fatalf("outcome is %+v, want pending: an empty verdict is the pre-upgrade migration state and must be retried, not reported as a permanent failure", done)
@@ -177,9 +162,6 @@ func TestChartVersion(t *testing.T) {
 	})
 
 	t.Run("an archive version with nothing recorded is still returned", func(t *testing.T) {
-		// The regression this guards: an entry with no media type, no reference and no
-		// verdict is a perfectly normal archive version, and reading it as "unresolved"
-		// made every such version report pending forever.
 		resolver := newTestResolver(t, chartWithVersions("example", "podinfo",
 			helmv1alpha1.ChartVersion{Version: "6.7.1"},
 		))
@@ -282,11 +264,6 @@ func newHybridResolver(t *testing.T, prober chartartifact.Prober, objects ...cli
 	}, c
 }
 
-// TestResolveHybridVersionUsesOCIRepository pins the whole point of a hybrid
-// repository for this controller: a classic HTTP repository whose index publishes one
-// version in a registry must have that version read through an OCIRepository. Sending
-// it down the HelmChart path makes the source controller resolve the version to the
-// index url — an oci:// one — and fail with `unsupported protocol scheme "oci"`.
 func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 3},
@@ -331,8 +308,6 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 		t.Fatalf("layer selector = %+v, want the probed media type", ociRepo.Spec.LayerSelector)
 	}
 
-	// The catalog does not record a media type for such a version, so the probe is the
-	// only way this service can learn the layer.
 	if prober.calls != 1 {
 		t.Fatalf("prober calls = %d, want 1", prober.calls)
 	}
@@ -340,8 +315,6 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 		t.Fatalf("probed %q, want the recorded reference", prober.refs[0])
 	}
 
-	// Only public registries are supported for such a version: the repository's own
-	// credentials describe a different host.
 	if ociRepo.Spec.SecretRef != nil || ociRepo.Spec.CertSecretRef != nil {
 		t.Error("the repository's secrets must not be attached to a foreign registry")
 	}
@@ -352,13 +325,6 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 	}
 }
 
-// TestResolveArchiveVersionUsesHelmChart is the regression guard for the plain case,
-// and the one that reproduces what a cluster showed: a version an index publishes as a
-// .tgz archive carries neither a media type nor a reference, and that is not a verdict
-// about it — the catalog has nothing more to say about such a version. Reading "no
-// media type" as "not resolved yet" left every archive version of every helm
-// repository reporting pending forever, which is a wider break than the hybrid bug it
-// came in with.
 func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "bitnami"},
@@ -403,11 +369,6 @@ func TestResolveArchiveVersionUsesHelmChart(t *testing.T) {
 	}
 }
 
-// TestResolveDispatchesOnTheRequestShape covers what the HTTP layer cannot: an
-// unknown kind and a namespaced kind without a namespace are request errors,
-// distinguishable from "the repository is gone". A namespace on a cluster-scoped
-// kind is not a request error — see TestClusterScopedRequestsIgnoreAStrayNamespace
-// for what happens to it instead.
 func TestResolveDispatchesOnTheRequestShape(t *testing.T) {
 	r := newTestResolver(t)
 
@@ -432,9 +393,6 @@ func TestResolveDispatchesOnTheRequestShape(t *testing.T) {
 			want: OutcomeRepositoryNotFound,
 		},
 		{
-			// The spec requires a namespace here for authorization, even though it is a
-			// cluster-scoped repository kind: it must not be rejected, and it does not
-			// identify the repository, so "example" is still looked up cluster-wide.
 			name: "cluster application kind with a namespace is not rejected",
 			req:  Request{Kind: RepositoryKindHelmClusterApplication, Namespace: "team-a", RepositoryName: "shared", Chart: "podinfo", Version: "6.7.1"},
 			want: OutcomeRepositoryNotFound,
@@ -459,14 +417,6 @@ func TestResolveDispatchesOnTheRequestShape(t *testing.T) {
 	}
 }
 
-// TestClusterScopedRequestsIgnoreAStrayNamespace pins the rule the spec draws for
-// the request namespace: it is part of a chart's identity only for a namespaced
-// family. For a cluster-scoped kind — the addon family, whose contract must not
-// move, and the cluster application family, which the caller must authorize through
-// a namespace it does not otherwise use — a namespace on the request must resolve to
-// the exact same auxiliary resource name and cache entry as a request without one.
-// Otherwise the same chart would get a second, per-namespace copy of its internal
-// objects for every namespace a caller happens to send.
 func TestClusterScopedRequestsIgnoreAStrayNamespace(t *testing.T) {
 	for _, kind := range []RepositoryKind{RepositoryKindHelmClusterAddon, RepositoryKindHelmClusterApplication} {
 		t.Run(string(kind), func(t *testing.T) {
@@ -500,13 +450,7 @@ func TestClusterScopedRequestsIgnoreAStrayNamespace(t *testing.T) {
 	}
 }
 
-// TestReadValuesCachesNothingFromARefusedArchive pins what a refused extraction
-// must leave behind: nothing. A cache entry is what every later request is served
-// from without any check of its own, so half of an archive that was never accepted
-// reaching the disk would outlive the request that fetched it.
 func TestReadValuesCachesNothingFromARefusedArchive(t *testing.T) {
-	// A few kilobytes on the wire that walk into tens of megabytes: the archive
-	// the total budget exists for.
 	archive := buildBombArchive(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -540,8 +484,6 @@ func TestReadValuesCachesNothingFromARefusedArchive(t *testing.T) {
 	}
 }
 
-// buildBombArchive packs a large, highly compressible file ahead of values.yaml,
-// so reaching the values means walking past the budget.
 func buildBombArchive(t *testing.T) []byte {
 	t.Helper()
 
@@ -592,12 +534,6 @@ func mustFamily(t *testing.T, kind RepositoryKind) repositoryFamily {
 	return family
 }
 
-// TestAReplacedRepositoryIsNotServedFromTheOldEntry pins what the cache is keyed
-// on. A repository name is reusable: delete one and create another under it, or
-// point the existing one somewhere else, and the request tuple is unchanged. If
-// that tuple were the key, the caller would be handed the values of a chart from a
-// source that no longer exists — under a namespaced kind, from another team's
-// repository.
 func TestAReplacedRepositoryIsNotServedFromTheOldEntry(t *testing.T) {
 	const (
 		repoName = "example"
@@ -647,11 +583,6 @@ func TestAReplacedRepositoryIsNotServedFromTheOldEntry(t *testing.T) {
 	}
 }
 
-// TestAStatusWriteDoesNotInvalidateTheEntry is the other side of that key. Both
-// repository kinds carry a status subresource the operator writes on every
-// synchronization — conditions, the observed generation, the catalog — and none of
-// it changes where the chart comes from. Keying on anything that moved with those
-// writes would re-download every chart on every sync.
 func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
 	const (
 		repoName = "example"
@@ -671,8 +602,6 @@ func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
 		t.Fatalf("seeding cache: %v", err)
 	}
 
-	// What the operator does on a sync: conditions and the observed generation move,
-	// the spec does not.
 	stored := &helmv1alpha1.HelmClusterAddonRepository{}
 	if err := r.client.Get(context.Background(), client.ObjectKey{Name: repoName}, stored); err != nil {
 		t.Fatalf("reading repository: %v", err)
@@ -702,15 +631,7 @@ func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
 	}
 }
 
-// TestATransportTimeoutIsAnsweredAsPendingWhoeverHitIt covers the failure that
-// reads as a deadline without any context having expired: an http.Client timeout
-// is a context.DeadlineExceeded (Go 1.23 onwards), and source-controller being
-// slow says nothing about the chart. The caller that ran the download and the
-// callers that waited on it have to be told the same thing, or the same slow
-// response is a failed fetch for one console and a retry for the next.
 func TestATransportTimeoutIsAnsweredAsPendingWhoeverHitIt(t *testing.T) {
-	// The handler outlives the request on purpose and is released at the end, since
-	// httptest waits for its handlers before it closes.
 	hang := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		<-hang
@@ -734,11 +655,6 @@ func TestATransportTimeoutIsAnsweredAsPendingWhoeverHitIt(t *testing.T) {
 	}
 }
 
-// TestConcurrentMissesFetchTheArtifactOnce is the request-level statement of what
-// the in-flight group buys: /v1/chart-values is polled, so a chart the console is
-// waiting on is asked for repeatedly and concurrently. Every one of those requests
-// misses the cache until the first of them has written it, and each miss used to
-// mean a full download and a full gzip walk of the identical artifact.
 func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 	archive := buildValuesArchive(t, "replicaCount: 1\n")
 
@@ -753,9 +669,6 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 			wantFetches: 1,
 		},
 		{
-			// The key carries the repository's identity, so charts that differ in
-			// nothing but which repository they came from are separate artifacts and
-			// must not wait on each other.
 			name:        "charts under different keys are downloaded independently",
 			key:         func(caller int) string { return fmt.Sprintf("entry-%d", caller) },
 			wantFetches: 4,
@@ -772,8 +685,6 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				fetches.Add(1)
 				downloading <- struct{}{}
-				// Hold the response until every caller that is meant to join this
-				// download has joined it.
 				<-release
 				_, _ = w.Write(archive)
 			}))
@@ -787,12 +698,6 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 				maxArtifactBytes: 1 << 20,
 			}
 
-			// A caller that shares its key with one already downloading reports
-			// from inside the group, at the point where it can no longer start a
-			// download of its own; a caller under its own key never gets there and
-			// announces itself by reaching the server instead. Waiting for both
-			// counts puts every caller past the decision before anything returns,
-			// which is what makes the download count below mean anything.
 			var joined sync.WaitGroup
 			joined.Add(callers - int(tt.wantFetches))
 			r.downloads.onJoin = joined.Done
@@ -834,7 +739,6 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 	}
 }
 
-// buildValuesArchive packs a chart archive holding nothing but values.yaml.
 func buildValuesArchive(t *testing.T, values string) []byte {
 	t.Helper()
 
@@ -864,10 +768,6 @@ func buildValuesArchive(t *testing.T, values string) []byte {
 	return buf.Bytes()
 }
 
-// TestAFullCacheStillAnswersTheRequest states the degradation the cache budget
-// was chosen for: running out of disk budget must cost the next request a
-// download, never this request its answer. The values are extracted and returned
-// whether or not they could be kept.
 func TestAFullCacheStillAnswersTheRequest(t *testing.T) {
 	archive := buildValuesArchive(t, "replicaCount: 1\n")
 
@@ -878,7 +778,6 @@ func TestAFullCacheStillAnswersTheRequest(t *testing.T) {
 
 	dir := t.TempDir()
 	r := &Resolver{
-		// A budget of one byte: nothing at all fits.
 		cache:            cache.New(dir, 1),
 		httpClient:       srv.Client(),
 		maxArtifactBytes: 1 << 20,
@@ -903,11 +802,6 @@ func TestAFullCacheStillAnswersTheRequest(t *testing.T) {
 	}
 }
 
-// TestTheEntryCachedOnAMissNamesTheRevisionItCameFrom is what keeps the controller
-// from having to guess at entries it did not write. The resolver caches on every
-// miss, so most of what is on the volume is its writes; an entry that did not say
-// which artifact revision it holds would have to be judged by comparing bytes, or
-// thrown away on every refresh the controller could not complete.
 func TestTheEntryCachedOnAMissNamesTheRevisionItCameFrom(t *testing.T) {
 	archive := buildValuesArchive(t, "replicaCount: 1\n")
 
@@ -943,24 +837,10 @@ func TestTheEntryCachedOnAMissNamesTheRevisionItCameFrom(t *testing.T) {
 	}
 }
 
-// stillAt answers as a source object that still publishes the revision a download
-// came from, which is the ordinary case every test not about the revision moving
-// needs from the read that guards the write.
 func stillAt(digest string) currentDigestFunc {
 	return func(context.Context) (string, error) { return digest, nil }
 }
 
-// TestALateDownloadNeverPublishesOverANewerEntry is the interleaving the entry's
-// recorded revision alone does not close. A request misses the cache, the resolver
-// reads the source object at revision A and starts downloading; the artifact is
-// republished at B while that download runs and the controller's watch caches B
-// under the same key; the download then finishes and would write A over it. Nothing
-// repairs that afterwards — the controller's pass finds the source at B and the
-// entry claiming B is what it wrote — so the key answers requests with an earlier
-// revision's values until it expires, up to the whole TTL.
-//
-// The values in hand are still this request's answer: caching is an optimization,
-// never part of it.
 func TestALateDownloadNeverPublishesOverANewerEntry(t *testing.T) {
 	const (
 		key       = "chart-values-abc123"
@@ -971,9 +851,7 @@ func TestALateDownloadNeverPublishesOverANewerEntry(t *testing.T) {
 	republished := []byte("replicaCount: 2\n")
 
 	tests := []struct {
-		name string
-		// interfere is what happens while the download is held open, against the
-		// same backing store and the same cache directory the resolver is using.
+		name       string
 		interfere  func(t *testing.T, c client.Client, valuesCache *cache.Cache, digestB string)
 		wantCached bool
 		wantValues []byte
@@ -984,8 +862,6 @@ func TestALateDownloadNeverPublishesOverANewerEntry(t *testing.T) {
 			interfere: func(t *testing.T, c client.Client, valuesCache *cache.Cache, digestB string) {
 				t.Helper()
 
-				// Exactly what the controller does on the watch event: the newer
-				// values under the key, and the source object now publishing B.
 				if err := valuesCache.Put(key, digestB, republished); err != nil {
 					t.Fatalf("caching the newer revision: %v", err)
 				}
@@ -1007,8 +883,6 @@ func TestALateDownloadNeverPublishesOverANewerEntry(t *testing.T) {
 			interfere: func(t *testing.T, c client.Client, _ *cache.Cache, _ string) {
 				t.Helper()
 
-				// The auxiliary object expired and was collected with its entry;
-				// writing one now would leave it there with nothing watching it.
 				chart := &sourcev1.HelmChart{ObjectMeta: metav1.ObjectMeta{Name: key, Namespace: namespace}}
 				if err := c.Delete(context.Background(), chart); err != nil {
 					t.Fatalf("collecting the source object: %v", err)
@@ -1024,9 +898,6 @@ func TestALateDownloadNeverPublishesOverANewerEntry(t *testing.T) {
 			digestA := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
 			digestB := "sha256:the-revision-published-while-the-download-ran"
 
-			// The handler is the whole ordering: it says when the download is under
-			// way and does not answer until the test has done its interfering, so
-			// nothing here depends on timing.
 			started := make(chan struct{})
 			release := make(chan struct{})
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1099,8 +970,6 @@ func TestALateDownloadNeverPublishesOverANewerEntry(t *testing.T) {
 	}
 }
 
-// moveArtifactTo republishes the chart's artifact at another revision, the way the
-// source controller does between a resolver's read and its download finishing.
 func moveArtifactTo(t *testing.T, c client.Client, name, namespace, digest string) {
 	t.Helper()
 

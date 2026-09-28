@@ -45,18 +45,12 @@ import (
 	"github.com/deckhouse/chart-values-controller/internal/labels"
 )
 
-// cacheBlock is what one entry costs the cache's budget however few bytes it
-// holds — the filesystem block the cache rounds to.
 const cacheBlock = 4096
 
 const (
-	testNamespace = "d8-operator-helm"
-	testName      = "chart-values-abc123"
-	// otherTestName is a second chart's entry in the same cache directory, there to
-	// be found untouched by work about testName.
-	otherTestName = "chart-values-def456"
-	// testCacheBudget is roomy enough that no test here runs into it; the budget
-	// itself is exercised in the cache package.
+	testNamespace   = "d8-operator-helm"
+	testName        = "chart-values-abc123"
+	otherTestName   = "chart-values-def456"
 	testCacheBudget = int64(16 << 20)
 )
 
@@ -71,8 +65,6 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-// testUID is the identity of the object every test starts from, named so that a
-// delete can be checked for carrying it.
 const testUID = types.UID("original-uid")
 
 func expiredChart(expiresAt time.Time) *sourcev1.HelmChart {
@@ -107,17 +99,10 @@ func reconcileOnce(t *testing.T, r *reconciler) (reconcile.Result, error) {
 	})
 }
 
-// TestReconcileDeletesOnlyTheExpiredObjectItRead pins the collection of expired
-// auxiliary resources against the window between reading an object and deleting it.
-// A resolver serving a new request extends the annotation or recreates the object
-// under the same name; collecting that object would take the source away from a
-// request already waiting on it, and drop values the resolver just cached.
 func TestReconcileDeletesOnlyTheExpiredObjectItRead(t *testing.T) {
 	past := time.Now().Add(-time.Minute)
 	future := time.Now().Add(time.Hour)
 
-	// mutate runs once, after the reconciler's read of the object, against the same
-	// backing store — exactly where a concurrent resolver would write.
 	tests := []struct {
 		name    string
 		mutate  func(t *testing.T, cl client.WithWatch)
@@ -207,8 +192,6 @@ func TestReconcileDeletesOnlyTheExpiredObjectItRead(t *testing.T) {
 			}
 
 			if tt.survive {
-				// A refused delete must bring the pass back on its own: the write that
-				// refused it may never produce an event the predicate lets through.
 				if result.RequeueAfter <= 0 {
 					t.Fatalf("a refused delete must requeue, got %+v", result)
 				}
@@ -220,11 +203,6 @@ func TestReconcileDeletesOnlyTheExpiredObjectItRead(t *testing.T) {
 	}
 }
 
-// TestReconcileNamesTheReadIdentityInTheDelete pins both halves of the
-// precondition. The fake client enforces only the resource version
-// (client/fake enforces ResourceVersion alone), so the recreation case above
-// would still pass if the UID were dropped from the delete — the replacement
-// carries a different version anyway. Here the request itself is inspected.
 func TestReconcileNamesTheReadIdentityInTheDelete(t *testing.T) {
 	var options client.DeleteOptions
 
@@ -261,9 +239,6 @@ func TestReconcileNamesTheReadIdentityInTheDelete(t *testing.T) {
 	}
 }
 
-// TestReconcileTreatsAnAlreadyDeletedObjectAsCollected covers the object that is gone
-// by the time the delete runs: another pass, or a namespace teardown, got there first.
-// There is nothing left to wait on, so the pass completes instead of failing.
 func TestReconcileTreatsAnAlreadyDeletedObjectAsCollected(t *testing.T) {
 	var mutated bool
 	c := fake.NewClientBuilder().
@@ -302,19 +277,10 @@ func TestReconcileTreatsAnAlreadyDeletedObjectAsCollected(t *testing.T) {
 	}
 }
 
-// refreshStop is one way a pass that found the artifact revision moved can end
-// without replacing what is cached under the key. They are held together because
-// none of them says anything about the entry: whether the download was refused by
-// the budget, by the network, by the size limit or by a republish that dropped
-// values.yaml, the entry is equally unreplaced and has to be judged the same way.
 type refreshStop struct {
-	name string
-	// build is a reconciler whose refresh of testName cannot complete, and the
-	// digest of the artifact revision that refresh is moving to.
+	name  string
 	build func(t *testing.T, current []byte) (*reconciler, string)
-	// seal runs once the entry to be judged is on the volume, for the stop that is
-	// a property of the cache rather than of the artifact.
-	seal func(t *testing.T, r *reconciler, dir string)
+	seal  func(t *testing.T, r *reconciler, dir string)
 }
 
 func refreshStops(t *testing.T) []refreshStop {
@@ -327,9 +293,6 @@ func refreshStops(t *testing.T) []refreshStop {
 			seal: func(t *testing.T, r *reconciler, dir string) {
 				t.Helper()
 
-				// Reopened over the same directory with room for the seeded entry
-				// alone: the write stages a temp file beside it, a second block
-				// that does not fit.
 				r.cache = cache.New(dir, cacheBlock)
 			},
 		},
@@ -342,8 +305,6 @@ func refreshStops(t *testing.T) []refreshStop {
 					http.Error(w, "storage is unavailable", http.StatusInternalServerError)
 				}
 
-				// Nothing reads the artifact, so its digest is only the revision the
-				// chart's status now names.
 				return newArtifactFixture(t, handler, "sha256:the-current-revision", 1<<20), "sha256:the-current-revision"
 			},
 		},
@@ -372,29 +333,13 @@ func refreshStops(t *testing.T) []refreshStop {
 	}
 }
 
-// TestARefreshThatCannotBeCompletedNeverLeavesAnEarlierRevisionUnderTheKey pins
-// what a pass leaves behind when the artifact has moved and the refresh did not
-// land. The entry under the key was extracted from some earlier moment of this
-// chart and version; answering a request for the chart's default values with that
-// revision's is worse than not answering with values at all, because the response
-// says nothing that would let the caller tell. A miss costs one more round trip and
-// is either served the current values or told to retry.
-//
-// The exception is the entry that already holds the very revision being refreshed —
-// typically the resolver's write on the miss before — which is current and must
-// survive, or a tight budget would have every pass throw away what the previous
-// request cached. Which of the two an entry is, is read off the entry: it records
-// the digest it was extracted from.
 func TestARefreshThatCannotBeCompletedNeverLeavesAnEarlierRevisionUnderTheKey(t *testing.T) {
 	current := []byte("replicaCount: 2\n")
 	earlier := []byte("replicaCount: 1\n")
 
 	entries := []struct {
-		name string
-		// seed puts the entry to be judged on the volume, given the revision the
-		// pass is refreshing to.
-		seed func(t *testing.T, r *reconciler, dir, digest string)
-		// wantKept is what a read after the pass must find, nil for a miss.
+		name     string
+		seed     func(t *testing.T, r *reconciler, dir, digest string)
 		wantKept []byte
 	}{
 		{
@@ -413,8 +358,6 @@ func TestARefreshThatCannotBeCompletedNeverLeavesAnEarlierRevisionUnderTheKey(t 
 			seed: func(t *testing.T, _ *reconciler, dir, _ string) {
 				t.Helper()
 
-				// Written straight onto the volume, which is exactly what the older
-				// image left there: values with nothing saying where they came from.
 				if err := os.WriteFile(filepath.Join(dir, testName), earlier, 0o644); err != nil {
 					t.Fatalf("seeding a pre-format entry: %v", err)
 				}
@@ -442,8 +385,6 @@ func TestARefreshThatCannotBeCompletedNeverLeavesAnEarlierRevisionUnderTheKey(t 
 				dir := t.TempDir()
 				r.cache = cache.New(dir, 8*cacheBlock)
 				entry.seed(t, r, dir, digest)
-				// Reopened so that whatever was seeded is charged to the budget,
-				// including a file written past the cache.
 				r.cache = cache.New(dir, 8*cacheBlock)
 
 				if stop.seal != nil {
@@ -472,11 +413,6 @@ func TestARefreshThatCannotBeCompletedNeverLeavesAnEarlierRevisionUnderTheKey(t 
 	}
 }
 
-// TestARefreshThatCannotBeCompletedLeavesTheEntryOfAnotherChartAlone guards the
-// dropping above against reaching past the key it is about: the budget is a
-// property of the whole directory, so a refusal here is routinely caused by entries
-// of other charts, and those entries are current and belong to requests of their
-// own. A failed download is about one artifact for the same reason.
 func TestARefreshThatCannotBeCompletedLeavesTheEntryOfAnotherChartAlone(t *testing.T) {
 	current := []byte("replicaCount: 2\n")
 	other := []byte("replicaCount: 9\n")
@@ -494,8 +430,6 @@ func TestARefreshThatCannotBeCompletedLeavesTheEntryOfAnotherChartAlone(t *testi
 				t.Fatalf("seeding another chart's entry: %v", err)
 			}
 
-			// Room for the two entries and nothing more, which is itself the refusal
-			// the cache stop is about; the other stops do not get that far anyway.
 			r.cache = cache.New(dir, 2*cacheBlock)
 
 			if _, err := reconcileOnce(t, r); err != nil {
@@ -520,10 +454,6 @@ func TestARefreshThatCannotBeCompletedLeavesTheEntryOfAnotherChartAlone(t *testi
 	}
 }
 
-// TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves is the path the refusal
-// above is the degradation of: with room on the volume, a republished chart has
-// its cached values replaced by the new revision's, and the entry records that
-// revision so the passes that follow do not download it again.
 func TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves(t *testing.T) {
 	current := []byte("replicaCount: 2\n")
 
@@ -548,10 +478,6 @@ func TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves(t *testing.T) {
 	}
 }
 
-// newRefreshFixture is a reconciler pointed at a chart whose artifact is published
-// and readable — what makes a pass attempt a refresh at all — serving an archive
-// that carries the given values. It returns the artifact's digest, which is the
-// revision a successful refresh records.
 func newRefreshFixture(t *testing.T, values []byte) (*reconciler, string) {
 	t.Helper()
 
@@ -561,9 +487,6 @@ func newRefreshFixture(t *testing.T, values []byte) (*reconciler, string) {
 	return newArtifactFixture(t, serveBytes(archive), digest, 1<<20), digest
 }
 
-// newArtifactFixture is a reconciler pointed at a chart whose artifact is published
-// and ready — what makes a pass attempt a refresh at all — at the given revision,
-// served by the given handler.
 func newArtifactFixture(t *testing.T, handler http.HandlerFunc, digest string, maxArtifactBytes int64) *reconciler {
 	t.Helper()
 
@@ -585,12 +508,6 @@ func serveBytes(body []byte) http.HandlerFunc {
 	}
 }
 
-// TestARefusedRefreshDeletesAtMostOnce follows the sequence the deletion above
-// starts: the stale entry goes, the next request has the resolver cache the
-// current values under the same key, and the pass after that is refused too. If a
-// refused pass judged the key by the digest it last tried to write rather than by
-// the one the entry records, that fresh entry would look stale to it and be deleted
-// in turn — the thrash the previous fix was about, one pass further along.
 func TestARefusedRefreshDeletesAtMostOnce(t *testing.T) {
 	values := []byte("replicaCount: 2\n")
 	archive := buildValuesArchive(t, values)
@@ -621,10 +538,6 @@ func TestARefusedRefreshDeletesAtMostOnce(t *testing.T) {
 		t.Fatal("the stale entry should have been dropped by the first pass")
 	}
 
-	// What the resolver does on the miss that follows: the values it just served
-	// are cached under the same key. A write needs room for the temp file beside
-	// the entry, so this is the budget with the space the deletion freed; it is
-	// then reopened at the tight one, which is where the next pass runs.
 	r.cache = cache.New(dir, 2*cacheBlock)
 	if err := r.cache.Put(testName, fmt.Sprintf("sha256:%x", sha256.Sum256(archive)), values); err != nil {
 		t.Fatalf("the resolver could not cache the current values: %v", err)
@@ -644,8 +557,6 @@ func TestARefusedRefreshDeletesAtMostOnce(t *testing.T) {
 	}
 }
 
-// readyChartWithArtifact is a chart whose artifact is published and ready to be
-// read, which is what makes a pass attempt a refresh at all.
 func readyChartWithArtifact(url, digest string) *sourcev1.HelmChart {
 	return &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
@@ -661,15 +572,12 @@ func readyChartWithArtifact(url, digest string) *sourcev1.HelmChart {
 	}
 }
 
-// buildValuesArchive packs values.yaml the way a chart artifact carries it.
 func buildValuesArchive(t *testing.T, values []byte) []byte {
 	t.Helper()
 
 	return buildArchive(t, "podinfo/values.yaml", values)
 }
 
-// buildArchive packs one named file, so an archive that is a chart artifact in
-// every way except that it carries no values.yaml can be built too.
 func buildArchive(t *testing.T, name string, content []byte) []byte {
 	t.Helper()
 
@@ -697,22 +605,12 @@ func buildArchive(t *testing.T, name string, content []byte) []byte {
 	return buf.Bytes()
 }
 
-// TestARefreshRepairsAnEntryLeftAtAnotherRevisionByALateWrite covers the key this
-// controller believes it made current and did not. A request that missed the cache
-// started its download from the previous revision; the artifact was republished, a
-// pass here cached the new one, and only then did that download finish and write its
-// older revision over the entry. A pass that judged the key by the revision it
-// remembers writing would find nothing to do and leave an earlier revision to be
-// served for the whole TTL. The entry says which revision is actually under the key,
-// and the pass acts on that.
 func TestARefreshRepairsAnEntryLeftAtAnotherRevisionByALateWrite(t *testing.T) {
 	current := []byte("replicaCount: 2\n")
 	stale := []byte("replicaCount: 1\n")
 
 	r, digest := newRefreshFixture(t, current)
 
-	// The pass that made the key current, and whose write this controller would be
-	// remembering.
 	if _, err := reconcileOnce(t, r); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
@@ -720,8 +618,6 @@ func TestARefreshRepairsAnEntryLeftAtAnotherRevisionByALateWrite(t *testing.T) {
 		t.Fatalf("the first pass left %+v under the key, want the current revision %q", entry, digest)
 	}
 
-	// The download that started before that revision existed, landing after it: the
-	// resolver caches on every miss, and it writes the revision it downloaded.
 	if err := r.cache.Put(testName, "sha256:the-revision-the-download-started-from", stale); err != nil {
 		t.Fatalf("the late write: %v", err)
 	}
@@ -742,17 +638,7 @@ func TestARefreshRepairsAnEntryLeftAtAnotherRevisionByALateWrite(t *testing.T) {
 	}
 }
 
-// TestReconcileCollectsAnObjectThatExpiredDuringTheRefresh pins what happens when
-// the download outlasts the expiry the pass judged to be ahead of it. Asking for a
-// requeue in the past asks for nothing — controller-runtime schedules only a
-// positive RequeueAfter — and no event would arrive either, because an unchanged
-// revision is filtered by the predicate. The object and its entry would then sit on
-// the volume for good, which is the one outcome the expiry exists to prevent.
 func TestReconcileCollectsAnObjectThatExpiredDuringTheRefresh(t *testing.T) {
-	// Ahead of the pass when it is read, behind it by the time the refresh returns.
-	// Counted in whole seconds because the annotation is RFC3339 without a fraction:
-	// a sub-second margin is truncated away and can land in the past before the pass
-	// even starts. Two seconds leaves at least one after the truncation.
 	soon := time.Now().Add(2 * time.Second)
 
 	c := fake.NewClientBuilder().
@@ -765,10 +651,6 @@ func TestReconcileCollectsAnObjectThatExpiredDuringTheRefresh(t *testing.T) {
 		t.Fatalf("seeding cache: %v", err)
 	}
 
-	// Stands in for the download, which is the slow part of a refresh and the only
-	// reason a pass can outlive an expiry it judged to be ahead of it. Placed here
-	// so the expiry is in the future when the pass reads it and in the past when
-	// the refresh returns — the interleaving the requeue has to survive.
 	artifact := r.artifactOf
 	var refreshed bool
 	r.artifactOf = func(o client.Object) *meta.Artifact {
@@ -783,9 +665,6 @@ func TestReconcileCollectsAnObjectThatExpiredDuringTheRefresh(t *testing.T) {
 		t.Fatalf("reconcile returned an error: %v", err)
 	}
 
-	// Without this the test would also pass by never reaching the refresh: a setup
-	// slow enough to consume the margin sends the pass down the top-of-pass branch,
-	// which collects the object for an entirely different reason.
 	if !refreshed {
 		t.Fatal("the pass never reached the refresh, so it did not exercise the expiry crossing it")
 	}

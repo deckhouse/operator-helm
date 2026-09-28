@@ -27,12 +27,8 @@ import (
 	"testing"
 )
 
-// testBudget is far above anything the round-trip tests store, so only the tests
-// that set their own budget exercise the accounting.
 const testBudget = int64(16 << 20)
 
-// testDigest stands in for the artifact revision an entry is written with, for the
-// tests that are about something else; the ones about the revision name their own.
 const testDigest = "sha256:0123456789abcdef"
 
 func TestPutGetRoundTrip(t *testing.T) {
@@ -60,9 +56,6 @@ func TestPutGetRoundTrip(t *testing.T) {
 	}
 }
 
-// TestConcurrentSameKey exercises the -race detector: many writers of the same
-// key (same content, as the digest guarantees) plus concurrent readers must
-// never observe a partial or corrupted file.
 func TestConcurrentSameKey(t *testing.T) {
 	c := New(t.TempDir(), testBudget)
 
@@ -93,14 +86,7 @@ func TestConcurrentSameKey(t *testing.T) {
 	}
 }
 
-// TestPutRefusesAnEntryThatDoesNotFitTheBudget covers the whole point of the
-// budget: the volume's sizeLimit only gets the pod evicted, so the cache has to
-// say no by itself, and say it without losing what is already stored. The budget
-// is charged twice per write because an atomic write briefly holds a temp copy
-// next to the published one.
 func TestPutRefusesAnEntryThatDoesNotFitTheBudget(t *testing.T) {
-	// One block's worth of content, since a budget is spent in whole blocks: this
-	// is what an entry costs the volume however few bytes it holds.
 	content := bytes.Repeat([]byte("x"), 1024)
 
 	tests := []struct {
@@ -154,14 +140,8 @@ func TestPutRefusesAnEntryThatDoesNotFitTheBudget(t *testing.T) {
 	}
 }
 
-// TestPutKeepsServingEarlierEntriesOnceTheBudgetIsExhausted pins the chosen
-// degradation: the cache refuses new entries instead of evicting old ones, so a
-// full cache still answers every request it could answer before. The values of a
-// refused write are handed to the client by the caller regardless.
 func TestPutKeepsServingEarlierEntriesOnceTheBudgetIsExhausted(t *testing.T) {
 	content := bytes.Repeat([]byte("y"), 512)
-	// Room for exactly one entry: 2n is claimed while writing, n stays afterwards,
-	// which leaves n free — not the 2n the next write needs.
 	c := New(t.TempDir(), 2*blockSize)
 
 	if err := c.Put("cv-first", testDigest, content); err != nil {
@@ -176,9 +156,6 @@ func TestPutKeepsServingEarlierEntriesOnceTheBudgetIsExhausted(t *testing.T) {
 	}
 }
 
-// TestOverwritingAnEntryCountsItOnce guards the accounting against charging the
-// same key twice: the controller rewrites an entry on every revision change, and a
-// cache that never gave the old bytes back would refuse everything after a while.
 func TestOverwritingAnEntryCountsItOnce(t *testing.T) {
 	content := bytes.Repeat([]byte("z"), 512)
 	c := New(t.TempDir(), 2*blockSize)
@@ -194,9 +171,6 @@ func TestOverwritingAnEntryCountsItOnce(t *testing.T) {
 	}
 }
 
-// TestDeleteGivesTheSpaceBackToTheBudget ties the budget to the controller's
-// expiry pass: it deletes the auxiliary object together with its cache entry, and
-// if that did not free the space the cache would stay full for the life of the pod.
 func TestDeleteGivesTheSpaceBackToTheBudget(t *testing.T) {
 	content := bytes.Repeat([]byte("q"), 512)
 	c := New(t.TempDir(), 2*blockSize)
@@ -216,7 +190,6 @@ func TestDeleteGivesTheSpaceBackToTheBudget(t *testing.T) {
 		t.Fatalf("put after delete: %v", err)
 	}
 
-	// A delete of a key that is not there must not credit the budget a second time.
 	if err := c.Delete("cv-old"); err != nil {
 		t.Fatalf("delete of a missing entry: %v", err)
 	}
@@ -225,9 +198,6 @@ func TestDeleteGivesTheSpaceBackToTheBudget(t *testing.T) {
 	}
 }
 
-// TestNewAccountsForEntriesAlreadyOnDisk covers a restarted container: the
-// emptyDir keeps its files, and a budget starting from zero would allow a second
-// volume's worth of entries on top of them.
 func TestNewAccountsForEntriesAlreadyOnDisk(t *testing.T) {
 	content := bytes.Repeat([]byte("w"), 512)
 
@@ -236,7 +206,6 @@ func TestNewAccountsForEntriesAlreadyOnDisk(t *testing.T) {
 		t.Fatalf("seeding the cache dir: %v", err)
 	}
 
-	// Enough for the pre-existing entry and for one more write (2n while it runs).
 	if err := New(dir, 3*blockSize).Put("cv-fresh", testDigest, content); err != nil {
 		t.Fatalf("put with room for both: %v", err)
 	}
@@ -244,16 +213,11 @@ func TestNewAccountsForEntriesAlreadyOnDisk(t *testing.T) {
 		t.Fatalf("clearing the fresh entry: %v", err)
 	}
 
-	// One byte short of that, which only shows if the pre-existing file is counted.
 	if err := New(dir, 3*blockSize-1).Put("cv-fresh", testDigest, content); !errors.Is(err, ErrBudgetExhausted) {
 		t.Fatalf("put = %v, want ErrBudgetExhausted: files found at startup must be charged to the budget", err)
 	}
 }
 
-// TestNewSweepsTempFilesLeftByACrash covers the other half of startup: a temp file
-// can only be left by a process that died mid-write (one process owns the
-// directory), it will never be renamed into an entry, and if it were merely
-// counted it would hold the space until the pod is replaced.
 func TestNewSweepsTempFilesLeftByACrash(t *testing.T) {
 	content := bytes.Repeat([]byte("e"), 512)
 
@@ -272,17 +236,10 @@ func TestNewSweepsTempFilesLeftByACrash(t *testing.T) {
 	}
 }
 
-// TestConcurrentPutsOfDifferentKeysStayWithinTheBudget is the -race case that
-// matters: only same-key work is collapsed upstream (resolver.inflight), so
-// different keys stage their temp files side by side and the budget is the only
-// thing keeping their sum off the volume's sizeLimit.
 func TestConcurrentPutsOfDifferentKeysStayWithinTheBudget(t *testing.T) {
-	// Short of a block, so that one entry — content plus the line naming its
-	// revision — still costs the budget exactly one.
 	content := bytes.Repeat([]byte("k"), 2048)
 
 	const writers = 16
-	// Room for four entries once settled, for two writes at their peak.
 	budget := int64(4 * blockSize)
 	dir := t.TempDir()
 	c := New(dir, budget)
@@ -320,7 +277,6 @@ func TestConcurrentPutsOfDifferentKeysStayWithinTheBudget(t *testing.T) {
 		t.Fatalf("cache dir holds %d bytes, over the %d-byte budget", n, budget)
 	}
 
-	// Whatever was admitted must be a whole, readable entry, never a partial one.
 	for i := range writers {
 		if got, ok := c.Get(fmt.Sprintf("cv-%d", i)); ok && !bytes.Equal(got, content) {
 			t.Fatalf("entry cv-%d holds %d bytes, want the full content", i, len(got))
@@ -328,8 +284,6 @@ func TestConcurrentPutsOfDifferentKeysStayWithinTheBudget(t *testing.T) {
 	}
 }
 
-// dirBytes sums the entries of a cache directory, temp files included: they
-// occupy the volume just as much as the published ones.
 func dirBytes(t *testing.T, dir string) int64 {
 	t.Helper()
 
@@ -350,12 +304,6 @@ func dirBytes(t *testing.T, dir string) int64 {
 	return total
 }
 
-// TestPutAndDeleteOfOneKeyLeaveTheAccountingMatchingTheDisk is the regression for
-// the window between publishing an entry and recording it. A delete landing in
-// that window used to subtract a file that was about to exist, leaving the entry
-// on the volume with nothing charged for it — or charged for one that is gone.
-// Neither is visible to the race detector: both interleavings are properly
-// synchronized, they just disagreed about the world.
 func TestPutAndDeleteOfOneKeyLeaveTheAccountingMatchingTheDisk(t *testing.T) {
 	content := bytes.Repeat([]byte("r"), 1024)
 
@@ -397,8 +345,6 @@ func TestPutAndDeleteOfOneKeyLeaveTheAccountingMatchingTheDisk(t *testing.T) {
 			t.Fatalf("reserved = %d after both finished, want 0", reserved)
 		}
 
-		// Either order is a correct outcome; what has to hold is that the two
-		// agree, down to the exact block the entry costs.
 		want := int64(0)
 		if present {
 			want = blockSize
@@ -410,19 +356,11 @@ func TestPutAndDeleteOfOneKeyLeaveTheAccountingMatchingTheDisk(t *testing.T) {
 	}
 }
 
-// TestAnEntryNamesTheArtifactRevisionItWasExtractedFrom is the fact this cache
-// exists to record. Values alone cannot be judged later: a pass that fails to
-// replace an entry has to know whether what is there came from the revision that is
-// current now, and everything else it could compare is a guess. The digest travels
-// in the entry file, so it survives the rename that publishes the values and the
-// restart that finds them again.
 func TestAnEntryNamesTheArtifactRevisionItWasExtractedFrom(t *testing.T) {
 	values := []byte("replicaCount: 1\n# a comment that is not a header\n")
 
 	tests := []struct {
-		name string
-		// seed writes what is on the volume before the reader opens it; nil means
-		// the entry is written through the cache itself.
+		name       string
 		seed       func(t *testing.T, dir string)
 		digest     string
 		wantValues []byte
@@ -473,8 +411,6 @@ func TestAnEntryNamesTheArtifactRevisionItWasExtractedFrom(t *testing.T) {
 				}
 			}
 
-			// A second cache over the same directory is what a restarted container
-			// opens: nothing about the entry may live in the process that wrote it.
 			entry, ok := New(dir, testBudget).GetEntry(key)
 			if !ok {
 				t.Fatal("the entry was not found after reopening the directory")
@@ -486,7 +422,6 @@ func TestAnEntryNamesTheArtifactRevisionItWasExtractedFrom(t *testing.T) {
 				t.Fatalf("digest = %q, want %q", entry.Digest, tt.wantDigest)
 			}
 
-			// Get answers the request path, which wants the values and nothing else.
 			got, ok := New(dir, testBudget).Get(key)
 			if !ok || !bytes.Equal(got, tt.wantValues) {
 				t.Fatalf("get = (%q, %v), want (%q, true)", got, ok, tt.wantValues)
@@ -495,14 +430,7 @@ func TestAnEntryNamesTheArtifactRevisionItWasExtractedFrom(t *testing.T) {
 	}
 }
 
-// TestTheBudgetChargesTheRecordedRevisionAlongWithTheValues keeps the accounting
-// honest about what the volume actually holds now that an entry carries a line of
-// its own: a budget that charged for the values alone would admit entries whose
-// files are larger than anything it counted.
 func TestTheBudgetChargesTheRecordedRevisionAlongWithTheValues(t *testing.T) {
-	// Content that fills a block on its own, so the line naming the revision is what
-	// pushes the file into a second one: if it were not charged, the cache would
-	// admit twice the entries the budget is meant to allow.
 	content := bytes.Repeat([]byte("v"), blockSize)
 
 	dir := t.TempDir()
@@ -536,7 +464,6 @@ func TestTheBudgetChargesTheRecordedRevisionAlongWithTheValues(t *testing.T) {
 		t.Fatalf("charged %d against a budget of %d", charged, budget)
 	}
 
-	// What the volume holds, counted the way the budget counts it.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("reading cache dir: %v", err)
@@ -558,21 +485,11 @@ func TestTheBudgetChargesTheRecordedRevisionAlongWithTheValues(t *testing.T) {
 		t.Fatalf("the volume holds %d bytes' worth of blocks while the budget is charged %d", occupied, charged)
 	}
 
-	// And the next write is refused because the budget is genuinely full, not
-	// because the accounting drifted.
 	if err := c.Put("cv-one-more", testDigest, content); !errors.Is(err, ErrBudgetExhausted) {
 		t.Fatalf("put into the full cache = %v, want ErrBudgetExhausted", err)
 	}
 }
 
-// TestAnEntryFileThatSaysNothingUsableReadsAsUnknownRatherThanAsAnotherRevision
-// walks the edges of the one line an entry file opens with. None of these files can
-// be published by this cache — a write is a whole file put in place by one rename —
-// but the volume outlives the process and a reader must have an answer for whatever
-// is found there. The only answers that are safe are "no revision on record" and
-// "no values": both make the next pass download the artifact again, while a digest
-// read off a file that does not really carry it would attribute somebody else's
-// values to the revision that is current.
 func TestAnEntryFileThatSaysNothingUsableReadsAsUnknownRatherThanAsAnotherRevision(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -587,10 +504,7 @@ func TestAnEntryFileThatSaysNothingUsableReadsAsUnknownRatherThanAsAnotherRevisi
 			wantDigest: DigestUnknown,
 		},
 		{
-			name: "a file that is the header alone, with no line to end it, names no revision",
-			// Truncated before the newline that would close the header: there is no
-			// digest on the line, so it is read the way a file from before this
-			// format is — values of an unknown revision, dropped by the next pass.
+			name:       "a file that is the header alone, with no line to end it, names no revision",
 			raw:        []byte(entryHeaderPrefix),
 			wantValues: []byte(entryHeaderPrefix),
 			wantDigest: DigestUnknown,
@@ -602,9 +516,7 @@ func TestAnEntryFileThatSaysNothingUsableReadsAsUnknownRatherThanAsAnotherRevisi
 			wantDigest: DigestUnknown,
 		},
 		{
-			name: "a header with no values behind it keeps its revision and holds nothing",
-			// A chart whose values.yaml is empty reaches the disk as exactly this,
-			// so the digest is real and the values are genuinely empty.
+			name:       "a header with no values behind it keeps its revision and holds nothing",
 			raw:        []byte(entryHeaderPrefix + "sha256:c0ffee\n"),
 			wantValues: nil,
 			wantDigest: "sha256:c0ffee",
@@ -629,8 +541,6 @@ func TestAnEntryFileThatSaysNothingUsableReadsAsUnknownRatherThanAsAnotherRevisi
 				t.Fatalf("digest = %q, want %q", entry.Digest, tt.wantDigest)
 			}
 
-			// And the request path sees the same values, without a second reading of
-			// the file's shape.
 			got, ok := New(dir, testBudget).Get("cv-edge")
 			if !ok || !bytes.Equal(got, tt.wantValues) {
 				t.Fatalf("get = (%q, %v), want (%q, true)", got, ok, tt.wantValues)
@@ -639,14 +549,6 @@ func TestAnEntryFileThatSaysNothingUsableReadsAsUnknownRatherThanAsAnotherRevisi
 	}
 }
 
-// TestPutUnlessAsksTheGuardWithTheRenameAlreadyHeld pins the property the resolver
-// depends on: a writer that was overtaken while it produced its content must be
-// able to find that out with no room left for another writer to slip in. Checking
-// before calling Put cannot give that — the temp file is written outside the lock —
-// so the guard has to run under the lock the rename happens beneath.
-//
-// Asked of the lock itself rather than of a competing writer: a goroutine that
-// fails to finish proves nothing, since it may simply not have been scheduled.
 func TestPutUnlessAsksTheGuardWithTheRenameAlreadyHeld(t *testing.T) {
 	c := New(t.TempDir(), testBudget)
 
@@ -674,9 +576,6 @@ func TestPutUnlessAsksTheGuardWithTheRenameAlreadyHeld(t *testing.T) {
 		t.Fatal("a refused entry was published")
 	}
 
-	// The lock is free again, and a refused entry costs nothing lasting: its claim
-	// is given back whole, or a cache under pressure would shrink by every
-	// overtaken download.
 	if err := c.Put(key, "new", []byte("new values\n")); err != nil {
 		t.Fatalf("Put after a refusal: %v", err)
 	}

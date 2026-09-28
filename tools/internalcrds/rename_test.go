@@ -81,8 +81,6 @@ func TestRenameRewritesEveryIdentity(t *testing.T) {
 		t.Fatalf("metadata.name = %v", got)
 	}
 
-	// Short names and categories are dropped rather than renamed: these are
-	// service objects, and the upstream values would collide with a real flux.
 	if _, ok := names["shortNames"]; ok {
 		t.Fatal("shortNames must be gone")
 	}
@@ -211,8 +209,6 @@ func TestRenameRewritesKindNamesInProse(t *testing.T) {
 			validation["rule"],
 			"!has(self.verify) || self.sourceRef.kind == 'InternalNelmOperatorHelmRepository'",
 		},
-		// A composite upstream type name is not a kind and stays as upstream
-		// wrote it; only the kind it is named after moves.
 		"composite type name": {
 			schema["status"].(map[string]any)["description"],
 			"HelmChartStatus records the observed state of the InternalNelmOperatorHelmChart.",

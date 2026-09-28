@@ -46,9 +46,6 @@ type archiveEntry struct {
 	content string
 }
 
-// buildOrderedChartArchive writes the entries in the order given. Order is what a
-// budget test turns on: values.yaml ends the walk, so a payload that must be
-// walked has to be written before it.
 func buildOrderedChartArchive(t *testing.T, entries []archiveEntry) []byte {
 	t.Helper()
 
@@ -80,8 +77,6 @@ func buildOrderedChartArchive(t *testing.T, entries []archiveEntry) []byte {
 	return buf.Bytes()
 }
 
-// buildArchiveWithEntries writes count header-only entries, so the archive is
-// judged by how many files it claims rather than by how much they hold.
 func buildArchiveWithEntries(t *testing.T, count int) []byte {
 	t.Helper()
 
@@ -143,7 +138,6 @@ func TestFetchValuesMissing(t *testing.T) {
 }
 
 func TestFetchValuesNestedValuesIgnored(t *testing.T) {
-	// values.yaml of a subchart must not be mistaken for the chart's own.
 	archive := buildChartArchive(t, map[string]string{
 		"podinfo/charts/dep/values.yaml": "nested: true\n",
 	})
@@ -176,20 +170,13 @@ func TestFetchValuesTooLarge(t *testing.T) {
 
 	url := serve(t, archive)
 
-	// A limit smaller than the archive must be rejected before digest checks.
 	_, err := FetchValues(context.Background(), http.DefaultClient, url, digestOf(archive), 8)
 	if !errors.Is(err, ErrArtifactTooLarge) {
 		t.Fatalf("expected ErrArtifactTooLarge, got %v", err)
 	}
 }
 
-// TestExtractValuesRejectsAnArchiveThatExpandsPastTheTotalBudget covers the
-// decompression bomb the per-entry bound left through: the values.yaml of such an
-// archive is small and well within every per-file limit, while the entries walked
-// on the way to it expand into orders of magnitude more than the archive itself.
 func TestExtractValuesRejectsAnArchiveThatExpandsPastTheTotalBudget(t *testing.T) {
-	// Zeroes compress to almost nothing, which is the whole trick: a few kilobytes
-	// on the wire, tens of megabytes once walked.
 	archive := buildOrderedChartArchive(t, []archiveEntry{
 		{name: "podinfo/big.bin", content: strings.Repeat("\x00", 64<<20)},
 		{name: "podinfo/values.yaml", content: "a: b\n"},
@@ -205,9 +192,6 @@ func TestExtractValuesRejectsAnArchiveThatExpandsPastTheTotalBudget(t *testing.T
 	}
 }
 
-// TestExtractValuesRejectsAnArchiveWithTooManyEntries covers the other half of the
-// same budget: entries that carry no content cost no bytes, so only counting them
-// bounds an archive built out of headers alone.
 func TestExtractValuesRejectsAnArchiveWithTooManyEntries(t *testing.T) {
 	archive := buildArchiveWithEntries(t, maxArchiveEntries+1)
 
@@ -217,8 +201,6 @@ func TestExtractValuesRejectsAnArchiveWithTooManyEntries(t *testing.T) {
 	}
 }
 
-// TestExtractValuesAcceptsAnArchiveWithinBothBudgets is the other side of the two
-// tests above: the bounds must not refuse a chart of the size real charts have.
 func TestExtractValuesAcceptsAnArchiveWithinBothBudgets(t *testing.T) {
 	archive := buildArchiveWithEntries(t, maxArchiveEntries-1)
 
@@ -231,9 +213,6 @@ func TestExtractValuesAcceptsAnArchiveWithinBothBudgets(t *testing.T) {
 	}
 }
 
-// TestExtractValuesStopsOnACancelledContext pins that the walk is abandonable: it
-// used to run to the end of the archive whatever the caller's context said, so a
-// request that had already gone away still paid for the whole extraction.
 func TestExtractValuesStopsOnACancelledContext(t *testing.T) {
 	archive := buildChartArchive(t, map[string]string{
 		"podinfo/values.yaml": "a: b\n",
@@ -248,9 +227,6 @@ func TestExtractValuesStopsOnACancelledContext(t *testing.T) {
 	}
 }
 
-// TestBoundedReaderStopsACopyInFlight pins the half of cancellation a per-entry
-// check cannot reach: one large entry is a single copy, and it has to be
-// interruptible in the middle rather than only between entries.
 func TestBoundedReaderStopsACopyInFlight(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -270,15 +246,7 @@ func TestBoundedReaderStopsACopyInFlight(t *testing.T) {
 	}
 }
 
-// TestExtractValuesChargesTheBytesOfAnOrdinaryEntryOnce is the guard against
-// paying for the sparse fix with the budget of every real chart. A values.yaml of
-// compressible YAML passes through gzip on the way to the walk and is then read
-// out of it; counting both would halve what a chart is allowed to weigh, and a
-// file over half the budget would be refused with the budget half spent.
 func TestExtractValuesChargesTheBytesOfAnOrdinaryEntryOnce(t *testing.T) {
-	// Repetitive YAML compresses hard, so the archive stays small and its budget
-	// stays at the floor: the entry is then comfortably under the budget and well
-	// over half of it, which is the only interesting size here.
 	values := strings.Repeat("replicaCount: 1\n", (5<<20)/16)
 
 	archive := buildOrderedChartArchive(t, []archiveEntry{{name: "podinfo/values.yaml", content: values}})
@@ -298,12 +266,6 @@ func TestExtractValuesChargesTheBytesOfAnOrdinaryEntryOnce(t *testing.T) {
 	}
 }
 
-// TestCancellableReaderStopsAReaderThatYieldsNothing pins the half of cancellation
-// the budget cannot reach. gzip walks concatenated members inside a single Read of
-// its own, returning no bytes until one of them holds data, so a reader bounded
-// only on its output would run an archive of empty members to the end whatever the
-// request said. The check belongs on the compressed side, where every member is
-// pulled from.
 func TestCancellableReaderStopsAReaderThatYieldsNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -342,15 +304,6 @@ func TestDecompressedLimit(t *testing.T) {
 	}
 }
 
-// TestExtractValuesRejectsASparseEntryThatFabricatesItsSize covers the one way an
-// entry can cost more than it weighs. tar serves the holes of a sparse file out of
-// its own zero reader without touching the stream underneath (archive/tar
-// reader.go, zeroReader), so a budget counting only what leaves gzip never sees
-// them: a three-kilobyte archive hands back megabytes having read two kilobytes.
-//
-// The size is chosen between the archive's budget and maxBytes, so that the
-// per-file limit cannot be what refuses it — that limit already held, and it is
-// the budget this test is about.
 func TestExtractValuesRejectsASparseEntryThatFabricatesItsSize(t *testing.T) {
 	archive := buildSparseArchive(t, "podinfo/values.yaml", 9<<20)
 
@@ -368,9 +321,6 @@ func TestExtractValuesRejectsASparseEntryThatFabricatesItsSize(t *testing.T) {
 	}
 }
 
-// buildSparseArchive writes a PAX 1.0 sparse entry by hand: archive/tar writes no
-// sparse files, so the bytes are assembled here. The entry declares realsize and
-// carries a map saying all of it is a hole, which is what makes it free to produce.
 func buildSparseArchive(t *testing.T, name string, realsize int64) []byte {
 	t.Helper()
 
@@ -379,7 +329,6 @@ func buildSparseArchive(t *testing.T, name string, realsize int64) []byte {
 		paxRecord("GNU.sparse.name", name) +
 		paxRecord("GNU.sparse.realsize", fmt.Sprint(realsize))
 
-	// One entry at offset zero holding zero bytes of data: the whole file is a hole.
 	sparseMap := padToBlock([]byte("1\n0\n0\n"))
 
 	var tarball bytes.Buffer
@@ -387,7 +336,7 @@ func buildSparseArchive(t *testing.T, name string, realsize int64) []byte {
 	tarball.Write(padToBlock([]byte(records)))
 	tarball.Write(tarHeader(t, "GNUSparseFile.0/"+name, int64(len(sparseMap)), tar.TypeReg))
 	tarball.Write(sparseMap)
-	tarball.Write(make([]byte, 1024)) // the two empty blocks that end an archive
+	tarball.Write(make([]byte, 1024))
 
 	var out bytes.Buffer
 	gz := gzip.NewWriter(&out)
@@ -401,7 +350,6 @@ func buildSparseArchive(t *testing.T, name string, realsize int64) []byte {
 	return out.Bytes()
 }
 
-// tarHeader writes one ustar header block, checksum included.
 func tarHeader(t *testing.T, name string, size int64, typeflag byte) []byte {
 	t.Helper()
 
@@ -414,7 +362,6 @@ func tarHeader(t *testing.T, name string, size int64, typeflag byte) []byte {
 	copy(block[257:263], "ustar\x00")
 	copy(block[263:265], "00")
 
-	// The checksum is computed with its own field read as spaces.
 	for i := 148; i < 156; i++ {
 		block[i] = ' '
 	}
@@ -427,9 +374,6 @@ func tarHeader(t *testing.T, name string, size int64, typeflag byte) []byte {
 	return block
 }
 
-// paxRecord formats one "<length> <key>=<value>\n" record, whose length counts
-// itself and so has to be solved for. The search starts at the shortest possible
-// record rather than at a guess, so a short key and value cannot run past it.
 func paxRecord(key, value string) string {
 	for n := 1; ; n++ {
 		record := fmt.Sprintf("%d %s=%s\n", n, key, value)

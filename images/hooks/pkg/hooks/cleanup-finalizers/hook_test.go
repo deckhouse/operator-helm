@@ -34,7 +34,6 @@ import (
 	"hooks/pkg/settings"
 )
 
-// patchCall records one collected patch so a test can compare the whole set at once.
 type patchCall struct {
 	filter     string
 	apiVersion string
@@ -43,11 +42,6 @@ type patchCall struct {
 	name       string
 }
 
-// newInput wires a hook input whose snapshots hold the given resources keyed by snapshot
-// name and whose namespace looks free of workloads. Only PatchWithJQ is mocked, so a
-// merge or JSON patch would hit an unmocked method and fail the test; the patch type is
-// not an implementation detail here, see
-// TestCleanupFinalizersRemovesOnlyTheModuleFinalizerAndLeavesForeignOnesInPlace.
 func newInput(t *testing.T, snapshots map[string][]resource, workloads ...*unstructured.Unstructured) (*pkg.HookInput, *[]patchCall) {
 	t.Helper()
 
@@ -80,7 +74,6 @@ func newInput(t *testing.T, snapshots map[string][]resource, workloads ...*unstr
 	}, &calls
 }
 
-// snapshotOf mimics what the jq filter of the binding produces for one object.
 func snapshotOf(t *testing.T, res resource) pkg.Snapshot {
 	t.Helper()
 
@@ -97,9 +90,6 @@ func snapshotOf(t *testing.T, res resource) pkg.Snapshot {
 	return snapshot
 }
 
-// k8sClient serves the dynamic client the hook probes workloads with. The embedded
-// interface is nil on purpose: the hook touches nothing else, and a call to any other
-// method should panic loudly rather than silently pass.
 type k8sClient struct {
 	pkg.KubernetesClient
 
@@ -108,8 +98,6 @@ type k8sClient struct {
 
 func (c k8sClient) Dynamic() dynamic.Interface { return c.dynamic }
 
-// fakeDynamicClient answers the workload probe with the supplied objects, whatever
-// resource and namespace is asked for.
 func fakeDynamicClient(t *testing.T, objects ...*unstructured.Unstructured) dynamic.Interface {
 	t.Helper()
 
@@ -134,9 +122,6 @@ func fakeDynamicClient(t *testing.T, objects ...*unstructured.Unstructured) dyna
 	return dynamicClient
 }
 
-// applyFilter runs a collected jq filter over an object the way shell-operator does
-// when it executes the patch: the object as stored is fed to the same gojq engine and
-// the result is what would be written back.
 func applyFilter(t *testing.T, filter string, object map[string]any) map[string]any {
 	t.Helper()
 
@@ -158,10 +143,6 @@ func applyFilter(t *testing.T, filter string, object map[string]any) map[string]
 	return filtered
 }
 
-// objectWithFinalizers is the stored object a collected filter is replayed against.
-// objectWithFinalizers builds the stored object carrying exactly the given list; with
-// no arguments the list is present and empty, which is a different shape from the list
-// being absent and is asserted separately.
 func objectWithFinalizers(finalizers ...string) map[string]any {
 	list := make([]any, 0, len(finalizers))
 	for _, finalizer := range finalizers {
@@ -171,7 +152,6 @@ func objectWithFinalizers(finalizers ...string) map[string]any {
 	return map[string]any{"metadata": map[string]any{"name": "object", "finalizers": list}}
 }
 
-// finalizersOf reads the member back, telling an empty list from an absent one.
 func finalizersOf(object map[string]any) any {
 	metadata, ok := object["metadata"].(map[string]any)
 	if !ok {
@@ -193,10 +173,6 @@ func TestCleanupFinalizersStripsFinalizersFromInternalAndPublicKindsOfBothFamili
 	for _, watched := range watchedKinds {
 		namespace := settings.ModuleNamespace
 		if !watched.moduleNamespaceOnly {
-			// Whatever the binding is not narrowed to the module namespace is patched
-			// wherever it was found. An empty namespace is what the snapshot carries for
-			// the cluster-scoped kinds; the namespaced public ones are covered by
-			// TestCleanupFinalizersPatchesNamespacedPublicObjectsInTheirOwnNamespace.
 			namespace = ""
 		}
 
@@ -225,9 +201,6 @@ func TestCleanupFinalizersStripsFinalizersFromInternalAndPublicKindsOfBothFamili
 }
 
 func TestCleanupFinalizersCoversEveryKindThatCarriesTheCleanupFinalizer(t *testing.T) {
-	// The finalizer helm.deckhouse.io/cleanup is put on the release kinds and on all
-	// three repository kinds by the controllers; after the module is deleted nobody
-	// else can take it off, so each of them must be watched by the hook.
 	want := map[string]string{
 		"HelmApplication":                    publicAPIVersion,
 		"HelmApplicationRepository":          publicAPIVersion,
@@ -240,12 +213,6 @@ func TestCleanupFinalizersCoversEveryKindThatCarriesTheCleanupFinalizer(t *testi
 		"InternalNelmOperatorOCIRepository":  "source.internal.operator-helm.deckhouse.io/v1",
 	}
 
-	// Which finalizer belongs to which kind, spelled out rather than read back from the
-	// table under test: the hook now removes one name instead of the whole list, so a
-	// kind paired with the wrong name would leave its object finalized forever, and a
-	// test deriving the expectation from the same field could not see it. The public
-	// kinds carry the finalizer our controllers add; the internal flux objects carry
-	// flux's own, under the name the kube-api-rewriter stores it with.
 	wantFinalizers := map[string]string{
 		"HelmApplication":                    "helm.deckhouse.io/cleanup",
 		"HelmApplicationRepository":          "helm.deckhouse.io/cleanup",
@@ -271,10 +238,6 @@ func TestCleanupFinalizersCoversEveryKindThatCarriesTheCleanupFinalizer(t *testi
 	for _, config := range kubernetesConfigs() {
 		got[config.Kind] = config.APIVersion
 
-		// The public kinds are not confined to the module namespace: the cluster-scoped
-		// ones have no namespace at all, and HelmApplication and HelmApplicationRepository
-		// are namespaced but live in arbitrary user namespaces. Neither can be found by a
-		// binding narrowed to the module namespace.
 		if config.APIVersion == publicAPIVersion && config.NamespaceSelector != nil {
 			t.Errorf("%s is watched only in %v, but it may live in any namespace",
 				config.Kind, config.NamespaceSelector.NameSelector)
@@ -305,13 +268,6 @@ func TestCleanupFinalizersPatchesNamespacedPublicObjectsInTheirOwnNamespace(t *t
 	}
 }
 
-// TestCleanupFinalizersRemovesOnlyTheModuleFinalizerAndLeavesForeignOnesInPlace replays
-// the collected filter against the object it would be applied to. The collector hands
-// patches to the API server only after the hook returns, so nothing here observes the
-// write itself; what the filter does to the stored object is the behaviour that matters.
-// A HelmApplication lives in a user namespace where a backup or policy operator may hold
-// its own finalizer, and the module being torn down says nothing about whether that
-// operator has finished.
 func TestCleanupFinalizersRemovesOnlyTheModuleFinalizerAndLeavesForeignOnesInPlace(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -339,25 +295,16 @@ func TestCleanupFinalizersRemovesOnlyTheModuleFinalizerAndLeavesForeignOnesInPla
 			want:   []any{"backup.example.com/protect"},
 		},
 		{
-			// A list emptied by an earlier removal, ours or somebody else's. The guard
-			// has to treat it as present, not as absent: jq's `if` is false only on
-			// null and false, and an empty array is neither.
 			name:   "an empty list stays an empty list",
 			stored: objectWithFinalizers(),
 			want:   []any{},
 		},
 		{
-			// An explicit null is what a client that removed the last finalizer with a
-			// merge patch leaves behind, and it is the shape the previous JSON Patch
-			// implementation of this hook could not handle at all.
 			name:   "an explicit null is left alone",
 			stored: map[string]any{"metadata": map[string]any{"name": "object", "finalizers": nil}},
 			want:   nil,
 		},
 		{
-			// The API server does not create duplicates, but an object edited by two
-			// clients racing on the list can carry one. Removing only the first would
-			// leave the object finalized forever with nobody left to finish the job.
 			name:   "every copy of ours is removed, not just the first",
 			stored: objectWithFinalizers(publicFinalizer, "backup.example.com/protect", publicFinalizer),
 			want:   []any{"backup.example.com/protect"},
@@ -390,9 +337,6 @@ func TestCleanupFinalizersRemovesOnlyTheModuleFinalizerAndLeavesForeignOnesInPla
 	}
 }
 
-// TestCleanupFinalizersStripsTheRewrittenFluxFinalizerFromInternalObjects guards the one
-// string the hook cannot borrow from the api module: the kube-api-rewriter stores flux's
-// finalizers.fluxcd.io under the internal domain, and the hook bypasses the rewriter.
 func TestCleanupFinalizersStripsTheRewrittenFluxFinalizerFromInternalObjects(t *testing.T) {
 	snapshots := map[string][]resource{
 		"internalHelmReleaseSnapshot": {{
@@ -421,8 +365,6 @@ func TestCleanupFinalizersStripsTheRewrittenFluxFinalizerFromInternalObjects(t *
 }
 
 func TestCleanupFinalizersWaitsWhileTheModuleNamespaceStillRunsWorkloads(t *testing.T) {
-	// Stripping finalizers while a controller is alive lets it recreate them, so the
-	// hook must fail and be retried instead.
 	pod := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Pod",

@@ -27,9 +27,6 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-// TestReviewCarriesTheNamespaceIntoTheAccessReview pins the check that makes a
-// namespaced resource's authorization meaningful: without the namespace the API
-// server answers for the cluster scope, which is a different question entirely.
 func TestReviewCarriesTheNamespaceIntoTheAccessReview(t *testing.T) {
 	clientset := fake.NewClientset()
 
@@ -76,9 +73,6 @@ func TestReviewCarriesTheNamespaceIntoTheAccessReview(t *testing.T) {
 	}
 }
 
-// reviewerFor wires a Reviewer onto a clientset whose TokenReview answers with
-// status, records the review that was sent, and allows every access review, so a
-// test only has to say what the API server knows about the token.
 func reviewerFor(t *testing.T, audiences []string, status authnv1.TokenReviewStatus) (*Reviewer, **authnv1.TokenReview) {
 	t.Helper()
 
@@ -99,9 +93,6 @@ func reviewerFor(t *testing.T, audiences []string, status authnv1.TokenReviewSta
 
 var testAccess = Access{Group: "helm.deckhouse.io", Resource: "helmclusteraddons", Verb: "create"}
 
-// TestReviewAcceptsATokenIssuedForTheConfiguredAudience pins both halves of the
-// audience check: the audience is asked for in the TokenReview, and a token the
-// API server confirms it for is accepted.
 func TestReviewAcceptsATokenIssuedForTheConfiguredAudience(t *testing.T) {
 	reviewer, recorded := reviewerFor(t, []string{"chart-values-api"}, authnv1.TokenReviewStatus{
 		Authenticated: true,
@@ -124,9 +115,6 @@ func TestReviewAcceptsATokenIssuedForTheConfiguredAudience(t *testing.T) {
 	}
 }
 
-// TestReviewRejectsATokenIssuedForAnotherAudience is the point of the check: a
-// token the cluster happily authenticates, but which was minted for a different
-// recipient, must not pass as authentication here.
 func TestReviewRejectsATokenIssuedForAnotherAudience(t *testing.T) {
 	for name, status := range map[string]authnv1.TokenReviewStatus{
 		"no audience confirmed": {
@@ -153,9 +141,6 @@ func TestReviewRejectsATokenIssuedForAnotherAudience(t *testing.T) {
 	}
 }
 
-// TestReviewWithoutAConfiguredAudienceAsksForNone keeps the default behaviour
-// explicit: nothing is required of the token beyond what the API server checks
-// against its own default audience, which is what clients rely on today.
 func TestReviewWithoutAConfiguredAudienceAsksForNone(t *testing.T) {
 	reviewer, recorded := reviewerFor(t, nil, authnv1.TokenReviewStatus{
 		Authenticated: true,

@@ -183,7 +183,6 @@ Host: 127.0.0.1
 
 func TestRestoreUnknownCustomResourceListWithKnownKind(t *testing.T) {
 	// Request list of resources with known kind but with unknown apiGroup.
-	// Check that apiVersion and kind stay as-is while metadata is restored.
 	listUnknownCR := `GET /apis/other.product.group.io/v1alpha1/someresources HTTP/1.1
 Host: 127.0.0.1
 
@@ -274,8 +273,6 @@ Host: 127.0.0.1
 }
 
 func TestRenameUnknownCustomResourceWithKnownKind(t *testing.T) {
-	// Create a resource with known kind but with unknown apiGroup.
-	// Check that apiVersion and kind stay as-is while metadata is renamed.
 	postUnknownCR := `POST /apis/other.product.group.io/v1alpha1/namespaces/ns-name/someresources HTTP/1.1
 Host: 127.0.0.1
 

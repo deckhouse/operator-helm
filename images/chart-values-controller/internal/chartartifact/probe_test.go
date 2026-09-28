@@ -37,23 +37,14 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
-// TestChartLayerMediaTypeGivesUpOnAServerThatNeverAnswers pins the second half of
-// the probe's bound: whatever deadline the caller's context carries, the whole
-// probe — dial through body read — must end when that deadline passes rather
-// than hang on a registry that never answers.
 func TestChartLayerMediaTypeGivesUpOnAServerThatNeverAnswers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		// Never respond; only give up when the request's own context ends, the
-		// same way a hung connection to a real registry would behave.
 		<-r.Context().Done()
 	}))
 	t.Cleanup(server.Close)
 
 	host := strings.TrimPrefix(server.URL, "http://")
 
-	// The deadline is set on the caller's context, not read from ProbeTimeout:
-	// the point of this test is that the probe respects whatever bound it is
-	// given, including one shorter than its own floor.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
@@ -69,10 +60,6 @@ func TestChartLayerMediaTypeGivesUpOnAServerThatNeverAnswers(t *testing.T) {
 	}
 }
 
-// TestChartLayerMediaTypeWithCustomTLSSettings pins the other half: a transport
-// built by Transport for a registry with its own CA must still let the probe
-// succeed, proving the clone in Transport carries a usable TLS configuration
-// rather than a broken bare one.
 func TestChartLayerMediaTypeWithCustomTLSSettings(t *testing.T) {
 	server := httptest.NewTLSServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
 	t.Cleanup(server.Close)
@@ -100,9 +87,6 @@ func TestChartLayerMediaTypeWithCustomTLSSettings(t *testing.T) {
 	}
 }
 
-// TestTransportClonesDefaultTimeouts pins the first half of the bound: a
-// transport built for one probe must carry the configured default's dial and
-// idle-connection timeouts, not the zero values of a bare &http.Transport{}.
 func TestTransportClonesDefaultTimeouts(t *testing.T) {
 	rt, err := Transport("", true)
 	if err != nil {
@@ -126,10 +110,6 @@ func TestTransportClonesDefaultTimeouts(t *testing.T) {
 	}
 }
 
-// TestTransportRejectsACACertificateWithoutAnyCertificate pins that a repository
-// whose caCertificate carries no certificate is reported instead of silently
-// yielding an empty trust root: an empty pool looks valid and would turn every
-// probe into a verification failure that names the registry rather than the field.
 func TestTransportRejectsACACertificateWithoutAnyCertificate(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -162,10 +142,6 @@ func TestTransportRejectsACACertificateWithoutAnyCertificate(t *testing.T) {
 	}
 }
 
-// TestProbeContextBoundsAnUnboundedCaller is the fast, deterministic half of the
-// deadline test: a caller that supplies no deadline at all (context.Background(),
-// exactly what a reconcile loop passes) must still get one from ProbeTimeout,
-// without this test having to wait for a real hang.
 func TestProbeContextBoundsAnUnboundedCaller(t *testing.T) {
 	ctx, cancel := probeContext(context.Background())
 	defer cancel()
@@ -179,8 +155,6 @@ func TestProbeContextBoundsAnUnboundedCaller(t *testing.T) {
 	}
 }
 
-// TestProbeContextKeepsAnEarlierCallerDeadline pins that probeContext narrows
-// but never widens: a caller deadline sooner than ProbeTimeout must still win.
 func TestProbeContextKeepsAnEarlierCallerDeadline(t *testing.T) {
 	parent, cancelParent := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancelParent()
@@ -204,9 +178,6 @@ func (s *spyTransport) CloseIdleConnections() {
 	s.closed++
 }
 
-// TestChartLayerMediaTypeClosesTheTransportItWasGiven pins the other half of the
-// transport fix: Transport builds a single-use pool for one probe, so the probe
-// must drain it once finished rather than leaking it for the life of the process.
 func TestChartLayerMediaTypeClosesTheTransportItWasGiven(t *testing.T) {
 	server := httptest.NewTLSServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
 	t.Cleanup(server.Close)

@@ -33,10 +33,6 @@ func TestFamilyForRejectsAnUnknownKind(t *testing.T) {
 	}
 }
 
-// TestAddonFamilyReadsTheClusterScopedRepositoryAndCatalog pins that the addon
-// family is unchanged: a cluster-scoped repository read by name alone, its catalog
-// object named by the shared scheme, and internal objects found by the one label
-// the operator writes for it.
 func TestAddonFamilyReadsTheClusterScopedRepositoryAndCatalog(t *testing.T) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 4},
@@ -47,9 +43,6 @@ func TestAddonFamilyReadsTheClusterScopedRepositoryAndCatalog(t *testing.T) {
 			InsecureSkipVerify: true,
 		},
 	}
-	// The name is a literal, not built through the same apinaming helper the family
-	// under test calls: otherwise a wrong naming scheme in the family could never be
-	// caught, since the fixture would always agree with whatever the family did.
 	chart := &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-chart-podinfo-015bdf9886f6"},
 		Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "6.7.1"}}},
@@ -74,9 +67,7 @@ func TestAddonFamilyReadsTheClusterScopedRepositoryAndCatalog(t *testing.T) {
 		Auth:               repo.Spec.Auth,
 		CACertificate:      repo.Spec.CACertificate,
 		InsecureSkipVerify: true,
-		// Which object this came from, not what it is called: everything keyed on the
-		// repository hangs off this.
-		Identity: "repo-uid@4",
+		Identity:           "repo-uid@4",
 	}
 	if !reflect.DeepEqual(spec, want) {
 		t.Fatalf("repository spec = %+v, want %+v", spec, want)
@@ -116,16 +107,11 @@ func TestAddonFamilyReportsAMissingCatalogAsNotFound(t *testing.T) {
 	}
 }
 
-// TestApplicationFamiliesReadTheirOwnObjects pins the two application kinds: the
-// namespaced one reads its repository and catalog from the request namespace, the
-// cluster one from the cluster scope, and each recognises its own internal objects.
 func TestApplicationFamiliesReadTheirOwnObjects(t *testing.T) {
 	namespaced := &helmv1alpha1.HelmApplicationRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a"},
 		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
-	// Both catalog objects are named with a literal, not apinaming.*ChartName, for the
-	// same reason as the addon fixture above.
 	namespacedChart := &helmv1alpha1.HelmApplicationChart{
 		ObjectMeta: metav1.ObjectMeta{Name: "stable-chart-podinfo-d433c642288b", Namespace: "team-a"},
 		Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "6.7.1"}}},
@@ -162,7 +148,6 @@ func TestApplicationFamiliesReadTheirOwnObjects(t *testing.T) {
 		t.Fatalf("namespaced internal labels = %v, want %v", got, wantNSLabels)
 	}
 
-	// A repository of the same name in another namespace is a different repository.
 	if _, err := nsFamily.GetRepository(context.Background(), c, "team-b", "stable"); !apierrors.IsNotFound(err) {
 		t.Fatalf("err = %v, want NotFound for a same-named repository in another namespace", err)
 	}

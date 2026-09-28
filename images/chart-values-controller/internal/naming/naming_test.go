@@ -25,13 +25,9 @@ import (
 var dns1123 = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
 
 const (
-	// testKind is lower case because Resolve lower-cases the kind before it ever
-	// reaches AuxResourceName, so that is the only casing production hashes.
 	testKind = "helmclusteraddonrepository"
 	nsKind   = "helmapplicationrepository"
 
-	// testIdentity stands in for what the resolver passes: the UID and generation of
-	// the repository object the chart is read from.
 	testIdentity = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0@1"
 )
 
@@ -59,11 +55,9 @@ func TestAuxResourceNameDistinct(t *testing.T) {
 		{testKind, "", "github", "podinfo", "6.7.2", testIdentity},
 		{testKind, "", "github", "nginx", "6.7.1", testIdentity},
 		{testKind, "", "gitlab", "podinfo", "6.7.1", testIdentity},
-		{"FutureRepository", "", "github", "podinfo", "6.7.1", testIdentity}, // same name/chart/version, different kind
+		{"FutureRepository", "", "github", "podinfo", "6.7.1", testIdentity},
 		{nsKind, "team-a", "stable", "podinfo", "6.7.1", testIdentity},
-		{nsKind, "team-b", "stable", "podinfo", "6.7.1", testIdentity}, // same repository name in another namespace
-		// The same tuple read from another repository object: recreated under the
-		// same name (another UID), or edited in place (another generation).
+		{nsKind, "team-b", "stable", "podinfo", "6.7.1", testIdentity},
 		{testKind, "", "github", "podinfo", "6.7.1", "11111111-2222-3333-4444-555555555555@1"},
 		{testKind, "", "github", "podinfo", "6.7.1", "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0@2"},
 		{nsKind, "team-a", "stable", "podinfo", "6.7.1", "11111111-2222-3333-4444-555555555555@1"},
@@ -89,15 +83,6 @@ func TestAuxResourceNameValidDNS1123(t *testing.T) {
 	}
 }
 
-// TestAuxResourceNameClusterScopedNamesAreFrozen pins the names a cluster-scoped
-// repository resolves to: it passes an empty namespace, and for one repository
-// object the name must not move — the objects are live and shared by every polling
-// client, and a moving name would orphan the one they are all waiting on.
-//
-// These values changed once, when the identity of the repository object entered the
-// hash. Names derived before that move belong to no repository in particular and are
-// deliberately unreachable; the auxiliary objects carrying them expire on their own
-// annotation.
 func TestAuxResourceNameClusterScopedNamesAreFrozen(t *testing.T) {
 	cases := []struct {
 		repository string
@@ -118,9 +103,6 @@ func TestAuxResourceNameClusterScopedNamesAreFrozen(t *testing.T) {
 	}
 }
 
-// TestAuxResourceNameKeepsTheHintsAcrossIdentities keeps a replaced repository
-// diagnosable: only the hash moves with the identity, so the readable part still
-// names the repository and the chart an object belongs to.
 func TestAuxResourceNameKeepsTheHintsAcrossIdentities(t *testing.T) {
 	before := AuxResourceName(testKind, "", "github", "podinfo", "6.7.1", testIdentity)
 	after := AuxResourceName(testKind, "", "github", "podinfo", "6.7.1", "11111111-2222-3333-4444-555555555555@1")
@@ -135,8 +117,6 @@ func TestAuxResourceNameKeepsTheHintsAcrossIdentities(t *testing.T) {
 	}
 }
 
-// TestAuxResourceNameCarriesTheNamespaceHint keeps a namespaced name diagnosable:
-// the namespace appears in the readable part, not only in the hash.
 func TestAuxResourceNameCarriesTheNamespaceHint(t *testing.T) {
 	name := AuxResourceName(nsKind, "team-a", "stable", "podinfo", "6.7.1", testIdentity)
 

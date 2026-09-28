@@ -28,24 +28,13 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// definitionsGlob finds the definitions the generator writes from upstream
-// flux. They are the other half of the rules in this package: the proxy
-// renames a request to a group, kind and resource type, and one of these
-// declares them. A resource renamed to something no definition declares is
-// not found, and nothing but a live cluster says so.
 const definitionsGlob = "../../../../crds/embedded/*.yaml"
 
-// property is the part of an OpenAPI schema a kind reference path walks
-// through. The proxy addresses these paths with gjson on a plain object
-// (see rewriter.TransformObject), so nothing but a named field of an object
-// is ever traversed: no array items, no additionalProperties.
 type property struct {
 	Properties map[string]property `json:"properties"`
 }
 
 type definition struct {
-	// file records where the definition was read from, so a failure names a
-	// file to open rather than a CRD name to grep for.
 	file string
 
 	Metadata struct {
@@ -72,9 +61,6 @@ type definition struct {
 	} `json:"spec"`
 }
 
-// loadDefinitions reads every generated internal definition, keyed by the
-// name the API server knows, which is the one thing both sides derive
-// independently.
 func loadDefinitions(t *testing.T) map[string]definition {
 	t.Helper()
 
@@ -163,9 +149,6 @@ func TestRulesMatchGeneratedDefinitions(t *testing.T) {
 				t.Errorf("%s: serves %v, the rule offers %v", name, served, rule.Versions)
 			}
 
-			// The proxy answers discovery with the preferred version, so a
-			// definition storing a different one would have every write land
-			// in a conversion the module never asked for.
 			if storage != rule.PreferredVersion {
 				t.Errorf("%s: stores %q, the rule prefers %q", name, storage, rule.PreferredVersion)
 			}
@@ -179,12 +162,6 @@ func TestRulesMatchGeneratedDefinitions(t *testing.T) {
 	}
 }
 
-// TestKindRefPathsExistInGeneratedDefinitions keeps the kind reference paths
-// honest. A path the schema does not declare is silently skipped by the
-// proxy: the reference keeps the upstream kind, and the object reaches the
-// cluster pointing at a kind that does not exist there. A typo, or a field
-// upstream moved during a flux bump, looks exactly like a working rule
-// until then.
 func TestKindRefPathsExistInGeneratedDefinitions(t *testing.T) {
 	definitions := loadDefinitions(t)
 
@@ -225,8 +202,6 @@ func TestKindRefPathsExistInGeneratedDefinitions(t *testing.T) {
 					continue
 				}
 
-				// Reaching a field that holds no kind means the path lost
-				// its meaning even though every segment still resolves.
 				if _, ok := ref.Properties["kind"]; !ok {
 					t.Errorf("%s: kind reference path %q of %s: %s %s declares it with no kind field (%s)",
 						parsed.Metadata.Name, path, kind, renamed, version.Name,
@@ -237,11 +212,6 @@ func TestKindRefPathsExistInGeneratedDefinitions(t *testing.T) {
 	}
 }
 
-// resolvePath walks a dotted kind reference path through the schema the same
-// way the proxy walks it through an object: every segment is a named field
-// of the object before it. It returns the schema the path ends at, or the
-// segment the schema stops declaring together with the part of the path
-// that should have declared it.
 func resolvePath(schema property, path string) (ref property, parent, missing string) {
 	current := schema
 	segments := strings.Split(path, ".")

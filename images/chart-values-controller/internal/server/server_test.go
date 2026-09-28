@@ -208,10 +208,6 @@ func TestHandleReviewError(t *testing.T) {
 	assertCode(t, rec.Body.Bytes(), "code", "INTERNAL")
 }
 
-// blockingResolver stands for a step that keeps going until something ends it:
-// an access review against an unresponsive API server, a download that never
-// finishes. What it returns afterwards is how that step reports having been cut
-// short.
 type blockingResolver struct {
 	result resolver.Result
 	err    error
@@ -231,9 +227,6 @@ func (blockingReviewer) Review(ctx context.Context, _ string, _ auth.Access) (au
 	return auth.Result{}, ctx.Err()
 }
 
-// doBudgeted sends a valid request through the assembled handler with timeout as
-// the whole request's budget, which is where the deadline is applied in
-// production.
 func doBudgeted(t *testing.T, res chartValuesResolver, rev tokenReviewer, timeout time.Duration) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -246,11 +239,6 @@ func doBudgeted(t *testing.T, res chartValuesResolver, rev tokenReviewer, timeou
 	return rec
 }
 
-// TestARequestOutOfBudgetIsAnswered covers the request-wide deadline: a chain of
-// steps that each bound only themselves used to add up to an unbounded request,
-// which only WriteTimeout ended — by dropping the connection. Whatever the step
-// that ran out reports afterwards, the client gets a 504 naming the budget rather
-// than that step's own verdict.
 func TestARequestOutOfBudgetIsAnswered(t *testing.T) {
 	cases := []struct {
 		name string
@@ -261,15 +249,10 @@ func TestARequestOutOfBudgetIsAnswered(t *testing.T) {
 			res:  blockingResolver{err: context.DeadlineExceeded},
 		},
 		{
-			// This is the download: artifact.FetchValues reports a read the context
-			// ended as a fetch failure, which would otherwise read as 502 — an
-			// unreachable chart rather than an exhausted budget.
 			name: "the step reports the cancellation as a fetch failure",
 			res:  blockingResolver{result: resolver.Result{Outcome: resolver.OutcomeFetchFailed, Message: "context deadline exceeded"}},
 		},
 		{
-			// And this is the probe: it treats any transport failure as pending, so a
-			// request that spent its whole budget would answer "retry later".
 			name: "the step reports the cancellation as pending",
 			res:  blockingResolver{result: resolver.Result{Outcome: resolver.OutcomePending}},
 		},
@@ -287,9 +270,6 @@ func TestARequestOutOfBudgetIsAnswered(t *testing.T) {
 	}
 }
 
-// TestTheBudgetCoversTheAccessReview pins that the budget starts before the
-// resolver does: the token and access reviews are Kubernetes calls with no timeout
-// of their own, so a request may run out of budget without ever reaching a chart.
 func TestTheBudgetCoversTheAccessReview(t *testing.T) {
 	rec := doBudgeted(t, fakeResolver{}, blockingReviewer{}, 20*time.Millisecond)
 
@@ -299,10 +279,6 @@ func TestTheBudgetCoversTheAccessReview(t *testing.T) {
 	assertCode(t, rec.Body.Bytes(), "code", "REQUEST_TIMEOUT")
 }
 
-// TestTheBudgetReachesEveryStep pins that the deadline travels on the request's
-// own context, which is the context the resolver hands down to the download and,
-// through it, to the extraction of the archive. Nothing on that path may replace
-// it with one of its own.
 func TestTheBudgetReachesEveryStep(t *testing.T) {
 	var (
 		reviewed  time.Time
@@ -332,9 +308,6 @@ func TestTheBudgetReachesEveryStep(t *testing.T) {
 	}
 }
 
-// TestTheServerServesUnderItsOwnBudget pins the wiring the tests above stand on.
-// They assemble the middleware themselves to choose a budget, which would keep
-// passing if the server ever stopped putting one on at all.
 func TestTheServerServesUnderItsOwnBudget(t *testing.T) {
 	var (
 		resolved  time.Time
@@ -381,9 +354,6 @@ func (d *deadlineResolver) Resolve(ctx context.Context, _ resolver.Request) (res
 	return resolver.Result{Outcome: resolver.OutcomeReady, Values: []byte("a: b\n")}, nil
 }
 
-// TestPendingIsStillAnsweredUnderTheBudget pins that the retry protocol survives
-// the deadline: an artifact that is still being prepared is answered with its own
-// 202 and Retry-After, not swallowed by the budget.
 func TestPendingIsStillAnsweredUnderTheBudget(t *testing.T) {
 	rec := doBudgeted(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomePending}}, authorized, time.Minute)
 
@@ -396,11 +366,6 @@ func TestPendingIsStillAnsweredUnderTheBudget(t *testing.T) {
 	assertCode(t, rec.Body.Bytes(), "code", "CHART_PENDING")
 }
 
-// TestTheBudgetOutlastsTheStepsUnderIt pins the two relations that keep the budget
-// from turning into either a dropped connection or a lost retry answer:
-// WriteTimeout, which ends a request without an answer, must expire after it; and
-// the registry probe — the one blocking step on the way to a pending answer — must
-// expire well before it, so a client told to retry is told so on time.
 func TestTheBudgetOutlastsTheStepsUnderIt(t *testing.T) {
 	srv := newHTTPServer("", http.NewServeMux())
 
@@ -426,9 +391,6 @@ func assertCode(t *testing.T, body []byte, field, want string) {
 	}
 }
 
-// TestHandleRejectsANamespacedKindWithoutANamespace covers the request-shape guard
-// at the HTTP boundary: the resolver would refuse it too, but the client deserves a
-// 400 naming the missing field rather than a generic outcome.
 func TestHandleRejectsANamespacedKindWithoutANamespace(t *testing.T) {
 	cases := []struct {
 		name string
@@ -439,8 +401,6 @@ func TestHandleRejectsANamespacedKindWithoutANamespace(t *testing.T) {
 			body: `{"repositoryKind":"HelmApplicationRepository","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
 		},
 		{
-			// Without this, a namespace no cluster can have reaches the access
-			// review and comes back as a 403 the caller cannot act on.
 			name: "the field holds a name no namespace can have",
 			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"  ","repositoryName":"stable","chart":"podinfo","version":"6.7.1"}`,
 		},
@@ -458,10 +418,6 @@ func TestHandleRejectsANamespacedKindWithoutANamespace(t *testing.T) {
 	}
 }
 
-// TestHandleAuthorizesPerFamily pins which permission each repository kind demands:
-// the addon family a cluster-scoped create of HelmClusterAddon, both application
-// kinds a create of HelmApplication in the request's namespace — that is the
-// resource whose values are exposed by the answer.
 func TestHandleAuthorizesPerFamily(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -524,9 +480,6 @@ func TestHandleInvalidRequestOutcome(t *testing.T) {
 	assertCode(t, rec.Body.Bytes(), "code", "INVALID_REQUEST")
 }
 
-// TestHandleUnknownRepositoryKind pins the response contract for a kind the server
-// does not recognise: it must be reported as UNSUPPORTED_REPOSITORY_KIND, the same
-// code the resolver's own outcome of that name maps to, not a generic INVALID_REQUEST.
 func TestHandleUnknownRepositoryKind(t *testing.T) {
 	rec := do(t, fakeResolver{}, `{"repositoryKind":"SomethingElse","repositoryName":"github","chart":"podinfo","version":"6.7.1"}`)
 
@@ -537,10 +490,6 @@ func TestHandleUnknownRepositoryKind(t *testing.T) {
 	assertCode(t, rec.Body.Bytes(), "error", `unsupported repository kind "SomethingElse"`)
 }
 
-// TestHandleForbiddenMessageNamesTheResourceKind pins the FORBIDDEN message's
-// wording: it names the Kubernetes kind the caller may not create (e.g.
-// "HelmClusterAddon"), not the lower-cased plural resource string used in the
-// SubjectAccessReview.
 func TestHandleForbiddenMessageNamesTheResourceKind(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -573,9 +522,6 @@ func TestHandleForbiddenMessageNamesTheResourceKind(t *testing.T) {
 	}
 }
 
-// TestHandleRequestTooLarge covers the bound placed on the whole body: a
-// legitimate request is five short string fields, so a client sending far more
-// gets rejected with 413 instead of being decoded in full.
 func TestHandleRequestTooLarge(t *testing.T) {
 	oversized := `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"` +
 		strings.Repeat("a", maxRequestBodyBytes) + `","version":"6.7.1"}`
@@ -588,10 +534,6 @@ func TestHandleRequestTooLarge(t *testing.T) {
 	assertCode(t, rec.Body.Bytes(), "code", "REQUEST_TOO_LARGE")
 }
 
-// TestHandleMissingTokenRejectsBeforeReadingAnOversizedBody pins the ordering fix:
-// the cheap bearer-token check runs before the body is even read, so an
-// unauthenticated caller sending an oversized body gets 401, not 413 — the body
-// limit is never consulted for a request that never gets past authentication.
 func TestHandleMissingTokenRejectsBeforeReadingAnOversizedBody(t *testing.T) {
 	oversized := `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"` +
 		strings.Repeat("a", maxRequestBodyBytes) + `","version":"6.7.1"}`
@@ -607,9 +549,6 @@ func TestHandleMissingTokenRejectsBeforeReadingAnOversizedBody(t *testing.T) {
 	assertCode(t, rec.Body.Bytes(), "code", "UNAUTHENTICATED")
 }
 
-// TestNewHTTPServerSetsEveryTimeout pins the fix for the entry point that
-// previously set only ReadHeaderTimeout: an unauthenticated client could hold the
-// handler open on the rest of the request, or on an unfinished response.
 func TestNewHTTPServerSetsEveryTimeout(t *testing.T) {
 	srv := newHTTPServer("", http.NewServeMux())
 
@@ -624,10 +563,6 @@ func TestNewHTTPServerSetsEveryTimeout(t *testing.T) {
 	}
 }
 
-// TestHandleValidatesRepositoryName pins the fields the resolver received only an
-// emptiness check for: an invalid name would otherwise reach the resolver and read
-// back as repository_not_found, telling the caller nothing about the field they
-// got wrong.
 func TestHandleValidatesRepositoryName(t *testing.T) {
 	cases := []struct {
 		name string
@@ -638,7 +573,6 @@ func TestHandleValidatesRepositoryName(t *testing.T) {
 			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"Not Valid!","chart":"podinfo","version":"6.7.1"}`,
 		},
 		{
-			// HelmApplicationRepository's CRD enforces a 3-63 character name.
 			name: "shorter than the application repository CRD allows",
 			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`,
 		},
@@ -671,10 +605,6 @@ func TestHandleValidatesRepositoryName(t *testing.T) {
 	}
 }
 
-// TestHandleAcceptsAShortAddonRepositoryName pins the half of the bound that is
-// not shared: HelmClusterAddonRepository shipped without a minimum length and
-// cannot gain one, so a name under 3 characters — which the application repository
-// CRDs reject — must still be accepted for this kind.
 func TestHandleAcceptsAShortAddonRepositoryName(t *testing.T) {
 	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}},
 		`{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`)
@@ -684,10 +614,6 @@ func TestHandleAcceptsAShortAddonRepositoryName(t *testing.T) {
 	}
 }
 
-// TestHandleValidatesChartAndVersion pins the whitespace-only and length bounds
-// placed on chart and version. Neither field is checked against a naming grammar:
-// chart names may contain a space (an index entry can legally be "my chart"), and
-// an OCI tag is not semver, so imposing either grammar would reject legal input.
 func TestHandleValidatesChartAndVersion(t *testing.T) {
 	cases := []struct {
 		name string
@@ -725,8 +651,6 @@ func TestHandleValidatesChartAndVersion(t *testing.T) {
 	}
 }
 
-// TestHandleAcceptsAChartNameWithASpace pins that chart carries no character
-// grammar: only a whitespace-only value and the length bound are rejected.
 func TestHandleAcceptsAChartNameWithASpace(t *testing.T) {
 	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}},
 		`{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"github","chart":"my chart","version":"6.7.1"}`)

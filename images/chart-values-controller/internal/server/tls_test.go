@@ -36,15 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher/metrics"
 )
 
-// testWatchInterval is the poll backstop the tests run the watcher with. The
-// watcher registers its file watches asynchronously, so a write that lands
-// before the registration is only ever seen by the next poll; at the production
-// 10s interval that turns every rotation assertion into a race with the clock.
 const testWatchInterval = 20 * time.Millisecond
 
-// TestTLSConfigServesTheRotatedCertificateWithoutARestart is the point of the
-// watcher: the hook reissues the pair into the mounted Secret while the process
-// keeps running, and the next handshake has to present the new certificate.
 func TestTLSConfigServesTheRotatedCertificateWithoutARestart(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "tls.crt")
@@ -60,8 +53,6 @@ func TestTLSConfigServesTheRotatedCertificateWithoutARestart(t *testing.T) {
 
 	writeKeyPair(t, certFile, keyFile, "second")
 
-	// The watcher installs a pair before it reports it, so once the reload is
-	// observed the next handshake has to present it.
 	awaitReload(t, reloaded, "second")
 
 	if got := handshakeCommonName(t, addr); got != "second" {
@@ -69,10 +60,6 @@ func TestTLSConfigServesTheRotatedCertificateWithoutARestart(t *testing.T) {
 	}
 }
 
-// TestTLSConfigKeepsTheLoadedCertificateWhenTheFilesCannotBeReread covers the
-// moment a rotation is caught half-written, and any other unreadable state: the
-// re-read fails, and the server has to keep answering with the pair it already
-// holds instead of failing handshakes.
 func TestTLSConfigKeepsTheLoadedCertificateWhenTheFilesCannotBeReread(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "tls.crt")
@@ -86,12 +73,8 @@ func TestTLSConfigKeepsTheLoadedCertificateWhenTheFilesCannotBeReread(t *testing
 		t.Fatalf("common name = %q, want %q", got, "first")
 	}
 
-	// The watcher counts every read it could not turn into a pair, which is the
-	// observable proof that it did try to pick the broken file up.
 	failedReads := testutil.ToFloat64(metrics.ReadCertificateErrors)
 
-	// A certificate truncated mid-write parses as nothing at all, which is what
-	// the watcher must refuse to install.
 	if err := os.WriteFile(certFile, []byte("-----BEGIN CERTIFICATE-----\nnot a certi"), 0o600); err != nil {
 		t.Fatalf("truncate certificate: %v", err)
 	}
@@ -103,10 +86,6 @@ func TestTLSConfigKeepsTheLoadedCertificateWhenTheFilesCannotBeReread(t *testing
 	}
 }
 
-// TestTLSConfigKeepsServingAfterTheFilesDisappear covers the mounted pair going
-// away under a running process — an unmount, or a rotation that unlinks before
-// it writes: the server has to keep completing handshakes with the certificate
-// it already holds instead of failing them.
 func TestTLSConfigKeepsServingAfterTheFilesDisappear(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "tls.crt")
@@ -114,8 +93,6 @@ func TestTLSConfigKeepsServingAfterTheFilesDisappear(t *testing.T) {
 
 	writeKeyPair(t, certFile, keyFile, "first")
 
-	// Nothing here waits for a reload, and with the files gone every poll would
-	// only log a failed read, so keep the backstop out of the way.
 	addr, _ := serveTLSConfig(t, certFile, keyFile, withWatchInterval(time.Hour))
 
 	if err := os.Remove(certFile); err != nil {
@@ -132,8 +109,6 @@ func TestTLSConfigKeepsServingAfterTheFilesDisappear(t *testing.T) {
 	}
 }
 
-// TestNewTLSConfigFailsWhenTheKeyPairCannotBeLoaded pins the one case that is
-// fatal: without a first successful read there is no pair to serve at all.
 func TestNewTLSConfigFailsWhenTheKeyPairCannotBeLoaded(t *testing.T) {
 	dir := t.TempDir()
 
@@ -145,19 +120,12 @@ func TestNewTLSConfigFailsWhenTheKeyPairCannotBeLoaded(t *testing.T) {
 	}
 }
 
-// serveTLSConfig starts a TLS listener configured the way the API server is and
-// returns its address together with the common name of every pair the watcher
-// installs, the first of which is the one read at construction. Only the
-// handshake matters here, so the connection is closed as soon as it is
-// accepted.
 func serveTLSConfig(t *testing.T, certFile, keyFile string, opts ...watcherOption) (string, <-chan string) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	// Buffered and never blocking: the watcher reports a reload from its own
-	// goroutine, and a test that stops reading must not wedge it.
 	reloaded := make(chan string, 8)
 	opts = append([]watcherOption{
 		withWatchInterval(testWatchInterval),
@@ -194,8 +162,6 @@ func serveTLSConfig(t *testing.T, certFile, keyFile string, opts ...watcherOptio
 	return ln.Addr().String(), reloaded
 }
 
-// handshakeCommonName dials addr and reports the common name of the certificate
-// the server presented.
 func handshakeCommonName(t *testing.T, addr string) string {
 	t.Helper()
 
@@ -216,14 +182,9 @@ func handshakeCommonName(t *testing.T, addr string) string {
 	return certs[0].Subject.CommonName
 }
 
-// awaitReload blocks until the watcher reports that it installed the pair with
-// the given common name. The watcher reloads asynchronously, so this is what a
-// test waits on instead of guessing how long the reload takes.
 func awaitReload(t *testing.T, reloaded <-chan string, want string) {
 	t.Helper()
 
-	// Long enough that only a watcher that never reloads at all can hit it: the
-	// poll backstop alone answers within testWatchInterval.
 	timeout := time.NewTimer(time.Minute)
 	defer timeout.Stop()
 
@@ -239,8 +200,6 @@ func awaitReload(t *testing.T, reloaded <-chan string, want string) {
 	}
 }
 
-// awaitFailedRead blocks until the watcher has counted a read it could not turn
-// into a key pair on top of the reads it had already counted.
 func awaitFailedRead(t *testing.T, before float64) {
 	t.Helper()
 
@@ -255,10 +214,6 @@ func awaitFailedRead(t *testing.T, before float64) {
 	t.Fatal("the watcher never tried to re-read the broken key pair")
 }
 
-// installedCommonName reports the common name of a pair the watcher installed.
-// It runs on the watcher's own goroutine, where a failed assertion would be
-// illegal, so an unparsable leaf simply names no certificate and the waiting
-// test keeps waiting for one it recognises.
 func installedCommonName(cert tls.Certificate) string {
 	leaf := cert.Leaf
 	if leaf == nil {
@@ -272,9 +227,6 @@ func installedCommonName(cert tls.Certificate) string {
 	return leaf.Subject.CommonName
 }
 
-// writeKeyPair writes a fresh self-signed certificate with the given common
-// name, and its key, to the two paths. The key is written first so the pair is
-// only ever incomplete in the direction a rotation would leave it.
 func writeKeyPair(t *testing.T, certFile, keyFile, commonName string) {
 	t.Helper()
 

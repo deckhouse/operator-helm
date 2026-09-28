@@ -26,15 +26,8 @@ import (
 	"time"
 )
 
-// waiterBudget is the budget a waiter is given in the deadline test. It is the
-// thing under test there — how long the waiter is willing to wait — and not a
-// window for another goroutine to reach some point in the code.
 const waiterBudget = 50 * time.Millisecond
 
-// TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall pins the behaviour the
-// polling API needs: N consoles asking for the same chart at the same moment all
-// miss the cache, and must still cause a single download and extraction of the one
-// artifact their shared key names.
 func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 	const callers = 8
 
@@ -43,11 +36,6 @@ func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 
 	release := make(chan struct{})
 
-	// Every caller but the one that wins the key joins the call it is running, and
-	// each of them reports having joined from inside do, at the point where it can
-	// no longer run a call of its own. Only once all of them have is the leader
-	// released, so the count below measures coalescing and not which goroutine the
-	// scheduler happened to run first.
 	var joined sync.WaitGroup
 	joined.Add(callers - 1)
 	g.onJoin = joined.Done
@@ -67,9 +55,6 @@ func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 
 			values, shared, err := g.do(context.Background(), "chart-key", func() ([]byte, error) {
 				calls.Add(1)
-				// Whoever leads stays in flight until every other caller has
-				// joined, so the test measures coalescing rather than a race the
-				// leader happened to win alone.
 				<-release
 
 				return []byte("replicaCount: 1\n"), nil
@@ -103,10 +88,6 @@ func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 	}
 }
 
-// TestInflightRunsCallsOnDifferentKeysConcurrently guards the other half: the group
-// must serialize nothing beyond one key. Charts of two repositories — or, since the
-// key carries the repository's identity, two repositories sharing a name — are
-// separate artifacts, and one slow download must not hold the other's request.
 func TestInflightRunsCallsOnDifferentKeysConcurrently(t *testing.T) {
 	var g inflight
 
@@ -115,9 +96,6 @@ func TestInflightRunsCallsOnDifferentKeysConcurrently(t *testing.T) {
 		"second-key": make(chan struct{}),
 	}
 
-	// Each call waits for the other to have started, so neither can finish unless
-	// both are in flight at once: a group that blocked across keys would deadlock
-	// here and the test would fail on its own deadline rather than hang.
 	done := make(chan error, len(started))
 	for key, start := range started {
 		go func() {
@@ -151,10 +129,6 @@ func TestInflightRunsCallsOnDifferentKeysConcurrently(t *testing.T) {
 	}
 }
 
-// TestInflightForgetsACallThatProducedNothing covers the leak: whatever ends a
-// call — a returned error, a panic, or a goroutine killed outright — the key must
-// be free again, or one failed download would leave every later request for that
-// chart waiting on a call that will never finish.
 func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 	failure := errors.New("fetching the artifact failed")
 
@@ -164,8 +138,6 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 		wantErr error
 	}{
 		{
-			// The shared call ends by returning failure, which every waiter is
-			// handed as its own error.
 			name:    "a call that returned an error",
 			run:     func() {},
 			wantErr: failure,
@@ -188,10 +160,6 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 			entered := make(chan struct{})
 			waiterErr := make(chan error, 1)
 
-			// The waiter reports from inside do, once it has found the call in
-			// flight and can no longer start one of its own. The leader is held
-			// until then, so the failure the waiter is meant to inherit cannot
-			// happen before it is there to inherit it.
 			joined := make(chan struct{})
 			g.onJoin = func() { close(joined) }
 
@@ -199,8 +167,6 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				// A panic belongs to the request that caused it and travels no
-				// further, so it is caught here rather than taking the test down.
 				defer func() { _ = recover() }()
 
 				_, _, _ = g.do(context.Background(), "chart-key", func() ([]byte, error) {
@@ -237,8 +203,6 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 				t.Fatalf("the shared work ran %d times while one call was in flight, want 1", got)
 			}
 
-			// The entry must be gone, so the next request starts a fresh call
-			// instead of joining a dead one.
 			values, shared, err := g.do(context.Background(), "chart-key", func() ([]byte, error) {
 				return []byte("replicaCount: 1\n"), nil
 			})
@@ -262,17 +226,8 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 	}
 }
 
-// TestInflightWaiterEndsOnItsOwnDeadline pins that joining a call never outlives the
-// request that joined it: the handler puts a budget on every request, and a waiter
-// that ignored it would hold its connection for as long as somebody else's download
-// takes.
 func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 	tests := []struct {
-		// ctx builds the waiter's context and, with it, what ends that context.
-		// The second return value is run at the moment the waiter has joined the
-		// call in flight: cancelling from there ends a request that is provably
-		// already waiting, which a timer could only approximate. A case that needs
-		// nothing done at that moment returns nil.
 		name    string
 		ctx     func(t *testing.T) (context.Context, func())
 		wantErr error
@@ -289,8 +244,6 @@ func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 			wantErr: context.Canceled,
 		},
 		{
-			// The budget runs out on its own while the waiter waits; nothing has
-			// to be timed against it.
 			name: "a request out of budget",
 			ctx: func(t *testing.T) (context.Context, func()) {
 				t.Helper()
@@ -310,9 +263,6 @@ func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 			ctx, onJoin := test.ctx(t)
 			g.onJoin = onJoin
 
-			// The leader is held for far longer than the waiter's budget and is
-			// released only when the test is over, so a waiter that waited for it
-			// would fail on the test's own deadline.
 			release := make(chan struct{})
 			t.Cleanup(func() { close(release) })
 
@@ -344,8 +294,6 @@ func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 				t.Fatalf("the waiter returned values %q from a call it never saw finish", values)
 			}
 
-			// The leader is untouched by the waiter giving up: it keeps running for
-			// whoever else is waiting on the same artifact.
 			select {
 			case <-leaderDone:
 				t.Fatal("the leader ended when the waiter gave up")
