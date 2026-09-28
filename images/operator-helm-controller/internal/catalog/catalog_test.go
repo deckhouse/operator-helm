@@ -247,9 +247,10 @@ func TestReconcileWritesNamespacedCatalogNextToTheRepository(t *testing.T) {
 // TestReconcileRepairsAnObjectStrippedOfItsLabels covers the catalog object a pass
 // cannot see. The catalog is listed by the repository label, so an object that lost its
 // labels is absent from every read this pass takes while still occupying the name the
-// chart is published under: it has to be adopted rather than reported as a collision,
-// or the chart stays unpublished for as long as the repository offers it and the object
-// is invisible to every consumer looking the chart up by label.
+// chart is published under. This pass may not write its status — it was computed
+// without knowing the object existed — but the labels have to be repaired, or the
+// object is missing from every later snapshot too and the collision is permanent
+// instead of a lost race.
 func TestReconcileRepairsAnObjectStrippedOfItsLabels(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
@@ -263,13 +264,14 @@ func TestReconcileRepairsAnObjectStrippedOfItsLabels(t *testing.T) {
 		t.Fatalf("creating the unlabelled object: %v", err)
 	}
 
-	if _, err := reconcileOnce(cat, repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
-		t.Fatalf("Reconcile returned %v, want the object adopted rather than a collision reported", err)
+	_, err := reconcileOnce(cat, repo, []repoclient.Chart{chart("podinfo", "6.7.1")})
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("Reconcile returned %v, want a conflict: the object was not in the read this pass was computed from", err)
 	}
 
 	got := &helmv1alpha1.HelmApplicationChart{}
 	if err := c.Get(context.Background(), key, got); err != nil {
-		t.Fatalf("reading the adopted object: %v", err)
+		t.Fatalf("reading the repaired object: %v", err)
 	}
 	if got.Labels[helmv1alpha1.LabelRepositoryName] != "stable" || got.Labels[helmv1alpha1.LabelChartName] != "podinfo" {
 		t.Fatalf("labels = %v, want the object labelled back into the catalog", got.Labels)
@@ -277,8 +279,102 @@ func TestReconcileRepairsAnObjectStrippedOfItsLabels(t *testing.T) {
 	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].Name != "stable" {
 		t.Fatalf("owner references = %v, want the repository owning it again", got.OwnerReferences)
 	}
+
+	// The retry the work queue runs: the object is labelled, so it is part of this
+	// read, and the chart is published onto it like onto any other recorded object.
+	if _, err := reconcileOnce(cat, repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
+		t.Fatalf("the pass after the repair returned %v", err)
+	}
+
+	if err := c.Get(context.Background(), key, got); err != nil {
+		t.Fatalf("reading the object after the retry: %v", err)
+	}
 	if len(got.Status.Versions) != 1 || got.Status.Versions[0].Version != "6.7.1" {
-		t.Fatalf("versions = %+v, want the chart published onto the adopted object", got.Status.Versions)
+		t.Fatalf("versions = %+v, want the chart published onto the repaired object", got.Status.Versions)
+	}
+}
+
+// TestReconcileRejectsPublishingOntoAnObjectCreatedAfterTheRead covers the other way a
+// chart can be missing from a pass's read: it was genuinely not in the catalog when the
+// pass started, and another writer created it while this pass was probing the registry.
+// Between the two, the tag was pushed again, so the object records a media type this
+// pass's own probe — older than the other writer's — knows nothing about.
+//
+// Nothing catches this downstream. The create fails, and a merge into the object just
+// read would be patched against the current resource version, so the optimistic lock
+// accepts the write and the catalog publishes the superseded media type; every later
+// pass then skips the version, a recorded unmarked verdict being exactly what a pass
+// carries forward. The absence from the read is itself the evidence that the pass is
+// behind, so the only safe answer is to write no status and report the race.
+func TestReconcileRejectsPublishingOntoAnObjectCreatedAfterTheRead(t *testing.T) {
+	const (
+		probed   = "application/tar+gzip"
+		repushed = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+	)
+
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+
+	// The competing writer lands between this pass's read and its create: it publishes
+	// the chart with the media type of the re-pushed artifact and asks, on an annotation
+	// already consumed, for that verdict to be looked at again.
+	overtaken := false
+	c := newClientWithInterceptor(t, interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if obj.GetName() == key.Name && !overtaken {
+				overtaken = true
+
+				written := &helmv1alpha1.HelmApplicationChart{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      key.Name,
+						Namespace: key.Namespace,
+						Labels: map[string]string{
+							helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+							helmv1alpha1.LabelRepositoryName:    "stable",
+							helmv1alpha1.LabelChartName:         "podinfo",
+						},
+					},
+				}
+				if err := cl.Create(ctx, written); err != nil {
+					return err
+				}
+
+				written.Status.Versions = []helmv1alpha1.ChartVersion{
+					{Version: "1.0.0", MediaType: repushed, ReexaminationRequired: true},
+				}
+				if err := cl.Status().Update(ctx, written); err != nil {
+					return err
+				}
+			}
+
+			return cl.Create(ctx, obj, opts...)
+		},
+	})
+	cat := adapter.NewApplicationCatalog(c, c)
+	repo := applicationRepo("team-a", "stable")
+
+	fetched := repoclient.Chart{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("1.0.0"), MediaType: probed}},
+	}
+
+	_, err := reconcileOnce(cat, repo, []repoclient.Chart{fetched})
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("Reconcile returned %v, want a conflict: the catalog gained the object after this pass read it", err)
+	}
+
+	got := &helmv1alpha1.HelmApplicationChart{}
+	if err := c.Get(context.Background(), key, got); err != nil {
+		t.Fatalf("reading the object the other writer created: %v", err)
+	}
+	if len(got.Status.Versions) != 1 || got.Status.Versions[0].Version != "1.0.0" {
+		t.Fatalf("versions = %+v, want the other writer's single entry", got.Status.Versions)
+	}
+	if got.Status.Versions[0].MediaType != repushed {
+		t.Fatalf("media type = %q, want %q: this pass probed before the re-push and must not publish what it found",
+			got.Status.Versions[0].MediaType, repushed)
+	}
+	if !got.Status.Versions[0].ReexaminationRequired {
+		t.Fatal("the mark the other writer recorded must survive: the force asking for it is already consumed")
 	}
 }
 
@@ -721,6 +817,7 @@ func TestMigrationSurvivesAFailedStatusWrite(t *testing.T) {
 // that moved on rejects it, the migration is left unfinished — legacy object included,
 // because deleting it after a rejected copy would throw away the only copy of a version
 // a consumer still pins — and the next pass reads both objects again.
+
 func TestMigrationLeavesADestinationAnotherPassWroteAlone(t *testing.T) {
 	const (
 		legacyName = "example-chart-podinfo"
@@ -792,6 +889,7 @@ func TestMigrationLeavesADestinationAnotherPassWroteAlone(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKey{Name: currentName}, written); err != nil {
 		t.Fatalf("reading the destination after the retry: %v", err)
 	}
+
 	if len(written.Status.Versions) != 1 || !written.Status.Versions[0].ReexaminationRequired {
 		t.Fatalf("destination versions = %+v, want the other pass's state kept by the retry too", written.Status.Versions)
 	}

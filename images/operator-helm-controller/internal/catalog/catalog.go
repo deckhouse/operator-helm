@@ -18,6 +18,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -358,7 +359,8 @@ func (s *snapshot[C, CL]) Reconcile(ctx context.Context, charts []repoclient.Cha
 // ensure returns the catalog object of one chart with its labels and owner reference
 // up to date. present says whether the snapshot found it; an object it did not find is
 // created, which is how a chart the repository has just started offering enters the
-// catalog.
+// catalog. A name the create finds taken belongs to an object the snapshot did not
+// see, which is a lost race rather than a chart to publish (adopt).
 //
 // Metadata is written separately from the status and under the same lock, so a pass
 // that loses the race repairs nothing rather than repairing it over someone else's
@@ -394,17 +396,7 @@ func (s *snapshot[C, CL]) ensure(ctx context.Context, existing C, present bool, 
 	err := s.client.Create(ctx, created)
 	switch {
 	case apierrors.IsAlreadyExists(err):
-		// The object appeared after this snapshot was read, so nothing of it is known
-		// here — including whatever versions its status already holds, which the merge
-		// below must not drop. Reading it authoritatively is the only way to go on
-		// without patching against a state this pass never saw.
-		fetched := s.cfg.NewObject()
-		key := client.ObjectKey{Namespace: s.repo.Namespace(), Name: name}
-		if err := s.reader.Get(ctx, key, fetched); err != nil {
-			return created, fmt.Errorf("reading chart %s: %w", describeKey(key), err)
-		}
-
-		return s.ensure(ctx, fetched, true, name, chartName)
+		return created, s.adopt(ctx, name, chartName)
 	case err != nil:
 		return created, fmt.Errorf("creating chart %s: %w", describeKey(client.ObjectKeyFromObject(created)), err)
 	}
@@ -413,6 +405,57 @@ func (s *snapshot[C, CL]) ensure(ctx context.Context, existing C, present bool, 
 		"kind", s.cfg.Kind, "operation", "created", "chartObject", client.ObjectKeyFromObject(created))
 
 	return created, nil
+}
+
+// adopt repairs the metadata of an object that exists on the server while this pass's
+// snapshot holds none for the chart, and then reports the pass lost: the object is
+// proof that the catalog moved on since the read, so nothing computed from that read
+// may be written onto it.
+//
+// Merging into it instead would defeat the lock rather than obey it. The versions this
+// pass fetched are older than whatever the writer that created this object recorded —
+// it probed after our probe — and a merge patched against the object just read has the
+// current resource version as its base, so the server accepts a write that puts a stale
+// verdict over a fresh one. Every later pass then skips the version, because a recorded
+// and unmarked verdict is exactly what a pass carries forward, and the catalog publishes
+// the media type of an artifact that has already been superseded. A re-examination mark
+// recorded on that object after our probe would be cleared by the same write, with the
+// annotation asking for the refresh long consumed.
+//
+// The metadata is still repaired, under the lock like every other write of the pass: an
+// object whose labels do not put it in this repository's catalog is invisible to every
+// read this controller takes, so it is absent from every snapshot while occupying the
+// name the chart is published under, and leaving it alone would make the collision
+// permanent rather than a lost race. Labelled back in, it is part of the next snapshot
+// and the retry merges into it as into any other recorded chart.
+//
+// The conflict is reported the way the optimistic lock's own rejection is, because it is
+// the same thing: a pass computed from a read that has been overtaken, retried against
+// one that has caught up (internal/reconcile/repository.Evaluate).
+func (s *snapshot[C, CL]) adopt(ctx context.Context, name, chartName string) error {
+	logger := log.FromContext(ctx)
+
+	key := client.ObjectKey{Namespace: s.repo.Namespace(), Name: name}
+	fetched := s.cfg.NewObject()
+	if err := s.reader.Get(ctx, key, fetched); err != nil {
+		return fmt.Errorf("reading chart %s: %w", describeKey(key), err)
+	}
+
+	base := fetched.DeepCopyObject().(C)
+	s.applyMeta(fetched, chartName)
+
+	if !equality.Semantic.DeepEqual(base.GetLabels(), fetched.GetLabels()) ||
+		!equality.Semantic.DeepEqual(base.GetOwnerReferences(), fetched.GetOwnerReferences()) {
+		if err := s.client.Patch(ctx, fetched, lockedTo(base)); err != nil {
+			return fmt.Errorf("updating chart %s: %w", describeKey(key), err)
+		}
+
+		logger.Info("Reconciled chart catalog object",
+			"kind", s.cfg.Kind, "operation", "adopted", "chartObject", key)
+	}
+
+	return apierrors.NewConflict(helmv1alpha1.Resource(strings.ToLower(s.cfg.Kind)), name,
+		errors.New("the chart catalog object was written after this pass read the catalog"))
 }
 
 // applyMeta stamps the metadata every catalog object of a repository carries: the
