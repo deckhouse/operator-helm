@@ -19,7 +19,6 @@ package reposync
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -34,7 +33,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
-	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
 )
 
@@ -92,7 +90,46 @@ func newSynchronizerWithInterceptor(
 		return stub, nil
 	}
 
-	return NewSynchronizer(c, factory, adapter.NewAddonCatalog(c)), c
+	return NewSynchronizer(c, factory, adapter.NewAddonCatalog(c, c)), c
+}
+
+// newSynchronizerWithLaggingCache wires the synchronization the way the manager does,
+// with the two readers kept apart: writes and cached reads go through the intercepted
+// client, while the catalog reads the store directly, as it does through the API reader
+// in production. funcs therefore describe an informer that has not caught up — and
+// nothing else — so a test can state exactly what the lag would cost. The store is
+// returned, because what a pass wrote is a question about the cluster, not about the
+// cache in front of it.
+func newSynchronizerWithLaggingCache(
+	t *testing.T,
+	stub repoclient.ClientInterface,
+	funcs interceptor.Funcs,
+	objects ...client.Object,
+) (*Synchronizer, client.Client) {
+	t.Helper()
+
+	scheme := testScheme(t)
+	store := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithStatusSubresource(&helmv1alpha1.HelmClusterAddonChart{}, &helmv1alpha1.HelmClusterAddonRepository{}).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonChart, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{index.AddonChartValue(
+				addon.Spec.Chart.HelmClusterAddonRepository,
+				addon.Spec.Chart.HelmClusterAddonChartName,
+			)}
+		}).
+		Build()
+
+	cached := interceptor.NewClient(store, funcs)
+
+	factory := func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
+		return stub, nil
+	}
+
+	return NewSynchronizer(cached, factory, adapter.NewAddonCatalog(cached, store)), store
 }
 
 func ociVersion(version, mediaType string) repoclient.ChartVersion { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
@@ -342,118 +379,6 @@ func TestSynchronizerSyncRecordsAForcedRefreshBeforeTheRegistryIsRead(t *testing
 	}
 }
 
-// recordingCatalog stands in for the catalog so the set one pass hands from its marking
-// to its merge can be observed directly. The real catalog cannot show it here: over the
-// fake client nothing lags behind a write, so a merge that re-read the marks from the
-// cluster would reach the same status as one that was handed them, and the carry the
-// production code depends on would be indistinguishable from not carrying anything.
-type recordingCatalog struct {
-	marked   contract.MarkedVersions
-	received contract.MarkedVersions
-	merged   bool
-}
-
-func (c *recordingCatalog) Known(context.Context, contract.Repository) (repoclient.KnownCharts, error) {
-	return nil, nil
-}
-
-func (c *recordingCatalog) MigrateNames(context.Context, contract.Repository) error {
-	return nil
-}
-
-func (c *recordingCatalog) MarkForReexamination(context.Context, contract.Repository) (contract.MarkedVersions, error) {
-	return c.marked, nil
-}
-
-func (c *recordingCatalog) Reconcile(
-	_ context.Context,
-	_ contract.Repository,
-	_ []repoclient.Chart,
-	marked contract.MarkedVersions,
-) (contract.CatalogResult, error) {
-	c.received = marked
-	c.merged = true
-
-	return contract.CatalogResult{}, nil
-}
-
-func (c *recordingCatalog) InUseVersions(context.Context, contract.Repository, string) (map[string]struct{}, error) {
-	return nil, nil
-}
-
-func (c *recordingCatalog) Lookup(
-	context.Context,
-	contract.Repository,
-	string,
-) (client.Object, *helmv1alpha1.ChartCatalogStatus, error) {
-	return nil, nil, nil
-}
-
-// TestSynchronizerSyncHandsTheMergeTheVersionsItMarked pins the one thing that connects
-// the two halves of a forced pass. The marking write is read back through the manager's
-// cache, which is not guaranteed to show a pass its own write, and a merge patch on a
-// list ships the whole array: a merge that trusted that read would write the versions
-// this pass deferred back unmarked, with the force annotation already consumed. The
-// pass therefore carries what it marked in memory, and what reaches the merge has to be
-// exactly what the marking reported — an empty set for a pass that marked nothing.
-func TestSynchronizerSyncHandsTheMergeTheVersionsItMarked(t *testing.T) {
-	tests := []struct {
-		name   string
-		forced bool
-		marked contract.MarkedVersions
-		want   contract.MarkedVersions
-	}{
-		{
-			name:   "a forced pass carries every version its marking reported",
-			forced: true,
-			marked: contract.MarkedVersions{
-				"podinfo": {"6.7.1": struct{}{}, "6.7.0": struct{}{}},
-				"legacy":  {"1.0.0": struct{}{}},
-			},
-			want: contract.MarkedVersions{
-				"podinfo": {"6.7.1": struct{}{}, "6.7.0": struct{}{}},
-				"legacy":  {"1.0.0": struct{}{}},
-			},
-		},
-		{
-			name:   "an unforced pass marks nothing and carries nothing",
-			forced: false,
-			marked: contract.MarkedVersions{"podinfo": {"6.7.1": struct{}{}}},
-			want:   nil,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			repo := testRepository()
-			if test.forced {
-				repo.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
-			}
-
-			cat := &recordingCatalog{marked: test.marked}
-			stub := stubRepoClient{charts: []repoclient.Chart{{
-				Name:     "podinfo",
-				Versions: []repoclient.ChartVersion{ociVersion("6.7.1", "application/tar+gzip")},
-			}}}
-			service := NewSynchronizer(nil, func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
-				return stub, nil
-			}, cat)
-
-			outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
-			if outcome.Catalog.Err != nil {
-				t.Fatalf("the pass returned %v", outcome.Catalog.Err)
-			}
-			if !cat.merged {
-				t.Fatal("the fixture must reach the merge, or it proves nothing about what the merge is handed")
-			}
-
-			if !reflect.DeepEqual(cat.received, test.want) {
-				t.Fatalf("the merge was handed %v, want %v: the mark cannot be read back from a cache that may predate it", cat.received, test.want)
-			}
-		})
-	}
-}
-
 // TestSynchronizerSyncRecordsAForcedRefreshOnlyWhereItMeansSomething pins which
 // repositories pay for the durable form of the request. The mark exists to stop a later
 // pass from skipping a recorded verdict, and only the OCI client skips anything: the
@@ -537,54 +462,71 @@ func TestSynchronizerSyncRecordsAForcedRefreshOnlyWhereItMeansSomething(t *testi
 	}
 }
 
-// TestSynchronizerSyncReportsAForcedRefreshRecordedWhenTheKnownListingFails covers the
-// gap between the two catalog reads a forced pass makes. The request is written first
-// and the recorded verdicts are read after it; a failure of that second read is a
-// cluster-side failure of this pass, not of the refresh, which is already in the
-// catalog. Reporting the request as unrecorded there would keep the annotation and force
-// the whole repository again on the next pass, for work the passes that follow are
-// already going to do.
-func TestSynchronizerSyncReportsAForcedRefreshRecordedWhenTheKnownListingFails(t *testing.T) {
+// TestSynchronizerSyncKeepsAForcedRefreshWhenTheCatalogCannotBeRead covers the failure
+// that comes before anything is written. A pass reads the catalog once, and a forced
+// pass writes its request onto what that read returned; a read that fails has therefore
+// recorded nothing, and the annotation is the only thing left carrying the refresh.
+// Reporting it as recorded there would consume it for work no pass has done.
+//
+// A repository nothing is marked for is the other case: there was never anything to
+// write down, so the failed read holds nothing up and keeping the annotation would force
+// the repository again on every pass forever.
+func TestSynchronizerSyncKeepsAForcedRefreshWhenTheCatalogCannotBeRead(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
-	forced := testRepository()
-	forced.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
-	chart := existingChart(forced.Name, "podinfo",
-		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: mediaType},
-	)
+	tests := []struct {
+		name         string
+		repoType     chartsource.Kind
+		wantRecorded bool
+	}{
+		{
+			name:         "an oci repository, whose request is written onto the read that failed",
+			repoType:     chartsource.OCI,
+			wantRecorded: false,
+		},
+		{
+			name:         "a helm repository, which records nothing either way",
+			repoType:     chartsource.Helm,
+			wantRecorded: true,
+		},
+	}
 
-	sentinel := errors.New("synthetic chart list failure")
-	// Marking lists the charts too, so only the listing after it may fail: the request
-	// has to have landed for this to be about anything.
-	lists := 0
-	service, c := newSynchronizerWithInterceptor(t, stubRepoClient{}, interceptor.Funcs{
-		List: func(ctx context.Context, wc client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-			if _, ok := list.(*helmv1alpha1.HelmClusterAddonChartList); ok {
-				lists++
-				if lists > 1 {
-					return sentinel
-				}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			forced := testRepository()
+			forced.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+			chart := existingChart(forced.Name, "podinfo",
+				helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: mediaType},
+			)
+
+			sentinel := errors.New("synthetic chart list failure")
+			service, c := newSynchronizerWithInterceptor(t, stubRepoClient{}, interceptor.Funcs{
+				List: func(ctx context.Context, wc client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if _, ok := list.(*helmv1alpha1.HelmClusterAddonChartList); ok {
+						return sentinel
+					}
+
+					return wc.List(ctx, list, opts...)
+				},
+			}, forced, chart)
+
+			outcome := service.Sync(context.Background(), adapter.NewAddonRepository(forced), test.repoType)
+
+			if !errors.Is(outcome.Catalog.Err, sentinel) {
+				t.Fatalf("the fixture must fail the catalog read, got %v", outcome.Catalog.Err)
+			}
+			if outcome.FetchAttempted {
+				t.Fatal("the registry is never contacted once the catalog cannot be read")
+			}
+			if outcome.ForceRequestRecorded != test.wantRecorded {
+				t.Fatalf("ForceRequestRecorded = %t, want %t", outcome.ForceRequestRecorded, test.wantRecorded)
 			}
 
-			return wc.List(ctx, list, opts...)
-		},
-	}, forced, chart)
-
-	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(forced), chartsource.OCI)
-
-	if !errors.Is(outcome.Catalog.Err, sentinel) {
-		t.Fatalf("the fixture must fail the listing the recorded verdicts are read from, got %v", outcome.Catalog.Err)
-	}
-	if outcome.FetchAttempted {
-		t.Fatal("the registry is never contacted once the recorded verdicts cannot be read")
-	}
-	if !outcome.ForceRequestRecorded {
-		t.Fatal("the request landed before this failure: keeping the annotation would force the repository again for nothing")
-	}
-
-	marked := chartStatus(t, c, forced.Name, "podinfo").Versions
-	if len(marked) != 1 || !marked[0].ReexaminationRequired {
-		t.Fatalf("recorded versions = %+v, want the refresh written onto them before the failure", marked)
+			versions := chartStatus(t, c, forced.Name, "podinfo").Versions
+			if len(versions) != 1 || versions[0].ReexaminationRequired {
+				t.Fatalf("recorded versions = %+v, want nothing written by a pass that could not read", versions)
+			}
+		})
 	}
 }
 
@@ -593,10 +535,6 @@ func TestSynchronizerSyncReportsAForcedRefreshRecordedWhenTheKnownListingFails(t
 // rest as unexamined, carrying forward the recorded verdict of every version it is
 // allowed to skip. mediaType is what the registry holds now — every tag was re-pushed —
 // so a version that was examined is distinguishable from one that was only carried.
-//
-// A carried entry is flagged as carried, exactly as the real client flags it: it is the
-// only thing that tells the merge the registry was never asked about the version, and a
-// stand-in that dropped the flag would let the merge clear marks nothing answered.
 type budgetedRepoClient struct {
 	chartName string
 	tags      []string
@@ -618,7 +556,6 @@ func (b *budgetedRepoClient) FetchCharts(_ context.Context, _ string, _ *repocli
 				MediaType:          known.MediaType,
 				UnavailableReason:  known.UnavailableReason,
 				UnavailableMessage: known.UnavailableMessage,
-				Carried:            true,
 			})
 		case left == 0:
 			if !recorded {
@@ -722,115 +659,46 @@ func TestSynchronizerSyncFinishesAForcedRefreshOverSeveralIncompletePasses(t *te
 	}
 }
 
-// TestSynchronizerSyncKeepsAMarkAnOrdinaryPassOnlyCarriedPast reproduces the one way a
-// forced refresh is still lost after everything above it. The forced pass marked the
-// version and then failed to read the registry; the annotation is consumed by that pass
-// (SyncOutcome.ForceRequestRecorded), so the mark is now the only record of the request.
-// The ordinary pass that follows builds its Known from a cached list that has not caught
-// up with the marking write, so NeedsExamination sees a recorded media type and no mark
-// and the client carries the verdict forward without asking the registry anything — while
-// the read the merge patch is computed from goes through a cache that has caught up and
-// does carry the mark. A merge that read "fetched" as "examined" would clear it, and the
-// version would stay skippable with the verdict of an artifact that may no longer exist,
-// with nothing left anywhere to ask for it again.
-//
-// The second case is the other half of the argument, and the reason preserving the mark
-// does not pin it: as soon as the snapshot a pass is built from carries the mark, the
-// version is probed and the mark is cleared by an answer.
-func TestSynchronizerSyncKeepsAMarkAnOrdinaryPassOnlyCarriedPast(t *testing.T) {
+// TestSynchronizerSyncExaminesAMarkedVersionAndClearsItByAnswering pins what an
+// ordinary pass does with a mark a forced pass left behind: the annotation was consumed
+// by that forced pass, so the mark is the whole of the request, and the verdicts this
+// pass skips tags by come from the same read the mark is on. NeedsExamination therefore
+// sees it, the version is probed rather than carried, and the answer clears the mark —
+// which is what keeps a refresh from repeating forever.
+func TestSynchronizerSyncExaminesAMarkedVersionAndClearsItByAnswering(t *testing.T) {
 	const (
 		recorded = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 		repushed = "application/tar+gzip"
 	)
 
-	tests := []struct {
-		name string
-		// staleKnown makes every list answer with the version list as it was before the
-		// mark was written, which is what the pass's Known is built from. The object
-		// itself keeps the mark, so the merge's own read still sees it.
-		staleKnown    bool
-		wantProbed    bool
-		wantMediaType string
-		wantMarked    bool
-	}{
-		{
-			name:          "the known snapshot predates the marking write, so the pass only carries the verdict",
-			staleKnown:    true,
-			wantProbed:    false,
-			wantMediaType: recorded,
-			wantMarked:    true,
-		},
-		{
-			name:          "the next pass reads the mark and answers it",
-			staleKnown:    false,
-			wantProbed:    true,
-			wantMediaType: repushed,
-			wantMarked:    false,
-		},
+	repo := testRepository()
+	marked := existingChart(repo.Name, "podinfo",
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: recorded, ReexaminationRequired: true},
+	)
+
+	// The repository carries no force annotation: this is an ordinary pass, and it
+	// marks nothing itself.
+	service, c := newSynchronizer(t,
+		&budgetedRepoClient{chartName: "podinfo", tags: []string{"6.7.1"}, mediaType: repushed, budget: 1},
+		repo, marked)
+
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
+	if outcome.Fetch.Err != nil {
+		t.Fatalf("fetch failed: %v", outcome.Fetch.Err)
+	}
+	if outcome.Catalog.Err != nil {
+		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			repo := testRepository()
-			marked := existingChart(repo.Name, "podinfo",
-				helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: recorded, ReexaminationRequired: true},
-			)
-
-			funcs := interceptor.Funcs{
-				List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-					if err := cl.List(ctx, list, opts...); err != nil {
-						return err
-					}
-
-					charts, ok := list.(*helmv1alpha1.HelmClusterAddonChartList)
-					if !ok || !test.staleKnown {
-						return nil
-					}
-
-					for i := range charts.Items {
-						for j := range charts.Items[i].Status.Versions {
-							charts.Items[i].Status.Versions[j].ReexaminationRequired = false
-						}
-					}
-
-					return nil
-				},
-			}
-
-			// The repository carries no force annotation: this is an ordinary pass, so it
-			// marks nothing itself and hands the merge no set of its own.
-			service, c := newSynchronizerWithInterceptor(t,
-				&budgetedRepoClient{chartName: "podinfo", tags: []string{"6.7.1"}, mediaType: repushed, budget: 1},
-				funcs, repo, marked)
-
-			outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
-			if outcome.Fetch.Err != nil {
-				t.Fatalf("fetch failed: %v", outcome.Fetch.Err)
-			}
-			if outcome.Catalog.Err != nil {
-				t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
-			}
-
-			stored := chartStatus(t, c, repo.Name, "podinfo").Versions
-			if len(stored) != 1 || stored[0].Version != "6.7.1" {
-				t.Fatalf("recorded versions = %+v, want the single version the fixture records", stored)
-			}
-
-			probed := stored[0].MediaType == repushed
-			if probed != test.wantProbed || stored[0].MediaType != test.wantMediaType {
-				t.Fatalf("media type = %q, want %q: the pass was expected %s",
-					stored[0].MediaType, test.wantMediaType,
-					map[bool]string{true: "to examine the version", false: "to carry the recorded verdict"}[test.wantProbed])
-			}
-
-			if stored[0].ReexaminationRequired != test.wantMarked {
-				if test.wantMarked {
-					t.Fatal("a version this pass only carried must keep its mark: nothing asked the registry, and the force annotation is already consumed")
-				}
-
-				t.Fatal("a version this pass examined must have its mark cleared: the refresh has been answered")
-			}
-		})
+	stored := chartStatus(t, c, repo.Name, "podinfo").Versions
+	if len(stored) != 1 || stored[0].Version != "6.7.1" {
+		t.Fatalf("recorded versions = %+v, want the single version the fixture records", stored)
+	}
+	if stored[0].MediaType != repushed {
+		t.Fatalf("media type = %q, want %q: a marked version must be examined, not carried", stored[0].MediaType, repushed)
+	}
+	if stored[0].ReexaminationRequired {
+		t.Fatal("a version this pass examined must have its mark cleared: the refresh has been answered")
 	}
 }
 
@@ -1044,7 +912,7 @@ func TestSynchronizerSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T)
 	factory := func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stubRepoClient{}, nil
 	}
-	service := NewSynchronizer(c, factory, adapter.NewAddonCatalog(c))
+	service := NewSynchronizer(c, factory, adapter.NewAddonCatalog(c, c))
 
 	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 
@@ -1089,64 +957,21 @@ func TestSynchronizerSyncReportsTheVersionsAPassLeftUnexamined(t *testing.T) {
 	}
 }
 
-// stagedRepoClient serves a different repository client to each pass of a test that
-// runs several. The passes of one scenario are not variations on a fixture: what the
-// registry answers is part of the story being told.
-type stagedRepoClient struct {
-	current repoclient.ClientInterface
-}
-
-func (s *stagedRepoClient) FetchCharts(
-	ctx context.Context,
-	url string,
-	config *repoclient.RepoConfig,
-	opts repoclient.FetchOptions,
-) ([]repoclient.Chart, error) {
-	return s.current.FetchCharts(ctx, url, config, opts)
-}
-
-// TestSynchronizerSyncRejectsACatalogWriteComputedFromAPreMarkRead covers the write the
-// whole mark mechanism rests on: the patch that publishes a pass is computed from a read
-// through the manager's cache, and that cache can lag behind this controller's own
-// writes.
-//
-// The trace is the one a forced refresh dies of. The forced pass marks every recorded
-// version and its fetch then fails, so the annotation is consumed
-// (SyncOutcome.ForceRequestRecorded) and the mark is the only record of the request. An
-// ordinary pass follows while the cache still holds the pre-mark object: its Known says
-// the verdict is recorded and unmarked, so it carries that verdict forward without
-// asking the registry anything, and the base of its merge patch is the same pre-mark
-// object. Anything else in the array differing — here one tag the repository published
-// since — makes the merge patch ship the whole array, and the array it ships was built
-// from a list that has no mark in it. Without the lock the write lands and the mark is
-// gone, with nothing left anywhere to ask for the refresh again.
-//
-// Under the lock the pre-mark base carries the resource version it was read at, so the
-// server rejects the patch as a conflict: the pass reports it, the catalog keeps the
-// mark, and the retry — the second pass here — is computed from a read that has caught
-// up, examines exactly the version the mark asked for and clears it by answering.
-//
-// The existing lag fixtures intercept List, which is what a pass builds its Known from;
-// this one intercepts Get as well, because the merge patch base is a Get and it is the
-// read the write is judged against.
-func TestSynchronizerSyncRejectsACatalogWriteComputedFromAPreMarkRead(t *testing.T) {
-	const (
-		recorded = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
-		repushed = "application/tar+gzip"
-	)
-
-	// The pre-mark object the lagging cache keeps serving: its status and, just as
-	// importantly, the resource version it was observed at.
-	var stale *helmv1alpha1.HelmClusterAddonChart
-
-	funcs := interceptor.Funcs{
+// laggingChartCache builds the interceptor of a cache that has not caught up: every
+// chart object a cached read returns is the one the store holds, rewritten by mutate
+// into the state an older observation of it was in. Both reads are covered, because a
+// cache lags in all of them and a fixture that lagged in only one would be describing a
+// cache that does not exist.
+func laggingChartCache(mutate func(*helmv1alpha1.HelmClusterAddonChart)) interceptor.Funcs {
+	return interceptor.Funcs{
 		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			chart, ok := obj.(*helmv1alpha1.HelmClusterAddonChart)
-			if !ok || stale == nil || key.Name != stale.Name {
-				return cl.Get(ctx, key, obj, opts...)
+			if err := cl.Get(ctx, key, obj, opts...); err != nil {
+				return err
 			}
 
-			stale.DeepCopyInto(chart)
+			if chart, ok := obj.(*helmv1alpha1.HelmClusterAddonChart); ok {
+				mutate(chart)
+			}
 
 			return nil
 		},
@@ -1156,74 +981,201 @@ func TestSynchronizerSyncRejectsACatalogWriteComputedFromAPreMarkRead(t *testing
 			}
 
 			charts, ok := list.(*helmv1alpha1.HelmClusterAddonChartList)
-			if !ok || stale == nil {
+			if !ok {
 				return nil
 			}
 
 			for i := range charts.Items {
-				if charts.Items[i].Name == stale.Name {
-					stale.DeepCopyInto(&charts.Items[i])
-				}
+				mutate(&charts.Items[i])
 			}
 
 			return nil
 		},
 	}
+}
+
+// TestASecondForceIsRecordedWhenTheCachedCatalogStillShowsTheFirst covers the force that
+// is consumed having recorded nothing. Marking skips the objects that already carry the
+// mark everywhere, which is right — a refresh asked for twice over an unreachable
+// registry must not rewrite the catalog twice — but only if "already marked" is a
+// statement about the catalog. Decided from a cached read it is not: the cache here
+// still holds the object from while the first refresh was outstanding, while a pass that
+// has since finished answered it and cleared the mark on the server.
+//
+// A pass that took that read at its word would write nothing, and the annotation is
+// consumed by this very pass (SyncOutcome.ForceRequestRecorded): with the fetch then
+// failing, the second refresh would be gone with nothing anywhere recording that it was
+// ever asked for, and every later pass would go on skipping the recorded verdict.
+func TestASecondForceIsRecordedWhenTheCachedCatalogStillShowsTheFirst(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	forced := testRepository()
+	forced.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
+
+	// The store: the first refresh has been answered and the mark cleared.
+	answered := existingChart(forced.Name, "podinfo",
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: mediaType},
+	)
+
+	// The cache: the object as it was while the first refresh was still outstanding.
+	stale := laggingChartCache(func(chart *helmv1alpha1.HelmClusterAddonChart) {
+		for i := range chart.Status.Versions {
+			chart.Status.Versions[i].ReexaminationRequired = true
+		}
+	})
+
+	// The registry is unreachable, which is the case the durable record exists for: the
+	// pass ends having written the request and nothing else.
+	service, store := newSynchronizerWithLaggingCache(t,
+		stubRepoClient{err: errors.New("dial tcp: connection refused")}, stale, forced, answered)
+
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(forced), chartsource.OCI)
+	if outcome.Fetch.Err == nil {
+		t.Fatal("the fixture must reach a forced pass whose read failed, or the request would be answered rather than recorded")
+	}
+	if !outcome.ForceRequestRecorded {
+		t.Fatal("the pass reports the request as recorded, so the annotation is consumed: what it wrote has to be in the catalog")
+	}
+
+	versions := chartStatus(t, store, forced.Name, "podinfo").Versions
+	if len(versions) != 1 {
+		t.Fatalf("recorded versions = %+v, want the fixture's single version", versions)
+	}
+	if !versions[0].ReexaminationRequired {
+		t.Fatal("the second force must be written onto the catalog: a cached read showing the first one's mark is not evidence about the catalog, and the annotation is already consumed")
+	}
+}
+
+// TestAVerdictCarriedByAPassCannotOverwriteANewerOne covers the other half of the same
+// rule, on a pass that writes successfully. The verdicts a fetch skips tags by and the
+// object the write is patched against have to be one read: a pass that took them
+// separately could carry a verdict forward from the older of the two and publish it over
+// the newer one, with the optimistic lock powerless to stop it because the object it was
+// patched against is current.
+//
+// Here the catalog holds the media type a completed pass established, while the cache
+// still shows the one it replaced. The pass asks the registry nothing about the version —
+// its verdict is recorded and unmarked — so whatever it carries is what the catalog ends
+// up publishing, and an ordinary pass would go on skipping the tag forever.
+func TestAVerdictCarriedByAPassCannotOverwriteANewerOne(t *testing.T) {
+	const (
+		established = "application/tar+gzip"
+		replaced    = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+	)
 
 	repo := testRepository()
-	staged := &stagedRepoClient{
-		current: &budgetedRepoClient{chartName: "podinfo", tags: []string{"6.7.1"}, mediaType: recorded, budget: 1},
-	}
-	service, c := newSynchronizerWithInterceptor(t, staged, funcs, repo)
-	addonRepo := adapter.NewAddonRepository(repo)
+	current := existingChart(repo.Name, "podinfo",
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: established},
+	)
 
-	// A steady-state pass first, so the catalog object exists exactly as the production
-	// code writes it: labels, owner reference and one recorded verdict.
-	if outcome := service.Sync(context.Background(), addonRepo, chartsource.OCI); outcome.Catalog.Err != nil {
-		t.Fatalf("the seeding pass returned %v", outcome.Catalog.Err)
-	}
+	// The cache: the object as it was before the pass that established the media type.
+	stale := laggingChartCache(func(chart *helmv1alpha1.HelmClusterAddonChart) {
+		for i := range chart.Status.Versions {
+			chart.Status.Versions[i].MediaType = replaced
+		}
+	})
 
-	preMark := &helmv1alpha1.HelmClusterAddonChart{}
-	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
-	if err := c.Get(context.Background(), key, preMark); err != nil {
-		t.Fatalf("reading the catalog object before the mark: %v", err)
-	}
+	service, store := newSynchronizerWithLaggingCache(t,
+		&budgetedRepoClient{chartName: "podinfo", tags: []string{"6.7.1"}, mediaType: "application/gzip", budget: 1},
+		stale, repo, current)
 
-	// The forced pass: it marks the recorded verdict and then cannot read the registry.
-	repo.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
-	staged.current = stubRepoClient{err: errors.New("registry unreachable")}
-
-	forcedOutcome := service.Sync(context.Background(), addonRepo, chartsource.OCI)
-	if forcedOutcome.Fetch.Err == nil {
-		t.Fatal("the fixture must reach a forced pass whose read failed")
+	outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
+	if outcome.Fetch.Err != nil {
+		t.Fatalf("fetch failed: %v", outcome.Fetch.Err)
 	}
-	if !forcedOutcome.ForceRequestRecorded {
-		t.Fatal("the forced pass must record the request before reading: the annotation is consumed either way")
-	}
-	if marked := chartStatus(t, c, repo.Name, "podinfo").Versions; len(marked) != 1 || !marked[0].ReexaminationRequired {
-		t.Fatalf("recorded versions = %+v, want the single version marked", marked)
+	if outcome.Catalog.Err != nil {
+		t.Fatalf("catalog update failed: %v", outcome.Catalog.Err)
 	}
 
-	// From here the cache serves the pre-mark object, which is older than what the
-	// marking wrote: same list of versions, no mark, an earlier resource version.
-	stale = preMark
-	repo.Annotations = nil
-	staged.current = &budgetedRepoClient{
+	versions := chartStatus(t, store, repo.Name, "podinfo").Versions
+	if len(versions) != 1 {
+		t.Fatalf("recorded versions = %+v, want the fixture's single version", versions)
+	}
+	if versions[0].MediaType == "application/gzip" {
+		t.Fatal("the fixture must reach a carried verdict, not a probe: a version whose verdict is recorded and unmarked is exactly what a pass skips")
+	}
+	if versions[0].MediaType != established {
+		t.Fatalf("media type = %q, want %q: a verdict carried forward must be the one the catalog holds, not one a cached read remembered",
+			versions[0].MediaType, established)
+	}
+}
+
+// TestSynchronizerSyncRejectsACatalogWriteOvertakenByAnotherWriter covers the window
+// the optimistic lock exists for. A pass reads the catalog once and writes it at the
+// end, and between the two lies the whole fetch — long enough for another writer to
+// record something this pass knows nothing about. A merge patch on a list ships the
+// whole array, so the write would replace that state wholesale with one computed
+// without it.
+//
+// What is lost is worst for a mark: the writer here is a forced pass that recorded a
+// refresh and had its annotation consumed for it, so the mark is the only record of the
+// request. Under the lock the base carries the resource version it was read at, the
+// server rejects the patch as a conflict, the pass reports it, and the retry — computed
+// from a read taken after the mark — examines exactly the version it asks about and
+// clears it by answering.
+func TestSynchronizerSyncRejectsACatalogWriteOvertakenByAnotherWriter(t *testing.T) {
+	const (
+		recorded = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+		repushed = "application/tar+gzip"
+	)
+
+	repo := testRepository()
+	chart := existingChart(repo.Name, "podinfo",
+		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: recorded},
+	)
+
+	// The competing writer runs once, just before this pass's own status patch: the
+	// object it marks is the one the pass read before its fetch, and everything the
+	// pass is about to write was computed from that earlier state.
+	overtaken := false
+	funcs := interceptor.Funcs{
+		SubResourcePatch: func(
+			ctx context.Context,
+			cl client.Client,
+			sub string,
+			obj client.Object,
+			patch client.Patch,
+			opts ...client.SubResourcePatchOption,
+		) error {
+			if _, ok := obj.(*helmv1alpha1.HelmClusterAddonChart); ok && !overtaken {
+				overtaken = true
+
+				marked := &helmv1alpha1.HelmClusterAddonChart{}
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), marked); err != nil {
+					return err
+				}
+
+				for i := range marked.Status.Versions {
+					marked.Status.Versions[i].ReexaminationRequired = true
+				}
+
+				if err := cl.Status().Update(ctx, marked); err != nil {
+					return err
+				}
+			}
+
+			return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	}
+
+	// The registry published one more tag, so the array this pass computed differs from
+	// what it read and the patch is a real write rather than a no-op.
+	client := &budgetedRepoClient{
 		chartName: "podinfo",
 		tags:      []string{"6.7.2", "6.7.1"},
 		mediaType: repushed,
 		budget:    2,
 	}
+	service, c := newSynchronizerWithInterceptor(t, client, funcs, repo, chart)
+	addonRepo := adapter.NewAddonRepository(repo)
 
-	lagging := service.Sync(context.Background(), addonRepo, chartsource.OCI)
-	if lagging.Fetch.Err != nil {
-		t.Fatalf("the fetch of the lagging pass failed: %v", lagging.Fetch.Err)
+	overtakenPass := service.Sync(context.Background(), addonRepo, chartsource.OCI)
+	if overtakenPass.Fetch.Err != nil {
+		t.Fatalf("the fetch of the overtaken pass failed: %v", overtakenPass.Fetch.Err)
 	}
-	if !apierrors.IsConflict(lagging.Catalog.Err) {
-		t.Fatalf("catalog error = %v, want the patch rejected as a conflict: its base predates this controller's own write", lagging.Catalog.Err)
+	if !apierrors.IsConflict(overtakenPass.Catalog.Err) {
+		t.Fatalf("catalog error = %v, want the patch rejected as a conflict: the read it was computed from has been overtaken", overtakenPass.Catalog.Err)
 	}
-
-	stale = nil
 
 	survived := versionsByVersion(t, chartStatus(t, c, repo.Name, "podinfo").Versions)
 	if len(survived) != 1 || !survived["6.7.1"].ReexaminationRequired {
@@ -1233,11 +1185,11 @@ func TestSynchronizerSyncRejectsACatalogWriteComputedFromAPreMarkRead(t *testing
 		t.Fatalf("6.7.1 media type = %q, want %q: a rejected patch must leave the catalog as it was", got, recorded)
 	}
 
-	// The retry the work queue runs: nothing lags any more, so the pass sees the mark,
-	// examines the version it asks about and answers it.
+	// The retry the work queue runs: its read is taken after the mark, so the pass sees
+	// it, examines the version it asks about and answers it.
 	retried := service.Sync(context.Background(), addonRepo, chartsource.OCI)
 	if retried.Fetch.Err != nil || retried.Catalog.Err != nil {
-		t.Fatalf("the retry returned fetch %v, catalog %v: a caught-up read must be writable", retried.Fetch.Err, retried.Catalog.Err)
+		t.Fatalf("the retry returned fetch %v, catalog %v: a read nothing has overtaken must be writable", retried.Fetch.Err, retried.Catalog.Err)
 	}
 
 	written := versionsByVersion(t, chartStatus(t, c, repo.Name, "podinfo").Versions)

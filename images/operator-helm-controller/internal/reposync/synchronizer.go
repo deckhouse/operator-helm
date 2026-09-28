@@ -66,6 +66,11 @@ func (s *Synchronizer) MigrateNames(ctx context.Context, repo contract.Repositor
 // mirror it. The two phases are reported separately: a fetch failure is about the
 // remote, a catalog failure is about this cluster.
 //
+// The catalog is read once, at the start, and that one read is what the pass decides
+// everything from: which tags the fetch may skip, what a forced refresh marks, and the
+// object each write is patched against. Reading it twice is what lets a pass carry a
+// verdict forward from one state of the catalog and write it back over another.
+//
 // A forced pass over an OCI repository starts by writing the request into the catalog,
 // before anything is asked of the registry. The force annotation is consumed by the
 // pass that attempts the read, so this write is the only thing that makes the request
@@ -81,12 +86,6 @@ func (s *Synchronizer) Sync(
 ) SyncOutcome {
 	forced := repo.ForceReconcileRequired()
 
-	// What the marking wrote, carried to the merge in memory. The catalog is read back
-	// through the manager's cache, which is not guaranteed to show this pass its own
-	// write, so the versions this pass defers take their mark from here rather than from
-	// what that read returned.
-	var marked contract.MarkedVersions
-
 	// A helm repository is marked for nothing: its client ignores FetchOptions outright
 	// (the index is one document carrying every version, and media types are not probed
 	// incrementally there), so no pass ever skips a recorded verdict and no mark can
@@ -96,35 +95,39 @@ func (s *Synchronizer) Sync(
 	// index fetch that then failed would leave every version of every chart claiming a
 	// re-examination no pass is going to do. The request is still recorded as far as it
 	// goes: there is nothing to record, so nothing is waiting on the annotation either.
-	if forced && repoType == chartsource.OCI {
-		var err error
-		if marked, err = s.catalog.MarkForReexamination(ctx, repo); err != nil {
+	marking := forced && repoType == chartsource.OCI
+
+	snapshot, err := s.catalog.Snapshot(ctx, repo)
+	if err != nil {
+		// The registry was never contacted: FetchAttempted stays false so the
+		// caller does not mistake this cluster-side read failure for a fetch that
+		// ran (let alone succeeded). A pass that had a request to write down has not
+		// written it, so the annotation is all that is left of it and must be kept;
+		// a pass with nothing to record is holding nothing up.
+		return SyncOutcome{ForceRequestRecorded: !marking, Catalog: CatalogOutcome{Err: err}}
+	}
+
+	if marking {
+		if err := snapshot.MarkForReexamination(ctx); err != nil {
 			// ForceRequestRecorded stays false: nothing holds the request but the
 			// annotation, and dropping it here would lose the refresh entirely.
 			return SyncOutcome{Catalog: CatalogOutcome{Err: err}}
 		}
 	}
 
-	known, err := s.catalog.Known(ctx, repo)
-	if err != nil {
-		// The registry was never contacted: FetchAttempted stays false so the
-		// caller does not mistake this cluster-side read failure for a fetch that
-		// ran (let alone succeeded).
-		return SyncOutcome{ForceRequestRecorded: true, Catalog: CatalogOutcome{Err: err}}
-	}
-
-	// Full asks the registry for what the marks above already record, rather than
-	// relying on reading them back: the catalog is read through the controller's cache,
-	// which is not guaranteed to show this pass its own write yet.
+	// Known is read after the marking, from the same objects the marking wrote on, so a
+	// version this pass just marked is one the fetch re-examines. Full asks for every
+	// tag regardless, which is what a forced refresh means for the tags nothing is
+	// recorded about.
 	charts, fetch := s.fetchCharts(ctx, repo, repoType, repoclient.FetchOptions{
-		Known: known,
+		Known: snapshot.Known(),
 		Full:  forced,
 	})
 	if fetch.Err != nil {
 		return SyncOutcome{ForceRequestRecorded: true, FetchAttempted: true, Fetch: fetch}
 	}
 
-	result, err := s.catalog.Reconcile(ctx, repo, charts, marked)
+	result, err := snapshot.Reconcile(ctx, charts)
 
 	return SyncOutcome{
 		ForceRequestRecorded: true,

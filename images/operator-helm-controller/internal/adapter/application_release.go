@@ -182,11 +182,14 @@ type applicationRepositoryResolver struct {
 	clusterCatalog contract.Catalog
 }
 
+// NewApplicationRepositoryResolver builds the resolver the release reconciler looks
+// charts up through. Its catalogs are only ever read (Lookup), never synchronized, so
+// they read through the cache like the rest of the release path.
 func NewApplicationRepositoryResolver(c client.Client) *applicationRepositoryResolver {
 	return &applicationRepositoryResolver{
 		client:         c,
-		namespaced:     NewApplicationCatalog(c),
-		clusterCatalog: NewClusterApplicationCatalog(c),
+		namespaced:     NewApplicationCatalog(c, c),
+		clusterCatalog: NewClusterApplicationCatalog(c, c),
 	}
 }
 

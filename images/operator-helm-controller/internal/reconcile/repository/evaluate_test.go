@@ -1477,14 +1477,15 @@ func TestEvaluateKeepsTheIncompleteCatalogThroughAFailedPass(t *testing.T) {
 }
 
 // TestEvaluateReportsACatalogWriteRejectedByItsLockAsALostRace covers what a user is
-// told, and how soon the write is redone, when a catalog patch is refused because its
-// base predates another writer (catalog.lockedTo). Nothing is broken: the pass read the
-// repository and lost a race with a write it could not see, and the next pass computes
-// the same catalog from a read that has caught up.
+// told, and how soon the write is redone, when a catalog patch is refused because the
+// read it was computed from has been overtaken (catalog.lockedTo). Nothing is broken:
+// the pass read the repository and lost a race with a write it could not see, and the
+// next pass computes the same catalog from a read that has caught up.
 //
 // Both halves of that are verdicts of their own. The message must not be the verbatim
 // "the object has been modified; please apply your changes to the latest version and
-// try again", which a user reads as a defect in the operator. And the retry must not
+// try again", which a user reads as a defect in the operator; nor may it blame another
+// party, since the writer that overtook this pass is most often this controller itself. And the retry must not
 // wait a full synchronization interval: the work queue does retry the failed pass at
 // once, but that retry attempts no synchronization while the schedule says the next one
 // is minutes away (ShouldAttempt), so the schedule this pass writes is what decides when
@@ -1505,7 +1506,7 @@ func TestEvaluateReportsACatalogWriteRejectedByItsLockAsALostRace(t *testing.T) 
 		{
 			name:              "a rejected patch is named as the race it is and retried promptly",
 			err:               conflict,
-			wantMessage:       "The chart catalog was written by someone else while this pass was updating it; retrying",
+			wantMessage:       "The chart catalog changed since this pass read it; retrying",
 			wantShortSchedule: true,
 		},
 		{

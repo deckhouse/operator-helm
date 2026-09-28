@@ -275,7 +275,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				repo.Status.ObservedGeneration = repo.Generation
 			}
 
-			gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c), adapter.NewAddonRepository(repo), adapter.NewAddonRelease(addon), tt.repoType)
+			gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c, c), adapter.NewAddonRepository(repo), adapter.NewAddonRelease(addon), tt.repoType)
 
 			if tt.wantErr {
 				if err == nil {
@@ -528,7 +528,7 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 				context.Background(),
 				adapter.NewAddonRelease(addon),
 				adapter.NewAddonRepository(repo),
-				adapter.NewAddonCatalog(c),
+				adapter.NewAddonCatalog(c, c),
 				chartsource.Helm,
 			)
 
@@ -558,7 +558,7 @@ func TestGetHelmClusterAddonChartMissingChart(t *testing.T) {
 	addon := testAddon()
 	r, c := newTestReconciler(t)
 
-	gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c), adapter.NewAddonRepository(helmRepositoryFixture()), adapter.NewAddonRelease(addon), chartsource.OCI)
+	gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c, c), adapter.NewAddonRepository(helmRepositoryFixture()), adapter.NewAddonRelease(addon), chartsource.OCI)
 	if err == nil {
 		t.Fatalf("expected an error when the addon chart does not exist, got version %+v", gotVersion)
 	}

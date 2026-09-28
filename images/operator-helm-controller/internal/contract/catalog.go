@@ -38,22 +38,17 @@ type CatalogResult struct {
 	SkippedCharts []string
 }
 
-// MarkedVersions names, per chart, the versions MarkForReexamination left owing a
-// fresh verdict. It is handed straight back to Reconcile because the mark cannot be
-// re-read reliably: the catalog objects are served by the manager's cache, and the read
-// the merge patch is computed from can still show the state before our own marking
-// write landed. Carrying the set in memory makes the merge independent of that read —
-// the pass knows what it asked for without asking the cache again.
-type MarkedVersions map[string]map[string]struct{}
-
 // Catalog mirrors the chart list of a repository into the chart catalog kind of
 // its family. One Catalog serves every repository of one kind; the repository is
 // passed to each call because the objects it writes are owned by, labelled with
 // and (for a namespaced kind) placed next to that repository.
 type Catalog interface {
-	// Known returns the verdicts recorded for the repository by previous passes,
-	// so the repository client can skip tags it already examined.
-	Known(ctx context.Context, repo Repository) (repoclient.KnownCharts, error)
+	// Snapshot reads the catalog objects of one repository and returns the state a
+	// synchronization pass decides from. It is a single read for the whole pass by
+	// design: every decision the pass makes — which tags to probe, which verdicts to
+	// mark, what to merge the fetched charts into and what to patch against — comes
+	// from it, so no two of them can disagree.
+	Snapshot(ctx context.Context, repo Repository) (CatalogSnapshot, error)
 	// MigrateNames moves the repository's catalog objects to the names the current
 	// scheme derives. It reads nothing from the repository, so it must run on every
 	// reconcile, not only when a fetch is attempted or succeeds.
@@ -61,25 +56,6 @@ type Catalog interface {
 	// TRANSITIONAL: remove once every cluster has reconciled each repository once
 	// under the current scheme.
 	MigrateNames(ctx context.Context, repo Repository) error
-	// MarkForReexamination records on every version the catalog holds for the
-	// repository that its verdict is no longer trusted, which is what forcing a
-	// refresh asks for. It is the durable form of that request: the annotation
-	// carrying it is consumed by the pass that acts on it, so the request has to be
-	// in the catalog before the registry is contacted, or a read that fails takes the
-	// whole refresh with it and the re-pushed tag it was asked for is never looked at
-	// again. Every later pass — forced or not — re-examines a marked version and
-	// clears the mark by answering it. The versions it left marked are returned so the
-	// same pass can hand them to Reconcile instead of reading them back.
-	MarkForReexamination(ctx context.Context, repo Repository) (MarkedVersions, error)
-	// Reconcile writes the fetched charts into the catalog and prunes objects the
-	// repository no longer lists, keeping any version a consumer still references.
-	// The result names the charts it could not publish; it is filled in as far as
-	// the pass got, so it is meaningful next to an error too.
-	//
-	// marked is what MarkForReexamination recorded earlier in this pass, or nil when
-	// nothing was forced. A version this pass did not reach keeps the mark because it
-	// is in that set, not because the read said so.
-	Reconcile(ctx context.Context, repo Repository, charts []repoclient.Chart, marked MarkedVersions) (CatalogResult, error)
 	// InUseVersions reports the versions of one chart still referenced by the
 	// consumers of this family. An empty chart name yields no versions.
 	InUseVersions(ctx context.Context, repo Repository, chartName string) (map[string]struct{}, error)
@@ -87,4 +63,30 @@ type Catalog interface {
 	// can find the version it asks for. The error is a NotFound when the repository
 	// does not offer the chart.
 	Lookup(ctx context.Context, repo Repository, chartName string) (client.Object, *helmv1alpha1.ChartCatalogStatus, error)
+}
+
+// CatalogSnapshot is one read of a repository's catalog objects and everything a
+// synchronization pass does with it. Holding the read is the point: the verdicts the
+// pass skips tags by, the marks it writes and the base every status patch is computed
+// against are all the same objects, so a version cannot be carried forward from one
+// state of the catalog and written back over another.
+type CatalogSnapshot interface {
+	// Known returns the verdicts the snapshot holds, so the repository client can skip
+	// tags a previous pass already examined. It is read after MarkForReexamination, so
+	// what a forced pass marked is part of it.
+	Known() repoclient.KnownCharts
+	// MarkForReexamination records on every version the catalog holds for the
+	// repository that its verdict is no longer trusted, which is what forcing a
+	// refresh asks for. It is the durable form of that request: the annotation
+	// carrying it is consumed by the pass that acts on it, so the request has to be
+	// in the catalog before the registry is contacted, or a read that fails takes the
+	// whole refresh with it and the re-pushed tag it was asked for is never looked at
+	// again. Every later pass — forced or not — re-examines a marked version and
+	// clears the mark by answering it.
+	MarkForReexamination(ctx context.Context) error
+	// Reconcile writes the fetched charts into the catalog and prunes objects the
+	// repository no longer lists, keeping any version a consumer still references.
+	// The result names the charts it could not publish; it is filled in as far as
+	// the pass got, so it is meaningful next to an error too.
+	Reconcile(ctx context.Context, charts []repoclient.Chart) (CatalogResult, error)
 }

@@ -29,8 +29,8 @@ import (
 
 // NewAddonCatalog builds the HelmClusterAddonChart catalog. Its consumers are the
 // HelmClusterAddon objects referencing a repository/chart pair.
-func NewAddonCatalog(c client.Client) contract.Catalog {
-	return catalog.New(c, catalog.Config[*helmv1alpha1.HelmClusterAddonChart, *helmv1alpha1.HelmClusterAddonChartList]{
+func NewAddonCatalog(c client.Client, reader client.Reader) contract.Catalog {
+	return catalog.New(c, reader, catalog.Config[*helmv1alpha1.HelmClusterAddonChart, *helmv1alpha1.HelmClusterAddonChartList]{
 		Kind:      helmv1alpha1.HelmClusterAddonChartKind,
 		NewObject: func() *helmv1alpha1.HelmClusterAddonChart { return &helmv1alpha1.HelmClusterAddonChart{} },
 		NewList:   func() *helmv1alpha1.HelmClusterAddonChartList { return &helmv1alpha1.HelmClusterAddonChartList{} },
@@ -44,8 +44,8 @@ func NewAddonCatalog(c client.Client) contract.Catalog {
 }
 
 // NewApplicationCatalog builds the HelmApplicationChart catalog; its consumers are the HelmApplication objects of the repository's namespace.
-func NewApplicationCatalog(c client.Client) contract.Catalog {
-	return catalog.New(c, catalog.Config[*helmv1alpha1.HelmApplicationChart, *helmv1alpha1.HelmApplicationChartList]{
+func NewApplicationCatalog(c client.Client, reader client.Reader) contract.Catalog {
+	return catalog.New(c, reader, catalog.Config[*helmv1alpha1.HelmApplicationChart, *helmv1alpha1.HelmApplicationChartList]{
 		Kind:      helmv1alpha1.HelmApplicationChartKind,
 		NewObject: func() *helmv1alpha1.HelmApplicationChart { return &helmv1alpha1.HelmApplicationChart{} },
 		NewList:   func() *helmv1alpha1.HelmApplicationChartList { return &helmv1alpha1.HelmApplicationChartList{} },
@@ -59,8 +59,8 @@ func NewApplicationCatalog(c client.Client) contract.Catalog {
 }
 
 // NewClusterApplicationCatalog builds the HelmClusterApplicationChart catalog; its consumers are the HelmApplication objects of every namespace.
-func NewClusterApplicationCatalog(c client.Client) contract.Catalog {
-	return catalog.New(c, catalog.Config[*helmv1alpha1.HelmClusterApplicationChart, *helmv1alpha1.HelmClusterApplicationChartList]{
+func NewClusterApplicationCatalog(c client.Client, reader client.Reader) contract.Catalog {
+	return catalog.New(c, reader, catalog.Config[*helmv1alpha1.HelmClusterApplicationChart, *helmv1alpha1.HelmClusterApplicationChartList]{
 		Kind:      helmv1alpha1.HelmClusterApplicationChartKind,
 		NewObject: func() *helmv1alpha1.HelmClusterApplicationChart { return &helmv1alpha1.HelmClusterApplicationChart{} },
 		NewList: func() *helmv1alpha1.HelmClusterApplicationChartList {

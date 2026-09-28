@@ -447,20 +447,15 @@ func resolveChartVersions(
 // answers no for, which is never one recorded as removed from the repository: a tag the
 // listing offers again has content behind it that the recorded verdict was not reached
 // about, so it is examined rather than carried, and the removed marker is dropped by the
-// fresh verdict that replaces it.
-//
-// The entry says that it was carried. Nothing else distinguishes it from a probe that
-// reached the same verdict, and the catalog merge has to make that distinction: a carry
-// answers no question, so it must not clear a re-examination mark. The mark it might
-// clear is one this pass could not see — NeedsExamination reads the Known snapshot,
-// which comes from a cache that can still predate the marking write.
+// fresh verdict that replaces it. Nor is it ever one awaiting re-examination: the Known
+// snapshot NeedsExamination reads is the same read the catalog merges into, so a marked
+// version is probed here and the mark is cleared by that answer.
 func carryKnown(version *semver.Version, known KnownVersion) *ChartVersion {
 	return &ChartVersion{
 		Version:            version,
 		MediaType:          known.MediaType,
 		UnavailableReason:  known.UnavailableReason,
 		UnavailableMessage: known.UnavailableMessage,
-		Carried:            true,
 	}
 }
 

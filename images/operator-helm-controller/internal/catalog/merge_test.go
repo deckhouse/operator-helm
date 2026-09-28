@@ -44,7 +44,7 @@ func TestMergeChartVersionsCarriesOCIRef(t *testing.T) {
 
 	inUse := map[string]struct{}{"1.0.0": {}}
 
-	merged := mergeChartVersions(fetched, current, inUse, nil, nil)
+	merged := mergeChartVersions(fetched, current, inUse, nil)
 
 	byVersion := map[string]helmv1alpha1.ChartVersion{}
 	for _, version := range merged {
@@ -89,7 +89,7 @@ func TestMergeChartVersionsDoesNotCarryMediaTypeOntoOCIRef(t *testing.T) {
 
 	inUse := map[string]struct{}{"6.7.1": {}}
 
-	merged := mergeChartVersions(fetched, current, inUse, nil, nil)
+	merged := mergeChartVersions(fetched, current, inUse, nil)
 
 	if len(merged) != 1 {
 		t.Fatalf("merged = %+v, want exactly one version", merged)

@@ -140,8 +140,13 @@ type addonRepositoryResolver struct {
 	catalog contract.Catalog
 }
 
+// NewAddonRepositoryResolver builds the resolver the release reconciler looks charts
+// up through. The catalog it holds is never synchronized from here — only Lookup is
+// called — so it reads through the cache like every other read on the release path: a
+// resolution computed from a catalog an informer has not caught up with is retried by
+// the event that write produces, and writes nothing.
 func NewAddonRepositoryResolver(c client.Client) *addonRepositoryResolver {
-	return &addonRepositoryResolver{client: c, catalog: NewAddonCatalog(c)}
+	return &addonRepositoryResolver{client: c, catalog: NewAddonCatalog(c, c)}
 }
 
 func (r *addonRepositoryResolver) Resolve(ctx context.Context, ref contract.RepositoryRef) (contract.Repository, contract.Catalog, error) {

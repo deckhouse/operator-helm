@@ -51,13 +51,6 @@ import (
 // about a version nobody looked at. A version that is unexamined and unrecorded stays
 // out of the status entirely rather than being invented as pending.
 //
-// marked names the versions MarkForReexamination left owing a fresh verdict earlier in
-// this same pass, and it is the only thing a deferred version's mark is taken from. The
-// recorded entries this merge is handed come from a cached read that may predate that
-// write, and a merge patch on a list ships the whole array, so trusting what the read
-// carried would write the deferred versions back unmarked and lose a refresh whose
-// annotation is already consumed. It is empty for an unforced pass, which marks nothing.
-//
 // The mark a forced refresh leaves on a recorded version (ReexaminationRequired) is
 // only ever cleared here, never invented: MarkForReexamination puts it on every recorded
 // version before the registry is read, so by the time a pass is merged the request is
@@ -72,33 +65,18 @@ import (
 // the pass that lists it examines it on the strength of that reason alone
 // (FetchOptions.NeedsExamination), mark or no mark.
 //
-// Being among the fetched entries is not the same as having been examined, which is why
-// only a version this pass actually probed has its mark cleared. A pass that did not have
-// to examine a version carries the recorded verdict forward without asking the registry
-// anything and reports it here like any other (repoclient.ChartVersion.Carried); the
-// entry exists so the catalog keeps publishing the verdict, and a carry answers no
-// question. Clearing a mark on one would end a refresh nobody did, and that is reachable
-// rather than theoretical: an ordinary pass decides what to skip against the Known
-// snapshot it was built from, which comes from the same lagging cache as the read below,
-// so a snapshot taken before a marking write leaves the version skippable for that pass
-// while the read this merge is computed from may already carry the mark. A carried entry
-// therefore keeps whatever that read recorded instead of clearing it.
-//
-// That converges rather than pinning the mark. If the read carries no mark, preserving
-// "no mark" writes the entry exactly as it already was — a no-op. If it carries one, the
-// mark survives this pass, and the next pass builds its Known from a read that has caught
-// up (the write it lagged behind is a whole synchronization interval old by then), so
-// NeedsExamination sees the mark, the version is probed, and the mark is cleared by an
-// answer. This merge never marks a version the marking pass did not: the only mark it
-// writes is the one put back on a deferred version from the set that pass reported, so a
-// version cannot be kept marked by this rule alone; a mark comes off by a probe, a
-// confirmed absence or a drop.
+// That a fetched entry may have been carried forward rather than probed costs this merge
+// nothing, because current and the verdicts the fetch was built from are the same read
+// (contract.CatalogSnapshot): a marked version makes NeedsExamination true, so it is
+// probed rather than carried, and an entry that was carried therefore had no mark to
+// clear. The merge puts no mark on anything either — only a forced refresh does that,
+// before the registry is read — so a mark only ever comes off here, by a probe, by a
+// confirmed absence or by the version being dropped.
 func mergeChartVersions(
 	fetched []repoclient.ChartVersion,
 	current []helmv1alpha1.ChartVersion,
 	inUse map[string]struct{},
 	unexamined []string,
-	marked map[string]struct{},
 ) []helmv1alpha1.ChartVersion {
 	merged := make([]helmv1alpha1.ChartVersion, 0, len(fetched)+len(current))
 	listed := make(map[string]struct{}, len(fetched))
@@ -119,14 +97,6 @@ func mergeChartVersions(
 
 		old, recorded := currentByVersion[name]
 
-		// A carry is not an answer: the mark stays exactly as the read found it. A forced
-		// pass never gets here — it asks for every tag (FetchOptions.Full), so nothing it
-		// fetches is carried — which is why the set the marking reported is not consulted
-		// for a fetched version the way it is for a deferred one. A version nothing is
-		// recorded for needs no test of its own: old is the zero value then, and an entry
-		// the catalog has never held carries no mark.
-		reexaminationRequired := version.Carried && old.ReexaminationRequired
-
 		mediaType := version.MediaType
 		// The carry-forward only makes sense for a version that still resolves to an
 		// archive: a fresh entry that now carries an OCIRef must probe its own layer
@@ -142,12 +112,11 @@ func mergeChartVersions(
 		}
 
 		merged = append(merged, helmv1alpha1.ChartVersion{
-			Version:               name,
-			OCIRef:                version.OCIRef,
-			MediaType:             mediaType,
-			UnavailableReason:     version.UnavailableReason,
-			UnavailableMessage:    version.UnavailableMessage,
-			ReexaminationRequired: reexaminationRequired,
+			Version:            name,
+			OCIRef:             version.OCIRef,
+			MediaType:          mediaType,
+			UnavailableReason:  version.UnavailableReason,
+			UnavailableMessage: version.UnavailableMessage,
 		})
 	}
 
@@ -161,11 +130,9 @@ func mergeChartVersions(
 			// it would throw away the verdict the next pass is meant to skip. The entry is
 			// kept verbatim, mark included: a version an outstanding refresh still owes a
 			// fresh verdict for is exactly one this pass did not get to, and clearing the
-			// mark here would end the refresh without doing the work it asked for.
-			if _, owed := marked[version.Version]; owed {
-				version.ReexaminationRequired = true
-			}
-
+			// mark here would end the refresh without doing the work it asked for. The mark
+			// this pass wrote is already on the entry — the marking mutated these very
+			// objects — so keeping the entry keeps the request.
 			merged = append(merged, version)
 
 			continue

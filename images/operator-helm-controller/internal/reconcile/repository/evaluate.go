@@ -128,10 +128,12 @@ func Evaluate(in Inputs) Decision {
 	fetchIncomplete := fetchSucceeded && in.Fetch.Unexamined > 0
 	catalogFailed := in.MigrateErr != nil || (in.Attempted && in.Catalog != nil && in.Catalog.Err != nil)
 	// A catalog write rejected by its optimistic lock, which is a lost race rather than a
-	// failure: it is scheduled as a pass another one finishes. A pass whose fetch failed
-	// is not one of those — its schedule is the read backoff, which a rename conflict must
-	// not cut short.
-	catalogRaced := catalogFailed && !fetchFailed && apierrors.IsConflict(firstErr(in.MigrateErr, catalogErr(in)))
+	// failure: it is scheduled as a pass another one finishes. A failed fetch is not tested
+	// for alongside it, because the two cannot both have happened: a rename that failed
+	// stops the pass before any fetch is attempted (Reconciler.Reconcile), and a fetch that
+	// failed returns before the catalog is written (Synchronizer.Sync), so a pass that has
+	// a catalog failure to report has no fetch failure to weigh it against.
+	catalogRaced := catalogFailed && apierrors.IsConflict(firstErr(in.MigrateErr, catalogErr(in)))
 
 	failures := in.Current.ConsecutiveFetchFailures
 	if in.Generation != in.Current.ObservedGeneration {
@@ -322,16 +324,18 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 
 		if apierrors.IsConflict(err) {
 			// A catalog write is patched against the read it was computed from, under an
-			// optimistic lock (catalog.lockedTo), so a base that lagged behind another
-			// writer is rejected instead of overwriting it. Nothing is wrong with the
-			// repository, the catalog or the cluster: the pass lost a race and another
+			// optimistic lock (catalog.lockedTo), so a base that has been overtaken is
+			// rejected instead of overwriting whatever overtook it. Nothing is wrong with
+			// the repository, the catalog or the cluster: the pass lost a race and another
 			// one runs against a current read. The verbatim API error would say "the
 			// object has been modified; please apply your changes to the latest version
-			// and try again" in a status a user reads as a defect report, so the race is
-			// named instead. It is still Synced=False, because the catalog in front of
-			// that user is indeed not what this pass read.
+			// and try again" in a status a user reads as a defect report, so what happened
+			// is named instead — without attributing it to anyone, since the writer is as
+			// likely to be this controller on another pass as anything else. It is still
+			// Synced=False, because the catalog in front of that user is indeed not what
+			// this pass read.
 			return metav1.ConditionFalse, helmv1alpha1.ReasonCatalogUpdateFailed,
-				"The chart catalog was written by someone else while this pass was updating it; retrying"
+				"The chart catalog changed since this pass read it; retrying"
 		}
 
 		return metav1.ConditionFalse, helmv1alpha1.ReasonCatalogUpdateFailed,

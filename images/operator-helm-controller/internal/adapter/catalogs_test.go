@@ -81,7 +81,7 @@ func TestAddonCatalogInUseVersionsCountsDesiredAndLastApplied(t *testing.T) {
 	}
 
 	c := addonClient(t, addon, switched)
-	cat := NewAddonCatalog(c)
+	cat := NewAddonCatalog(c, c)
 	repo := NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "example"}})
 
 	inUse, err := cat.InUseVersions(context.Background(), repo, "podinfo")
@@ -111,7 +111,7 @@ func TestApplicationCatalogInUseVersionsSeesOnlyItsOwnNamespace(t *testing.T) {
 	inB.Spec.Chart.Version = "9.9.9"
 
 	c := applicationClient(t, inA, inB)
-	cat := NewApplicationCatalog(c)
+	cat := NewApplicationCatalog(c, c)
 	repo := NewApplicationRepository(&helmv1alpha1.HelmApplicationRepository{ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a"}})
 
 	inUse, err := cat.InUseVersions(context.Background(), repo, "podinfo")

@@ -21,10 +21,11 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -52,23 +53,29 @@ type Config[C client.Object, CL client.ObjectList] struct {
 	Consumers func(ctx context.Context, repo contract.Repository, chartName string) (map[string]struct{}, error)
 }
 
-// New builds the contract.Catalog of one kind.
-func New[C client.Object, CL client.ObjectList](c client.Client, cfg Config[C, CL]) contract.Catalog {
-	return &typed[C, CL]{client: c, cfg: cfg}
+// New builds the contract.Catalog of one kind. reader reads catalog objects straight
+// from the API server rather than from the manager's cache: everything a
+// synchronization pass decides is computed from one such read (Snapshot), and a cached
+// one can still show the state before this controller's own previous pass wrote it.
+// The release path (Lookup) stays on the cached client, where a read that lags by an
+// informer's latency only delays a resolution and cannot overwrite anything.
+func New[C client.Object, CL client.ObjectList](c client.Client, reader client.Reader, cfg Config[C, CL]) contract.Catalog {
+	return &typed[C, CL]{client: c, reader: reader, cfg: cfg}
 }
 
 type typed[C client.Object, CL client.ObjectList] struct {
 	client client.Client
+	reader client.Reader
 	cfg    Config[C, CL]
 }
 
-// list returns the catalog objects of one repository. A namespaced repository's
-// objects live in its namespace; for a cluster repository the namespace is empty and
-// InNamespace is a no-op. Listing by namespace is what keeps two same-named
-// repositories in different namespaces apart.
+// list returns the catalog objects of one repository, read through the API server. A
+// namespaced repository's objects live in its namespace; for a cluster repository the
+// namespace is empty and InNamespace is a no-op. Listing by namespace is what keeps two
+// same-named repositories in different namespaces apart.
 func (t *typed[C, CL]) list(ctx context.Context, repo contract.Repository) ([]C, error) {
 	list := t.cfg.NewList()
-	if err := t.client.List(ctx, list,
+	if err := t.reader.List(ctx, list,
 		client.InNamespace(repo.Namespace()),
 		client.MatchingLabels{helmv1alpha1.LabelRepositoryName: repo.Name()},
 	); err != nil {
@@ -79,33 +86,69 @@ func (t *typed[C, CL]) list(ctx context.Context, repo contract.Repository) ([]C,
 	return t.cfg.Items(list), nil
 }
 
-// Known collects the verdicts recorded by previous passes, so the client can skip
-// the tags it has already examined. The chart objects are the only store of that
-// state: keeping a separate fingerprint would be one more thing to drift.
-func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (repoclient.KnownCharts, error) {
+// Snapshot reads every catalog object of one repository and hands back the state the
+// whole pass decides from. One read is the point of it: the verdicts the fetch skips
+// tags by, the marks a forced refresh writes and the base each status patch is computed
+// against all come from these objects, so no two inputs of the pass can describe the
+// catalog differently. They are read through the API server rather than the manager's
+// cache, because the previous pass wrote this very catalog and an informer that has not
+// caught up would hand this one a state that has already been superseded.
+//
+// The read is taken once and used across the fetch, which can take the whole budget of
+// a pass. What it cannot see is another writer in the meantime, and that is exactly
+// what the optimistic lock on every write below is for.
+func (t *typed[C, CL]) Snapshot(ctx context.Context, repo contract.Repository) (contract.CatalogSnapshot, error) {
 	charts, err := t.list(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
 
 	logger := log.FromContext(ctx)
-	known := make(repoclient.KnownCharts, len(charts))
-
 	for _, chart := range charts {
-		chartName := chart.GetLabels()[helmv1alpha1.LabelChartName]
-		if chartName == "" {
+		if chart.GetLabels()[helmv1alpha1.LabelChartName] == "" {
 			// The chart label is the only way back from the object name (a
 			// truncated hash) to the chart name it belongs to. Without it the
-			// recorded verdicts for this chart cannot be looked up here, so every
-			// tag is re-examined on the next fetch; that is safe but not free, so
+			// recorded verdicts for this chart cannot be looked up by the fetch, so
+			// every tag is re-examined on the next one; that is safe but not free, so
 			// it is worth surfacing.
 			logger.Info("Chart object has no chart label, dropping its recorded verdicts",
 				"kind", t.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
+		}
+	}
 
+	return &snapshot[C, CL]{typed: t, repo: repo, charts: charts}, nil
+}
+
+// snapshot is one read of a repository's catalog objects. Its methods mutate those
+// objects in place and patch them against themselves, so a write this pass made is part
+// of every decision the rest of the pass takes without any read having to catch up.
+type snapshot[C client.Object, CL client.ObjectList] struct {
+	*typed[C, CL]
+
+	repo   contract.Repository
+	charts []C
+}
+
+// Known collects the verdicts recorded by previous passes, so the client can skip
+// the tags it has already examined. The chart objects are the only store of that
+// state: keeping a separate fingerprint would be one more thing to drift.
+//
+// It is computed from the snapshot each time it is asked for rather than once at the
+// read, so a mark this pass wrote (MarkForReexamination) is in it: that mark is what
+// makes the version a probe candidate again, and a verdict answered from before it
+// would let the pass skip the very tag the refresh was asked for.
+func (s *snapshot[C, CL]) Known() repoclient.KnownCharts {
+	known := make(repoclient.KnownCharts, len(s.charts))
+
+	for _, chart := range s.charts {
+		chartName := chart.GetLabels()[helmv1alpha1.LabelChartName]
+		if chartName == "" {
+			// Reported by the read that built this snapshot; here it only means the
+			// verdicts cannot be keyed under any chart name.
 			continue
 		}
 
-		recorded := t.cfg.Status(chart).Versions
+		recorded := s.cfg.Status(chart).Versions
 		versions := make(repoclient.KnownVersions, len(recorded))
 		for _, version := range recorded {
 			versions[version.Version] = repoclient.KnownVersion{
@@ -119,7 +162,7 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (rep
 		known[chartName] = versions
 	}
 
-	return known, nil
+	return known
 }
 
 // MarkForReexamination marks every verdict the catalog holds for the repository as
@@ -147,80 +190,52 @@ func (t *typed[C, CL]) Known(ctx context.Context, repo contract.Repository) (rep
 // pass re-examines it anyway, so the mark would buy nothing and would move the tag out
 // of the group the probe order deliberately asks last.
 //
-// Objects that already carry the mark everywhere are not patched, so forcing a refresh
-// on an unreachable registry twice in a row costs one write, not two.
-//
-// What ends up marked is reported back rather than left to be read again. The catalog
-// objects are served by the manager's cache, and the base of the merge patch the pass
-// later computes is such a read: an informer that has not yet caught up with the write
-// made here would hand the merge the version list from before the mark, and because a
-// merge patch on a list ships the whole array, the versions the pass deferred would be
-// written back unmarked — with the annotation already consumed, which loses the refresh
-// exactly where it is needed. The caller carries this set into Reconcile instead. The
-// write itself is guarded too (lockedTo), which is what covers everything else a stale
-// base would carry back; the set is what the same pass knows without waiting for a read
-// to catch up.
-func (t *typed[C, CL]) MarkForReexamination(ctx context.Context, repo contract.Repository) (contract.MarkedVersions, error) {
-	charts, err := t.list(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-
-	allMarked := make(contract.MarkedVersions, len(charts))
-
-	for _, chart := range charts {
+// Objects the snapshot already found marked everywhere are not patched, so forcing a
+// refresh on an unreachable registry twice in a row costs one write, not two. That the
+// snapshot is an authoritative read is what makes the skip safe: deciding "already
+// marked" from a cached object could skip the write while the catalog on the server
+// carries no mark at all, and the force being consumed regardless, the refresh would be
+// gone with nothing recording that it was ever asked for.
+func (s *snapshot[C, CL]) MarkForReexamination(ctx context.Context) error {
+	for _, chart := range s.charts {
 		base := chart.DeepCopyObject().(C)
-		status := t.cfg.Status(chart)
-		chartName := chart.GetLabels()[helmv1alpha1.LabelChartName]
+		status := s.cfg.Status(chart)
 
 		patch := false
-		marked := make(map[string]struct{}, len(status.Versions))
 
 		for i := range status.Versions {
 			if status.Versions[i].UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending {
 				continue
 			}
 
-			// A version that already carries the mark is reported as marked as well: an
-			// earlier forced pass that could not finish owes the same fresh verdict, and
-			// the set is what the merge preserves the mark from.
 			if !status.Versions[i].ReexaminationRequired {
 				status.Versions[i].ReexaminationRequired = true
 				patch = true
 			}
-
-			marked[status.Versions[i].Version] = struct{}{}
-		}
-
-		// A chart object with no chart label cannot be matched to a fetched chart (Known
-		// drops its verdicts for the same reason), so recording its versions would key
-		// them under a name no merge ever looks up.
-		if chartName != "" && len(marked) > 0 {
-			allMarked[chartName] = marked
 		}
 
 		if !patch {
 			continue
 		}
 
-		if err := t.client.Status().Patch(ctx, chart, lockedTo(base)); err != nil {
-			return nil, fmt.Errorf("marking the versions of chart %s for re-examination: %w",
+		if err := s.client.Status().Patch(ctx, chart, lockedTo(base)); err != nil {
+			return fmt.Errorf("marking the versions of chart %s for re-examination: %w",
 				describeKey(client.ObjectKeyFromObject(chart)), err)
 		}
 	}
 
-	return allMarked, nil
+	return nil
 }
 
-func (t *typed[C, CL]) Reconcile(
-	ctx context.Context,
-	repo contract.Repository,
-	charts []repoclient.Chart,
-	marked contract.MarkedVersions,
-) (contract.CatalogResult, error) {
+func (s *snapshot[C, CL]) Reconcile(ctx context.Context, charts []repoclient.Chart) (contract.CatalogResult, error) {
 	logger := log.FromContext(ctx)
 
 	var result contract.CatalogResult
+
+	recorded := make(map[string]C, len(s.charts))
+	for _, chart := range s.charts {
+		recorded[chart.GetName()] = chart
+	}
 
 	desired := make(map[string]struct{}, len(charts))
 	// A fetch that ran out of its budget describes the repository only in part, so
@@ -250,75 +265,55 @@ func (t *typed[C, CL]) Reconcile(
 			// logged at V(1) because the verdict never changes while the repository keeps
 			// offering the name, and the catalog is re-read every few minutes.
 			logger.V(1).Info("Skipping a chart whose name cannot be recorded on a catalog object",
-				"kind", t.cfg.Kind, "chart", chart.Name, "reason", strings.Join(errs, "; "))
+				"kind", s.cfg.Kind, "chart", chart.Name, "reason", strings.Join(errs, "; "))
 
 			result.SkippedCharts = append(result.SkippedCharts, chart.Name)
 
 			continue
 		}
 
-		name := t.cfg.ObjectName(repo.Name(), chart.Name)
-		// A chart with no usable version is still created: it carries the reason each of
-		// its versions is unusable, and skipping it here would let the pruning loop below
-		// delete a chart whose tags merely failed to resolve.
-		existing := t.cfg.NewObject()
-		existing.SetName(name)
-		existing.SetNamespace(repo.Namespace())
-
+		name := s.cfg.ObjectName(s.repo.Name(), chart.Name)
 		desired[name] = struct{}{}
 
-		op, err := controllerutil.CreateOrPatch(ctx, t.client, existing, func() error {
-			existing.SetOwnerReferences([]metav1.OwnerReference{
-				*metav1.NewControllerRef(repo.Object(), repo.OwnerGVK()),
-			})
-			existing.SetLabels(map[string]string{
-				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
-				helmv1alpha1.LabelRepositoryName:    repo.Name(),
-				helmv1alpha1.LabelChartName:         chart.Name,
-			})
+		// A chart with no usable version is still published: it carries the reason each
+		// of its versions is unusable, and skipping it here would let the pruning loop
+		// below delete a chart whose tags merely failed to resolve.
+		known, present := recorded[name]
 
-			return nil
-		})
+		existing, err := s.ensure(ctx, known, present, name, chart.Name)
 		if err != nil {
-			return result, fmt.Errorf("creating or updating chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
+			return result, err
 		}
 
-		if op != controllerutil.OperationResultNone {
-			logger.Info("Reconciled chart catalog object",
-				"kind", t.cfg.Kind, "operation", op, "chartObject", client.ObjectKeyFromObject(existing))
-		}
-
-		inUse, err := t.InUseVersions(ctx, repo, chart.Name)
+		inUse, err := s.InUseVersions(ctx, s.repo, chart.Name)
 		if err != nil {
 			return result, err
 		}
 
 		base := existing.DeepCopyObject().(C)
 
-		status := t.cfg.Status(existing)
+		status := s.cfg.Status(existing)
 		if len(chart.Versions) > 0 {
 			status.IconURL = chart.Versions[0].IconURL
 		}
-		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions, marked[chart.Name])
+		status.Versions = mergeChartVersions(chart.Versions, status.Versions, inUse, chart.UnexaminedVersions)
 
-		if err := t.client.Status().Patch(ctx, existing, lockedTo(base)); err != nil {
+		if err := s.client.Status().Patch(ctx, existing, lockedTo(base)); err != nil {
 			return result, fmt.Errorf("updating versions of chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
 		}
 	}
 
 	if incomplete {
 		logger.V(1).Info("Keeping every chart: the repository read was incomplete",
-			"kind", t.cfg.Kind, "repository", describeKey(client.ObjectKey{Namespace: repo.Namespace(), Name: repo.Name()}))
+			"kind", s.cfg.Kind, "repository", describeKey(client.ObjectKey{Namespace: s.repo.Namespace(), Name: s.repo.Name()}))
 
 		return result, nil
 	}
 
-	existingCharts, err := t.list(ctx, repo)
-	if err != nil {
-		return result, fmt.Errorf("listing charts for pruning: %w", err)
-	}
-
-	for _, chart := range existingCharts {
+	// Pruned against the same read the rest of the pass used: an object created after
+	// it is one this pass knows nothing about, and the listing it would be judged by is
+	// just as old, so leaving it to the next pass is the only honest answer.
+	for _, chart := range s.charts {
 		if _, wanted := desired[chart.GetName()]; wanted {
 			continue
 		}
@@ -331,10 +326,10 @@ func (t *typed[C, CL]) Reconcile(
 			// pruned even if a consumer still uses it. That fail-open is unavoidable
 			// as written, so at least make it diagnosable.
 			logger.Info("Pruning a chart with no chart label; in-use protection could not be checked",
-				"kind", t.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
+				"kind", s.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
 		}
 
-		inUse, err := t.InUseVersions(ctx, repo, chartName)
+		inUse, err := s.InUseVersions(ctx, s.repo, chartName)
 		if err != nil {
 			return result, err
 		}
@@ -343,21 +338,95 @@ func (t *typed[C, CL]) Reconcile(
 			// its own reconciliation fail on a missing chart and block every change
 			// to it, including its removal.
 			logger.Info("Keeping a chart referenced by a consumer",
-				"kind", t.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
+				"kind", s.cfg.Kind, "chartObject", client.ObjectKeyFromObject(chart))
 
-			if err := t.recordAbsence(ctx, chart, inUse, marked[chartName]); err != nil {
+			if err := s.recordAbsence(ctx, chart, inUse); err != nil {
 				return result, err
 			}
 
 			continue
 		}
 
-		if err := client.IgnoreNotFound(t.client.Delete(ctx, chart)); err != nil {
+		if err := client.IgnoreNotFound(s.client.Delete(ctx, chart)); err != nil {
 			return result, fmt.Errorf("deleting stale charts: %w", err)
 		}
 	}
 
 	return result, nil
+}
+
+// ensure returns the catalog object of one chart with its labels and owner reference
+// up to date. present says whether the snapshot found it; an object it did not find is
+// created, which is how a chart the repository has just started offering enters the
+// catalog.
+//
+// Metadata is written separately from the status and under the same lock, so a pass
+// that loses the race repairs nothing rather than repairing it over someone else's
+// object. An object that is already as it should be is not patched at all: labels and
+// the owner reference change only when the repository object itself is replaced.
+func (s *snapshot[C, CL]) ensure(ctx context.Context, existing C, present bool, name, chartName string) (C, error) {
+	logger := log.FromContext(ctx)
+
+	if present {
+		base := existing.DeepCopyObject().(C)
+		s.applyMeta(existing, chartName)
+
+		if equality.Semantic.DeepEqual(base.GetLabels(), existing.GetLabels()) &&
+			equality.Semantic.DeepEqual(base.GetOwnerReferences(), existing.GetOwnerReferences()) {
+			return existing, nil
+		}
+
+		if err := s.client.Patch(ctx, existing, lockedTo(base)); err != nil {
+			return existing, fmt.Errorf("updating chart %s: %w", describeKey(client.ObjectKeyFromObject(existing)), err)
+		}
+
+		logger.Info("Reconciled chart catalog object",
+			"kind", s.cfg.Kind, "operation", "updated", "chartObject", client.ObjectKeyFromObject(existing))
+
+		return existing, nil
+	}
+
+	created := s.cfg.NewObject()
+	created.SetName(name)
+	created.SetNamespace(s.repo.Namespace())
+	s.applyMeta(created, chartName)
+
+	err := s.client.Create(ctx, created)
+	switch {
+	case apierrors.IsAlreadyExists(err):
+		// The object appeared after this snapshot was read, so nothing of it is known
+		// here — including whatever versions its status already holds, which the merge
+		// below must not drop. Reading it authoritatively is the only way to go on
+		// without patching against a state this pass never saw.
+		fetched := s.cfg.NewObject()
+		key := client.ObjectKey{Namespace: s.repo.Namespace(), Name: name}
+		if err := s.reader.Get(ctx, key, fetched); err != nil {
+			return created, fmt.Errorf("reading chart %s: %w", describeKey(key), err)
+		}
+
+		return s.ensure(ctx, fetched, true, name, chartName)
+	case err != nil:
+		return created, fmt.Errorf("creating chart %s: %w", describeKey(client.ObjectKeyFromObject(created)), err)
+	}
+
+	logger.Info("Reconciled chart catalog object",
+		"kind", s.cfg.Kind, "operation", "created", "chartObject", client.ObjectKeyFromObject(created))
+
+	return created, nil
+}
+
+// applyMeta stamps the metadata every catalog object of a repository carries: the
+// controller reference that has it garbage-collected with the repository, and the
+// labels the catalog is listed and queried by.
+func (s *snapshot[C, CL]) applyMeta(obj C, chartName string) {
+	obj.SetOwnerReferences([]metav1.OwnerReference{
+		*metav1.NewControllerRef(s.repo.Object(), s.repo.OwnerGVK()),
+	})
+	obj.SetLabels(map[string]string{
+		helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
+		helmv1alpha1.LabelRepositoryName:    s.repo.Name(),
+		helmv1alpha1.LabelChartName:         chartName,
+	})
 }
 
 // recordAbsence writes the verdict owed to a chart this pass saw the whole repository
@@ -378,13 +447,13 @@ func (t *typed[C, CL]) Reconcile(
 // while the chart is unlisted, because probe candidates are built from the listing — is
 // cleared by the same rule that clears it for a single removed version, rather than by a
 // special case that clears it without answering anything.
-func (t *typed[C, CL]) recordAbsence(ctx context.Context, chart C, inUse, marked map[string]struct{}) error {
+func (s *snapshot[C, CL]) recordAbsence(ctx context.Context, chart C, inUse map[string]struct{}) error {
 	base := chart.DeepCopyObject().(C)
-	status := t.cfg.Status(chart)
+	status := s.cfg.Status(chart)
 
-	status.Versions = mergeChartVersions(nil, status.Versions, inUse, nil, marked)
+	status.Versions = mergeChartVersions(nil, status.Versions, inUse, nil)
 
-	if err := t.client.Status().Patch(ctx, chart, lockedTo(base)); err != nil {
+	if err := s.client.Status().Patch(ctx, chart, lockedTo(base)); err != nil {
 		return fmt.Errorf("recording that the repository no longer offers chart %s: %w",
 			describeKey(client.ObjectKeyFromObject(chart)), err)
 	}
@@ -402,7 +471,13 @@ func (t *typed[C, CL]) recordAbsence(ctx context.Context, chart C, inUse, marked
 //
 // The status is copied only into an object that has none, and the old object is
 // deleted only once the copy has landed, so a failure anywhere leaves the old object
-// in place to be migrated again on the next pass.
+// in place to be migrated again on the next pass. Both halves of that rule rest on
+// reads that are not allowed to lag: the destination is read through the API server,
+// and the copy is patched under the optimistic lock, because "the destination has no
+// versions" is a statement about the catalog rather than about this reader's own
+// snapshot. A destination another pass has since written — marked for re-examination,
+// say — rejects the copy as a conflict, and the migration is then simply unfinished:
+// the legacy object stays, and the next pass reads both objects again.
 //
 // TRANSITIONAL: remove this method, its interface entry and its call once every
 // cluster has reconciled each repository at least once under the current scheme.
@@ -425,24 +500,16 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repositor
 			continue
 		}
 
-		current := t.cfg.NewObject()
-		current.SetName(name)
-		current.SetNamespace(repo.Namespace())
-
-		if _, err := controllerutil.CreateOrPatch(ctx, t.client, current, func() error {
-			current.SetOwnerReferences(legacy.GetOwnerReferences())
-			current.SetLabels(legacy.GetLabels())
-
-			return nil
-		}); err != nil {
-			return fmt.Errorf("renaming chart %s: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+		current, err := t.destination(ctx, repo, name, legacy)
+		if err != nil {
+			return err
 		}
 
 		if status := t.cfg.Status(current); len(status.Versions) == 0 {
 			base := current.DeepCopyObject().(C)
 			*status = *t.cfg.Status(legacy)
 
-			if err := t.client.Status().Patch(ctx, current, client.MergeFrom(base)); err != nil {
+			if err := t.client.Status().Patch(ctx, current, lockedTo(base)); err != nil {
 				return fmt.Errorf("carrying the status of chart %s over: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
 			}
 		}
@@ -456,6 +523,48 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repositor
 	}
 
 	return nil
+}
+
+// destination returns the object the migration copies into, creating it when the
+// repository has none under the current name. The read is authoritative for the same
+// reason the rest of the migration is: it is what the emptiness of the destination
+// status — the one thing that decides whether anything is copied at all — is judged by.
+func (t *typed[C, CL]) destination(ctx context.Context, repo contract.Repository, name string, legacy C) (C, error) {
+	current := t.cfg.NewObject()
+	key := client.ObjectKey{Namespace: repo.Namespace(), Name: name}
+
+	err := t.reader.Get(ctx, key, current)
+	switch {
+	case apierrors.IsNotFound(err):
+		current = t.cfg.NewObject()
+		current.SetName(name)
+		current.SetNamespace(repo.Namespace())
+		current.SetOwnerReferences(legacy.GetOwnerReferences())
+		current.SetLabels(legacy.GetLabels())
+
+		if err := t.client.Create(ctx, current); err != nil {
+			return current, fmt.Errorf("renaming chart %s: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+		}
+
+		return current, nil
+	case err != nil:
+		return current, fmt.Errorf("renaming chart %s: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+	}
+
+	base := current.DeepCopyObject().(C)
+	current.SetOwnerReferences(legacy.GetOwnerReferences())
+	current.SetLabels(legacy.GetLabels())
+
+	if equality.Semantic.DeepEqual(base.GetLabels(), current.GetLabels()) &&
+		equality.Semantic.DeepEqual(base.GetOwnerReferences(), current.GetOwnerReferences()) {
+		return current, nil
+	}
+
+	if err := t.client.Patch(ctx, current, lockedTo(base)); err != nil {
+		return current, fmt.Errorf("renaming chart %s: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+	}
+
+	return current, nil
 }
 
 func (t *typed[C, CL]) InUseVersions(ctx context.Context, repo contract.Repository, chartName string) (map[string]struct{}, error) {
@@ -477,20 +586,20 @@ func (t *typed[C, CL]) Lookup(ctx context.Context, repo contract.Repository, cha
 	return obj, t.cfg.Status(obj), nil
 }
 
-// lockedTo builds the status patch of a catalog object against the read it was
-// computed from, carrying that read's resource version so the server rejects the
-// write if the object moved on in between.
+// lockedTo builds the patch of a catalog object against the read it was computed from,
+// carrying that read's resource version so the server rejects the write if the object
+// moved on in between.
 //
-// The lock is what makes a cached read safe to patch from. Catalog objects are served
-// by the manager's cache, so every base this package patches against — the Get inside
-// CreateOrPatch, the List behind MarkForReexamination and the pruning loop — can lag
-// behind writes this controller itself made. A version list is merged from that base
-// and a merge patch on a list ships the whole array, so a base that predates our own
-// marking write would carry every mark on it back to false: a forced refresh whose
-// annotation is already consumed would be lost for good, with no record anywhere that
-// it was ever asked for. Reconstructing the list from a lagging read is wrong for the
-// same reason whatever it holds, which is why the lock sits on the write rather than on
-// any one field of it.
+// The read every write of a pass is computed from is authoritative (Snapshot), so the
+// lock is not there to catch this controller's own cache: it guards the window between
+// that read and the write, which spans the whole fetch and is therefore as long as a
+// pass. A version list is merged from the snapshot and a merge patch on a list ships
+// the whole array, so whatever another writer put there in the meantime would be
+// replaced wholesale by a state computed without it — a re-examination mark it wrote,
+// for instance, with the force annotation already consumed and nothing left to ask for
+// the refresh again. Reconstructing the list from a read that has been overtaken is
+// wrong whatever it holds, which is why the lock sits on the write rather than on any
+// one field of it.
 //
 // A rejected patch is a conflict, not a failure of the pass's own making: the caller
 // reports it, the work queue retries, and the retry is computed from a read that has
