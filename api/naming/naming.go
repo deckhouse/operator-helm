@@ -97,7 +97,21 @@ func chartObjectName(repoName, chartName string) string {
 		}
 	}
 
-	return string(readable) + "-" + hash
+	return collapseDashes(string(readable)) + "-" + hash
+}
+
+// collapseDashes replaces every run of two or more dashes in s with a single dash.
+func collapseDashes(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '-' && i > 0 && s[i-1] == '-' {
+			continue
+		}
+
+		b.WriteByte(s[i])
+	}
+
+	return b.String()
 }
 
 func isAlphanumeric(c byte) bool {

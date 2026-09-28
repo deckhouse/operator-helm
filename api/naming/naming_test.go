@@ -17,6 +17,7 @@ limitations under the License.
 package naming
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -84,6 +85,30 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 			chart: "",
 			want:  "chart-6e340b9cffb3",
 		},
+		{
+			name:  "separators in both parts stay single dashes",
+			repo:  "ch art",
+			chart: "x y z",
+			want:  "ch-art-chart-x-y-z-2e9c09ddbba9",
+		},
+		{
+			name:  "a dash next to a replaced dot collapses into one dash",
+			repo:  "my chart. v2",
+			chart: "a..b",
+			want:  "my-chart-v2-chart-a-b-a0503e359778",
+		},
+		{
+			name:  "parts made of separators only leave the bare literal",
+			repo:  "   ",
+			chart: "-.-",
+			want:  "chart-9d95432984ec",
+		},
+		{
+			name:  "long names with separators are truncated and collapsed",
+			repo:  "a very long repository name here",
+			chart: "an extremely long chart name here",
+			want:  "a-very-long-reposito-chart-an-extremely-long-ch-bbf8569a7775",
+		},
 	}
 
 	for _, tc := range cases {
@@ -92,10 +117,26 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("HelmClusterAddonChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
 			}
-			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
-				t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", got, errs)
-			}
+			assertNameIsValid(t, got)
 		})
+	}
+}
+
+// assertNameIsValid checks that a derived name is a DNS-1123 subdomain, fits a
+// DNS-1123 label, and carries no run of dashes.
+func assertNameIsValid(t *testing.T, name string) {
+	t.Helper()
+
+	if errs := validation.IsDNS1123Subdomain(name); len(errs) > 0 {
+		t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", name, errs)
+	}
+
+	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+		t.Fatalf("%q is not a valid DNS-1123 label: %v", name, errs)
+	}
+
+	if strings.Contains(name, "--") {
+		t.Fatalf("%q contains a run of dashes", name)
 	}
 }
 
@@ -167,9 +208,7 @@ func TestApplicationChartName(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("ApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
 			}
-			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
-				t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", got, errs)
-			}
+			assertNameIsValid(t, got)
 		})
 	}
 }
@@ -219,9 +258,7 @@ func TestClusterApplicationChartName(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("ClusterApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
 			}
-			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
-				t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", got, errs)
-			}
+			assertNameIsValid(t, got)
 		})
 	}
 }
@@ -294,10 +331,7 @@ func TestChartNameSanitizesAnIllegalDot(t *testing.T) {
 
 	for _, chart := range charts {
 		t.Run(chart, func(t *testing.T) {
-			got := HelmClusterAddonChartName("repo", chart)
-			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
-				t.Fatalf("HelmClusterAddonChartName(%q, %q) = %q, which is not a valid DNS-1123 subdomain: %v", "repo", chart, got, errs)
-			}
+			assertNameIsValid(t, HelmClusterAddonChartName("repo", chart))
 		})
 	}
 }
