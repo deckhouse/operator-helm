@@ -563,10 +563,11 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repositor
 	return nil
 }
 
-// carryOver moves into the destination the versions it does not already hold, and only
-// those: the legacy object is about to be deleted, so every version left behind is lost,
-// while every version the destination has is newer than the legacy copy of it and is
-// what this catalog publishes.
+// carryOver unions the legacy object into the destination: the versions the destination
+// does not hold are added, because the legacy object is about to be deleted and every
+// version left behind is lost; a version both hold keeps the destination's verdict, which
+// is the newer one and is what this catalog publishes, but inherits an outstanding mark;
+// and an icon the destination lacks is filled in.
 //
 // Copying the status wholesale is what the destination's own entries cannot survive, and
 // a non-empty destination is not the rare case it looks like: a copy rejected by the lock
@@ -589,9 +590,10 @@ func (t *typed[C, CL]) carryOver(ctx context.Context, legacy, current C) error {
 	}
 
 	// The verdict the destination holds wins, but an outstanding refresh is not a verdict:
-	// whichever object it was written on, it is a request nothing has answered yet, and
-	// dropping it here would end the refresh without doing the work it asked for. A mark
-	// only ever costs one probe, so carrying it over is the cheap side of the trade. The
+	// whichever object it was written on, nothing here can establish that it was answered,
+	// and dropping it would end the refresh without doing the work it asked for. A stale
+	// legacy mark therefore costs one redundant probe, which is the cheap side of the
+	// trade against losing a refresh whose annotation is already consumed. The
 	// indices are collected rather than applied, because the patch is computed against a
 	// copy taken below and a mutation made before it would not reach the server.
 	var marks []int

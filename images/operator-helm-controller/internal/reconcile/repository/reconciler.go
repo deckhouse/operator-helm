@@ -134,11 +134,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// as does a pass that never attempted a synchronization at all.
 	forceRecorded := false
 
-	// A rename left unfinished must stop the synchronization: a pass that published
-	// into the object under the new name would be merging a fetch into a status the
-	// migration is still about to carry the old object's versions into, and the merge
-	// drops what the fetch does not offer - taking with it the only copy of a version
-	// a consumer still holds.
+	// A rename left unfinished must stop the synchronization: a pass needs exactly one
+	// object per chart, and while both names exist it does not have one. The verdicts it
+	// reads are keyed by the chart label, so the two objects collide there and one of
+	// them decides what is probed, while what it publishes and what it prunes are keyed
+	// by object name - which makes the other copy look like a chart nobody offers.
 	if in.MigrateErr == nil && in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
 		ShouldAttempt(in.Current, in.Generation, in.Now, in.Forced) {
 		if err := r.markSyncInProgress(ctx, repo, in.Forced); err != nil {

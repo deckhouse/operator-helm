@@ -1883,6 +1883,10 @@ func TestMigrationCarriesAMarkAndAnIconTheDestinationLacks(t *testing.T) {
 	)
 	legacy.Status.IconURL = iconURL
 
+	// The mark alone must reach the destination: the second case below holds the icon on
+	// both objects and every version on the destination, so nothing but the mark can
+	// make the write happen.
+
 	destination := &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   currentName,
@@ -1916,5 +1920,51 @@ func TestMigrationCarriesAMarkAndAnIconTheDestinationLacks(t *testing.T) {
 	}
 	if written.Status.IconURL != iconURL {
 		t.Fatalf("destination icon = %q, want %q: the icon describes the chart, not one version", written.Status.IconURL, iconURL)
+	}
+}
+
+// TestMigrationCarriesAMarkWhenNothingElseIsMissing is the case that isolates the mark:
+// the destination already holds every version and the icon, so the write happens for the
+// outstanding refresh or not at all.
+func TestMigrationCarriesAMarkWhenNothingElseIsMissing(t *testing.T) {
+	const (
+		legacyName = "example-chart-podinfo"
+		mediaType  = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+		iconURL    = "https://example.test/podinfo.png"
+	)
+
+	currentName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	legacy := legacyAddonChart(legacyName, "example", "podinfo",
+		helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: mediaType, ReexaminationRequired: true},
+	)
+	legacy.Status.IconURL = iconURL
+
+	destination := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   currentName,
+			Labels: map[string]string{"repository": "example", "chart": "podinfo"},
+		},
+		Status: helmv1alpha1.ChartCatalogStatus{
+			IconURL:  iconURL,
+			Versions: []helmv1alpha1.ChartVersion{{Version: "1.0.0", MediaType: mediaType}},
+		},
+	}
+
+	c := newAddonClient(t, legacy, destination,
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"))
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := cat.MigrateNames(context.Background(), addonRepo()); err != nil {
+		t.Fatalf("MigrateNames returned %v", err)
+	}
+
+	written := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: currentName}, written); err != nil {
+		t.Fatalf("reading the destination: %v", err)
+	}
+
+	if len(written.Status.Versions) != 1 || !written.Status.Versions[0].ReexaminationRequired {
+		t.Fatalf("destination versions = %+v, want the mark carried over on its own", written.Status.Versions)
 	}
 }
