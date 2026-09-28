@@ -25,21 +25,16 @@ import (
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
-// InternalNames are the names of the internal objects derived from one
-// repository. They are computed by the adapter: the scheme differs between
-// the addon family (frozen, hash only on truncation) and the application family
-// (namespace-aware, hash always present), and no service should know which is
-// which.
+// InternalNames are the names of the internal objects derived from one repository. They
+// are computed by the adapter, whose naming scheme differs between the families.
 type InternalNames struct {
 	HelmRepository string
 	AuthSecret     string
 	TLSSecret      string
 }
 
-// Repository is a repository resource of any kind as its collaborators see it. Object
-// returns the API object itself, which is what the client reads, updates and
-// patches: the adapter is not registered in the scheme and must never be handed to
-// the client directly.
+// Repository is a repository resource of any kind as its collaborators see it. Object returns
+// the API object itself, the only thing ever handed to the client.
 type Repository interface {
 	Object() status.ObjectWithConditions
 	Name() string
@@ -64,9 +59,8 @@ type Repository interface {
 	InternalNames() InternalNames
 }
 
-// Consumers pushes a force reconcile request onto the internal sources of
-// the resources that consume a repository. Which resources those are depends on the
-// family, so the reconciler is handed an implementation instead of looking them up.
+// Consumers pushes a force reconcile request onto the internal sources of the resources
+// that consume a repository.
 type Consumers interface {
 	ForceReconcileConsumers(ctx context.Context, repo Repository) error
 }

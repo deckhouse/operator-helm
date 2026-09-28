@@ -16,10 +16,8 @@ limitations under the License.
 
 package repository
 
-// ConfigFailure is a terminal configuration failure the reconciler recognizes
-// before any attempt to reach the repository, such as an unsupported url scheme.
-// Nothing else produces one, which is why it lives here rather than with the
-// outcomes the synchronizer hands back.
+// ConfigFailure is a terminal configuration failure the reconciler recognizes before any
+// attempt to reach the repository, such as an unsupported url scheme.
 type ConfigFailure struct {
 	Reason  string
 	Message string

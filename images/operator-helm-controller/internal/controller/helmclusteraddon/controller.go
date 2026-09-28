@@ -112,10 +112,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&helmv1alpha1.HelmClusterAddonChart{},
 			handler.EnqueueRequestsFromMapFunc(mapChartToAddons(client)),
-			// A catalog write is a status-only change on the chart, so a
-			// generation-only predicate (as used for HelmClusterAddonRepository
-			// above) would never let it through; only a terminal probe verdict
-			// being reversible depends on this watch firing here.
+			// A catalog write is status-only, so a generation predicate would never let it through.
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)

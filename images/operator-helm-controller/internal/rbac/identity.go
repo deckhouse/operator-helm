@@ -38,28 +38,12 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// ApplicationRoleName is the Role every application release of a namespace is bound
-// to. One Role per namespace: every application there is bound to the same object,
-// and it outlives the applications that are bound to it.
+// ApplicationRoleName is the Role every application release of a namespace is bound to.
+// There is one per namespace, and it outlives the applications bound to it.
 const ApplicationRoleName = "operator-helm-application"
 
-// Identity provides the identity a release is applied with: a ServiceAccount in
-// the operator namespace (next to the HelmRelease, where helm-controller looks it
-// up), a Role in the target namespace and a RoleBinding tying the two together.
-//
-// The Role is bound through a RoleBinding, so whatever it grants stops at the
-// namespace boundary: cluster-scoped resources are unreachable regardless of its
-// content.
-//
-// All three are reconciled on every pass: the rules of the Role and the subjects of
-// the binding are ours and are written back, so an edit made out of band does not
-// survive. The Role and the binding are also watched (see
-// internal/controller/helmapplication), which is what turns such an edit into a
-// reconcile of the applications concerned rather than a drift that lasts until the
-// next pass happens for another reason. All three kinds are excluded from the
-// manager's client cache (see cmd/operator-helm-controller), so the reads here go
-// to the API server and never depend on the label-scoped informers those watches
-// run on.
+// Identity provides the identity a release is applied with: a ServiceAccount in the operator
+// namespace, a Role in the target namespace and a RoleBinding tying the two together.
 type Identity struct {
 	client          client.Client
 	targetNamespace string
@@ -69,9 +53,8 @@ func NewIdentity(c client.Client, targetNamespace string) *Identity {
 	return &Identity{client: c, targetNamespace: targetNamespace}
 }
 
-// Ensure reconciles the account, the Role and the binding. A release without a
-// service account name belongs to a family that does not impersonate; nothing is
-// created for it.
+// Ensure reconciles the account, the Role and the binding. A release without a service
+// account name belongs to a family that does not impersonate.
 func (s *Identity) Ensure(ctx context.Context, rel contract.Release) IdentityOutcome {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
@@ -95,20 +78,14 @@ func (s *Identity) Ensure(ctx context.Context, rel contract.Release) IdentityOut
 	return IdentityOutcome{}
 }
 
-// foreignObjectError marks an object occupying a name the operator derives that is
-// not the operator's to touch. The derived names are fully computable by anyone, so
-// finding something under one of them says nothing about who put it there; the
-// managed-by label does.
+// foreignObjectError marks an object occupying a derived name without the managed-by label.
 type foreignObjectError struct {
 	message string
 }
 
 func (e *foreignObjectError) Error() string { return e.message }
 
-// rbacFailure names the failure the release reports. A foreign object is terminal:
-// it leaves the way only by being removed or labelled, and neither is something a
-// retry brings about — the informers behind the watches on both kinds select on the
-// managed-by label, so an object without it is not even observed going away.
+// rbacFailure names the failure the release reports; a foreign object is terminal.
 func rbacFailure(err error) IdentityOutcome {
 	var foreign *foreignObjectError
 	if errors.As(err, &foreign) {
@@ -127,29 +104,13 @@ func rbacFailure(err error) IdentityOutcome {
 	}
 }
 
-// managedByOperator reports whether an object found under a derived name is one of
-// ours. It is the single ownership test: everything that carries the label is ours
-// to shape, everything that does not is left untouched.
+// managedByOperator reports whether an object found under a derived name is one of ours.
 func managedByOperator(labels map[string]string) bool {
 	return labels[helmv1alpha1.LabelManagedBy] == helmv1alpha1.LabelManagedByValue
 }
 
-// createOrPatchOwned is controllerutil.CreateOrPatch for an object whose ownership
-// has to be judged before it is written: mutate is called with what the read found
-// (exists tells an object that is already there from one about to be created), and
-// the patch that follows carries the resource version it was read at.
-//
-// That resource version is what makes the ownership test and the write one
-// decision. Without it the test says the object carried our label a moment ago,
-// not that the object being written is the one that carried it: an object deleted
-// and recreated by someone else in between would take our patch, and the label is
-// the privilege boundary of this package. Under the lock such a swap is a conflict
-// instead — a transient failure the release is retried from, and the next pass
-// judges whatever it then finds on its own labels.
-//
-// An unchanged object is not written at all, as CreateOrPatch does not write one:
-// a patch every pass would bump the resource version and wake the watches on the
-// Role and the binding for nothing.
+// createOrPatchOwned is controllerutil.CreateOrPatch with mutate told whether the read
+// found an existing object, so ownership can be judged before the write.
 func createOrPatchOwned(ctx context.Context, c client.Client, obj client.Object, mutate func(exists bool) error) error {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -173,23 +134,12 @@ func createOrPatchOwned(ctx context.Context, c client.Client, obj client.Object,
 		return nil
 	}
 
+	// The optimistic lock makes the ownership test and the write one decision.
 	return c.Patch(ctx, obj, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
 }
 
-// Cleanup removes the account and the binding and returns whichever of them is
-// still present, so the caller waits for it to actually go away before the
-// release's own finalizer comes off — the same shape the internal flux objects are
-// torn down with (see internalobj.Releases.Cleanup and
-// pass.AwaitInternalResourceDeletion). A Delete only sets a deletion timestamp:
-// a foreign finalizer on the account or the binding keeps it Terminating, and
-// neither object carries an ownerReference, so an application that dropped its
-// finalizer at that point would leave it behind for good — and the next
-// application of the namespace would then find it under the derived name and fail
-// terminally as foreign. It returns nil once both are gone.
-//
-// The Role stays: it is shared by every application of the namespace, and on its
-// own — with no binding left naming it — it grants nothing. Nothing waits on it
-// either, for the same reason: it is not this application's to outlive.
+// Cleanup removes the account and the binding and returns whichever is still present, for
+// the caller to wait on. The shared namespace Role stays and is never waited on.
 func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) (status.DeletingResource, error) {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
@@ -202,11 +152,7 @@ func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) (status.De
 		return nil, fmt.Errorf("deleting role binding: %w", err)
 	}
 
-	// Deleted by name alone, unlike the binding above: the account lives in
-	// s.targetNamespace (the operator's own namespace), where a namespace owner
-	// has no access to pre-create anything under our name. There is no foreign
-	// object to protect here, so the ownership check the binding needs does not
-	// apply.
+	// Deleted by name alone: nobody else can pre-create anything in the operator's namespace.
 	account := &corev1.ServiceAccount{}
 	accountKey := types.NamespacedName{Namespace: s.targetNamespace, Name: name}
 
@@ -215,9 +161,7 @@ func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) (status.De
 		return nil, fmt.Errorf("deleting service account: %w", err)
 	}
 
-	// Both deletes are issued before either is waited on: they are independent, and
-	// holding the account's delete back until a binding stuck on someone else's
-	// finalizer goes away would stall a deletion that could have made progress.
+	// Both deletes are issued before either is waited on, so one stuck object cannot stall the other.
 	switch {
 	case binding != nil:
 		return pendingDeletion{binding}, nil
@@ -229,21 +173,7 @@ func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) (status.De
 }
 
 // RemoveAccount deletes the ServiceAccount and nothing else, and waits for nothing.
-//
-// It is the escape from a teardown that cannot be applied as this identity at all:
-// the namespace the release lives in is terminating, so the namespace controller
-// deletes the Role and the RoleBinding there while the account — which lives in the
-// operator's namespace — survives, leaving helm-controller impersonating an account
-// that exists and may do nothing. Its uninstall reads the Helm storage secret in
-// that namespace and is refused, on every attempt, forever. helm-controller skips
-// the uninstall when the account is absent (v1.6.4, the "Confirm any ServiceAccount
-// used for impersonation exists" check in internal/controller/helmrelease_controller.go,
-// which tests NotFound on a Get of it), so taking the account away is what lets the
-// internal HelmRelease finish.
-//
-// Nothing is returned to wait on: the caller reaches Cleanup later in the same
-// teardown, and that is where the account — gone or still Terminating on someone
-// else's finalizer — is waited for as it always was.
+// helm-controller v1.6.4 skips the uninstall when the impersonated account is absent.
 func (s *Identity) RemoveAccount(ctx context.Context, rel contract.Release) error {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
@@ -260,31 +190,22 @@ func (s *Identity) RemoveAccount(ctx context.Context, rel contract.Release) erro
 	return nil
 }
 
-// pendingDeletion adapts an RBAC object to status.DeletingResource. Unlike the
-// internal flux objects that interface was written for, a ServiceAccount or a
-// RoleBinding has no conditions to report: whatever holds it in Terminating is a
-// finalizer of someone else's, which says nothing about itself on the object. The
-// owner therefore reports it as a deletion still in progress and never as a failed
-// one, which is exactly what status.MarkDeletionPending does without a Ready
-// condition to read.
+// pendingDeletion adapts an RBAC object to status.DeletingResource. It reports no
+// conditions, so the owner always reads it as a deletion still in progress.
 type pendingDeletion struct {
 	client.Object
 }
 
 func (pendingDeletion) GetConditions() []metav1.Condition { return nil }
 
-// ensureServiceAccount keeps the account in its desired shape. The account exists
-// only as a subject name — helm-controller impersonates it with headers on top of
-// its own identity — so no token is ever mounted for it.
+// ensureServiceAccount keeps the account in its desired shape; no token is mounted for it.
 func (s *Identity) ensureServiceAccount(ctx context.Context, rel contract.Release, name string) error {
 	account := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.targetNamespace},
 	}
 
 	_, err := controllerutil.CreateOrPatch(ctx, s.client, account, func() error {
-		// Merge rather than replace: the account may carry labels put there by
-		// someone else (a policy engine, a cost allocator), and dropping them on
-		// every pass would fight whoever set them.
+		// Merged rather than replaced, so labels set by someone else survive.
 		if account.Labels == nil {
 			account.Labels = map[string]string{}
 		}
@@ -297,20 +218,10 @@ func (s *Identity) ensureServiceAccount(ctx context.Context, rel contract.Releas
 	return err
 }
 
-// ensureRole keeps the namespace Role in its desired shape: full rights inside the
-// namespace, and nothing outside it. Unlike the account and the binding the Role is
-// shared by every application of the namespace, so it is not derived from one
-// release — its rules are ours whatever put it there, and a narrowed Role is written
-// back to them on the next pass. Its name is fixed and computable by anyone, though,
-// so a Role found under it that is not ours is refused rather than seized: granting
-// every application of the namespace full rights through an object someone else owns
-// is not a decision this controller gets to make on their behalf.
-//
-// Being shared is also what makes the create race real: two applications of one
-// namespace reconciling at once both read the Role as missing and both create it,
-// and the loser is refused. They write the same content, so the second attempt is
-// the patch the loser would have made had it read the Role a moment later.
+// ensureRole keeps the namespace Role in its desired shape: full rights inside the namespace,
+// and nothing outside it. A Role found under the name that is not ours is refused.
 func (s *Identity) ensureRole(ctx context.Context, namespace string) error {
+	// The Role is shared, so two applications can both create it; the loser retries as a patch.
 	err := s.applyRole(ctx, namespace)
 	if apierrors.IsAlreadyExists(err) {
 		err = s.applyRole(ctx, namespace)
@@ -332,9 +243,7 @@ func (s *Identity) applyRole(ctx context.Context, namespace string) error {
 			)}
 		}
 
-		// Merge rather than replace, for the same reason the account and the binding
-		// merge theirs: the Role lives in the user's namespace, where a policy engine
-		// or a cost allocator is most likely to add a label of its own.
+		// Merged rather than replaced, so labels set by someone else survive.
 		if role.Labels == nil {
 			role.Labels = map[string]string{}
 		}
@@ -350,10 +259,7 @@ func (s *Identity) applyRole(ctx context.Context, namespace string) error {
 	})
 }
 
-// applicationRBACLabels mark the namespace Role and every role binding we own. The
-// managed-by label is both the ownership test and what the informers behind the
-// watches on both kinds select on, so losing it reads as a deletion, brings the
-// object back here and has it refused as foreign.
+// applicationRBACLabels mark the namespace Role and every role binding we own.
 func applicationRBACLabels() map[string]string {
 	return map[string]string{
 		helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue,
@@ -368,17 +274,8 @@ func applicationRoleRef() rbacv1.RoleRef {
 	}
 }
 
-// ensureRoleBinding binds the account to the namespace Role. A binding that is ours
-// is held to the shape we want whatever state it is found in: its subjects and
-// labels are reconciled on every pass, and a roleRef naming some other role is
-// corrected too — by replacing the object, because roleRef is immutable in
-// Kubernetes and cannot be patched.
-//
-// A binding that is not ours is a different matter. The name is derived and fully
-// computable, so it may well have been taken by someone else; adding our account to
-// such a binding would grant it whatever that binding grants. It is reported and
-// left exactly as it is — never patched, never deleted — so its owner decides what
-// happens to it.
+// ensureRoleBinding binds the account to the namespace Role, reconciling a binding of ours
+// on every pass and leaving one that is not ours exactly as it is.
 func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, namespace, name string) error {
 	desiredRef := applicationRoleRef()
 
@@ -392,11 +289,7 @@ func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, 
 			"role binding %s/%s already exists and is not managed by the operator", namespace, name,
 		)}
 	case existing.RoleRef != desiredRef:
-		// The preconditions keep the delete off a binding that was replaced or
-		// rewritten between the read and here: that one has to be judged on its own
-		// labels, and the conflict brings this pass back to do it. A binding that is
-		// simply gone by now needs no deleting — the create below is what it was
-		// heading for.
+		// roleRef is immutable, so a binding naming another role is replaced rather than patched.
 		err := s.client.Delete(ctx, existing, client.Preconditions{
 			UID: &existing.UID, ResourceVersion: &existing.ResourceVersion,
 		})
@@ -410,19 +303,13 @@ func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, 
 	}
 
 	return createOrPatchOwned(ctx, s.client, binding, func(exists bool) error {
-		// The object is read again here, so the ownership test is repeated on what
-		// that read found: between the read above and this one a binding of someone
-		// else's may have taken the name, and merging our labels onto it is the
-		// adoption the test exists to prevent.
+		// The ownership test is repeated on this read: another binding may have taken the name.
 		if exists && !managedByOperator(binding.Labels) {
 			return &foreignObjectError{message: fmt.Sprintf(
 				"role binding %s/%s already exists and is not managed by the operator", namespace, name,
 			)}
 		}
 
-		// Merge rather than replace: the binding lives in the user's namespace, where
-		// a cluster's own policy or cost labelling is most likely to land, and
-		// dropping such labels on every pass would fight whoever set them.
 		if binding.Labels == nil {
 			binding.Labels = map[string]string{}
 		}
@@ -440,15 +327,8 @@ func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, 
 	})
 }
 
-// ensureOwnedRoleBindingDeleted deletes the role binding at nn only when it carries
-// our managed-by label. The derived name is fully computable by anyone, so a binding
-// found under it may belong to someone else — the same ownership test ensureRoleBinding
-// applies before it touches anything. A binding that is not ours is left alone; that
-// is not an error and must not block the rest of the cleanup.
-//
-// It returns the binding while it is still present — a delete that was issued is
-// not a delete that finished — and nil for a binding that is gone or was never
-// ours to remove: neither is something this release waits on.
+// ensureOwnedRoleBindingDeleted deletes the role binding at nn only when it carries our
+// managed-by label. It returns the binding while still present, and nil otherwise.
 func (s *Identity) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.NamespacedName) (*rbacv1.RoleBinding, error) {
 	binding := &rbacv1.RoleBinding{}
 	if err := s.client.Get(ctx, nn, binding); err != nil {
@@ -459,10 +339,7 @@ func (s *Identity) ensureOwnedRoleBindingDeleted(ctx context.Context, nn types.N
 		return nil, nil
 	}
 
-	// Only this exact object at this exact revision: a binding deleted and recreated
-	// by someone else between the read and here would otherwise be deleted on the
-	// strength of a label it never carried. The conflict is transient — the pass that
-	// retries reads the replacement and leaves it alone as foreign.
+	// Only this exact object at this exact revision, so a replacement is not deleted for it.
 	switch err := s.client.Delete(ctx, binding, client.Preconditions{
 		UID: &binding.UID, ResourceVersion: &binding.ResourceVersion,
 	}); {

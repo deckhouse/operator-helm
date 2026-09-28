@@ -31,21 +31,10 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// Claims enforces that at most one HelmClusterAddon uses a given
-// repository/chart pair. A validating webhook cannot guarantee this: admission
-// requests are served concurrently and before the object is persisted, so two
-// simultaneous creates can both pass. Uniqueness is instead delegated to the API
-// server's only atomic cross-object primitive — the uniqueness of an object name.
-// Each repository/chart pair maps to a single Lease name; whoever creates that
-// Lease first owns the pair, and every other addon reconciles into a conflict.
-//
-// It is addon-only in substance, not just by convention: the Lease name carries
-// neither the release kind nor a namespace, and the holder recorded on it is read
-// back as a HelmClusterAddon. Another family needing uniqueness would have to
-// bring its own implementation of the reconciler's Claims rather than reuse this one.
+// Claims enforces that at most one HelmClusterAddon uses a given repository/chart pair.
+// Whoever creates the pair's Lease first owns it; every other addon reconciles into a conflict.
 type Claims struct {
-	// reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
-	// controller cache: an acquisition decision must never be made against stale data.
+	// Reads bypass the controller cache: an acquisition decision must not be made on stale data.
 	reader    client.Reader
 	client    client.Client
 	namespace string
@@ -59,9 +48,8 @@ func NewClaims(c client.Client, reader client.Reader, namespace string) *Claims 
 	}
 }
 
-// Acquire ensures the addon owns the claim for its repository/chart pair. It
-// reports whether the claim is held by this addon; when it is not, holder names
-// the addon that currently owns it so the caller can surface a conflict.
+// Acquire ensures the addon owns the claim for its repository/chart pair. When it does not,
+// holder names the addon that currently owns it.
 func (s *Claims) Acquire(ctx context.Context, rel contract.Release) (acquired bool, holder string, err error) {
 	nn := s.leaseKey(rel)
 
@@ -76,8 +64,7 @@ func (s *Claims) Acquire(ctx context.Context, rel contract.Release) (acquired bo
 		if created {
 			return true, rel.Name(), nil
 		}
-		// Lost the create race against a concurrent reconcile; re-read the winning
-		// Lease authoritatively and fall through to the ownership check.
+		// Lost the create race; re-read the winning Lease and fall through to the ownership check.
 		if err := s.reader.Get(ctx, nn, lease); err != nil {
 			return false, "", fmt.Errorf("getting chart claim lease: %w", err)
 		}
@@ -98,9 +85,7 @@ func (s *Claims) Acquire(ctx context.Context, rel contract.Release) (acquired bo
 		return false, holder, nil
 	}
 
-	// The recorded holder is gone; take the orphaned Lease over.
-	// The update is optimistic: if another addon takes it over first, our write is
-	// rejected with a conflict and we report the pair as claimed and requeue.
+	// The take-over is optimistic: another addon getting there first makes this a conflict.
 	if err := s.takeOver(ctx, lease, rel); err != nil {
 		if apierrors.IsConflict(err) {
 			return false, holder, nil
@@ -111,9 +96,8 @@ func (s *Claims) Acquire(ctx context.Context, rel contract.Release) (acquired bo
 	return true, rel.Name(), nil
 }
 
-// OwnedBy reports whether the addon currently holds the claim Lease for its
-// repository/chart pair. It reads through the direct reader for the same reason
-// Acquire does: an ownership decision must not be made against stale cache data.
+// OwnedBy reports whether the addon currently holds the claim Lease for its repository/chart
+// pair, read through the direct reader rather than the cache.
 func (s *Claims) OwnedBy(ctx context.Context, rel contract.Release) (bool, error) {
 	lease := &coordinationv1.Lease{}
 	err := s.reader.Get(ctx, s.leaseKey(rel), lease)
@@ -127,8 +111,7 @@ func (s *Claims) OwnedBy(ctx context.Context, rel contract.Release) (bool, error
 	return leaseHolder(lease) == rel.Name(), nil
 }
 
-// Release deletes the claim Lease, but only if this addon still owns it, so a
-// duplicate addon that never acquired the pair cannot free the real owner's claim.
+// Drop deletes the claim Lease, but only if this addon still owns it.
 func (s *Claims) Drop(ctx context.Context, rel contract.Release) error {
 	nn := s.leaseKey(rel)
 
@@ -141,8 +124,7 @@ func (s *Claims) Drop(ctx context.Context, rel contract.Release) error {
 		return nil
 	}
 
-	// Delete only this exact revision: if the Lease was taken over between the read
-	// and the delete, the precondition fails and we leave the new owner's claim intact.
+	// Delete only this exact revision, so a Lease taken over in the meantime is left intact.
 	err := s.client.Delete(ctx, lease, client.Preconditions{ResourceVersion: &lease.ResourceVersion})
 	if apierrors.IsConflict(err) {
 		return nil
@@ -154,37 +136,10 @@ func (s *Claims) Drop(ctx context.Context, rel contract.Release) error {
 	return nil
 }
 
-// DropStale deletes claim Leases this addon still owns for repository/chart
-// pairs it no longer references — e.g. after the chart ref changed. The Lease name
-// is derived from the current spec, so a chart change makes Acquire claim a new
-// Lease and orphan the old one; the previous pair is not stored anywhere. The
-// orphans are found instead by the source-name label every claim already carries.
-// Only the addon's own claims (by HolderIdentity) other than the current one are
-// removed, so a pair taken over by another addon is left intact.
+// DropStale deletes the claim Leases this addon still owns for repository/chart pairs it no
+// longer references, found by the source-name label every claim carries.
 func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
-	// Freeing a pair is only safe once this release is known to have moved onto the
-	// one it names now. Until then its chart may still be installed under this
-	// release's name, and handing the pair to somebody else would have two releases
-	// deploying one chart into one namespace — the collision the claim exists to
-	// prevent.
-	//
-	// The status is what says the move happened, and it says it late: it is written
-	// after the chart is applied, so a release that has just installed something may
-	// still carry no record of it at all. An empty record therefore cannot be read as
-	// "nothing is deployed" — it is read as "unknown", and nothing is released.
-	//
-	// This keeps a pair the release cannot move off until the release is deleted,
-	// when teardown frees everything it holds. Two states reach that: a spec pointed
-	// at a chart somebody else holds, and a chart that never installs, since neither
-	// ever reaches the status. That is the cheaper failure — a pair held too long
-	// needs someone to look at it, a pair freed too early corrupts an installation.
-	//
-	// The record is written after the fact, and one sequence outruns it: a spec that
-	// moves A -> B, gets B deployed, and moves back to A before the pass that would
-	// have recorded B. The record still reads A, the spec reads A, so the move looks
-	// settled and B — deployed under this release's name — is released. Closing it
-	// needs an intent written before the internal release is repointed, or claims
-	// held by renewal rather than by spec; both are larger than what this guards.
+	// An absent record reads as unknown, not as "nothing deployed", so nothing is freed.
 	last := rel.LastAppliedChart()
 	if last == nil {
 		return nil
@@ -198,10 +153,8 @@ func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
 	return s.dropOwned(ctx, rel, current)
 }
 
-// DropAll releases every claim this release holds, the pair it names included. It
-// is the teardown counterpart of DropStale: nothing of this release is deployed any
-// more by the time it runs, so there is no pair left to protect, and no later pass
-// of anybody's would be allowed to free what it left behind.
+// DropAll releases every claim this release holds, the pair it names included. It is the
+// teardown counterpart of DropStale.
 func (s *Claims) DropAll(ctx context.Context, rel contract.Release) error {
 	return s.dropOwned(ctx, rel, "", "")
 }
@@ -218,8 +171,7 @@ func (s *Claims) dropOwned(ctx context.Context, rel contract.Release, keep ...st
 		return false
 	}
 
-	// Direct reader, not the cached client: claim Leases are not watched, so the
-	// informer cache has no data for them (same reason Acquire/Release use reader).
+	// Direct reader, not the cached client: claim Leases are not watched, so the cache is empty.
 	leases := &coordinationv1.LeaseList{}
 	if err := s.reader.List(ctx, leases,
 		client.InNamespace(s.namespace),
@@ -234,8 +186,7 @@ func (s *Claims) dropOwned(ctx context.Context, rel contract.Release, keep ...st
 			continue
 		}
 
-		// Delete only this exact revision: if the Lease was taken over between the
-		// list and the delete, the precondition fails and we leave it intact.
+		// Delete only this exact revision, so a Lease taken over in the meantime is left intact.
 		err := s.client.Delete(ctx, lease, client.Preconditions{ResourceVersion: &lease.ResourceVersion})
 		if apierrors.IsConflict(err) {
 			continue
@@ -286,18 +237,8 @@ func (s *Claims) takeOver(ctx context.Context, lease *coordinationv1.Lease, rel 
 	return s.client.Update(ctx, lease)
 }
 
-// isHolderStale reports whether the recorded holder no longer keeps this claim,
-// which it does only by ceasing to exist. A Lease left behind by a deletion is an
-// orphan nobody else would ever clear, so it is taken over here.
-//
-// A holder that is still there keeps its claim, whatever its spec now says. Giving
-// it up is the holder's own act — DropStale removes the Leases it holds for pairs it
-// no longer names, and Drop removes them all when it is deleted — and reading its
-// spec here instead would hand the pair out twice. The holder does not write to the
-// Lease when it finds itself already recorded in it, so an addon that moves off this
-// chart and back leaves the Lease untouched, and the optimistic update below is
-// happy to overwrite it: two addons would each believe they had the claim, and one
-// of them would have been told so after the other had resumed using it.
+// isHolderStale reports whether the recorded holder no longer keeps this claim, which it
+// does only by ceasing to exist. A holder that still exists keeps it, whatever its spec says.
 func (s *Claims) isHolderStale(ctx context.Context, holder string) (bool, error) {
 	if holder == "" {
 		return true, nil

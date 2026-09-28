@@ -34,9 +34,8 @@ import (
 	"github.com/deckhouse/operator-helm/internal/reposync"
 )
 
-// Inputs carries everything Evaluate needs. It holds no clients and no clock:
-// Now and Jitter are supplied by the caller so the function is deterministic
-// and unit testable.
+// Inputs carries everything Evaluate needs. It holds no clients and no clock: Now and
+// Jitter are supplied by the caller.
 type Inputs struct {
 	Generation int64
 	Now        time.Time
@@ -48,9 +47,8 @@ type Inputs struct {
 	InternalRepository    internalobj.InternalRepositoryState
 	ConfigErr             *ConfigFailure
 
-	// MigrateErr reports a failure to move the catalog objects to their current
-	// names. It is not tied to a synchronization attempt: the rename runs on every
-	// pass, whether or not the remote was read.
+	// MigrateErr reports a failure to move the catalog objects to their current names. It is
+	// not tied to a synchronization attempt.
 	//
 	// TRANSITIONAL: remove together with the catalog's own migration.
 	MigrateErr error
@@ -66,15 +64,7 @@ type Inputs struct {
 	Catalog   *reposync.CatalogOutcome
 
 	// SyncEnd is when the synchronization attempt finished, and is zero on a pass that
-	// attempted none. The next attempt is scheduled from it rather than from Now,
-	// because Now is captured before the attempt and an attempt can take minutes: a
-	// read that spent its whole three-minute budget would otherwise be given a next
-	// sync time two minutes in the past, and the catalog write that enqueues the
-	// repository would start the next full-budget pass with no pause at all.
-	//
-	// Only the schedule uses it. The timestamps that record when this pass ran - the
-	// condition transition times, lastForceReconcileTime, lastSuccessfulSyncTime - stay
-	// on Now, which is the one instant the whole pass is stamped with.
+	// attempted none. Only the schedule uses it; every recorded timestamp stays on Now.
 	SyncEnd time.Time
 }
 
@@ -97,22 +87,12 @@ type abnormalCondition struct {
 func Evaluate(in Inputs) Decision {
 	var status helmv1alpha1.RepositoryStatus
 	in.Current.DeepCopyInto(&status)
-	// Confirmed on every pass, unlike the release package's observedGeneration, which
-	// is held back until the pass settles. A repository has a second field for the
-	// verdict: lastSyncedGeneration, written only by a pass that published a catalog,
-	// is what says which spec the catalog in front of a reader belongs to, and it is
-	// the one releases read (catalogIsCurrent in internal/reconcile/release). That
-	// leaves observedGeneration to record which spec this pass ran against, and the
-	// failure counter below is its only reader: the count resets on the pass that
-	// first sees a new generation. Holding it back would make every pass look like
-	// that first one and reset the count again and again, so consecutive failures
-	// would never add up to the backoff and the stall they are counted for.
+	// Confirmed on every pass, not held back: lastSyncedGeneration carries the verdict instead.
 	status.ObservedGeneration = in.Generation
 
 	internal := in.InternalRepository
 	if in.InternalRepositoryErr != nil {
-		// A failure to reconcile the internal object is a structural failure:
-		// report it the same way as an unhealthy object so Ready reflects it.
+		// Reported the same way as an unhealthy object, so Ready reflects it.
 		internal = internalobj.InternalRepositoryState{
 			Present: true,
 			Reason:  helmv1alpha1.ReasonFailed,
@@ -122,17 +102,9 @@ func Evaluate(in Inputs) Decision {
 
 	fetchFailed := in.Attempted && in.Fetch != nil && in.Fetch.Err != nil
 	fetchSucceeded := in.Attempted && in.Fetch != nil && in.Fetch.Err == nil
-	// A read that stopped short of the repository: it published what it learned, so it
-	// is neither a failure nor a finished pass, and the only thing that finishes it is
-	// another pass.
 	fetchIncomplete := fetchSucceeded && in.Fetch.Unexamined > 0
 	catalogFailed := in.MigrateErr != nil || (in.Attempted && in.Catalog != nil && in.Catalog.Err != nil)
-	// A catalog write rejected by its optimistic lock, which is a lost race rather than a
-	// failure: it is scheduled as a pass another one finishes. A failed fetch is not tested
-	// for alongside it, because the two cannot both have happened: a rename that failed
-	// stops the pass before any fetch is attempted (Reconciler.Reconcile), and a fetch that
-	// failed returns before the catalog is written (Synchronizer.Sync), so a pass that has
-	// a catalog failure to report has no fetch failure to weigh it against.
+	// A lost race rather than a failure; a fetch failure cannot have happened alongside it.
 	catalogRaced := catalogFailed && apierrors.IsConflict(firstErr(in.MigrateErr, catalogErr(in)))
 
 	failures := in.Current.ConsecutiveFetchFailures
@@ -148,9 +120,7 @@ func Evaluate(in Inputs) Decision {
 
 	setCondition(&status, in, helmv1alpha1.ConditionTypeReady, ready.Status, ready.Reason, ready.Message)
 
-	// A rename failure is reported even on a pass that attempted no synchronization:
-	// the rename runs on every pass by design, so gating its verdict on an attempt
-	// would leave the previous Synced=True standing while consumers cannot resolve.
+	// A rename failure is reported even on a pass that attempted no synchronization.
 	if in.Attempted || in.MigrateErr != nil {
 		syncedStatus, syncedReason, syncedMessage := evaluateSynced(in, fetchFailed, catalogFailed)
 		setCondition(&status, in, helmv1alpha1.ConditionTypeSynced, syncedStatus, syncedReason, syncedMessage)
@@ -163,60 +133,24 @@ func Evaluate(in Inputs) Decision {
 
 	if in.Attempted {
 		if in.Forced {
-			// Stamped on the attempt, because the attempt is what consumes the force
-			// annotation. The stamp records that the request was acted on, not that it
-			// succeeded — the outcome is carried by Ready and Synced.
+			// Stamped on the attempt: it records that the request was acted on, not that it worked.
 			status.LastForceReconcileTime = &metav1.Time{Time: in.Now}
 		}
 
 		if fetchSucceeded {
-			// Written on every successful read, not only on a complete pass: it
-			// describes what the repository offers, and a pass left incomplete by a
-			// pending tag still read the full list of charts.
-			//
-			// The charts the catalog could not publish are subtracted, because this
-			// number is what a user compares against the chart objects in the cluster:
-			// counting a chart that has no object would make the comparison come out
-			// wrong with nothing in the status to explain it. Synced names them
-			// instead. A catalog write that failed part way reports only the charts it
-			// reached, so the count can be too high until the retry succeeds — which
-			// the failing Synced condition already says. The catalog can fail on its
-			// very first chart, so "too high" reaches as far as the whole index.
+			// Skipped charts are subtracted, so the count matches the chart objects in the cluster.
 			status.ChartCount = ptr.To(int32(in.Fetch.Charts - len(skippedCharts(in))))
 		}
 
 		if fetchSucceeded && !catalogFailed {
-			// Written in both directions by every pass that published a catalog, and left
-			// alone by one that did not: it says what the catalog in front of a reader
-			// holds, so a failed pass — which published nothing — must not clear it.
-			//
-			// It exists because lastSyncedGeneration cannot carry this. That one is held
-			// back by an incomplete pass, which protects only the first sync of a
-			// generation: once a generation has synced completely, new tags appearing in
-			// the registry need no spec change, so a later incomplete pass leaves
-			// lastSyncedGeneration equal to the generation and the catalog looks like the
-			// repository's full answer while it is missing versions nobody examined.
+			// Written in both directions by a pass that published a catalog, left alone by one
+			// that did not: it describes the catalog a reader has in front of it.
 			status.UnexaminedVersions = int32(in.Fetch.Unexamined)
 		}
 
 		if fetchSucceeded && !catalogFailed && !fetchIncomplete {
-			// Written on every pass that published a catalog for this spec, pending tags
-			// included: a version the registry has not answered about is listed like any
-			// other, so the catalog is still the repository's full answer as to which
-			// versions exist — which is the only question releases ask it. Holding the
-			// generation back until nothing is pending would never release it at all on a
-			// repository with one permanently unreadable tag.
-			//
-			// The condition cannot carry this: Synced is the verdict of the latest pass,
-			// so a transient fetch failure turns it False over a catalog that is complete
-			// and unchanged. Neither can lastSuccessfulSyncTime, which says when the
-			// repository was last mirrored in full but not which spec that was.
-			//
-			// A pass that ran out of its budget is the one exception, and the reason is the
-			// same sentence: its catalog is not the repository's full answer about which
-			// versions exist, because it never asked about some of them. Released early, a
-			// release asking for one of those versions would be told the repository does
-			// not offer it, instead of waiting for the pass that finds out.
+			// Written with pending tags included, but never by a pass that ran out of its budget:
+			// only then is the catalog the repository's full answer as to which versions exist.
 			status.LastSyncedGeneration = in.Generation
 
 			if in.Fetch.Pending == 0 {
@@ -226,20 +160,7 @@ func Evaluate(in Inputs) Decision {
 
 		delay := syncDelay(failures)
 		if (fetchIncomplete || catalogRaced) && delay > IncompleteSyncDelay {
-			// The repository is known to have more to say and the next pass picks up
-			// where this one stopped, so waiting a full interval between passes would
-			// stretch the convergence of a large repository over hours. It is still a
-			// wait rather than an immediate requeue: the pass that came back incomplete
-			// spent its whole budget holding one of the two workers, and the
-			// repositories queued behind it must not be starved by the one that is
-			// catching up.
-			//
-			// A pass whose catalog write was rejected by its lock is the same case: it
-			// read the repository and learned things it could not publish, and only a
-			// read that has since caught up stands in the way. The work queue does retry
-			// it at once, but that retry attempts no synchronization while the schedule
-			// says the next one is minutes away (ShouldAttempt), so the schedule is what
-			// decides when the write is actually redone.
+			// The next pass picks up where this one stopped, but still waits: it held a worker.
 			delay = IncompleteSyncDelay
 		}
 
@@ -262,10 +183,8 @@ func Evaluate(in Inputs) Decision {
 	}
 }
 
-// scheduleBase is the instant the wait until the next attempt is measured from: the
-// end of the attempt this pass made, or Now when it made none. The delay says how long
-// to leave the repository alone after a read, and a read that took longer than the
-// delay has already served it.
+// scheduleBase is the instant the wait until the next attempt is measured from: the end of
+// the attempt this pass made, or Now when it made none.
 func scheduleBase(in Inputs) time.Time {
 	if in.Attempted && !in.SyncEnd.IsZero() {
 		return in.SyncEnd
@@ -323,17 +242,7 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 		}
 
 		if apierrors.IsConflict(err) {
-			// A catalog write is patched against the read it was computed from, under an
-			// optimistic lock (catalog.lockedTo), so a base that has been overtaken is
-			// rejected instead of overwriting whatever overtook it. Nothing is wrong with
-			// the repository, the catalog or the cluster: the pass lost a race and another
-			// one runs against a current read. The verbatim API error would say "the
-			// object has been modified; please apply your changes to the latest version
-			// and try again" in a status a user reads as a defect report, so what happened
-			// is named instead — without attributing it to anyone, since the writer is as
-			// likely to be this controller on another pass as anything else. It is still
-			// Synced=False, because the catalog in front of that user is indeed not what
-			// this pass read.
+			// Named rather than reported verbatim: the API's conflict wording reads as a defect.
 			return metav1.ConditionFalse, helmv1alpha1.ReasonCatalogUpdateFailed,
 				"The chart catalog changed since this pass read it; retrying"
 		}
@@ -349,21 +258,13 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 	}
 }
 
-// partialSyncMessage describes every way the catalog of a pass that read the
-// repository and wrote what it could still does not mirror it. An empty string
-// means it does mirror it.
+// partialSyncMessage describes every way the catalog of a pass that read the repository and
+// wrote what it could still does not mirror it. An empty string means it does mirror it.
 func partialSyncMessage(in Inputs) string {
 	var parts []string
 
 	if skipped := skippedCharts(in); len(skipped) > 0 {
-		// Reported on every pass, not only the first one: a name the API cannot hold
-		// does not become valid on its own, so the chart stays out of the catalog for
-		// as long as the repository offers it, and the status is the only place a user
-		// can learn why chartCount is lower than the repository's own index. Repeating
-		// the same reason and message writes nothing — the condition, including its
-		// transition time, stays as it is — so saying it every pass is not noise. That
-		// holds only because describeCharts sorts: the same set of names has to spell
-		// the same message, whatever order the pass collected them in.
+		// Reported on every pass; repeating an identical reason and message writes nothing.
 		noun := "charts"
 		if len(skipped) == 1 {
 			noun = "chart"
@@ -376,26 +277,12 @@ func partialSyncMessage(in Inputs) string {
 	}
 
 	if in.Fetch != nil && in.Fetch.Pending > 0 && in.Current.LastSuccessfulSyncTime == nil {
-		// On the very first pass there is no other signal that the read was incomplete:
-		// lastSuccessfulSyncTime is empty either way, so a user who just created the
-		// repository would see Synced=True over a partial catalog. Once a full pass has
-		// happened, the frozen Last Sync column carries that signal instead and Synced
-		// stops flapping because of a single unreadable tag. The state does not escalate:
-		// the failure counter is untouched and Stalled is never reached. The nil guard on
-		// in.Fetch protects against a pre-fetch cluster failure, which leaves Fetch nil
-		// while still setting Attempted; that case is matched by fetchFailed/catalogFailed
-		// in evaluateSynced today, but the invariant lives elsewhere and must not be
-		// relied on here.
+		// Only on the first pass: afterwards the frozen Last Sync time carries the same signal.
 		parts = append(parts, fmt.Sprintf("The first repository read left %d chart versions unresolved", in.Fetch.Pending))
 	}
 
 	if in.Fetch != nil && in.Fetch.Unexamined > 0 {
-		// Said on every such pass, not only the first one, because unlike a pending tag
-		// this is not a property of the remote but of how far our own budget got: the
-		// catalog in front of the reader is missing versions the repository does offer,
-		// and the count is what shows the next pass making progress. Synced stays False
-		// until a pass covers the repository, which is the same state
-		// lastSyncedGeneration is held back for.
+		// Said on every such pass: the count is what shows the next pass making progress.
 		parts = append(parts, fmt.Sprintf(
 			"The repository read ran out of time with %d chart versions still unexamined; another pass is scheduled",
 			in.Fetch.Unexamined,
@@ -405,8 +292,8 @@ func partialSyncMessage(in Inputs) string {
 	return strings.Join(parts, ". ")
 }
 
-// skippedCharts names the charts this pass could not publish. Catalog is nil on a
-// pass that attempted nothing, and on one whose fetch never returned.
+// skippedCharts names the charts this pass could not publish. Catalog is nil on a pass that
+// attempted nothing, and on one whose fetch never returned.
 func skippedCharts(in Inputs) []string {
 	if in.Catalog == nil {
 		return nil
@@ -415,26 +302,10 @@ func skippedCharts(in Inputs) []string {
 	return in.Catalog.SkippedCharts
 }
 
-// describeCharts lists chart names for a condition message.
-//
-// The names are sorted, and on a copy so the outcome the caller holds is left
-// alone. Order is not a property of the input: a Helm index is a map on the wire,
-// so the same repository yields its charts in a different order every read. Without
-// sorting, the same set of skipped charts would produce a different message on each
-// pass, every pass would rewrite the condition, and the repository would be patched
-// forever over a state that never changed. The transition time stays put either way
-// — it follows the status, not the message — so it is the write itself that has to
-// be avoided.
-//
-// Only a few names are shown and each is cut short. A message is limited to 32768
-// bytes by the API server, and an index whose naming convention the API rejects
-// wholesale — with names as long as an index may legally publish — would otherwise
-// make the status unwritable and cost the repository its every other verdict too.
-// Both bounds are needed: a count alone does not bound the length.
-//
-// The names are quoted because a name that got here is not a label value and may
-// well be empty or hold spaces.
+// describeCharts lists chart names for a condition message, sorted on a copy, quoted, bounded
+// in count and in length. A message may hold at most 32768 bytes.
 func describeCharts(names []string) string {
+	// A Helm index is a map on the wire, so an unsorted message would differ on every pass.
 	shown := slices.Clone(names)
 	slices.Sort(shown)
 
@@ -452,12 +323,8 @@ func describeCharts(names []string) string {
 	return strings.Join(quoted, ", ") + suffix
 }
 
-// truncateChartName cuts one name down to the part worth showing. It counts runes,
-// not bytes, so the cut never lands inside a character. Quoting can still multiply
-// what is left — an unprintable byte becomes an escape of up to ten bytes — which is
-// why the bound is stated in the small: maxNamedCharts names of at most
-// maxChartNameRunes runes cannot approach the 32768 bytes a message may hold, even
-// when every rune has to be escaped.
+// truncateChartName cuts one name down to the part worth showing, counting runes rather than
+// bytes so the cut never lands inside a character.
 func truncateChartName(name string) string {
 	runes := []rune(name)
 	if len(runes) <= maxChartNameRunes {
@@ -470,9 +337,7 @@ func truncateChartName(name string) string {
 const (
 	// maxNamedCharts bounds how many names describeCharts shows.
 	maxNamedCharts = 3
-	// maxChartNameRunes bounds how much of one name it shows. A chart name this long
-	// is already past anything a user reads at a glance, and the point of the message
-	// is to identify the chart in the index, not to reproduce it.
+	// maxChartNameRunes bounds how much of one name it shows.
 	maxChartNameRunes = 128
 )
 
@@ -488,10 +353,7 @@ func evaluateStalled(
 	case internal.Present && internal.Stalled:
 		return abnormalCondition{set: true, reason: internal.Reason, message: internal.Message}
 	case !in.Attempted:
-		// A pass without an attempt carries the previous verdict forward so the
-		// specific reason is not replaced by a generic one. Only carry it forward
-		// when it was set for the current generation: a generation bump voids
-		// evidence about the previous spec, mirroring hasEvidence.
+		// Carried forward only for the current generation: a bump voids the previous spec's verdict.
 		if cond := apimeta.FindStatusCondition(in.Current.Conditions, helmv1alpha1.ConditionTypeStalled); cond != nil &&
 			cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == in.Generation {
 			return abnormalCondition{set: true, reason: cond.Reason, message: cond.Message}
@@ -537,13 +399,7 @@ func evaluateReconciling(
 			message: "Retrying after a chart catalog update failure",
 		}
 	case !in.Attempted && carriesCatalogFailure(in):
-		// The catalog write failure is handed to the work queue, whose immediate
-		// retry runs a pass with no attempt, so the case above cannot see it. Carry
-		// the retry forward the way evaluateStalled carries its verdict: without it
-		// the object would show Ready=True, Synced=False and no abnormal-true
-		// condition at all, which kstatus reads as healthy, and the fetch-failure
-		// counter — which deliberately ignores catalog failures — would never
-		// escalate it to Stalled either.
+		// The work queue's immediate retry runs a pass with no attempt, which the case above misses.
 		return abnormalCondition{
 			set:     true,
 			reason:  helmv1alpha1.ReasonProgressingWithRetry,
@@ -566,10 +422,8 @@ func evaluateReconciling(
 	}
 }
 
-// carriesCatalogFailure reports whether the current status still records an
-// unresolved chart catalog write failure. Only a record made for the current
-// generation counts: a generation bump voids evidence about the previous spec,
-// mirroring hasEvidence and the carry-forward in evaluateStalled.
+// carriesCatalogFailure reports whether the current status still records an unresolved chart
+// catalog write failure for the current generation.
 func carriesCatalogFailure(in Inputs) bool {
 	cond := apimeta.FindStatusCondition(in.Current.Conditions, helmv1alpha1.ConditionTypeSynced)
 
@@ -578,15 +432,10 @@ func carriesCatalogFailure(in Inputs) bool {
 		cond.ObservedGeneration == in.Generation
 }
 
-// hasEvidence reports whether the repository is already proven usable on the
-// current generation: a fetch succeeded for this spec.
+// hasEvidence reports whether the repository is already proven usable on the current
+// generation: a fetch succeeded for this spec.
 func hasEvidence(current helmv1alpha1.RepositoryStatus, generation int64) bool {
-	// Evidence is "a fetch succeeded on this spec". Ready alone cannot carry it:
-	// a higher-priority rule (an unhealthy internal repository, a failed secret)
-	// owns Ready on the very pass where the fetch succeeded, overwriting it.
-	// Synced is written only on a pass that attempted, and is True only when the
-	// fetch and the catalog write both succeeded, so Synced=True on the current
-	// generation means exactly that.
+	// Ready alone cannot carry it: a higher-priority rule can own Ready on that very pass.
 	for _, conditionType := range []string{helmv1alpha1.ConditionTypeReady, helmv1alpha1.ConditionTypeSynced} {
 		if cond := apimeta.FindStatusCondition(current.Conditions, conditionType); cond != nil &&
 			cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == generation {
@@ -648,31 +497,26 @@ func catalogErr(in Inputs) error {
 }
 
 const (
-	// SyncInterval is the normal catalog synchronization cadence and the base of
-	// the retry backoff, so a broken repository is never polled more often than a
-	// healthy one.
+	// SyncInterval is the normal catalog synchronization cadence and the base of the retry
+	// backoff, so a broken repository is never polled more often than a healthy one.
 	SyncInterval = 5 * time.Minute
 	// MaxSyncBackoff caps the retry delay.
 	MaxSyncBackoff = 1 * time.Hour
-	// MaxFetchFailures is the number of consecutive read failures after which the
-	// repository is reported as Stalled. Reaching it does not stop the retries:
-	// the cause may disappear on the remote side. Moved here from task 4's
-	// standalone declaration — the value does not change.
+	// MaxFetchFailures is the number of consecutive read failures after which the repository
+	// is reported as Stalled. Reaching it does not stop the retries.
 	MaxFetchFailures = 5
-	// IncompleteSyncDelay is the wait after a pass that read the repository but ran out
-	// of its budget before examining every version it listed. It is far below
-	// SyncInterval because such a pass leaves work that only another pass can finish,
-	// and each one starts from the verdicts its predecessor published.
+	// IncompleteSyncDelay is the wait after a pass that read the repository but ran out of its
+	// budget before examining every version it listed.
 	IncompleteSyncDelay = 1 * time.Minute
 	// SyncBackoffJitter spreads the schedule of repositories that share a remote.
 	SyncBackoffJitter = 0.1
-	// minRequeue keeps a due schedule from being reported as "no requeue",
-	// which is what a zero RequeueAfter means to controller-runtime.
+	// minRequeue keeps a due schedule from being reported as "no requeue", which is what a
+	// zero RequeueAfter means to controller-runtime.
 	minRequeue = time.Second
 )
 
-// ShouldAttempt reports whether a synchronization attempt is due. The caller
-// additionally requires the auxiliary resources to be in place.
+// ShouldAttempt reports whether a synchronization attempt is due. The caller additionally
+// requires the auxiliary resources to be in place.
 func ShouldAttempt(
 	current helmv1alpha1.RepositoryStatus,
 	generation int64,
@@ -691,8 +535,8 @@ func ShouldAttempt(
 	}
 }
 
-// NewJitter returns the random factor Evaluate applies to the computed delay.
-// It lives outside Evaluate to keep that function deterministic.
+// NewJitter returns the random factor Evaluate applies to the computed delay. It lives
+// outside Evaluate to keep that function deterministic.
 func NewJitter() float64 {
 	return (rand.Float64()*2 - 1) * SyncBackoffJitter
 }
@@ -724,9 +568,7 @@ func nextFailureCount(failures int32, attempted, fetchFailed bool, fetch *reposy
 	}
 
 	if fetch == nil {
-		// The pass ran but never reached the registry (a cluster-side failure, such
-		// as knownCharts, happened first). That is not evidence the registry
-		// recovered, so the counter is carried forward rather than reset.
+		// The pass never reached the registry, which is no evidence that the registry recovered.
 		return failures
 	}
 
@@ -735,8 +577,7 @@ func nextFailureCount(failures int32, attempted, fetchFailed bool, fetch *reposy
 	}
 
 	if fetch.Terminal {
-		// A terminal failure is reported immediately; saturating the counter keeps
-		// a single formula for the schedule and puts the retry at the cap.
+		// Saturating the counter keeps one formula for the schedule and puts the retry at the cap.
 		return MaxFetchFailures
 	}
 

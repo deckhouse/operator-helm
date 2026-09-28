@@ -23,10 +23,8 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// mapInternalResources maps an internal object back to the repository it was
-// derived from. Every family's internal objects share the operator namespace, so
-// the source-name label of this kind is what tells them apart; the namespaced
-// variant is used because the name alone does not identify a namespaced source.
+// mapInternalResources maps an internal object back to the namespaced repository it was
+// derived from, by the source-name and source-namespace labels of this kind.
 func mapInternalResources() handler.MapFunc {
 	return utils.MapNamespacedInternalResources(
 		ControllerName,

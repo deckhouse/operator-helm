@@ -37,10 +37,8 @@ import (
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
-// Deps are the collaborators of one repository kind, as the release package's Deps
-// are of one release kind. NewRepository returns an empty adapter of that kind for
-// the API object to be read into; Consumers pushes a force request onto the internal
-// sources of whatever consumes the repository in that family.
+// Deps are the collaborators of one repository kind. NewRepository returns an empty adapter
+// of that kind for the API object to be read into.
 type Deps struct {
 	NewRepository    func() contract.Repository
 	Secrets          Secrets
@@ -82,10 +80,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		if err := r.Update(ctx, repo.Object()); err != nil {
 			return reconcile.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
-		// Continue reconciling in the same pass: adding a finalizer is a
-		// metadata-only change that does not bump generation, so the resulting
-		// update event is dropped by the generation/annotation predicates and
-		// would not trigger a follow-up reconcile.
+		// Continue in the same pass: adding a finalizer bumps no generation, so no event follows.
 	}
 
 	in := Inputs{
@@ -95,12 +90,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		Current:    *repo.Status().DeepCopy(),
 	}
 
-	// TRANSITIONAL: the catalog object names moved, and a consumer resolves the new
-	// name from the moment this controller starts. Renaming here rather than inside
-	// the synchronization keeps it independent of the fetch: a repository that is not
-	// due for a sync yet, or whose remote is gone for good, still gets its objects
-	// moved. A failure travels to finish() rather than out of Reconcile, or the
-	// repository would report nothing at all while its consumers cannot resolve.
+	// TRANSITIONAL: renamed here rather than inside the synchronization, to run even without a fetch.
 	in.MigrateErr = r.deps.Catalogs.MigrateNames(ctx, repo)
 
 	if repoTypeErr != nil {
@@ -120,25 +110,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		case chartsource.Helm:
 			in.InternalRepository, in.InternalRepositoryErr = r.deps.HelmRepositories.Ensure(ctx, repo)
 		case chartsource.OCI:
-			// The url may have changed from helm to oci: drop the internal object
-			// that is no longer used. OCI repositories have none of their own.
+			// The url may have moved from helm to oci; an oci repository has no internal object.
 			in.InternalRepositoryErr = r.deps.HelmRepositories.Remove(ctx, repo.InternalNames())
 		}
 	}
 
 	in.Forced = repo.ForceReconcileRequired()
 
-	// forceRecorded says the request may be taken off the object: the catalog now
-	// carries it, so the refresh survives whatever happens to the annotation. A pass
-	// that never got as far as recording it leaves this false and keeps the request —
-	// as does a pass that never attempted a synchronization at all.
 	forceRecorded := false
 
-	// A rename left unfinished must stop the synchronization: a pass needs exactly one
-	// object per chart, and while both names exist it does not have one. The verdicts it
-	// reads are keyed by the chart label, so the two objects collide there and one of
-	// them decides what is probed, while what it publishes and what it prunes are keyed
-	// by object name - which makes the other copy look like a chart nobody offers.
+	// An unfinished rename stops the synchronization: a pass needs exactly one object per chart.
 	if in.MigrateErr == nil && in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
 		ShouldAttempt(in.Current, in.Generation, in.Now, in.Forced) {
 		if err := r.markSyncInProgress(ctx, repo, in.Forced); err != nil {
@@ -148,17 +129,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		outcome := r.deps.Catalogs.Sync(ctx, repo, repoType)
 		forceRecorded = outcome.ForceRequestRecorded
 
-		// Read after the synchronization, not before it: the schedule is a pause between
-		// attempts, and in.Now was captured before an attempt that may have taken its
-		// whole budget.
+		// Read after the synchronization, which may have taken the whole budget since in.Now.
 		in.SyncEnd = time.Now().UTC()
 
 		in.Attempted = true
 		if outcome.FetchAttempted {
-			// A cluster-side failure before the fetch (see Synchronizer.Sync)
-			// leaves outcome.FetchAttempted false; in.Fetch must stay nil then, or
-			// its zero-value Err == nil would be read as a successful fetch and
-			// reset ConsecutiveFetchFailures / mark Ready=True off nothing.
+			// in.Fetch must stay nil otherwise: a zero Err would read as a successful fetch.
 			in.Fetch = &outcome.Fetch
 		}
 		in.Catalog = &outcome.Catalog
@@ -167,9 +143,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return r.finish(ctx, repo, in, forceRecorded)
 }
 
-// finish applies the decision and consumes the force annotation once an attempt has
-// run and recorded the request in the catalog. The annotation is removed after the
-// status patch so a conflict does not lose the request.
+// finish applies the decision and consumes the force annotation once an attempt has recorded
+// the request in the catalog. The annotation is removed after the status patch.
 func (r *Reconciler) finish(
 	ctx context.Context,
 	repo contract.Repository,
@@ -179,8 +154,7 @@ func (r *Reconciler) finish(
 	decision := Evaluate(in)
 
 	if in.Fetch != nil && in.Fetch.Err != nil {
-		// A repository read failure is not returned to the work queue — its retry
-		// is carried by nextSyncTime — so this is the only place it is logged.
+		// A read failure is not returned to the work queue, so this is the only place it is logged.
 		log.FromContext(ctx).Error(in.Fetch.Err, in.Fetch.Message)
 	}
 
@@ -191,31 +165,21 @@ func (r *Reconciler) finish(
 	}
 
 	if consumeForce {
-		// A force request reaches a consumer's artifact only through the consumer's
-		// own internal OCIRepository, and any repository can have those: an oci:// one
-		// for every consumer, a helm one for every version its index publishes in a
-		// registry. This runs before the annotation is consumed: a failure leaves the
-		// request in place to be retried. The versions a helm repository serves as
-		// archives need no equivalent — there the internal HelmRepository carries the
-		// request and its HelmCharts follow the re-indexed source on their own.
+		// Run before the annotation is consumed, so a failure leaves the request to be retried.
 		if repo.ForceReconcileRequired() {
 			if err := r.deps.Consumers.ForceReconcileConsumers(ctx, repo); err != nil {
 				return reconcile.Result{}, fmt.Errorf("failed to force reconcile internal oci repositories: %w", err)
 			}
 		}
 
-		// The request is consumed by the attempt that recorded it, even one whose read
-		// failed: the catalog now carries it (see Synchronizer.Sync), so the refresh is
-		// finished by the ordinary passes that follow, while keeping the annotation would
-		// pin an unreachable repository into forcing on every pass forever.
+		// Consumed even when the read failed: the catalog carries the request from here on.
 		if err := pass.ConsumeForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(repo.Object()), r.deps.NewRepository().Object()); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 		}
 	}
 
 	if decision.Err != nil {
-		// Cluster write failures are handed to the work queue rate limiter; the
-		// schedule is re-established on the next pass.
+		// Cluster write failures go to the work queue rate limiter, not to the schedule.
 		return reconcile.Result{}, decision.Err
 	}
 
@@ -236,13 +200,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo contract.Reposito
 		return reconcile.Result{}, err
 	}
 
-	// Only a helm repository has an internal object of its own; for an oci one the
-	// secrets above were everything. An unknown repository type takes the helm path
-	// too, because it is a state a real repository can reach: the url validation
-	// regex on the CRD is looser than url.Parse, so a repository whose internal
-	// objects already exist can be edited to a url that no longer parses and then
-	// deleted. Cleaning up the helm way tolerates a missing internal repository, and
-	// leaving it out would orphan one.
+	// An unknown type takes the helm path too: the CRD's url regex is looser than url.Parse.
 	if repoType != chartsource.OCI {
 		helmRepo, err := r.deps.HelmRepositories.Cleanup(ctx, names)
 		if err != nil && !apierrors.IsNotFound(err) {
@@ -275,16 +233,8 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo contract.Reposito
 	return reconcile.Result{}, nil
 }
 
-// markSyncInProgress publishes Reconciling before the synchronization starts, so
-// a pass that is about to read the repository says so while the read is running
-// instead of only once it is over — a read can take a while, and until it
-// returns nothing else on the status moves. The reason distinguishes the two ways
-// a pass is triggered: ForceReconcile is the case someone is actively watching,
-// having annotated the repository a moment ago to see it picked up, while
-// Synchronization is the ordinary scheduled cadence. The condition is
-// deliberately written outside the Inputs snapshot Evaluate works from, so the
-// status computed at the end of the pass removes it again without a rule of its
-// own.
+// markSyncInProgress publishes Reconciling before the synchronization starts, with the reason
+// naming which of the two triggers it was. It is written outside the Inputs snapshot.
 func (r *Reconciler) markSyncInProgress(
 	ctx context.Context,
 	repo contract.Repository,

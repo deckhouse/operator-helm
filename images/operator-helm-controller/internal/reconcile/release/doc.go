@@ -14,29 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package release holds the one reconciler every release kind is served by:
-// HelmClusterAddon and HelmApplication run the exact same pass, and a new family
-// is added by wiring collaborators rather than by copying a control flow.
-//
-// What tells the families apart arrives as Deps: how the API object is read, how
-// its repository and catalog are found, whether a repository/chart pair is
-// claimed, whether the target namespace is created, and which identity the chart
-// is applied with. The reconciler itself never names a kind.
-//
-// The API object is only ever reached through a contract.Release adapter. The
-// adapter is not a registered type, so it is never handed to the client; the
-// object underneath it is reached through Object() at the few places that talk to
-// the API server.
-//
-// Status is managed the way the repository package manages it, and for the same
-// reason: a pass does cluster work and ends in one Outcome, and one deterministic
-// function — Evaluate — turns that into the whole desired status, what to requeue
-// and what to hand back to the work queue. The four outcomes are the four endings a
-// pass has, and each carries only what its ending can say anything about, so a pass
-// cannot describe a state it was never in. No step writes a condition of its own,
-// so what the release reports can be read in one place and tested without a
-// cluster. The collaborators this reconciler drives return outcomes rather than
-// conditions for the same reason. The one condition written outside Evaluate is the
-// progress a force request publishes before the work it asked for begins, and the
-// status update that ends the pass takes it away again.
+// Package release holds the one reconciler every release kind is served by. What tells the
+// families apart arrives as Deps, and a pass ends in one Outcome that Evaluate turns into status.
 package release

@@ -27,23 +27,16 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// DeletingResource is an internal resource that is being deleted; its deletion
-// timestamp and conditions are used to derive the owner's status while the
-// deletion is pending. It is a client.Object so that a caller waiting on one can
-// name it in the log; the resourceName passed alongside stays abstract because that
-// one reaches the user through the owner's status.
+// DeletingResource is an internal resource that is being deleted; its deletion timestamp and
+// conditions derive the owner's status while the deletion is pending.
 type DeletingResource interface {
 	client.Object
 
 	GetConditions() []metav1.Condition
 }
 
-// MarkUninstallPending records that a Helm release is still being uninstalled
-// while its owner is deleted. A failing release (its Ready condition is False)
-// makes the UninstallFailed condition True and Ready False, both with reason
-// UninstallFailed and the release's message; otherwise the owner stays
-// Reconciling until the release disappears. resourceName is a user-facing,
-// abstract name so the internal resource type is not leaked.
+// MarkUninstallPending records that a Helm release is still being uninstalled while its owner
+// is deleted. A failing release sets UninstallFailed True and Ready False.
 func (s *Manager) MarkUninstallPending(ctx context.Context, obj ObjectWithConditions, resourceName string, resource DeletingResource) error {
 	failing, message := deletionFailure(resourceName, resource)
 
@@ -55,9 +48,7 @@ func (s *Manager) MarkUninstallPending(ctx context.Context, obj ObjectWithCondit
 		ObservedGeneration: obj.GetGeneration(),
 	}
 
-	// Ready carries the same verdict with the polarity a reader expects: an
-	// uninstall that failed is an owner that is not ready, while one still running
-	// leaves both Unknown.
+	// Ready carries the same verdict with the polarity a reader expects.
 	ready := uninstallFailed
 	ready.Type = helmv1alpha1.ConditionTypeReady
 
@@ -71,11 +62,8 @@ func (s *Manager) MarkUninstallPending(ctx context.Context, obj ObjectWithCondit
 	return s.patchConditions(ctx, obj, uninstallFailed, ready)
 }
 
-// MarkDeletionPending records that an internal resource is still being deleted,
-// manipulating only the Ready condition — there is nothing to uninstall. A
-// failing resource (its Ready condition is False) yields Ready=False with reason
-// Failed and its message; otherwise Ready stays Unknown/Reconciling until the
-// resource disappears. resourceName is a user-facing, abstract name.
+// MarkDeletionPending records that an internal resource is still being deleted, setting only
+// Ready: False with reason Failed for a failing resource, Unknown otherwise.
 func (s *Manager) MarkDeletionPending(ctx context.Context, obj ObjectWithConditions, resourceName string, resource DeletingResource) error {
 	failing, message := deletionFailure(resourceName, resource)
 
@@ -95,12 +83,8 @@ func (s *Manager) MarkDeletionPending(ctx context.Context, obj ObjectWithConditi
 	return s.patchConditions(ctx, obj, ready)
 }
 
-// MarkDeletionFailed sets Ready=False with reason Failed when an internal
-// resource could not be deleted because of a hard error that is not reported
-// through the resource's own conditions (e.g. an API error while deleting a
-// dependency). The message uses the same abstract wording as MarkDeletionPending.
-// err itself is not logged here: every caller hands it back to the work queue,
-// which is where it is reported.
+// MarkDeletionFailed sets Ready=False with reason Failed when an internal resource could not
+// be deleted because of an error its own conditions do not report.
 func (s *Manager) MarkDeletionFailed(ctx context.Context, obj ObjectWithConditions, resourceName string, err error) error {
 	message := fmt.Sprintf("Failed to delete %s", resourceName)
 	if err != nil {
@@ -116,10 +100,7 @@ func (s *Manager) MarkDeletionFailed(ctx context.Context, obj ObjectWithConditio
 	})
 }
 
-// patchConditions writes the conditions of a deletion pass. observedGeneration is
-// advanced with them: a spec edited while the object is being deleted is still a
-// spec this controller has seen, and leaving it behind would report the teardown as
-// work that has not started.
+// patchConditions writes the conditions of a deletion pass and advances observedGeneration.
 func (s *Manager) patchConditions(ctx context.Context, obj ObjectWithConditions, conditions ...metav1.Condition) error {
 	return s.PatchStatus(ctx, obj, func() {
 		for _, condition := range conditions {
@@ -132,17 +113,11 @@ func (s *Manager) patchConditions(ctx context.Context, obj ObjectWithConditions,
 	})
 }
 
-// deletionFailure reports whether the deleted resource is failing, together with
-// a user-facing message.
-//
-// The failure is only reported once the resource's own deletion has actually
-// started (its deletionTimestamp is set). Before that, a Ready=False left over
-// from a state prior to deletion (e.g. a failed install) does not describe the
-// teardown and would be misleading — in that case the deletion has simply not
-// been attempted yet, so it is treated as still in progress.
+// deletionFailure reports whether the deleted resource is failing, with a user-facing message.
 func deletionFailure(resourceName string, resource DeletingResource) (bool, string) {
 	waiting := fmt.Sprintf("Waiting for %s to be deleted", resourceName)
 
+	// Before the deletion starts a Ready=False describes a state prior to it, not the teardown.
 	if resource.GetDeletionTimestamp().IsZero() {
 		return false, waiting
 	}

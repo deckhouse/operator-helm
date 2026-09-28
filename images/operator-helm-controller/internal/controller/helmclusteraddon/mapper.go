@@ -48,23 +48,15 @@ func mapRepositoryToAddons(c client.Client) handler.MapFunc {
 	}
 }
 
-// mapChartToAddons enqueues the addon that claims a HelmClusterAddonChart's
-// repository/chart pair whenever the chart object changes. This is the addon
-// controller's only watch that can fire on a catalog write: after a terminal probe
-// verdict (not a chart, or the tag no longer exists) the addon's internal HelmChart
-// has already been removed and no OCIRepository was created for it, so none of the
-// addon controller's other watches cover it, and without this one the addon would
-// stay Ready=False until a human forces a reconcile even after the repository
-// republishes something usable.
+// mapChartToAddons enqueues the addon that claims a HelmClusterAddonChart's repository/chart
+// pair whenever the chart object changes.
 func mapChartToAddons(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		labels := obj.GetLabels()
 		repoName := labels[helmv1alpha1.LabelRepositoryName]
 		chartName := labels[helmv1alpha1.LabelChartName]
 		if repoName == "" || chartName == "" {
-			// Same fail-open tradeoff as knownCharts: without both labels there is no
-			// repository/chart pair to look an addon up by, so this chart object
-			// cannot be mapped back to anything.
+			// Without both labels there is no repository/chart pair to look an addon up by.
 			log.FromContext(ctx).Info("Chart object missing repository or chart label, cannot map to addons",
 				"watchedObject", client.ObjectKeyFromObject(obj))
 

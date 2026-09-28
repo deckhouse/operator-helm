@@ -32,17 +32,13 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// applicationPrefix prefixes every internal object derived from a HelmApplication:
-// HelmChart, HelmRelease, OCIRepository and ServiceAccount share one name, as the
-// addon's do. The same prefix starts the Helm release name.
+// applicationPrefix starts every internal object name and the Helm release name of a HelmApplication.
 const applicationPrefix = "hap"
 
 var _ contract.Release = (*ApplicationRelease)(nil)
 
-// ApplicationRelease adapts a HelmApplication. This is the one place the two
-// mutually exclusive repository fields are read: everything downstream sees the
-// resolved kind, namespace and name. The release deploys into the application's
-// own namespace and is applied as a ServiceAccount derived here.
+// ApplicationRelease adapts a HelmApplication. It is the one place the two mutually exclusive
+// repository fields are read; the release deploys into the application's own namespace.
 type ApplicationRelease struct {
 	obj *helmv1alpha1.HelmApplication
 }
@@ -94,11 +90,8 @@ func (r *ApplicationRelease) LastAppliedValues() *apiextensionsv1.JSON {
 	return r.obj.Status.LastAppliedValues
 }
 
-// ReleaseName is prefixed so an application cannot take over a release someone
-// installed by hand under the same name in the same namespace; without the prefix
-// helm-controller would upgrade that release instead of failing. The hash is
-// unconditional for the same reason: two applications whose names met in one release
-// name would share its storage and overwrite each other's history.
+// ReleaseName is the application name prefixed and unconditionally hashed, so it cannot
+// collide with a hand-installed release or with another application's.
 func (r *ApplicationRelease) ReleaseName() string {
 	return utils.HashedReleaseName(applicationPrefix + "-" + r.obj.Name)
 }
@@ -149,9 +142,8 @@ func (r *ApplicationRelease) LastAppliedChart() *contract.ChartRef {
 	}
 }
 
-// SetLastAppliedChart replaces the record wholesale. A merge would leave the old
-// repository field set next to the new clusterRepository, both fields would be
-// filled, and IsChartStatusInfoOutdated would stay true forever.
+// SetLastAppliedChart replaces the record wholesale, so repository and clusterRepository are
+// never both filled in.
 func (r *ApplicationRelease) SetLastAppliedChart(ref contract.ChartRef) {
 	last := &helmv1alpha1.HelmApplicationLastAppliedChartRef{
 		Name:    ref.Chart,
@@ -182,9 +174,8 @@ type applicationRepositoryResolver struct {
 	clusterCatalog contract.Catalog
 }
 
-// NewApplicationRepositoryResolver builds the resolver the release reconciler looks
-// charts up through. Its catalogs are only ever read (Lookup), never synchronized, so
-// they read through the cache like the rest of the release path.
+// NewApplicationRepositoryResolver builds the resolver the release reconciler looks charts up
+// through. Its catalogs are only ever looked up in, so they read through the cache.
 func NewApplicationRepositoryResolver(c client.Client) *applicationRepositoryResolver {
 	return &applicationRepositoryResolver{
 		client:         c,
@@ -210,16 +201,13 @@ func (r *applicationRepositoryResolver) Resolve(ctx context.Context, ref contrac
 
 		return NewClusterApplicationRepository(repo), r.clusterCatalog, nil
 	default:
-		// The CEL rule on spec.chart keeps exactly one reference set on any persisted
-		// object, so this is reachable only for an object built in memory.
+		// The CEL rule on spec.chart makes this reachable only for an object built in memory.
 		return nil, nil, fmt.Errorf("unsupported repository kind %q", ref.Kind)
 	}
 }
 
-// ListApplicationReleases lists the HelmApplication objects consuming a repository,
-// or only those consuming one of its charts. The index value carries the repository
-// kind and namespace, so a namespaced repository only ever sees the applications of
-// its own namespace.
+// ListApplicationReleases lists the HelmApplication objects consuming a repository, or only
+// those consuming one of its charts. The index value carries the repository kind and namespace.
 func ListApplicationReleases(c client.Client) contract.ReleaseLister {
 	return func(ctx context.Context, repo contract.Repository, chartName string) ([]contract.Release, error) {
 		kind := repo.OwnerGVK().Kind

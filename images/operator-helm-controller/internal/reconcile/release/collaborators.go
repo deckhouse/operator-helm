@@ -30,65 +30,50 @@ import (
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
-// The collaborators of one reconcile pass, declared where they are used rather than
-// where they are implemented: a consumer names the behaviour it needs, and anything
-// that offers it fits. That is what lets a family opt out of a step with a null
-// implementation, and a test replace one step without standing up the rest.
+// The collaborators of one reconcile pass, declared where they are used.
 
-// Repositories loads the repository a release references and the catalog of
-// that repository's kind. The application family picks between two repository
-// kinds; the addon family has one.
+// Repositories loads the repository a release references and the catalog of that repository's
+// kind. The application family picks between two repository kinds; the addon family has one.
 type Repositories interface {
 	Resolve(ctx context.Context, ref contract.RepositoryRef) (contract.Repository, contract.Catalog, error)
 }
 
-// Claims guards the uniqueness of a repository/chart pair across the releases
-// of one family. The addon family enforces it with a Lease; the application family
-// does not enforce it at all.
+// Claims guards the uniqueness of a repository/chart pair across the releases of one family.
+// The addon family enforces it with a Lease; the application family does not enforce it.
 type Claims interface {
 	// Acquire reports whether the release holds the claim on its pair; when it does
 	// not, holder names the release that does.
 	Acquire(ctx context.Context, rel contract.Release) (acquired bool, holder string, err error)
-	// DropStale frees claims this release still holds on pairs it no longer
-	// references and is no longer running.
+	// DropStale frees claims this release still holds on pairs it no longer references and runs.
 	DropStale(ctx context.Context, rel contract.Release) error
 	// Drop frees the claim on the release's current pair.
 	Drop(ctx context.Context, rel contract.Release) error
-	// DropAll frees every claim this release holds. It is for teardown, where
-	// nothing of the release is deployed any more and no later pass of anybody's
-	// would be allowed to free what it left behind.
+	// DropAll frees every claim this release holds. It is for teardown.
 	DropAll(ctx context.Context, rel contract.Release) error
 }
 
-// Namespaces makes sure the namespace a release deploys into exists, and answers
-// whether it is on its way out — which the teardown path needs, because a namespace
-// that is terminating takes the release's identity apart underneath it.
+// Namespaces makes sure the namespace a release deploys into exists, and answers whether it
+// is on its way out, which the teardown path needs.
 type Namespaces interface {
 	EnsureTarget(ctx context.Context, rel contract.Release) error
 	Terminating(ctx context.Context, rel contract.Release) (bool, error)
 }
 
-// Identity provides the identity a release is applied with. The application
-// family creates a ServiceAccount, a Role and a RoleBinding and names the account
-// on the HelmRelease; the addon family applies charts as helm-controller itself.
+// Identity provides the identity a release is applied with. The application family creates a
+// ServiceAccount, a Role and a RoleBinding; the addon family applies charts as the controller.
 type Identity interface {
 	Ensure(ctx context.Context, rel contract.Release) rbac.IdentityOutcome
-	// Cleanup returns the identity object still present, so the caller can wait for
-	// it to actually go away before the release drops its finalizer, exactly as it
-	// does for the internal objects below.
+	// Cleanup returns the identity object still present, for the caller to wait on.
 	Cleanup(ctx context.Context, rel contract.Release) (status.DeletingResource, error)
-	// RemoveAccount deletes the account alone and waits for nothing, so a teardown
-	// that must not be applied as this identity can take it away ahead of everything
-	// the ordinary order puts first.
+	// RemoveAccount deletes the account alone, ahead of the ordinary order, and waits for nothing.
 	RemoveAccount(ctx context.Context, rel contract.Release) error
 }
 
-// Charts owns the internal HelmChart of a release, the source object of a
-// repository that hands out packaged archives.
+// Charts owns the internal HelmChart of a release, the source object of a repository that
+// hands out packaged archives.
 type Charts interface {
 	Ensure(ctx context.Context, rel contract.Release, repo contract.Repository) internalobj.ChartOutcome
-	// Cleanup returns the object while it is still present, so the caller
-	// can wait for it to actually go away.
+	// Cleanup returns the object while it is still present, for the caller to wait on.
 	Cleanup(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error)
 }
 
@@ -112,14 +97,12 @@ type Releases interface {
 		rel contract.Release,
 		sourceKind chartsource.Kind,
 		artifactRevision string,
-		// artifactCurrent reports whether that revision is the one the release's
-		// current spec asks for, or an artifact the source kept after failing to
-		// fetch the one it was last given.
+		// artifactCurrent reports whether that revision is the one the current spec asks for.
 		artifactCurrent bool,
 	) internalobj.ReleaseOutcome
 	Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error)
-	// SyncSpec keeps a release that is being deleted in step with its spec, so
-	// an uninstall blocked by a bad parameter can be unblocked by correcting it.
+	// SyncSpec keeps a release that is being deleted in step with its spec, so an uninstall
+	// blocked by a bad parameter can be unblocked by correcting it.
 	SyncSpec(ctx context.Context, rel contract.Release, existing *helmv2.HelmRelease) error
 }
 
@@ -129,9 +112,8 @@ type Maintenance interface {
 	Ensure(ctx context.Context, rel contract.Release) internalobj.MaintenanceOutcome
 }
 
-// NoClaims is the Claims of a family without a uniqueness rule: every
-// release holds its own pair, and the conflict branch of the reconciler is never
-// taken.
+// NoClaims is the Claims of a family without a uniqueness rule: every release holds its own
+// pair, and the conflict branch of the reconciler is never taken.
 type NoClaims struct{}
 
 func (NoClaims) Acquire(_ context.Context, rel contract.Release) (bool, string, error) {

@@ -14,18 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package rbac owns the identity a release is applied with: the ServiceAccount
-// helm-controller impersonates, the Role that grants it everything inside the
-// target namespace, and the RoleBinding between them.
-//
-// Only the application families need one. An addon is applied by the controller's
-// own identity, which is why the release reconciler takes this collaborator as an
-// interface it can leave empty rather than a package it always calls.
-//
-// The Role and the RoleBinding are refused rather than seized when they are not
-// ours, and the refusal is terminal: both live in the release's own namespace,
-// where their names are computable by whoever owns it, so an object found under one
-// of them without a managed-by label belongs to somebody else and no retry will
-// change that. The ServiceAccount needs no such check — it lives in the operator's
-// namespace, which nobody else can write into.
+// Package rbac owns the identity a release is applied with: the ServiceAccount helm-controller
+// impersonates, the Role granting it the target namespace, and the RoleBinding between them.
 package rbac

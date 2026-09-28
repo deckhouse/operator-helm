@@ -94,17 +94,8 @@ func (v *HelmClusterAddonWebhookValidator) ValidateDelete(_ context.Context, add
 	return nil, nil
 }
 
-// validateNameFitsTheLabel rejects a name the internal objects could not carry.
-// Every internal object derived from an addon repeats the addon's name in the
-// source-name label, and that is what bounds the name: a label value is at most 63
-// characters and has nowhere to put the overflow. The derived object names are not
-// the limit — they truncate and hash whatever they are given (internal/utils).
-//
-// CREATE only, and deliberately not a CEL rule on the type: a rule declared on the
-// object is evaluated on every write of the whole object, so an addon created
-// before this check would fail its own status updates and, held by the cleanup
-// finalizer, could never be deleted either. A name is immutable, so guarding the
-// one operation that sets it is the whole rule.
+// validateNameFitsTheLabel rejects a name that is not a valid label value, since every
+// internal object derived from an addon repeats it in the source-name label.
 func validateNameFitsTheLabel(addon *helmv1alpha1.HelmClusterAddon) error {
 	errs := validation.IsValidLabelValue(addon.Name)
 	if len(errs) == 0 {

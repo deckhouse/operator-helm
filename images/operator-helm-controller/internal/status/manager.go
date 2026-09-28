@@ -44,14 +44,8 @@ func NewManager(c client.Client) *Manager {
 	}
 }
 
-// PatchStatus applies mutate to the object and patches the status subresource
-// when it actually changed. It is the thin apply path used by reconcilers that
-// compute the whole desired status themselves.
-//
-// The whole object is compared rather than its status alone: mutate only ever
-// reaches the status, so the two are the same comparison, and this one needs no
-// method on the object to reach a field the interface would otherwise have to
-// hand out as an any.
+// PatchStatus applies mutate to the object and patches the status subresource when it
+// actually changed.
 func (s *Manager) PatchStatus(ctx context.Context, obj ObjectWithConditions, mutate func()) error {
 	oldObj := obj.DeepCopyObject().(ObjectWithConditions)
 

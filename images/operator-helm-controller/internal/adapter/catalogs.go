@@ -43,7 +43,8 @@ func NewAddonCatalog(c client.Client, reader client.Reader) contract.Catalog {
 	})
 }
 
-// NewApplicationCatalog builds the HelmApplicationChart catalog; its consumers are the HelmApplication objects of the repository's namespace.
+// NewApplicationCatalog builds the HelmApplicationChart catalog. Its consumers are the
+// HelmApplication objects of the repository's namespace.
 func NewApplicationCatalog(c client.Client, reader client.Reader) contract.Catalog {
 	return catalog.New(c, reader, catalog.Config[*helmv1alpha1.HelmApplicationChart, *helmv1alpha1.HelmApplicationChartList]{
 		Kind:      helmv1alpha1.HelmApplicationChartKind,
@@ -58,7 +59,8 @@ func NewApplicationCatalog(c client.Client, reader client.Reader) contract.Catal
 	})
 }
 
-// NewClusterApplicationCatalog builds the HelmClusterApplicationChart catalog; its consumers are the HelmApplication objects of every namespace.
+// NewClusterApplicationCatalog builds the HelmClusterApplicationChart catalog. Its consumers
+// are the HelmApplication objects of every namespace.
 func NewClusterApplicationCatalog(c client.Client, reader client.Reader) contract.Catalog {
 	return catalog.New(c, reader, catalog.Config[*helmv1alpha1.HelmClusterApplicationChart, *helmv1alpha1.HelmClusterApplicationChartList]{
 		Kind:      helmv1alpha1.HelmClusterApplicationChartKind,
@@ -84,12 +86,7 @@ func pointers[T any](items []T) []*T {
 	return out
 }
 
-// chartConsumers derives the in-use versions of a chart from the releases that
-// reference it. Both the desired version and the last applied one count, since
-// they differ during an upgrade — the latter only while it still names this
-// repository/chart pair: LastAppliedChart can lag behind the spec after a release
-// was repointed at another chart, and a stale entry would protect a phantom version
-// on the new chart while no longer protecting the version applied on the old one.
+// chartConsumers derives the in-use versions of a chart from the releases that reference it.
 func chartConsumers(list contract.ReleaseLister) func(context.Context, contract.Repository, string) (map[string]struct{}, error) {
 	return func(ctx context.Context, repo contract.Repository, chartName string) (map[string]struct{}, error) {
 		releases, err := list(ctx, repo, chartName)
@@ -103,6 +100,7 @@ func chartConsumers(list contract.ReleaseLister) func(context.Context, contract.
 		for _, rel := range releases {
 			inUse[rel.ChartRef().Version] = struct{}{}
 
+			// LastAppliedChart can lag behind the spec, so it counts only while it still names this pair.
 			if last := rel.LastAppliedChart(); last != nil && last.Chart == chartName && last.Repository == pair {
 				inUse[last.Version] = struct{}{}
 			}

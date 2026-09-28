@@ -27,9 +27,8 @@ import (
 
 var _ contract.Repository = (*AddonRepository)(nil)
 
-// AddonRepository adapts a HelmClusterAddonRepository. Its labels and internal
-// names are exactly what the addon controller has always written: those are live
-// objects, and the frozen naming functions in utils keep them in place.
+// AddonRepository adapts a HelmClusterAddonRepository. Its labels and internal names are
+// frozen to what the addon controller has always written.
 type AddonRepository struct {
 	obj *helmv1alpha1.HelmClusterAddonRepository
 }
@@ -38,8 +37,8 @@ func NewAddonRepository(obj *helmv1alpha1.HelmClusterAddonRepository) *AddonRepo
 	return &AddonRepository{obj: obj}
 }
 
-// EmptyAddonRepository returns an adapter around a zero object, for the reconciler
-// to read the API object into.
+// EmptyAddonRepository returns an adapter around a zero object, for the reconciler to read
+// the API object into.
 func EmptyAddonRepository() contract.Repository {
 	return NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{})
 }

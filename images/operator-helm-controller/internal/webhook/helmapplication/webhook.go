@@ -14,12 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package helmapplication validates HelmApplication objects. Unlike the addon
-// webhook it enforces no uniqueness: any number of applications may install the
-// same chart. It rejects an application in a system namespace — the release
-// deploys into the application's own namespace, so that is the namespace to
-// check — and refuses to delete an application in maintenance mode, unless that
-// namespace is itself already terminating.
+// Package helmapplication validates HelmApplication objects: it rejects one in a system
+// namespace and refuses to delete one in maintenance mode.
 package helmapplication
 
 import (
@@ -45,10 +41,7 @@ func SetupWebhookWithManager(mgr ctrl.Manager) error {
 var _ admission.Validator[*helmv1alpha1.HelmApplication] = (*HelmApplicationWebhookValidator)(nil)
 
 type HelmApplicationWebhookValidator struct {
-	// Reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
-	// controller cache: nothing watches Namespaces, so a cached typed Get would start
-	// an informer the ClusterRole has no watch permission for, and this decision — is
-	// the namespace terminating — must not be made against stale data anyway.
+	// Reader reads the API server directly; nothing watches Namespaces, so there is no cache.
 	Reader client.Reader
 }
 
@@ -65,12 +58,7 @@ func (v *HelmApplicationWebhookValidator) ValidateDelete(ctx context.Context, ap
 		return nil, nil
 	}
 
-	// Namespace deletion deletes the namespace's objects one by one and waits for
-	// each of them; a DELETE webhook that denies would make that wait never end,
-	// leaving the namespace Terminating forever with no way out other than editing
-	// the application. Maintenance mode protects an application from being deleted
-	// by mistake, not from its namespace going away, so the refusal is dropped once
-	// the namespace is on its way out.
+	// A DELETE denied during namespace deletion would leave the namespace Terminating forever.
 	if v.namespaceTerminating(ctx, app.Namespace) {
 		return nil, nil
 	}
@@ -78,10 +66,8 @@ func (v *HelmApplicationWebhookValidator) ValidateDelete(ctx context.Context, ap
 	return nil, fmt.Errorf("helmapplication/%s cannot be deleted while maintenance mode is active", app.Name)
 }
 
-// namespaceTerminating reports whether the application's own namespace is already
-// gone or being deleted. A read error other than NotFound is deliberately treated
-// as "not terminating": the refusal is the safe answer, and a transient API error
-// must not turn into a way past it.
+// namespaceTerminating reports whether the application's own namespace is already gone or
+// being deleted. A read error other than NotFound counts as not terminating.
 func (v *HelmApplicationWebhookValidator) namespaceTerminating(ctx context.Context, name string) bool {
 	namespace := &corev1.Namespace{}
 	if err := v.Reader.Get(ctx, client.ObjectKey{Name: name}, namespace); err != nil {

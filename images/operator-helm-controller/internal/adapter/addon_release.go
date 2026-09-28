@@ -34,9 +34,8 @@ import (
 
 var _ contract.Release = (*AddonRelease)(nil)
 
-// AddonRelease adapts a HelmClusterAddon. Its labels and internal names are exactly
-// what the addon controller has always written; the release name is the addon name
-// bounded to Helm's limit, which changes nothing for a name that already fits.
+// AddonRelease adapts a HelmClusterAddon. Its labels and internal names are frozen to what
+// the addon controller has always written; the release name is the addon name, bounded.
 type AddonRelease struct {
 	obj *helmv1alpha1.HelmClusterAddon
 }
@@ -45,8 +44,8 @@ func NewAddonRelease(obj *helmv1alpha1.HelmClusterAddon) *AddonRelease {
 	return &AddonRelease{obj: obj}
 }
 
-// EmptyAddonRelease returns an adapter around a zero object, for the reconciler to
-// read the API object into.
+// EmptyAddonRelease returns an adapter around a zero object, for the reconciler to read the
+// API object into.
 func EmptyAddonRelease() contract.Release {
 	return NewAddonRelease(&helmv1alpha1.HelmClusterAddon{})
 }
@@ -140,11 +139,8 @@ type addonRepositoryResolver struct {
 	catalog contract.Catalog
 }
 
-// NewAddonRepositoryResolver builds the resolver the release reconciler looks charts
-// up through. The catalog it holds is never synchronized from here — only Lookup is
-// called — so it reads through the cache like every other read on the release path: a
-// resolution computed from a catalog an informer has not caught up with is retried by
-// the event that write produces, and writes nothing.
+// NewAddonRepositoryResolver builds the resolver the release reconciler looks charts up
+// through. Its catalog is only ever looked up in, so it reads through the cache.
 func NewAddonRepositoryResolver(c client.Client) *addonRepositoryResolver {
 	return &addonRepositoryResolver{client: c, catalog: NewAddonCatalog(c, c)}
 }

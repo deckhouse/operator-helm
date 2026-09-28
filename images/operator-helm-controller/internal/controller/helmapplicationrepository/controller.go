@@ -15,9 +15,7 @@ limitations under the License.
 */
 
 // Package helmapplicationrepository wires the shared repository reconciler to the
-// HelmApplicationRepository kind. The kind is namespaced while its internal objects
-// live in the operator namespace, so the watches on those objects map back through
-// both source labels.
+// HelmApplicationRepository kind, whose internal objects map back through both source labels.
 package helmapplicationrepository
 
 import (

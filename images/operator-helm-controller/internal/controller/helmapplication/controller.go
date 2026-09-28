@@ -14,12 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package helmapplication wires the shared release reconciler to the HelmApplication
-// kind: no chart claim, no target-namespace creation (the release deploys into its
-// own namespace), and an identity of its own to apply the chart with. The kind can
-// reference either repository kind of its family, so it watches both, and both
-// catalogs. The Role and the RoleBinding making up that identity are watched too, so
-// an edit to either is repaired rather than waited out.
+// Package helmapplication wires the shared release reconciler to the HelmApplication kind:
+// no chart claim, no target-namespace creation, and an identity of its own.
 package helmapplication
 
 import (
@@ -57,8 +53,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Releases:        internalobj.NewReleases(client, helmv1alpha1.TargetNamespace),
 		Maintenance:     internalobj.NewMaintenance(client, helmv1alpha1.TargetNamespace),
 		Claims:          reconcile.NoClaims{},
-		// The application's namespace is its own and is never created here; the reader
-		// bypasses the cache because nothing watches Namespaces.
+		// The reader bypasses the cache because nothing watches Namespaces.
 		Namespaces: namespace.NewExistingTarget(mgr.GetAPIReader()),
 		Identity:   rbac.NewIdentity(client, helmv1alpha1.TargetNamespace),
 		Status:     status.NewManager(client),
@@ -98,10 +93,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(mapInternal),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
-		// The Role and the binding are the identity the chart is applied with, and
-		// nothing but these two watches reports an edit to them: they are not derived
-		// from the application's spec, so no event on the application itself follows
-		// when one is narrowed, relabelled or deleted out of band.
+		// Nothing but these two watches reports an out-of-band edit to the identity objects.
 		Watches(
 			&rbacv1.Role{},
 			handler.EnqueueRequestsFromMapFunc(mapRoleToApplications(client)),
@@ -122,9 +114,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(mapRepositoryToApplications(client, helmv1alpha1.HelmClusterApplicationRepositoryKind)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
-		// A catalog write is a status-only change, so a generation predicate would
-		// never let it through; a terminal probe verdict being reversible depends on
-		// these two watches firing.
+		// A catalog write is status-only, so a generation predicate would never let it through.
 		Watches(
 			&helmv1alpha1.HelmApplicationChart{},
 			handler.EnqueueRequestsFromMapFunc(mapChartToApplications(client, helmv1alpha1.HelmApplicationRepositoryKind)),

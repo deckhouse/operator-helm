@@ -28,15 +28,10 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-// Namespaces is the release reconciler's Namespaces: it creates a
-// release's target namespace when it does not exist yet, and never modifies an
-// existing one — the namespace belongs to whoever created it. Today only the addon
-// controller wires it in; other families deploy into a namespace that must already
-// exist (their own), which ExistingTarget below serves.
+// Namespaces creates a release's target namespace when it does not exist yet, and never
+// modifies an existing one.
 type Namespaces struct {
-	// reader reads from the API server directly (mgr.GetAPIReader()), bypassing the
-	// controller cache: nothing watches Namespaces, so a cached typed Get would start
-	// an informer the ClusterRole has no watch permission for.
+	// Nothing watches Namespaces, so a cached Get would start an informer we cannot watch with.
 	reader client.Reader
 	client client.Client
 }
@@ -73,16 +68,10 @@ func (s *Namespaces) Terminating(ctx context.Context, rel contract.Release) (boo
 	return terminating(ctx, s.reader, rel.TargetNamespace())
 }
 
-// ExistingTarget is the Namespaces of a family whose target namespace is the
-// release's own: it exists by definition, or the release could not, and this
-// collaborator never creates one. It still has to answer whether that namespace is
-// on its way out, which is what makes an application's teardown different from an
-// ordinary deletion.
+// ExistingTarget is the Namespaces of a family whose target namespace is the release's own.
+// It creates nothing and only answers whether that namespace is terminating.
 type ExistingTarget struct {
-	// reader reads from the API server directly, for the same reason Namespaces does:
-	// nothing watches Namespaces, so a cached typed Get would start an informer the
-	// ClusterRole has no watch permission for — and whether a namespace is terminating
-	// must not be answered from a cache that may predate the deletion.
+	// Nothing watches Namespaces, so a cached Get would start an informer we cannot watch with.
 	reader client.Reader
 }
 
@@ -97,11 +86,6 @@ func (s *ExistingTarget) Terminating(ctx context.Context, rel contract.Release) 
 }
 
 // terminating reports whether the namespace is being deleted or is already gone.
-// A namespace that is not there at all counts as terminating: everything it held
-// is gone with it, which is the very state the callers of this act on. A read that
-// fails for any other reason is handed back — the answer decides whether a release
-// tears itself down differently, and guessing it from a passing API error would
-// make that decision at random.
 func terminating(ctx context.Context, reader client.Reader, name string) (bool, error) {
 	ns := &corev1.Namespace{}
 	if err := reader.Get(ctx, client.ObjectKey{Name: name}, ns); err != nil {

@@ -27,30 +27,26 @@ import (
 	"github.com/deckhouse/operator-helm/internal/reposync"
 )
 
-// The collaborators of one reconcile pass, declared where they are used rather than
-// where they are implemented, as the release package declares its own.
+// The collaborators of one reconcile pass, declared where they are used.
 
-// Secrets owns the auxiliary secrets a repository needs to be read: the
-// credentials of its registry and, for an oci:// one, the TLS material.
+// Secrets owns the auxiliary secrets a repository needs to be read: the credentials of its
+// registry and, for an oci:// one, the TLS material.
 type Secrets interface {
 	Ensure(ctx context.Context, repo contract.Repository, repoType chartsource.Kind) error
 	Cleanup(ctx context.Context, names contract.InternalNames) error
 }
 
-// HelmRepositories owns the internal HelmRepository, which exists only for
-// a repository that hands out packaged archives.
+// HelmRepositories owns the internal HelmRepository, which exists only for a repository that
+// hands out packaged archives.
 type HelmRepositories interface {
 	Ensure(ctx context.Context, repo contract.Repository) (internalobj.InternalRepositoryState, error)
-	// Remove drops the object a repository no longer needs, after its
-	// url moved from helm to oci.
+	// Remove drops the object a repository no longer needs, after its url moved from helm to oci.
 	Remove(ctx context.Context, names contract.InternalNames) error
-	// Cleanup returns the object while it is still present, so the
-	// caller can wait for it to actually go away.
+	// Cleanup returns the object while it is still present, for the caller to wait on.
 	Cleanup(ctx context.Context, names contract.InternalNames) (*sourcev1.HelmRepository, error)
 }
 
-// Catalogs reads the remote and writes the chart catalog of one
-// repository.
+// Catalogs reads the remote and writes the chart catalog of one repository.
 type Catalogs interface {
 	Sync(ctx context.Context, repo contract.Repository, repoType chartsource.Kind) reposync.SyncOutcome
 	// MigrateNames moves the catalog objects to their current names.

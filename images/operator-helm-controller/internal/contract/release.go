@@ -25,11 +25,8 @@ import (
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
-// RepositoryRef names the repository a release takes its chart from. Kind is one
-// of the repository kinds of the API; Namespace is empty for a cluster-scoped kind.
-// The adapter resolves the release's spec into this one shape — a single field for
-// the addon, a pair of mutually exclusive fields for the application — so no
-// service ever sees the difference.
+// RepositoryRef names the repository a release takes its chart from. Kind is one of the
+// repository kinds of the API; Namespace is empty for a cluster-scoped kind.
 type RepositoryRef struct {
 	Kind      string
 	Namespace string
@@ -53,10 +50,8 @@ type ReleaseNames struct {
 	ServiceAccount string
 }
 
-// Release is a release resource of any kind as its collaborators see it. Object returns
-// the API object itself — the only thing ever handed to the client; the adapter is
-// not registered in the scheme. Values and the status setters point into that
-// object, so a write through them lands on it.
+// Release is a release resource of any kind as its collaborators see it. Object returns the
+// API object itself, the only thing ever handed to the client; the setters point into it.
 type Release interface {
 	Object() status.ObjectWithConditions
 	// Kind is the API kind of the object, for messages and log lines.
@@ -85,8 +80,7 @@ type Release interface {
 
 	// LastAppliedChart is nil until a first successful deployment.
 	LastAppliedChart() *ChartRef
-	// SetLastAppliedChart replaces the record wholesale: a merge would leave a stale
-	// repository field next to a new one on a kind with two reference fields.
+	// SetLastAppliedChart replaces the record wholesale rather than merging into it.
 	SetLastAppliedChart(ChartRef)
 	LastAppliedValues() *apiextensionsv1.JSON
 	SetLastAppliedValues(*apiextensionsv1.JSON)
@@ -96,7 +90,6 @@ type Release interface {
 	IsChartStatusInfoOutdated() bool
 }
 
-// ReleaseLister lists the releases of one family that consume a repository, or
-// only those consuming one chart of it when chartName is not empty. It is how a
-// repository finds its consumers without knowing their kind.
+// ReleaseLister lists the releases of one family that consume a repository, or only those
+// consuming one chart of it when chartName is not empty.
 type ReleaseLister func(ctx context.Context, repo Repository, chartName string) ([]Release, error)

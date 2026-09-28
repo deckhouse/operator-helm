@@ -34,9 +34,8 @@ const (
 
 var _ contract.Repository = (*ClusterApplicationRepository)(nil)
 
-// ClusterApplicationRepository adapts a HelmClusterApplicationRepository. It is
-// cluster-scoped, so its derived names carry no namespace part, and its labels no
-// namespace label.
+// ClusterApplicationRepository adapts a HelmClusterApplicationRepository. Its derived names
+// carry no namespace part and its labels no namespace label.
 type ClusterApplicationRepository struct {
 	obj *helmv1alpha1.HelmClusterApplicationRepository
 }

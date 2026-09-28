@@ -14,10 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package pass holds what one reconcile pass does the same way whichever kind it
-// runs on. Both reconcilers consume the force reconcile annotation and both wait
-// for an internal resource to finish being deleted; neither needs to know which
-// family the object belongs to, so neither is written twice.
+// Package pass holds what one reconcile pass does the same way whichever kind it runs on:
+// consuming the force reconcile annotation and waiting on an internal resource's deletion.
 package pass
 
 import (
@@ -34,16 +32,12 @@ import (
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
-// InternalResourceDeletionRequeueInterval bounds how often a pass re-checks whether
-// the internal resources have finished being deleted. Watches on those resources
-// drive most requeues; this is the safety net for a resource whose deletion is stuck
-// and stops emitting events.
+// InternalResourceDeletionRequeueInterval bounds how often a pass re-checks whether the
+// internal resources have finished being deleted, for one that stops emitting events.
 const InternalResourceDeletionRequeueInterval = 30 * time.Second
 
-// ConsumeForceAnnotation removes the force reconcile annotation from the object at
-// key. obj is an empty object of the right kind to read into: the object is fetched
-// again rather than patched from the copy the pass has held since it started, so a
-// change made meanwhile is not written back over.
+// ConsumeForceAnnotation removes the force reconcile annotation from the object at key,
+// re-reading it into obj rather than patching from the copy the pass started with.
 func ConsumeForceAnnotation(ctx context.Context, c client.Client, key client.ObjectKey, obj client.Object) error {
 	if err := c.Get(ctx, key, obj); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -55,8 +49,7 @@ func ConsumeForceAnnotation(ctx context.Context, c client.Client, key client.Obj
 
 	annotations := obj.GetAnnotations()
 	if _, found := annotations[helmv1alpha1.AnnotationForceReconcile]; !found {
-		// Guard on the annotation itself, not on the map: an object carrying any
-		// unrelated annotation would otherwise take an empty PATCH on every pass.
+		// Guarded on the annotation, not the map: any other annotation would force an empty PATCH.
 		return nil
 	}
 
@@ -72,15 +65,11 @@ func ConsumeForceAnnotation(ctx context.Context, c client.Client, key client.Obj
 	return nil
 }
 
-// MarkPending is the status write that says an internal resource is still going
-// away: MarkDeletionPending for an owner with nothing to uninstall, and
-// MarkUninstallPending for one whose Helm release is being removed.
+// MarkPending is the status write that says an internal resource is still going away.
 type MarkPending func(ctx context.Context, obj status.ObjectWithConditions, resourceName string, resource status.DeletingResource) error
 
-// AwaitInternalResourceDeletion surfaces that an internal resource is still being
-// deleted on the owner's status and requeues without removing the finalizer. name is
-// kept abstract so the internal type is not leaked to the user; the log line names
-// the object itself, which is what someone looking into a stuck deletion reaches for.
+// AwaitInternalResourceDeletion surfaces that an internal resource is still being deleted on
+// the owner's status and requeues without removing the finalizer.
 func AwaitInternalResourceDeletion(
 	ctx context.Context,
 	mark MarkPending,

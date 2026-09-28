@@ -31,20 +31,10 @@ import (
 	"github.com/deckhouse/operator-helm/internal/rbac"
 )
 
-// mapRoleToApplications enqueues every application of the namespace a change to the
-// namespace Role reaches. They all deploy as subjects bound to that one Role, so an
-// edit to it concerns all of them: any of them writes back a narrowing, and any of
-// them reports a Role that stopped being ours.
-//
-// The object is matched by name rather than by label. The informer behind this watch
-// selects on the managed-by label, so a Role stripped of it leaves the informer and
-// arrives here as a deletion — a state the object may equally reach through a
-// tombstone, and the name is the one thing every form of the event carries. That
-// event is the only notice such a Role ever produces: one that never carried the
-// label is invisible to the informer, so its arrival and its removal both pass
-// unseen and the application finds it on a pass it runs for another reason.
+// mapRoleToApplications enqueues every application of the namespace a change to the shared Role reaches.
 func mapRoleToApplications(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		// Matched by name: a Role stripped of the managed-by label arrives here as a deletion.
 		if obj.GetName() != rbac.ApplicationRoleName {
 			return nil
 		}
@@ -63,11 +53,8 @@ func mapRoleToApplications(c client.Client) handler.MapFunc {
 	}
 }
 
-// mapRoleBindingToApplications enqueues the one application whose identity a role
-// binding carries. The binding is named after the application's service account,
-// whose name is derived from the application, so the applications of the binding's
-// namespace are matched on their own derived name — again rather than on the labels
-// the binding carries, for the reason above.
+// mapRoleBindingToApplications enqueues the one application whose derived service account
+// name the role binding is named after.
 func mapRoleBindingToApplications(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		apps, err := applicationsInNamespace(ctx, c, obj)
@@ -101,10 +88,8 @@ func requestFor(app *helmv1alpha1.HelmApplication) reconcile.Request {
 	return reconcile.Request{NamespacedName: types.NamespacedName{Namespace: app.Namespace, Name: app.Name}}
 }
 
-// mapRepositoryToApplications enqueues the HelmApplication objects referencing a
-// repository object of the given kind. The index value carries the kind and the
-// repository namespace, so a namespaced repository reaches only the applications of
-// its own namespace and never a same-named repository's consumers elsewhere.
+// mapRepositoryToApplications enqueues the HelmApplication objects referencing a repository
+// object of the given kind. The index value carries the kind and the repository namespace.
 func mapRepositoryToApplications(c client.Client, repositoryKind string) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var apps helmv1alpha1.HelmApplicationList
@@ -121,11 +106,8 @@ func mapRepositoryToApplications(c client.Client, repositoryKind string) handler
 	}
 }
 
-// mapChartToApplications enqueues the HelmApplication objects using a chart catalog
-// object of the family whose repository kind is given. Like mapChartToAddons, this is
-// the only watch that fires on a catalog write, which a terminal probe verdict being
-// reversible depends on. The repository is identified by the catalog object's
-// namespace and repository label.
+// mapChartToApplications enqueues the HelmApplication objects using a chart catalog object of
+// the family whose repository kind is given, found by its namespace and repository label.
 func mapChartToApplications(c client.Client, repositoryKind string) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		labels := obj.GetLabels()

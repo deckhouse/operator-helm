@@ -16,11 +16,8 @@ limitations under the License.
 
 package rbac
 
-// IdentityOutcome is the result of reconciling the identity a release is applied
-// with. Terminal marks a failure that will not resolve by retrying: an object the
-// identity needs already occupies its name and is not the operator's to touch.
-// Reason and Message are what the release reports, filled in by the service so both
-// classes of failure are named where they are recognized.
+// IdentityOutcome is the result of reconciling the identity a release is applied with.
+// Terminal marks a failure that will not resolve by retrying; Reason and Message are reported.
 type IdentityOutcome struct {
 	Err      error
 	Terminal bool

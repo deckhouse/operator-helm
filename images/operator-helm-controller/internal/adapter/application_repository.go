@@ -25,9 +25,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// Prefixes of the internal objects derived from a HelmApplicationRepository. The
-// "ap" stands for application and keeps the family apart from the addon prefixes
-// hca/hcar, which are frozen.
+// Prefixes of the internal objects derived from a HelmApplicationRepository.
 const (
 	applicationRepositoryPrefix     = "hapr"
 	applicationRepositoryAuthPrefix = "hapr-auth"
@@ -36,9 +34,8 @@ const (
 
 var _ contract.Repository = (*ApplicationRepository)(nil)
 
-// ApplicationRepository adapts a HelmApplicationRepository. The kind is
-// namespaced while its internal objects live in the operator namespace, so both
-// the labels and the derived names carry the repository's namespace.
+// ApplicationRepository adapts a HelmApplicationRepository. Both its labels and its derived
+// names carry the repository's namespace.
 type ApplicationRepository struct {
 	obj *helmv1alpha1.HelmApplicationRepository
 }
