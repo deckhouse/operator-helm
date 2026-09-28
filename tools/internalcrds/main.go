@@ -14,13 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command internalcrds turns the upstream flux CustomResourceDefinitions into
-// the internal ones this module ships. It reads every yaml document from the
-// input directories, renames it, and writes one file per controller.
-//
-// Usage:
-//
-//	internalcrds -out crds/embedded/helm-controller.yaml <dir>...
+// Command internalcrds turns the upstream flux CustomResourceDefinitions into the internal
+// ones this module ships, reading every yaml document of the input directories into one file.
 package main
 
 import (
@@ -35,10 +30,7 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// forbiddenGroup must not survive into the rendered output. Its presence means
-// a group slipped past Rename: one nested somewhere the walk does not visit,
-// which a future flux version could introduce without the rename table
-// noticing.
+// forbiddenGroup is the upstream group that must not survive into the rendered output.
 const forbiddenGroup = "toolkit.fluxcd.io"
 
 func main() {
@@ -90,7 +82,7 @@ func run(out string, dirs []string) error {
 		}
 	}
 
-	// A stable order, or every run produces a different file.
+	// Sort by object name so that repeated runs produce an identical file.
 	slices.SortFunc(docs, func(a, b map[string]any) int {
 		return strings.Compare(name(a), name(b))
 	})
@@ -113,9 +105,7 @@ func run(out string, dirs []string) error {
 	return os.WriteFile(out, buf.Bytes(), 0o644)
 }
 
-// marshal renders a document with the indent kubectl and controller-gen use,
-// rather than the library's own default, so the committed files carry no
-// unrelated whitespace diff on top of the actual rename.
+// marshal renders a document with the two-space indent kubectl and controller-gen use.
 func marshal(doc map[string]any) ([]byte, error) {
 	var buf bytes.Buffer
 
@@ -139,10 +129,7 @@ func name(doc map[string]any) string {
 	return value
 }
 
-// checkKnownKind fails when a document declares a kind Rename does not know
-// about. A new upstream kind arrives as a new definition file, so this is
-// where such an addition is caught, before Rename has a chance to leave a
-// reference to it unrenamed elsewhere in the schema.
+// checkKnownKind fails when a document declares a kind that upstreamKinds does not list.
 func checkKnownKind(entryName string, doc map[string]any) error {
 	spec, _ := doc["spec"].(map[string]any)
 	names, _ := spec["names"].(map[string]any)
@@ -155,11 +142,7 @@ func checkKnownKind(entryName string, doc map[string]any) error {
 	return nil
 }
 
-// checkNoLeftoverUpstream fails if the rendered output still names an upstream
-// flux group or kind: Rename addresses both by path, so one nested somewhere
-// the walk does not visit would otherwise slip through and ship silently
-// unrenamed. A kind that survives in a validation expression is not merely
-// untidy — the rule can no longer hold against the renamed enum beside it.
+// checkNoLeftoverUpstream fails when the rendered output still names an upstream flux group or kind.
 func checkNoLeftoverUpstream(path string, rendered []byte) error {
 	for i, line := range strings.Split(string(rendered), "\n") {
 		if !strings.Contains(line, forbiddenGroup) && !kindWord.MatchString(line) {

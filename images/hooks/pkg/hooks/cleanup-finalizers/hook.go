@@ -31,35 +31,21 @@ import (
 	"hooks/pkg/settings"
 )
 
-// publicAPIVersion carries the module's own kinds. They are guarded by the
-// helm.deckhouse.io/cleanup finalizer, which only our controller ever removes; the
-// internal flux objects listed below instead carry flux's own finalizer, which only
-// the flux controllers ever remove. Once the module is gone neither of those is
-// running, so nothing is left to take either finalizer off and the hook has to.
 const publicAPIVersion = "helm.deckhouse.io/v1alpha1"
 
 const (
-	// publicFinalizer is v1alpha1.FinalizerName; the hooks module does not depend on
-	// the api module, so the string is repeated here.
+	// publicFinalizer repeats v1alpha1.FinalizerName, which this module cannot import.
 	publicFinalizer = "helm.deckhouse.io/cleanup"
-	// internalFinalizer is flux's own finalizers.fluxcd.io under the name it is
-	// actually stored with: the kube-api-rewriter sidecar renames finalizers into the
-	// internal domain on the way to the API server (see the Finalizers rule in
-	// images/kube-api-rewriter/pkg/operatornelm/operatornelm_rules.go). This hook talks
-	// to the API server directly, without the sidecar, so it must use the stored name.
+	// internalFinalizer is flux's finalizers.fluxcd.io under the name kube-api-rewriter stores it as.
 	internalFinalizer = "finalizers.internal.operator-helm.deckhouse.io"
 )
 
-// watchedKind is one kind the hook strips a finalizer from. A kind is either
-// confined to the module namespace (the internal flux objects, which are always
-// created there) or unconfined: cluster-scoped kinds have no namespace at all and
-// the namespaced public kinds live in arbitrary user namespaces.
+// watchedKind is one kind the hook strips its own finalizer from.
 type watchedKind struct {
 	snapshot   string
 	apiVersion string
 	kind       string
-	// finalizer is the one finalizer this module is responsible for on the kind.
-	// Everything else on the object belongs to somebody else and stays.
+	// finalizer is the one finalizer this module owns on the kind; any other one stays.
 	finalizer string
 	// moduleNamespaceOnly narrows the binding to settings.ModuleNamespace.
 	moduleNamespaceOnly bool
@@ -101,9 +87,7 @@ var watchedKinds = []watchedKind{
 	{snapshot: "helmClusterApplicationRepositorySnapshot", apiVersion: publicAPIVersion, kind: "HelmClusterApplicationRepository", finalizer: publicFinalizer},
 }
 
-// resource is the snapshot projection: enough to address the object in a patch.
-// Namespace is empty for cluster-scoped kinds, which is exactly what the patch
-// collector expects for them.
+// resource addresses one object in a patch; Namespace is empty for cluster-scoped kinds.
 type resource struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
@@ -116,11 +100,10 @@ func kubernetesConfigs() []pkg.KubernetesConfig {
 
 	for _, watched := range watchedKinds {
 		config := pkg.KubernetesConfig{
-			Name:       watched.snapshot,
-			APIVersion: watched.apiVersion,
-			Kind:       watched.kind,
-			JqFilter:   `{apiVersion: .apiVersion, kind: .kind, name: .metadata.name, namespace: .metadata.namespace}`,
-			// The hook only ever runs on module delete, so tracking events is pointless.
+			Name:                         watched.snapshot,
+			APIVersion:                   watched.apiVersion,
+			Kind:                         watched.kind,
+			JqFilter:                     `{apiVersion: .apiVersion, kind: .kind, name: .metadata.name, namespace: .metadata.namespace}`,
 			ExecuteHookOnEvents:          ptr.To(false),
 			ExecuteHookOnSynchronization: ptr.To(false),
 		}
@@ -160,18 +143,7 @@ func cleanupFinalizer(ctx context.Context, input *pkg.HookInput) error {
 		return fmt.Errorf("namespace %s still has running deployments or pods, retrying before removing finalizers", settings.ModuleNamespace)
 	}
 
-	// Only the module's own finalizer may go: the public kinds live in user namespaces
-	// and may well carry a backup or policy operator's finalizer, and our Deployments
-	// being stopped says nothing about whether that operator is done. A merge patch
-	// (RFC 7396) cannot express "drop one element", it can only null the whole member,
-	// and a JSON patch "remove" of an index needs one — racy — and fails outright on an
-	// object that has no finalizers left, while WithIgnoreMissingObject forgives only a
-	// missing object, not a missing path. The jq filter is read-modify-write under an
-	// optimistic lock: shell-operator gets the object, applies the filter, skips the
-	// write when nothing changed and retries the whole cycle on conflict. That keeps the
-	// operation idempotent — the hook may well run twice, a teardown can be retried after
-	// a transient failure, and the first pass leaves objects it patched but could not
-	// observe being deleted — and safe against a concurrent edit of the same list.
+	// A jq patch is read-modify-write under an optimistic lock, so a repeated run is a no-op.
 	removeFinalizer := func(res resource, finalizer string) {
 		input.PatchCollector.PatchWithJQ(
 			removeFinalizerFilter(finalizer),
@@ -197,9 +169,7 @@ func cleanupFinalizer(ctx context.Context, input *pkg.HookInput) error {
 	return nil
 }
 
-// removeFinalizerFilter builds the jq program dropping one finalizer. The guard keeps
-// an object that never had finalizers untouched: mapping over an absent member is an
-// error in jq, and writing an empty list back would be a pointless update.
+// removeFinalizerFilter builds the jq program dropping one finalizer, or leaving the object as is.
 func removeFinalizerFilter(finalizer string) string {
 	return fmt.Sprintf(`if .metadata.finalizers then .metadata.finalizers -= [%q] else . end`, finalizer)
 }

@@ -24,15 +24,11 @@ import (
 	"strings"
 )
 
-// internalPrefix is where every upstream flux group is mapped to. It matches the
-// prefix the api rewriter uses, and the two must never diverge: a resource the
-// proxy renames to a group no CustomResourceDefinition declares is simply not
-// found, and that only shows up against a live cluster.
+// internalPrefix is the group suffix upstream flux groups map onto, shared with the api rewriter.
 const internalPrefix = "internal.operator-helm.deckhouse.io"
 
-// InternalGroup maps an upstream flux API group to the internal one this module
-// serves. Anything but the two flux groups is a programming error: the generator
-// is fed a fixed list of upstream CustomResourceDefinitions.
+// InternalGroup maps an upstream flux API group to the internal one this module serves.
+// It returns an empty string for anything but the two flux groups.
 func InternalGroup(group string) string {
 	switch group {
 	case "source.toolkit.fluxcd.io":
@@ -44,10 +40,7 @@ func InternalGroup(group string) string {
 	}
 }
 
-// upstreamKinds lists every kind the two upstream controllers declare, so a
-// reference inside a schema can be recognised and renamed. A kind missing here
-// silently stays unrenamed, which is why Rename fails on an unknown group
-// rather than guessing.
+// upstreamKinds lists every kind the two upstream flux controllers declare.
 var upstreamKinds = []string{
 	"Bucket",
 	"ExternalArtifact",
@@ -58,22 +51,14 @@ var upstreamKinds = []string{
 	"OCIRepository",
 }
 
-// kindPrefix is prepended to every upstream kind. It carries the word "Nelm"
-// for historical reasons: these are the names of live objects in every cluster
-// running the module, and moving them would be a migration of its own.
+// kindPrefix is prepended to every upstream kind; it names live objects, so it cannot change.
 const kindPrefix = "InternalNelmOperator"
 
-// kindWord matches an upstream kind standing on its own as a word, which is
-// how the schemas refer to one in prose and in validation expressions. The
-// word boundaries keep it off the type names built from a kind — a
-// HelmChartStatus is upstream's own type and is not served under any name
-// here — and off a renamed kind, whose prefix leaves no boundary in front.
+// kindWord matches an upstream kind standing alone as a word, not one inside a longer name.
 var kindWord = regexp.MustCompile(`\b(` + strings.Join(upstreamKinds, "|") + `)\b`)
 
-// Rename turns one upstream CustomResourceDefinition into the internal one this
-// module serves: the group, the names block, the object name, and every
-// reference to a kind inside the schemas, whether it is a value the API server
-// reads or text a reader does.
+// Rename turns one upstream CustomResourceDefinition into the internal one this module serves.
+// It rewrites the group, the names block, the object name and every kind reference in the schemas.
 func Rename(doc map[string]any) error {
 	spec, ok := doc["spec"].(map[string]any)
 	if !ok {
@@ -110,8 +95,7 @@ func Rename(doc map[string]any) error {
 		names["singular"] = strings.ToLower(kindPrefix) + singular
 	}
 
-	// Service objects: nobody types them, and the upstream values would take
-	// "hr", "hc" and the "all" category away from a real flux in the cluster.
+	// Dropping these leaves "hr", "hc" and the "all" category to a real flux in the cluster.
 	delete(names, "shortNames")
 	delete(names, "categories")
 
@@ -119,10 +103,6 @@ func Rename(doc map[string]any) error {
 	if !ok {
 		return errors.New("the document has no metadata")
 	}
-	// Upstream tells a real flux kustomize-controller not to substitute
-	// variables into these definitions. Nothing applies them through one —
-	// Deckhouse installs them with the module — so the instruction has no
-	// reader here and only leaves an upstream identity on the object.
 	if annotations, ok := metadata["annotations"].(map[string]any); ok {
 		delete(annotations, "kustomize.toolkit.fluxcd.io/substitute")
 
@@ -143,17 +123,7 @@ func Rename(doc map[string]any) error {
 	return nil
 }
 
-// renameKindReferences walks the schemas and renames every upstream kind it
-// finds: under a "kind" key in a map; with no key to scope the match, any
-// plain string list element equal to a kind; and inside the three free-text
-// fields that name kinds — the documentation a reader gets from kubectl
-// explain, and the message and expression of a validation rule. Today the
-// only lists it reaches are the sourceRef and chartRef kind enums, so
-// matching a list element by value alone is safe; a future field whose string
-// entries happened to equal an upstream kind's name would be renamed too.
-//
-// Renaming the expression of a rule is not cosmetic: a rule comparing against
-// an upstream kind can never hold once the enum beside it is renamed.
+// renameKindReferences renames upstream kinds under a "kind" key, in string lists and in free text.
 func renameKindReferences(node any) {
 	switch typed := node.(type) {
 	case map[string]any:
