@@ -79,9 +79,7 @@ func (r *HelmApplication) RepositoryName() string {
 }
 
 // RepositoryKind returns the kind of the repository the chart is taken from, or an
-// empty string when neither reference is set. The CEL rule on spec.chart keeps
-// exactly one of them set on any persisted object, so an empty result means the
-// object was built in memory and never validated by the API server.
+// empty string when neither reference is set.
 func (r *HelmApplication) RepositoryKind() string {
 	switch {
 	case r.Spec.Chart.Repository != "":
@@ -141,10 +139,8 @@ func (r *HelmApplication) UpdateInstallInProgress() bool {
 	return cond.Status == metav1.ConditionUnknown && cond.Reason == ReasonReconciling
 }
 
-// IsChartStatusInfoOutdated compares the whole chart reference, both repository
-// fields included: moving a chart of the same name from a namespaced repository to
-// a cluster one, or back, is a chart change even though the repository name and the
-// version stay the same.
+// IsChartStatusInfoOutdated reports whether the whole chart reference, both repository
+// fields included, differs from the one the release was last deployed from.
 func (r *HelmApplication) IsChartStatusInfoOutdated() bool {
 	if r.Status.LastAppliedChart == nil {
 		return true
@@ -173,19 +169,12 @@ type HelmApplicationSpec struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	Values *apiextensionsv1.JSON `json:"values,omitempty"`
-	// Maintenance specifies the reconciliation strategy for the resource.
-	// When set to "NoResourceReconciliation", the controller will stop updating the
-	// underlying resources, allowing for manual intervention or maintenance
-	// without the operator overwriting changes.
-	// When empty (""), standard reconciliation is active.
+	// Maintenance specifies the reconciliation strategy for the resource. "NoResourceReconciliation"
+	// stops updating the underlying resources; empty ("") keeps standard reconciliation active.
 	// +kubebuilder:validation:Enum="";NoResourceReconciliation
 	// +optional
 	Maintenance string `json:"maintenance,omitempty"`
 }
-
-// The XValidation rule below states the relationship between the two reference
-// fields, which is why it is declared on the object rather than on either field.
-// A value sent as an empty string passes has() and is rejected by MinLength.
 
 // +kubebuilder:validation:XValidation:rule="has(self.repository) != has(self.clusterRepository)",message="exactly one of spec.chart.repository or spec.chart.clusterRepository must be set"
 type HelmApplicationChartRef struct {
@@ -193,16 +182,14 @@ type HelmApplicationChartRef struct {
 	// from the referenced repository (e.g., "nginx" or "redis").
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
-	// Specifies the name of the HelmApplicationRepository custom resource in the same
-	// namespace that contains the connection details and credentials for the
-	// repository where the chart is located.
+	// Specifies the name of the HelmApplicationRepository custom resource in the same namespace
+	// that contains the connection details and credentials for the repository holding the chart.
 	// +optional
 	// +kubebuilder:validation:MinLength=3
 	// +kubebuilder:validation:MaxLength=63
 	Repository string `json:"repository,omitempty"`
-	// Specifies the name of the cluster-wide HelmClusterApplicationRepository custom
-	// resource that contains the connection details and credentials for the
-	// repository where the chart is located.
+	// Specifies the name of the cluster-wide HelmClusterApplicationRepository custom resource
+	// that contains the connection details and credentials for the repository holding the chart.
 	// +optional
 	// +kubebuilder:validation:MinLength=3
 	// +kubebuilder:validation:MaxLength=63
@@ -225,22 +212,13 @@ type HelmApplicationStatus struct {
 	// Generation represents resource generation that was last processed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// LastForceReconcileTime is the time the most recent force reconcile request was
-	// processed. It records that the request was acted on, not that it succeeded:
-	// the outcome is reported by Ready.
+	// LastForceReconcileTime is the time the most recent force reconcile request was processed.
+	// It records that the request was acted on, not that it succeeded.
 	// +optional
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
 }
 
-// HelmApplicationLastAppliedChartRef mirrors HelmApplicationChartRef field for
-// field, both repository references included. Which of the two is filled records
-// the kind of the repository the release was last deployed from, so no separate
-// kind field is needed. No validation is declared here: the status is written by
-// the controller, and a rule would only be able to block a write.
-//
-// This note is outside the doc comment on purpose, as in repository_types.go: a
-// doc comment attached to a type used as a status field becomes that field's
-// description in the CRD.
+// This note is outside the doc comment on purpose: a doc comment on a type used as a status field becomes that field's description in the CRD.
 
 type HelmApplicationLastAppliedChartRef struct {
 	// Specifies the name of the Helm chart the release was last deployed from.
@@ -270,8 +248,7 @@ func (r *HelmApplicationLastAppliedChartRef) RepositoryName() string {
 }
 
 // RepositoryKind returns the kind of the repository the release was last deployed
-// from, or an empty string when neither reference is set — which is what the status
-// holds before the first successful deployment.
+// from, or an empty string when neither reference is set.
 func (r *HelmApplicationLastAppliedChartRef) RepositoryKind() string {
 	switch {
 	case r.Repository != "":

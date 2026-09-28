@@ -28,14 +28,6 @@ const (
 	HelmClusterAddonRepositoryLabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 )
 
-// The name rule below is only the upper half of the one the application repositories
-// carry. This kind shipped without any rule, and a root rule is re-evaluated on every
-// write to the object — a status patch included — so a minimum added now would not
-// merely forbid new short names, it would freeze every repository already created with
-// one, with no way out but deleting it and its whole catalog. The cap is different: a
-// name longer than a label value can hold already breaks the internal objects that
-// carry it.
-
 // HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
 //
 // +kubebuilder:object:root=true

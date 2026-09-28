@@ -81,9 +81,8 @@ spec:
                 properties:
                   clusterRepository:
                     description: |-
-                      Specifies the name of the cluster-wide HelmClusterApplicationRepository custom
-                      resource that contains the connection details and credentials for the
-                      repository where the chart is located.
+                      Specifies the name of the cluster-wide HelmClusterApplicationRepository custom resource
+                      that contains the connection details and credentials for the repository holding the chart.
                     maxLength: 63
                     minLength: 3
                     type: string
@@ -95,9 +94,8 @@ spec:
                     type: string
                   repository:
                     description: |-
-                      Specifies the name of the HelmApplicationRepository custom resource in the same
-                      namespace that contains the connection details and credentials for the
-                      repository where the chart is located.
+                      Specifies the name of the HelmApplicationRepository custom resource in the same namespace
+                      that contains the connection details and credentials for the repository holding the chart.
                     maxLength: 63
                     minLength: 3
                     type: string
@@ -115,11 +113,8 @@ spec:
                   rule: has(self.repository) != has(self.clusterRepository)
               maintenance:
                 description: |-
-                  Maintenance specifies the reconciliation strategy for the resource.
-                  When set to "NoResourceReconciliation", the controller will stop updating the
-                  underlying resources, allowing for manual intervention or maintenance
-                  without the operator overwriting changes.
-                  When empty (""), standard reconciliation is active.
+                  Maintenance specifies the reconciliation strategy for the resource. "NoResourceReconciliation"
+                  stops updating the underlying resources; empty ("") keeps standard reconciliation active.
                 enum:
                 - ""
                 - NoResourceReconciliation
@@ -219,9 +214,8 @@ spec:
                 x-kubernetes-preserve-unknown-fields: true
               lastForceReconcileTime:
                 description: |-
-                  LastForceReconcileTime is the time the most recent force reconcile request was
-                  processed. It records that the request was acted on, not that it succeeded:
-                  the outcome is reported by Ready.
+                  LastForceReconcileTime is the time the most recent force reconcile request was processed.
+                  It records that the request was acted on, not that it succeeded.
                 format: date-time
                 type: string
               observedGeneration:

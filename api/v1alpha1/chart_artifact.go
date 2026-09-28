@@ -21,23 +21,13 @@ import (
 	"strings"
 )
 
-// The media types below are the value domain of ChartVersion.MediaType
-// and the rule for recognizing a packaged Helm chart inside an OCI artifact. They live
-// in the API module because more than one component has to agree on them: the operator
-// records a verdict against them, and the chart-values service examines the same
-// artifacts to read values.yaml. Two copies of these lists would be two definitions of
-// what counts as a chart.
-
-// ChartConfigMediaTypes identify an OCI artifact as a packaged Helm chart. The layer
-// media type alone cannot: application/tar+gzip is generic and any tarball may carry
-// it, so the config is the authoritative marker.
+// ChartConfigMediaTypes identify an OCI artifact as a packaged Helm chart.
 var ChartConfigMediaTypes = []string{
 	"application/vnd.cncf.helm.config.v1+json",
 }
 
 // ChartLayerMediaTypes hold a packaged chart, in priority order. The first entry
-// present in a manifest wins regardless of the order of layers inside it, so an
-// artifact carrying two supported layers resolves deterministically.
+// present in a manifest wins regardless of the order of layers inside it.
 var ChartLayerMediaTypes = []string{
 	"application/vnd.cncf.helm.chart.content.v1.tar+gzip",
 	"application/tar+gzip",
@@ -54,20 +44,8 @@ func IsChartConfigMediaType(mediaType string) bool {
 	return false
 }
 
-// SplitOCIRef splits the value of ChartVersion.OCIRef into the
-// repository address and the tag. fallbackTag is used when the reference carries no
-// tag of its own, which is how an index entry that relies on its own version field
-// spells the reference; a reference read back from the catalog always carries one, so
-// callers reading recorded data can pass an empty fallback.
-//
-// The returned address deliberately keeps the spelling it was given instead of being
-// rebuilt from a parsed reference: registry libraries normalize some hosts (docker.io
-// becomes index.docker.io), and the internal source object must address the registry
-// the repository actually named.
-//
-// This is decomposition only, not validation: whether the reference is addressable at
-// all is decided once, where it is first read from a repository index, and recorded as
-// a verdict on the version.
+// SplitOCIRef splits the value of ChartVersion.OCIRef into the repository address and
+// the tag, using fallbackTag when the reference carries no tag of its own.
 func SplitOCIRef(ref, fallbackTag string) (string, string, error) {
 	trimmed := strings.TrimPrefix(ref, "oci://")
 
@@ -82,8 +60,7 @@ func SplitOCIRef(ref, fallbackTag string) (string, string, error) {
 
 	repository, tag := trimmed, fallbackTag
 
-	// The colon is looked for after the last slash only: a registry port lives before
-	// it and is not a tag.
+	// The colon is looked for after the last slash only: a registry port is not a tag.
 	if colon := strings.LastIndex(trimmed[slash+1:], ":"); colon >= 0 {
 		repository = trimmed[:slash+1+colon]
 		tag = trimmed[slash+1+colon+1:]

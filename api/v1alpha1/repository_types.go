@@ -20,16 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// RepositorySpec, RepositoryAuth and RepositoryStatus are shared by every
-// repository kind: HelmClusterAddonRepository, HelmApplicationRepository and
-// HelmClusterApplicationRepository differ only in scope and in who may reference
-// them. Declaring the shape once makes a divergence between the schemas impossible
-// by construction, and lets the controller reconcile all three through one code
-// path. The field descriptions are the ones the released HelmClusterAddonRepository
-// CRD already carries: sharing them changes no generated schema.
-//
-// This note is outside every doc comment on purpose: a doc comment on a Spec or
-// Status type becomes the description of the spec or status field in the CRD.
+// This note is outside every doc comment on purpose: a doc comment on a Spec or Status type becomes the description of the spec or status field in the CRD.
 
 type RepositorySpec struct {
 	// URL of the Helm repository. Supports http(s):// and oci:// protocols.
@@ -45,13 +36,8 @@ type RepositorySpec struct {
 	// +optional
 	CACertificate string `json:"caCertificate,omitempty"`
 
-	// InsecureSkipVerify disable TLS certificate verification.
-	// It applies to the catalog fetch this operator performs itself and, for an OCI
-	// registry, to the pull the chart is installed from. An HTTPS Helm repository
-	// pulls its charts through source-controller, which ignores the flag outside OCI
-	// (see spec.insecure of its HelmRepository), so a self-signed HTTPS repository
-	// will publish a catalog and then fail every installation from it. Give such a
-	// repository caCertificate instead.
+	// InsecureSkipVerify disable TLS certificate verification. It applies to the catalog fetch and,
+	// for an OCI registry, to the chart pull; an HTTPS Helm repository needs caCertificate instead.
 	// +optional
 	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }
@@ -76,53 +62,27 @@ type RepositoryStatus struct {
 	// including creating and pruning chart resources.
 	// +optional
 	LastSuccessfulSyncTime *metav1.Time `json:"lastSuccessfulSyncTime,omitempty"`
-	// LastSyncedGeneration is the generation of the spec whose catalog is the one
-	// published now. It is written by every pass that published a catalog, including
-	// one left with tags the registry has not answered about, because the catalog
-	// still lists every version that exists. It keeps its value through later
-	// failures, which is what tells a published catalog apart from one that is
-	// merely not being updated at the moment. Releases read it to know whether this
-	// repository has already answered about the chart they name.
+	// LastSyncedGeneration is the generation of the spec whose catalog is the one published now.
+	// It is written by every pass that published a catalog and keeps its value through later failures.
 	// +optional
 	LastSyncedGeneration int64 `json:"lastSyncedGeneration,omitempty"`
-	// UnexaminedVersions is how many chart versions the repository offers that the
-	// catalog published now says nothing about, because the pass that wrote it ran out
-	// of its own budget before examining them. Zero means the catalog lists every
-	// version the repository offers; a positive value means a version can be missing
-	// from the catalog without the repository having decided anything about it, so a
-	// release asking for one waits for the pass that finds out instead of being told
-	// the repository does not offer it.
-	//
-	// It is a status field rather than a reading of the Synced condition for the same
-	// reason as lastSyncedGeneration: a condition is the verdict of the latest pass,
-	// so a transient read failure over an incomplete catalog would turn it into a
-	// verdict about something else, while this describes the catalog in front of a
-	// reader and is rewritten only by a pass that published one.
+	// UnexaminedVersions is how many chart versions the repository offers that the catalog published now
+	// says nothing about. Zero means the catalog lists every version the repository offers.
 	// +optional
 	UnexaminedVersions int32 `json:"unexaminedVersions,omitempty"`
 	// NextSyncTime is the scheduled time of the next synchronization attempt.
 	// +optional
 	NextSyncTime *metav1.Time `json:"nextSyncTime,omitempty"`
-	// LastForceReconcileTime is the time the most recent force reconcile request was
-	// processed. It records that the request was acted on, not that it succeeded:
-	// the outcome is reported by Ready and Synced.
+	// LastForceReconcileTime is the time the most recent force reconcile request was processed.
+	// It records that the request was acted on, not that it succeeded.
 	// +optional
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
 	// ConsecutiveFetchFailures counts consecutive failures to read from the repository.
 	// It drives the retry backoff and resets on the first success.
 	// +optional
 	ConsecutiveFetchFailures int32 `json:"consecutiveFetchFailures,omitempty"`
-	// ChartCount is the number of charts the last successful read found in the
-	// repository, minus the ones left out because their name cannot be recorded on a
-	// catalog object, which the Synced condition names. It describes the read, not the
-	// catalog: a pass whose catalog update failed is still counted, and that update can
-	// fail on its very first chart, so while Synced reports a failed catalog update the
-	// number says what the repository offers rather than what the catalog holds. It is
-	// not a count of the chart objects in the cluster either, which can be higher: a
-	// chart the repository no longer offers is kept for as long as something still
-	// references it. The field is absent until the first successful read, so a
-	// repository that has never been read is distinguishable from one that offers no
-	// charts.
+	// ChartCount is the number of charts the last successful read found in the repository, minus the ones
+	// whose name cannot be recorded on a catalog object. It is absent until the first successful read.
 	// +optional
 	ChartCount *int32 `json:"chartCount,omitempty"`
 }

@@ -20,14 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ChartCatalogStatus and ChartVersion are shared by every chart catalog kind:
-// HelmClusterAddonChart, HelmApplicationChart and HelmClusterApplicationChart are
-// all projections of a repository index and differ only in scope. One declaration
-// lets the controller write all three catalogs through one generic code path and
-// lets chart-values-controller read them the same way.
-//
-// This note is outside every doc comment on purpose: a doc comment on a Status type
-// becomes the description of the status field in the CRD.
+// This note is outside every doc comment on purpose: a doc comment on a Status type becomes the description of the status field in the CRD.
 
 type ChartCatalogStatus struct {
 	// IconURL is the URL to the Helm chart icon (applicable to Helm Chart repository charts only).
@@ -40,8 +33,7 @@ type ChartCatalogStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Versions lists every chart version the controller has examined. A version is
-	// usable when it has no unavailableReason; for an OCI repository a usable version
-	// also carries the media type of the layer that holds it.
+	// usable when it has no unavailableReason.
 	// +optional
 	Versions []ChartVersion `json:"versions,omitempty"`
 }
@@ -50,16 +42,12 @@ type ChartVersion struct {
 	// Helm chart version
 	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`
-	// OCIRef is the OCI reference this version is published at, as recorded from
-	// the repository index. It is set only for a version of a helm repository whose
-	// index entry points at a registry instead of a chart archive; such a version is
-	// deployed through an internal OCIRepository even though its repository is a helm
-	// one.
+	// OCIRef is the OCI reference this version is published at, as recorded from the repository index.
+	// It is set only for a version of a helm repository whose index entry points at a registry instead of a chart archive.
 	// +optional
 	OCIRef string `json:"ociRef,omitempty"`
-	// MediaType is the OCI media type of the layer that holds this chart version. It
-	// is set only for a version of an oci:// repository, and only when the layer is
-	// supported: an empty value there means the version cannot be deployed.
+	// MediaType is the OCI media type of the layer that holds this chart version.
+	// It is set only for a supported layer of a version of an oci:// repository.
 	// +optional
 	MediaType string `json:"mediaType,omitempty"`
 	// UnavailableReason explains why this version cannot be deployed. Its absence means
@@ -71,22 +59,7 @@ type ChartVersion struct {
 	// +optional
 	UnavailableMessage string `json:"unavailableMessage,omitempty"`
 	// ReexaminationRequired says the verdict recorded for this version is stale and
-	// must be established again against the repository. Forcing a refresh of an oci://
-	// repository sets it, before the registry is read at all, on every version the
-	// catalog records for that repository except one already awaiting a verdict, which
-	// every pass re-examines anyway. A helm repository is never marked: its index is one
-	// document read in full on every pass, so no verdict there is ever skipped. Forcing
-	// is what re-examines a version the repository still offers and whose media type is
-	// already recorded - a tag re-pushed with different content is otherwise invisible to
-	// an ordinary pass - so the request is written here to outlive the pass it was asked
-	// of. A version recorded as removed from the repository needs no force: the listing
-	// that offers the tag again is itself the evidence that there is new content behind
-	// the verdict, so the version needs examining on any pass that lists it, marked or
-	// not - whether that pass gets to it, or one after it does, is left to the budget a
-	// pass examines versions under. The mark is cleared by the pass that examines the
-	// version, and by a pass that sees the whole repository and confirms the version is
-	// no longer offered, so the refresh finishes across as many passes as it needs while
-	// the entries themselves stay readable and deployable.
+	// must be established again against the repository.
 	// +optional
 	ReexaminationRequired bool `json:"reexaminationRequired,omitempty"`
 }

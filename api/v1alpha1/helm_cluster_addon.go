@@ -32,25 +32,7 @@ const (
 	HelmClusterAddonLabelSourceName = "helm.deckhouse.io/cluster-addon"
 )
 
-// The name is bounded to 63 characters, because it is carried as the value of the
-// source-name label on every internal object derived from the addon, and a label
-// value cannot be longer than that. The derived object names themselves do not
-// bound it — they truncate and hash whatever they are given
-// (internal/utils/name.go) — but a label value has nowhere to put the overflow.
-//
-// The bound is enforced by the validating webhook on CREATE
-// (internal/webhook/helmclusteraddon), not by a CEL rule here. A rule declared on
-// the object is evaluated on every write of the whole object, so an addon that
-// already carries a longer name would fail its status updates and, because of the
-// helm.deckhouse.io/cleanup finalizer, could never be deleted either.
-//
-// The printer columns below are the ones HelmApplication shows, minus its "Cluster
-// Repository": an application picks between a namespaced and a cluster-wide
-// repository, while an addon has only the one repository kind, so there is no
-// second column to fill. That difference is deliberate, not an oversight.
-//
-// These notes are outside the doc comment on purpose: a doc comment on the type
-// becomes the description of the kind in the CRD.
+// This note is outside the doc comment on purpose: a doc comment on the type becomes the description of the kind in the CRD.
 
 // HelmClusterAddon represents a single cluster-wide installation of a Helm chart, which may include custom resource definitions (CRDs) and requires cluster-admin permissions to deploy. Only one instance of a specific chart can be installed at any given time.
 //
@@ -168,11 +150,8 @@ type HelmClusterAddonSpec struct {
 	// +kubebuilder:validation:MinLength=3
 	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace,omitempty"`
-	// Maintenance specifies the reconciliation strategy for the resource.
-	// When set to "NoResourceReconciliation", the controller will stop updating the
-	// underlying resources, allowing for manual intervention or maintenance
-	// without the operator overwriting changes.
-	// When empty (""), standard reconciliation is active.
+	// Maintenance specifies the reconciliation strategy for the resource. "NoResourceReconciliation"
+	// stops updating the underlying resources; empty ("") keeps standard reconciliation active.
 	// +kubebuilder:validation:Enum="";NoResourceReconciliation
 	// +optional
 	Maintenance string `json:"maintenance,omitempty"`
@@ -183,14 +162,10 @@ type HelmClusterAddonChartRef struct {
 	// from the defined repository (e.g., "ingress-nginx" or "redis").
 	// +kubebuilder:validation:MinLength=1
 	HelmClusterAddonChartName string `json:"helmClusterAddonChart"`
-	// The minimum below is 1, not 3: the referenced kind shipped without a minimum of
-	// its own, so a repository created under a shorter name must stay referenceable.
-	// This note is outside the doc comment on purpose — a doc comment becomes the
-	// field's description in the CRD.
+	// This note is outside the doc comment on purpose: a doc comment becomes the field's description in the CRD.
 
 	// Specifies the name of the HelmClusterAddonRepository custom resource that contains
-	// the connection details and credentials for the repository where
-	// the chart is located.
+	// the connection details and credentials for the repository where the chart is located.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	HelmClusterAddonRepository string `json:"helmClusterAddonRepository"`
@@ -211,9 +186,8 @@ type HelmClusterAddonStatus struct {
 	// Generation represents resource generation that was last processed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// LastForceReconcileTime is the time the most recent force reconcile request was
-	// processed. It records that the request was acted on, not that it succeeded:
-	// the outcome is reported by Ready.
+	// LastForceReconcileTime is the time the most recent force reconcile request was processed.
+	// It records that the request was acted on, not that it succeeded.
 	// +optional
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
 }
@@ -224,8 +198,7 @@ type HelmClusterAddonLastAppliedChartRef struct {
 	// +optional
 	HelmClusterAddonChartName string `json:"helmClusterAddonChart,omitempty"`
 	// Specifies the name of the HelmClusterAddonRepository custom resource that contains
-	// the connection details and credentials for the repository where
-	// the chart is located.
+	// the connection details and credentials for the repository where the chart is located.
 	// +optional
 	HelmClusterAddonRepository string `json:"helmClusterAddonRepository,omitempty"`
 	// Versions holds the HelmClusterAddon chart version.

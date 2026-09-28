@@ -219,10 +219,7 @@ func TestHelmApplicationIsChartStatusInfoOutdated(t *testing.T) {
 		})
 	}
 
-	// The cases above all differ in a field the addon's three-field comparison
-	// already covers, so none of them would fail if clusterRepository were dropped
-	// from the comparison. This one isolates it: the namespaced reference is unset
-	// on both sides, so clusterRepository is the only field left that differs.
+	// This case isolates clusterRepository: it is the only field that differs.
 	t.Run("only the cluster repository changed, with the namespaced reference unset on both sides", func(t *testing.T) {
 		app := &HelmApplication{
 			Spec: HelmApplicationSpec{Chart: HelmApplicationChartRef{
