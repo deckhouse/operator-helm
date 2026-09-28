@@ -817,7 +817,13 @@ func TestMigrationSurvivesAFailedStatusWrite(t *testing.T) {
 // that moved on rejects it, the migration is left unfinished — legacy object included,
 // because deleting it after a rejected copy would throw away the only copy of a version
 // a consumer still pins — and the next pass reads both objects again.
-
+//
+// That retry is where both objects have to survive the other pass's write: the
+// destination keeps everything it was given, and the version only the legacy object
+// records — pinned by a consumer, and no longer offered by the repository, which is why
+// it was retained at all — comes over before the legacy object is deleted. Losing it
+// costs the release the media type it resolves through, with nothing left anywhere to
+// reconstruct it from.
 func TestMigrationLeavesADestinationAnotherPassWroteAlone(t *testing.T) {
 	const (
 		legacyName = "example-chart-podinfo"
@@ -890,8 +896,60 @@ func TestMigrationLeavesADestinationAnotherPassWroteAlone(t *testing.T) {
 		t.Fatalf("reading the destination after the retry: %v", err)
 	}
 
-	if len(written.Status.Versions) != 1 || !written.Status.Versions[0].ReexaminationRequired {
-		t.Fatalf("destination versions = %+v, want the other pass's state kept by the retry too", written.Status.Versions)
+	migrated := make(map[string]helmv1alpha1.ChartVersion, len(written.Status.Versions))
+	for _, version := range written.Status.Versions {
+		migrated[version.Version] = version
+	}
+	if len(migrated) != 2 {
+		t.Fatalf("destination versions = %+v, want both the other pass's entry and the one only the legacy object held", written.Status.Versions)
+	}
+	if !migrated["2.0.0"].ReexaminationRequired {
+		t.Fatal("the retry must keep the mark the other pass recorded: it is still the only record of that request")
+	}
+	if migrated["1.0.0"].MediaType != mediaType {
+		t.Fatalf("1.0.0 = %+v, want the pinned version carried over with its media type before the legacy object was deleted", migrated["1.0.0"])
+	}
+}
+
+// TestMigrationKeepsTheDestinationOwnedByTheRepository pins the metadata a created
+// destination inherits. Catalog objects are garbage collected with the repository that
+// owns them, and the migration is the one path that creates one outside the
+// synchronization: a chart the repository no longer offers is migrated but never
+// reconciled again, so a destination created without the owner reference keeps it
+// forever and outlives the repository as an orphan nothing deletes.
+func TestMigrationKeepsTheDestinationOwnedByTheRepository(t *testing.T) {
+	const legacyName = "example-chart-gone"
+
+	repo := adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "example-uid"},
+	})
+
+	legacy := legacyAddonChart(legacyName, "example", "gone",
+		helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+	)
+	legacy.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(repo.Object(), repo.OwnerGVK())}
+
+	c := newAddonClient(t, legacy, addonConsumer("consumer", "example", "gone", "1.0.0"))
+	cat := adapter.NewAddonCatalog(c, c)
+
+	// The migration alone, without a synchronization behind it: the repository does not
+	// offer this chart, so nothing else ever stamps the destination's metadata.
+	if err := cat.MigrateNames(context.Background(), repo); err != nil {
+		t.Fatalf("MigrateNames returned %v", err)
+	}
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "gone")}, got); err != nil {
+		t.Fatalf("reading the migrated object: %v", err)
+	}
+
+	if len(got.OwnerReferences) != 1 {
+		t.Fatalf("owner references = %v, want the destination owned by the repository the legacy object belonged to", got.OwnerReferences)
+	}
+	owner := got.OwnerReferences[0]
+	if owner.Kind != helmv1alpha1.HelmClusterAddonRepositoryKind || owner.Name != "example" ||
+		owner.UID != "example-uid" || owner.Controller == nil || !*owner.Controller {
+		t.Fatalf("owner = %+v, want a controller reference to HelmClusterAddonRepository/example", owner)
 	}
 }
 

@@ -512,15 +512,15 @@ func (s *snapshot[C, CL]) recordAbsence(ctx context.Context, chart C, inUse map[
 // such an object under its old name forever, while the consumer already resolves the
 // new one.
 //
-// The status is copied only into an object that has none, and the old object is
-// deleted only once the copy has landed, so a failure anywhere leaves the old object
-// in place to be migrated again on the next pass. Both halves of that rule rest on
-// reads that are not allowed to lag: the destination is read through the API server,
-// and the copy is patched under the optimistic lock, because "the destination has no
-// versions" is a statement about the catalog rather than about this reader's own
-// snapshot. A destination another pass has since written — marked for re-examination,
-// say — rejects the copy as a conflict, and the migration is then simply unfinished:
-// the legacy object stays, and the next pass reads both objects again.
+// The legacy status is carried over, and the old object is deleted only once the carry
+// has landed, so a failure anywhere leaves the old object in place to be migrated again
+// on the next pass. The carry rests on reads that are not allowed to lag: the
+// destination is read through the API server and patched under the optimistic lock,
+// because what the destination already holds is a statement about the catalog rather
+// than about this reader's own snapshot. A destination another pass has since written —
+// marked for re-examination, say — rejects the write as a conflict, and the migration is
+// then simply unfinished: the legacy object stays, and the next pass reads both objects
+// again.
 //
 // TRANSITIONAL: remove this method, its interface entry and its call once every
 // cluster has reconciled each repository at least once under the current scheme.
@@ -548,13 +548,8 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repositor
 			return err
 		}
 
-		if status := t.cfg.Status(current); len(status.Versions) == 0 {
-			base := current.DeepCopyObject().(C)
-			*status = *t.cfg.Status(legacy)
-
-			if err := t.client.Status().Patch(ctx, current, lockedTo(base)); err != nil {
-				return fmt.Errorf("carrying the status of chart %s over: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
-			}
+		if err := t.carryOver(ctx, legacy, current); err != nil {
+			return err
 		}
 
 		logger.Info("Renamed a chart catalog object",
@@ -568,10 +563,68 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repositor
 	return nil
 }
 
+// carryOver moves into the destination the versions it does not already hold, and only
+// those: the legacy object is about to be deleted, so every version left behind is lost,
+// while every version the destination has is newer than the legacy copy of it and is
+// what this catalog publishes.
+//
+// Copying the status wholesale is what the destination's own entries cannot survive, and
+// a non-empty destination is not the rare case it looks like: a copy rejected by the lock
+// leaves the migration unfinished, and by the retry another pass has written the
+// destination, so the retry is exactly where the legacy object would be deleted with a
+// version only it records. That version is not replaceable — retention exists for
+// versions the repository no longer offers, and its media type is what a release pinning
+// it resolves through — so it is carried over instead, next to whatever the other pass
+// recorded, marks and all.
+//
+// A destination that already holds everything is not patched, so the pass that finishes a
+// migration nothing is left to carry writes only the deletion.
+func (t *typed[C, CL]) carryOver(ctx context.Context, legacy, current C) error {
+	status := t.cfg.Status(current)
+	legacyStatus := t.cfg.Status(legacy)
+
+	held := make(map[string]struct{}, len(status.Versions))
+	for _, version := range status.Versions {
+		held[version.Version] = struct{}{}
+	}
+
+	missing := make([]helmv1alpha1.ChartVersion, 0, len(legacyStatus.Versions))
+	for _, version := range legacyStatus.Versions {
+		if _, ok := held[version.Version]; ok {
+			continue
+		}
+
+		missing = append(missing, version)
+	}
+
+	// The icon is a property of the chart rather than of one version, so it comes over
+	// with the versions it describes; a destination that already has one keeps it, for
+	// the same reason its versions are kept.
+	icon := status.IconURL == "" && legacyStatus.IconURL != ""
+	if len(missing) == 0 && !icon {
+		return nil
+	}
+
+	base := current.DeepCopyObject().(C)
+
+	if icon {
+		status.IconURL = legacyStatus.IconURL
+	}
+
+	status.Versions = append(status.Versions, missing...)
+	sortChartVersions(status.Versions)
+
+	if err := t.client.Status().Patch(ctx, current, lockedTo(base)); err != nil {
+		return fmt.Errorf("carrying the status of chart %s over: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+	}
+
+	return nil
+}
+
 // destination returns the object the migration copies into, creating it when the
 // repository has none under the current name. The read is authoritative for the same
-// reason the rest of the migration is: it is what the emptiness of the destination
-// status — the one thing that decides whether anything is copied at all — is judged by.
+// reason the rest of the migration is: it is what the versions the destination already
+// holds — the one thing that decides what is carried over at all — are judged by.
 func (t *typed[C, CL]) destination(ctx context.Context, repo contract.Repository, name string, legacy C) (C, error) {
 	current := t.cfg.NewObject()
 	key := client.ObjectKey{Namespace: repo.Namespace(), Name: name}
