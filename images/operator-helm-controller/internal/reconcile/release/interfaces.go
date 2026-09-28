@@ -30,7 +30,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
-// The collaborators of one reconcile pass, declared where they are used.
+// The interfaces one reconcile pass depends on, declared where they are used.
 
 // Repositories loads the repository a release references and the catalog of that repository's
 // kind. The application family picks between two repository kinds; the addon family has one.

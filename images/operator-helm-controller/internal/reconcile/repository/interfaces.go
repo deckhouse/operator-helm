@@ -27,7 +27,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/reposync"
 )
 
-// The collaborators of one reconcile pass, declared where they are used.
+// The interfaces one reconcile pass depends on, declared where they are used.
 
 // Secrets owns the auxiliary secrets a repository needs to be read: the credentials of its
 // registry and, for an oci:// one, the TLS material.
