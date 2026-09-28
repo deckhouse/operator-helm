@@ -577,20 +577,32 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repositor
 // it resolves through — so it is carried over instead, next to whatever the other pass
 // recorded, marks and all.
 //
-// A destination that already holds everything is not patched, so the pass that finishes a
-// migration nothing is left to carry writes only the deletion.
+// A destination that already holds everything, marks included, is not patched, so the pass
+// that finishes a migration nothing is left to carry writes only the deletion.
 func (t *typed[C, CL]) carryOver(ctx context.Context, legacy, current C) error {
 	status := t.cfg.Status(current)
 	legacyStatus := t.cfg.Status(legacy)
 
-	held := make(map[string]struct{}, len(status.Versions))
-	for _, version := range status.Versions {
-		held[version.Version] = struct{}{}
+	held := make(map[string]int, len(status.Versions))
+	for i, version := range status.Versions {
+		held[version.Version] = i
 	}
+
+	// The verdict the destination holds wins, but an outstanding refresh is not a verdict:
+	// whichever object it was written on, it is a request nothing has answered yet, and
+	// dropping it here would end the refresh without doing the work it asked for. A mark
+	// only ever costs one probe, so carrying it over is the cheap side of the trade. The
+	// indices are collected rather than applied, because the patch is computed against a
+	// copy taken below and a mutation made before it would not reach the server.
+	var marks []int
 
 	missing := make([]helmv1alpha1.ChartVersion, 0, len(legacyStatus.Versions))
 	for _, version := range legacyStatus.Versions {
-		if _, ok := held[version.Version]; ok {
+		if i, ok := held[version.Version]; ok {
+			if version.ReexaminationRequired && !status.Versions[i].ReexaminationRequired {
+				marks = append(marks, i)
+			}
+
 			continue
 		}
 
@@ -601,11 +613,15 @@ func (t *typed[C, CL]) carryOver(ctx context.Context, legacy, current C) error {
 	// with the versions it describes; a destination that already has one keeps it, for
 	// the same reason its versions are kept.
 	icon := status.IconURL == "" && legacyStatus.IconURL != ""
-	if len(missing) == 0 && !icon {
+	if len(missing) == 0 && !icon && len(marks) == 0 {
 		return nil
 	}
 
 	base := current.DeepCopyObject().(C)
+
+	for _, i := range marks {
+		status.Versions[i].ReexaminationRequired = true
+	}
 
 	if icon {
 		status.IconURL = legacyStatus.IconURL

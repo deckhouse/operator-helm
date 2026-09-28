@@ -134,10 +134,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	// as does a pass that never attempted a synchronization at all.
 	forceRecorded := false
 
-	// A rename left unfinished must stop the synchronization: the object under the
-	// new name still has an empty status, and writing the fetched versions into it
-	// would make the next pass skip the status carry-over and delete the old object,
-	// taking with it the only copy of a version a consumer still holds.
+	// A rename left unfinished must stop the synchronization: a pass that published
+	// into the object under the new name would be merging a fetch into a status the
+	// migration is still about to carry the old object's versions into, and the merge
+	// drops what the fetch does not offer - taking with it the only copy of a version
+	// a consumer still holds.
 	if in.MigrateErr == nil && in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
 		ShouldAttempt(in.Current, in.Generation, in.Now, in.Forced) {
 		if err := r.markSyncInProgress(ctx, repo, in.Forced); err != nil {

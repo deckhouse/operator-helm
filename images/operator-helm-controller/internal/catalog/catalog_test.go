@@ -1863,3 +1863,58 @@ func versionsByName(t *testing.T, c client.Client, key client.ObjectKey) map[str
 
 	return versions
 }
+
+// TestMigrationCarriesAMarkAndAnIconTheDestinationLacks pins the two pieces of a legacy
+// status that are not versions of their own: an outstanding refresh recorded against a
+// version the destination also holds, and the chart icon. The verdict of a shared version
+// stays the destination's - it is the newer writer - but a mark is a request nothing has
+// answered, so it survives the rename it happened to straddle.
+func TestMigrationCarriesAMarkAndAnIconTheDestinationLacks(t *testing.T) {
+	const (
+		legacyName = "example-chart-podinfo"
+		mediaType  = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+		iconURL    = "https://example.test/podinfo.png"
+	)
+
+	currentName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	legacy := legacyAddonChart(legacyName, "example", "podinfo",
+		helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: mediaType, ReexaminationRequired: true},
+	)
+	legacy.Status.IconURL = iconURL
+
+	destination := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   currentName,
+			Labels: map[string]string{"repository": "example", "chart": "podinfo"},
+		},
+		Status: helmv1alpha1.ChartCatalogStatus{
+			Versions: []helmv1alpha1.ChartVersion{
+				{Version: "1.0.0", MediaType: mediaType},
+			},
+		},
+	}
+
+	c := newAddonClient(t, legacy, destination,
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"))
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := cat.MigrateNames(context.Background(), addonRepo()); err != nil {
+		t.Fatalf("MigrateNames returned %v", err)
+	}
+
+	written := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: currentName}, written); err != nil {
+		t.Fatalf("reading the destination: %v", err)
+	}
+
+	if len(written.Status.Versions) != 1 {
+		t.Fatalf("destination versions = %+v, want the shared version alone", written.Status.Versions)
+	}
+	if !written.Status.Versions[0].ReexaminationRequired {
+		t.Fatal("a refresh recorded on the legacy object must survive the rename: nothing has answered it yet")
+	}
+	if written.Status.IconURL != iconURL {
+		t.Fatalf("destination icon = %q, want %q: the icon describes the chart, not one version", written.Status.IconURL, iconURL)
+	}
+}
