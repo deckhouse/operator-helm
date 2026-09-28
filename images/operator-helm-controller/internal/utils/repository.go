@@ -41,8 +41,6 @@ func GetRegistryHost(s string) (string, error) {
 	return parsedURL.Host, nil
 }
 
-// dockerConfig is the subset of the docker config format carried by
-// kubernetes.io/dockerconfigjson secrets.
 type dockerConfig struct {
 	Auths map[string]dockerConfigEntry `json:"auths"`
 }
@@ -53,10 +51,8 @@ type dockerConfigEntry struct {
 	Auth     string `json:"auth"`
 }
 
-// BuildDockerConfigJSON renders the credentials for the registry behind
-// repositoryURL in the docker config format. OCIRepository resolves registry
-// credentials from a kubernetes.io/dockerconfigjson secret, so basic auth cannot be
-// passed to it as plain username/password keys.
+// BuildDockerConfigJSON renders the credentials for the registry behind repositoryURL in the
+// docker config format, the only shape OCIRepository resolves registry credentials from.
 func BuildDockerConfigJSON(repositoryURL, username, password string) (string, error) {
 	host, err := GetRegistryHost(repositoryURL)
 	if err != nil {
@@ -82,9 +78,7 @@ func BuildDockerConfigJSON(repositoryURL, username, password string) (string, er
 	return string(encoded), nil
 }
 
-// dockerHubAuthKey is the legacy config key credentials for Docker Hub are looked
-// up under.
-const dockerHubAuthKey = "https://index.docker.io/v1/"
+const dockerHubAuthKey = "https://index.docker.io/v1/" // Docker Hub's legacy config key.
 
 var dockerHubHosts = map[string]struct{}{
 	"docker.io":            {},
@@ -92,11 +86,8 @@ var dockerHubHosts = map[string]struct{}{
 	"registry-1.docker.io": {},
 }
 
-// registryAuthKeys returns the docker config keys the credentials for host have to
-// be stored under. Normally that is the host itself, but Docker Hub is resolved
-// under its legacy key and under the canonical host regardless of how the
-// repository URL spells it, so credentials are stored under every alias.
 func registryAuthKeys(host string) []string {
+	// Docker Hub resolves under its legacy key and its canonical host, however the url spells it.
 	if _, ok := dockerHubHosts[host]; !ok {
 		return []string{host}
 	}
@@ -109,21 +100,15 @@ func registryAuthKeys(host string) []string {
 	return keys
 }
 
-// SplitOCIRef splits an oci:// reference taken from a repository index into the
-// repository address and the tag, and rejects a reference that is not addressable.
-//
-// The decomposition itself lives in the API module, because the chart-values service
-// splits the same recorded field. The validation stays here: this is the write side,
-// where a reference read from a third-party index is judged once and the verdict is
-// recorded on the version, so nothing downstream has to judge it again.
+// SplitOCIRef splits an oci:// reference taken from a repository index into the repository
+// address and the tag, and rejects a reference that is not addressable.
 func SplitOCIRef(ref, fallbackTag string) (string, string, error) {
 	url, tag, err := helmv1alpha1.SplitOCIRef(ref, fallbackTag)
 	if err != nil {
 		return "", "", err
 	}
 
-	// Parsed only to reject the unaddressable; the returned address keeps the
-	// spelling the index used, which name.NewTag would normalize away.
+	// Parsed only to reject the unaddressable; the returned address keeps the index's spelling.
 	if _, err := name.NewTag(strings.TrimPrefix(url, "oci://") + ":" + tag); err != nil {
 		return "", "", fmt.Errorf("oci reference %q is not a valid tagged reference: %w", ref, err)
 	}

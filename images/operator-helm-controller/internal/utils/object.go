@@ -24,11 +24,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// DeleteIfPresent issues a delete for the object if it is still present and reports
-// whether it still exists. A deletion may stay pending because a downstream
-// controller (helm-controller, source-controller) holds a finalizer and has not
-// finished tearing the resource down yet, so callers that must not proceed until
-// the resource is actually gone should keep requeuing while exists is true.
+// DeleteIfPresent issues a delete for the object if it is still present and reports whether
+// it still exists, which it does while a downstream controller's finalizer is running.
 func DeleteIfPresent(ctx context.Context, c client.Client, nn types.NamespacedName, obj client.Object) (exists bool, err error) {
 	if err := c.Get(ctx, nn, obj); err != nil {
 		return false, client.IgnoreNotFound(err)

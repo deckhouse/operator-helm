@@ -14,13 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package chartsource names where one chart version comes from. A release is served
-// either by an internal HelmChart, when the repository hands out packaged archives,
-// or by an internal OCIRepository, when it hands out registry artifacts — and which
-// of the two applies is a property of the version, not of the repository alone. The
-// vocabulary lives in its own package because every layer speaks it: the repository
-// client picks an implementation by Kind, internalobj writes the internal object it
-// names, and both reconcilers branch on it.
+// Package chartsource names where one chart version comes from: an internal HelmChart for a
+// packaged archive, an internal OCIRepository for a registry artifact.
 package chartsource
 
 import (
@@ -40,12 +35,8 @@ const (
 	OCI  Kind = "oci"
 )
 
-// Source is where one chart version is actually fetched from. It is not the
-// same thing as the repository type: the repository type follows the scheme of
-// spec.url and decides the catalog client, the shape of the auth secret and whether
-// an internal HelmRepository exists at all, while Source decides which internal
-// source object one addon needs for the version it asks for. The two differ exactly
-// when a helm repository's index points a version at a registry.
+// Source is where one chart version is actually fetched from. It is not the repository type:
+// the two differ exactly when a helm repository's index points a version at a registry.
 type Source struct {
 	Kind Kind
 	// URL is the artifact address with the oci:// scheme and without the tag. It is
@@ -55,18 +46,14 @@ type Source struct {
 	Tag string
 }
 
-// Resolve decides where one chart version comes from. A recorded OCI reference wins
-// over the repository scheme: that is the hybrid case this exists for. It takes the
-// repository url rather than the repository object so that every repository kind can
-// use it.
+// Resolve decides where one chart version comes from. A recorded OCI reference wins over
+// the repository scheme, which is the hybrid case this exists for.
 func Resolve(
 	repoURL string,
 	version *helmv1alpha1.ChartVersion,
 ) (Source, error) {
 	if version.OCIRef != "" {
-		// The recorded reference always carries a tag, so there is no fallback to
-		// offer here; a reference that cannot be split was never recorded by the
-		// catalog and can only come from data written by hand or by an older version.
+		// The recorded reference always carries a tag, so there is no fallback to offer.
 		url, tag, err := utils.SplitOCIRef(version.OCIRef, "")
 		if err != nil {
 			return Source{}, fmt.Errorf("resolving the source of version %q: %w", version.Version, err)
@@ -87,9 +74,8 @@ func Resolve(
 	return Source{Kind: Helm}, nil
 }
 
-// KindOf reads the kind off a repository url alone. It answers for the repository
-// as a whole — which catalog client to use, which auth secret shape, whether an
-// internal HelmRepository exists at all — where Resolve answers for one version.
+// KindOf reads the kind off a repository url alone. It answers for the repository as a
+// whole, where Resolve answers for one version.
 func KindOf(s string) (Kind, error) {
 	parsedURL, err := url.Parse(s)
 	if err != nil {
@@ -105,7 +91,3 @@ func KindOf(s string) (Kind, error) {
 		return "", fmt.Errorf("unsupported repository schema in use: %s", parsedURL.Scheme)
 	}
 }
-
-// GetRegistryHost extracts the registry host (with port, if any) from a repository
-// URL. Registry credentials in the docker config format are keyed by host, the
-// chart path inside the registry is not part of the key.

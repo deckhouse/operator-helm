@@ -66,9 +66,7 @@ func main() {
 		enableLeaderElection bool
 	)
 
-	// Metrics stay on the loopback interface: the kube-rbac-proxy sidecar is the
-	// only intended reader and reaches them at 127.0.0.1:8080, so nothing in the
-	// cluster network can scrape them unauthenticated.
+	// Metrics stay on loopback: the kube-rbac-proxy sidecar is the only intended reader.
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "127.0.0.1:8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":9440", "The address the health probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager.")
@@ -88,32 +86,20 @@ func main() {
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "operator-helm-controller.helm.deckhouse.io",
 		Client: client.Options{
-			// The rbac package reads these three kinds only to reconcile the objects its
-			// own release names. The Roles and RoleBindings it manages are watched, but
-			// through an informer that selects on the managed-by label — an object
-			// stripped of the label is missing from it, and reading through it would
-			// then report an object that exists as absent and try to create it again.
-			// Reads go to the API server for that reason, and for ServiceAccounts
-			// because nothing watches them at all and a cached typed Get would start a
-			// cluster-wide informer for the kind.
+			// Reads go to the API server: the Role informer is label-scoped and nothing watches ServiceAccounts.
 			Cache: &client.CacheOptions{
 				DisableFor: []client.Object{&corev1.ServiceAccount{}, &rbacv1.Role{}, &rbacv1.RoleBinding{}},
 			},
 		},
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				// The repository controllers watch Secrets, and every Secret they read
-				// or write lives in the module namespace, so the informer is scoped
-				// there instead of holding every Secret in the cluster in memory.
+				// Every Secret the controllers read or write lives in the module namespace.
 				&corev1.Secret{}: {
 					Namespaces: map[string]cache.Config{
 						helmv1alpha1.TargetNamespace: {},
 					},
 				},
-				// The application controller watches the Roles and RoleBindings making
-				// up a release identity, in whichever namespace the application lives,
-				// so neither informer can be scoped by namespace. The label is what
-				// keeps them off every other Role and RoleBinding in the cluster.
+				// A release identity lives in whichever namespace the application does, so only the label scopes these.
 				&rbacv1.Role{}:        {Label: managedByOperatorHelm},
 				&rbacv1.RoleBinding{}: {Label: managedByOperatorHelm},
 			},

@@ -44,10 +44,7 @@ var ociRepositoryErrorRules = []ErrorConditionRule{
 	{Type: "SourceVerified", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonOCIVerificationFailed},
 }
 
-// chartArtifactProbeRequeueInterval bounds how often a version whose artifact could
-// not be examined is retried. There is no watch that fires when a registry starts
-// answering again, so this periodic requeue is what lets a rate-limited or briefly
-// unreachable registry recover on its own.
+// Nothing watches a foreign registry, so this requeue is what brings a recovering one back.
 const chartArtifactProbeRequeueInterval = 2 * time.Minute
 
 type OCIRepositories struct {
@@ -56,8 +53,7 @@ type OCIRepositories struct {
 	resolver        repoclient.ChartResolverInterface
 }
 
-// NewOCIRepositories builds the gateway. A nil resolver selects the default one; tests
-// pass their own so they never reach a registry.
+// NewOCIRepositories builds the gateway. A nil resolver selects the default one.
 func NewOCIRepositories(
 	client client.Client,
 	namespace string,
@@ -120,16 +116,6 @@ func (s *OCIRepositories) Ensure(
 	}
 }
 
-// resolveMediaType decides the layer selector for this version. A version of an
-// oci:// repository carries the verdict the catalog reached for it. A version a helm
-// index publishes in a registry does not: the catalog records only the reference, and
-// the artifact is examined here, when the addon is about to be deployed.
-//
-// The internal OCIRepository is the cache of that verdict, and it needs no upkeep of
-// its own: it lives exactly as long as the addon/version pair it serves, and it
-// already records which artifact the verdict is about. The registry is asked only
-// when the object is missing, addresses a different artifact, or carries no selector
-// — or when a force request asks for a re-examination.
 func (s *OCIRepositories) resolveMediaType(
 	ctx context.Context,
 	rel contract.Release,
@@ -141,6 +127,7 @@ func (s *OCIRepositories) resolveMediaType(
 		return version.MediaType, nil
 	}
 
+	// The internal OCIRepository caches the verdict; a force request asks for a fresh one.
 	if !rel.ForceReconcileRequired() {
 		if cached := s.cachedMediaType(ctx, rel.InternalNames(), src); cached != "" {
 			return cached, nil
@@ -169,8 +156,6 @@ func (s *OCIRepositories) resolveMediaType(
 	}
 }
 
-// cachedMediaType returns the verdict recorded on the internal object, but only if it
-// is a verdict about this exact artifact.
 func (s *OCIRepositories) cachedMediaType(
 	ctx context.Context,
 	names contract.ReleaseNames,
@@ -196,11 +181,8 @@ func (s *OCIRepositories) cachedMediaType(
 	return existing.GetLayerMediaType()
 }
 
-// artifactRepoConfig builds the transport settings for examining the artifact. Only
-// the host the repository names gets them, and credentials are never included: the
-// internal OCIRepository pulls a foreign registry anonymously, and a probe that
-// authenticated would report a chart the pull could not fetch.
 func artifactRepoConfig(repo contract.Repository, src chartsource.Source) *repoclient.RepoConfig {
+	// Transport settings only, and only for the host the repository names: the pull is anonymous.
 	if !sameRegistryHost(repo.URL(), src.URL) {
 		return nil
 	}
@@ -215,10 +197,8 @@ func artifactRepoConfig(repo contract.Repository, src chartsource.Source) *repoc
 	}
 }
 
-// Remove issues a delete for the internal OCIRepository and returns
-// it while it is still present, so the caller can inspect its conditions and wait
-// for source-controller to finish removing it. It returns nil once the
-// OCIRepository is gone.
+// Remove issues a delete for the internal OCIRepository and returns it while it is still
+// present, so the caller can wait for source-controller to finish removing it.
 func (s *OCIRepositories) Remove(ctx context.Context, names contract.ReleaseNames) (*sourcev1.OCIRepository, error) {
 	nn := types.NamespacedName{Name: names.OCIRepository, Namespace: s.targetNamespace}
 	ociRepo := &sourcev1.OCIRepository{}
@@ -253,11 +233,7 @@ func applyOCIRepositorySpec(
 
 	names := repo.InternalNames()
 
-	// The repository's transport settings and credentials describe the host it
-	// names. An artifact its index points at somewhere else is reached as a public
-	// registry: the settings do not describe that host, and the credentials must not
-	// be sent to it. For an oci:// repository the two hosts are the same one, so this
-	// is where its existing behaviour lives.
+	// An artifact the index points at another host is reached as a public registry, with no credentials.
 	if sameRegistryHost(repo.URL(), src.URL) {
 		existing.Spec.Insecure = repo.InsecureSkipVerify()
 
@@ -267,10 +243,7 @@ func applyOCIRepositorySpec(
 			}
 		}
 
-		// Only an oci:// repository keeps its credentials in the dockerconfigjson
-		// secret OCIRepository requires. A helm repository's secret is an Opaque
-		// username/password one, and referencing it here would break the pull with a
-		// less obvious error than not authenticating at all.
+		// Only an oci:// repository keeps its credentials in the dockerconfigjson secret this needs.
 		if repo.Auth() != nil && repositoryIsOCI(repo) {
 			existing.Spec.SecretRef = &meta.LocalObjectReference{
 				Name: names.AuthSecret,
@@ -278,10 +251,7 @@ func applyOCIRepositorySpec(
 		}
 	}
 
-	// The media type is either the one recorded for this version by the repository
-	// synchronization or the one this pass read from the registry: it differs between
-	// charts pushed by current and by older tooling. The caller guarantees it is
-	// non-empty.
+	// The caller guarantees the media type is non-empty.
 	existing.Spec.LayerSelector = &sourcev1.OCILayerSelector{
 		MediaType: mediaType,
 		Operation: "copy",
@@ -290,10 +260,8 @@ func applyOCIRepositorySpec(
 	applyOwnedLabels(existing, rel.SourceLabels())
 }
 
-// sameRegistryHost reports whether the artifact lives on the host the repository
-// itself names. An unparsable url on either side means "not the same host", which is
-// the safe answer: it withholds credentials rather than misdirecting them.
 func sameRegistryHost(repoURL, artifactURL string) bool {
+	// An unparsable url on either side answers "not the same host", which withholds credentials.
 	repoHost, err := utils.GetRegistryHost(repoURL)
 	if err != nil {
 		return false

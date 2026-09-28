@@ -25,10 +25,8 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// AddonChart indexes HelmClusterAddon objects by the repository/chart pair they
-// reference. The webhook uses it to enforce that a pair is claimed by one addon, and
-// the repository synchronization uses it to find the addon that still references a
-// chart before pruning anything.
+// AddonChart indexes HelmClusterAddon objects by the repository/chart pair they reference.
+// The webhook and the repository synchronization both query it.
 const AddonChart = ".spec.chart.repoAndChart"
 
 // AddonChartValue builds the index value of a repository/chart pair.
@@ -36,9 +34,8 @@ func AddonChartValue(repoName, chartName string) string {
 	return repoName + "/" + chartName
 }
 
-// AddonChartIndexer is the index function behind AddonChart. It is exported, like
-// the application ones below, so tests and the webhook's fake client register the
-// same function the manager's cache does instead of a copy of it.
+// AddonChartIndexer is the index function behind AddonChart. It is exported so tests and the
+// webhook's fake client register the same function the manager's cache does.
 func AddonChartIndexer(obj client.Object) []string {
 	addon := obj.(*helmv1alpha1.HelmClusterAddon)
 
@@ -75,11 +72,8 @@ func SetupAddonRepository(mgr ctrl.Manager) error {
 	)
 }
 
-// ApplicationRepository indexes HelmApplication objects by the repository they
-// reference. The value carries the repository kind and namespace, not just the name:
-// a HelmApplicationRepository named "stable" in one namespace must not attract the
-// reconciliations of applications referencing a same-named one elsewhere, and a
-// namespaced and a cluster repository may share a name too.
+// ApplicationRepository indexes HelmApplication objects by the repository they reference.
+// The value carries the repository kind and namespace, not just the name.
 const ApplicationRepository = ".spec.chart.repositoryRef"
 
 // ApplicationRepositoryValue builds the index value of a repository reference. The

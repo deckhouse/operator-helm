@@ -45,10 +45,8 @@ func NewHelmRepositories(client client.Client, namespace string) *HelmRepositori
 	return &HelmRepositories{client: client, targetNamespace: namespace}
 }
 
-// Ensure reconciles the internal HelmRepository and
-// reports its observed state. The returned error is an API failure that the
-// caller must surface to the work queue; an unhealthy internal object is not an
-// error and is reported through the state instead.
+// Ensure reconciles the internal HelmRepository and reports its observed state. The error
+// is an API failure; an unhealthy internal object is reported through the state instead.
 func (s *HelmRepositories) Ensure(
 	ctx context.Context,
 	repo contract.Repository,
@@ -78,11 +76,7 @@ func (s *HelmRepositories) Ensure(
 
 	state := InternalRepositoryState{Present: true}
 
-	// The Stalled condition is read only while it speaks about the generation the
-	// object now has: source-controller clears it at the start of the pass that acts on
-	// a new spec, so between the patch above and that pass the status still carries the
-	// stall of the spec that was just corrected, and a repository already on its way
-	// would be reported as abandoned.
+	// The Stalled condition counts only while it speaks about the generation the object now has.
 	if stalled := currentCondition(existing.Status.Conditions, helmv1alpha1.ConditionTypeStalled, existing.Generation); stalled != nil &&
 		stalled.Status == metav1.ConditionTrue {
 		state.Stalled = true
@@ -116,10 +110,8 @@ func (s *HelmRepositories) Remove(ctx context.Context, names contract.InternalNa
 	return nil
 }
 
-// Cleanup issues a delete for the internal HelmRepository and
-// returns it while it is still present, so the caller can inspect its conditions
-// and wait for source-controller to finish removing it. It returns nil once
-// the HelmRepository is gone.
+// Cleanup issues a delete for the internal HelmRepository and returns it while it is
+// still present, so the caller can wait for source-controller to finish removing it.
 func (s *HelmRepositories) Cleanup(ctx context.Context, names contract.InternalNames) (*sourcev1.HelmRepository, error) {
 	nn := types.NamespacedName{Name: names.HelmRepository, Namespace: s.targetNamespace}
 	helmRepo := &sourcev1.HelmRepository{}
@@ -151,10 +143,7 @@ func applyHelmRepositorySpec(repo contract.Repository, existing *sourcev1.HelmRe
 	existing.Spec.Insecure = repo.InsecureSkipVerify()
 	existing.Spec.CertSecretRef = nil
 	existing.Spec.SecretRef = nil
-	// Reset with the reference it belongs to. Credentials that survive the secret
-	// they came with are a promise to keep sending them across a redirect to another
-	// host, made by a repository that no longer has any - and the next time this
-	// repository is given credentials, it would carry that promise from before.
+	// Reset with the reference it belongs to: this must not outlive the secret it was set for.
 	existing.Spec.PassCredentials = false
 
 	if repo.Auth() != nil {

@@ -31,8 +31,7 @@ import (
 var _ contract.Consumers = (*Consumers)(nil)
 
 // Consumers pushes a repository's force reconcile request onto the internal
-// OCIRepository of every release consuming it. Which releases those are is the
-// family's business: the lister is injected.
+// OCIRepository of every release consuming it. The lister naming those releases is injected.
 type Consumers struct {
 	client          client.Client
 	targetNamespace string
@@ -44,16 +43,7 @@ func NewConsumers(c client.Client, targetNamespace string, list contract.Release
 }
 
 // ForceReconcileConsumers stamps the reconcile request annotations on the internal
-// OCIRepository of every release that references repo.
-//
-// An artifact pulled per release has no internal source object shared by the
-// repository, so a force request reaches it only through the releases' own
-// OCIRepositories. That is every release of an oci:// repository, and every release
-// of a helm repository whose version the index publishes in a registry.
-//
-// A release whose internal OCIRepository does not exist yet is skipped: the force
-// request must not be blocked by a release that has not reached the point of
-// building one.
+// OCIRepository of every release that references repo, skipping those that have none yet.
 func (s *Consumers) ForceReconcileConsumers(ctx context.Context, repo contract.Repository) error {
 	releases, err := s.list(ctx, repo, "")
 	if err != nil {
@@ -76,8 +66,7 @@ func (s *Consumers) ForceReconcileConsumers(ctx context.Context, repo contract.R
 		base := ociRepo.DeepCopy()
 		setReconcileRequestAnnotations(ociRepo)
 
-		// The internal repository may be removed between the get and the patch,
-		// which is the same case as the one skipped above.
+		// The internal repository may be removed between the get and the patch.
 		if err := s.client.Patch(ctx, ociRepo, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("requesting reconciliation of internal oci repository %s: %w", name, err)
 		}

@@ -39,44 +39,18 @@ var HelmRepositoryDefaultClient ClientInterface = &helmRepositoryClient{}
 
 type helmRepositoryClient struct{}
 
-// The limits below are variables rather than constants for one reason: the tests
-// that pin this behaviour would otherwise have to wait out real minutes or stream
-// real megabytes. Nothing outside this package writes them.
+// Variables rather than constants so the tests that pin them need not wait or stream for real.
 var (
-	// indexAttemptTimeout bounds one attempt — connect, respond and hand over the
-	// whole index — on its own. A shared deadline for all attempts is what made the
-	// retries decorative: against a slow mirror the first attempt drank the entire
-	// budget and the backoff had nothing left to retry with. Fifteen seconds is a
-	// GET of a single file with half of it left to the dial, and it matters because
-	// a repository controller runs two reconciles at a time: a remote that accepts
-	// the connection and then says nothing holds a worker for the whole attempt,
-	// and the repositories behind it wait.
-	indexAttemptTimeout = 15 * time.Second
-	// indexFetchBudget caps the three attempts together with the pauses between
-	// them (3*15s + ~1s + ~2s of backoff, jitter included). It is a read that runs
-	// once per SyncInterval (5 minutes, see reconcile/repository), so spending up
-	// to a minute on a struggling remote still leaves the next pass on schedule
-	// and keeps one repository from occupying a worker indefinitely.
-	indexFetchBudget = time.Minute
-	// maxIndexSize bounds the index.yaml held in memory. Large public repositories
-	// publish indexes of a few tens of megabytes (bitnami's is the extreme), so the
-	// limit is set well above them while keeping a repository that streams without
-	// end — or one that simply outgrew what this controller can mirror — from
-	// inflating the controller's heap.
-	maxIndexSize = 64 << 20
+	indexAttemptTimeout = 15 * time.Second // Bounds one attempt: connect, respond and hand over the whole index.
+	indexFetchBudget    = time.Minute      // Caps the three attempts together with the pauses between them.
+	maxIndexSize        = 64 << 20         // Bounds the index.yaml held in memory.
 )
 
-// errIndexTooLarge marks the size limit being hit, so the read is reported as
-// oversize instead of being retried or, worse, decoded from a truncated document
-// that YAML would happily accept as a smaller repository.
 var errIndexTooLarge = errors.New("index.yaml is too large")
 
 type HelmRepositoryIndex struct {
-	// The yaml tag is spelled out because this document is decoded by a YAML decoder,
-	// which ignores json tags and matches a field by its lower-cased name: without it
-	// APIVersion would never populate from the key helm writes, and the validity rule
-	// below would have nothing to stand on. Entries needs no tag - its name lower-cases
-	// to the key it carries - but is spelled out for symmetry.
+	// The yaml tag is spelled out because a YAML decoder ignores json tags and matches a
+	// field by its lower-cased name, which would leave APIVersion empty.
 	APIVersion string                                  `json:"apiVersion" yaml:"apiVersion"`
 	Entries    map[string][]HelmRepositoryChartVersion `json:"entries"    yaml:"entries"`
 }
@@ -89,10 +63,8 @@ type HelmRepositoryChartVersion struct {
 	URLs    []string `json:"urls,omitempty"`
 }
 
-// FetchCharts reads the repository index. FetchOptions is ignored: the index is a
-// single document that already carries every version, and the one thing it does not
-// carry — the media type of a version published in a registry — is resolved lazily at
-// deploy time rather than incrementally here.
+// FetchCharts reads the repository index. FetchOptions is ignored: the index is a single
+// document that already carries every version.
 func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig, _ FetchOptions) ([]Chart, error) {
 	if !strings.HasSuffix(url, "/index.yaml") {
 		url += "/index.yaml"
@@ -120,17 +92,11 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 	ctx, cancel := context.WithTimeout(ctx, indexFetchBudget)
 	defer cancel()
 
-	// lastErr keeps the cause of the most recent retriable failure. The backoff
-	// helper reports only its own timeout once the steps are exhausted, and a
-	// transient read failure — 5xx, DNS, connection refused, TLS — is the most
-	// common one there is: without this the operator would surface "timed out
-	// waiting for the condition" as the whole diagnostic.
+	// lastErr keeps the cause: the backoff helper reports only its own timeout once the steps run out.
 	var lastErr error
 
 	err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (done bool, err error) {
-		// Each attempt gets its own deadline, carved out of the overall budget: the
-		// point of retrying is that the next attempt may reach a healthier backend,
-		// which requires it to still have time of its own.
+		// Each attempt gets its own deadline, carved out of the overall budget.
 		ctx, cancelAttempt := context.WithTimeout(ctx, indexAttemptTimeout)
 		defer cancelAttempt()
 
@@ -157,10 +123,7 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 			return false, nil
 		}
 
-		// A throttle is not terminal, and the nil that says so must not be read here
-		// as permission to go on: the body a registry sends with it is JSON, which
-		// decodes into an empty index without error, and the caller would then prune
-		// the repository's whole catalog as if it had gone empty.
+		// The body sent with a 429 decodes into an empty index, which would prune the whole catalog.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			lastErr = fmt.Errorf("repository %s throttled the request (HTTP %d)", url, resp.StatusCode)
 
@@ -178,40 +141,19 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 				return true, err
 			}
 
-			// The body stopped mid-transfer — a reset connection or this attempt's
-			// own deadline. That is the same class of failure as a refused
-			// connection, so it is retried rather than reported as a broken index.
+			// A body cut short is the same class of failure as a refused connection, so it is retried.
 			lastErr = fmt.Errorf("reading the index of %s: %w", url, err)
 
 			return false, nil
 		}
 
-		// Decoded into a fresh value: a retry must not merge its entries into
-		// whatever a previous attempt managed to parse.
+		// A fresh value: a retry must not merge its entries into what a previous attempt parsed.
 		var decoded HelmRepositoryIndex
 		if err := yaml.Unmarshal(body, &decoded); err != nil {
 			return true, fmt.Errorf("cannot decode response: %w", err)
 		}
 
-		// yaml.Unmarshal accepts documents that are not an index at all without an
-		// error: an empty body (a proxy answering 200 with nothing, a server answering
-		// 204, which TerminalFromStatusCode lets through), a blank document, a JSON
-		// error page. Each leaves both members zero, which reads as a repository that
-		// went empty - and the catalog reconciler prunes every chart of the repository
-		// on exactly that.
-		//
-		// An index is recognised the way helm's own loader recognises one: by its
-		// apiVersion. A document carrying it is an index whatever its entries say, so a
-		// repository that publishes `entries: {}` - or `entries:` with no value, which
-		// decodes to nil just like an absent key - is still a successful fetch of no
-		// charts, and pruning still follows. A document carrying neither member is not
-		// an index; entries alone still counts as one, since a server that omits
-		// apiVersion but lists charts is answering about a repository, not about a
-		// failure.
-		//
-		// Retried rather than reported terminal: nothing about the repository resource
-		// is wrong, it is the remote or something in front of it answering badly, and
-		// the next attempt may well reach a healthy backend.
+		// A document with neither member is not an index at all, and would read as a repository gone empty.
 		if decoded.APIVersion == "" && decoded.Entries == nil {
 			lastErr = fmt.Errorf("repository %s returned no index document (%d bytes, HTTP %d)", url, len(body), resp.StatusCode)
 
@@ -224,10 +166,7 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 	})
 	if err != nil {
 		if lastErr != nil && wait.Interrupted(err) {
-			// The loop ran out of steps or the context ended with every attempt
-			// failing retriably, so err is the bare timeout. Report the cause
-			// instead. A terminal error never reaches here: it stops the loop as
-			// the callback's own error and stays reachable through errors.As.
+			// Every attempt failed retriably, so err is the bare timeout; report the cause instead.
 			return nil, fmt.Errorf("helm repository index.yaml request failed: %w", lastErr)
 		}
 
@@ -246,9 +185,7 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 
 			semVersion, err := semver.NewVersion(chartVersion.Version)
 			if err != nil {
-				// A single malformed entry must not cost the whole catalog: the OCI
-				// client already skips such tags, and the repository owner may publish
-				// non-semver artifacts we simply cannot address.
+				// A single malformed entry must not cost the whole catalog.
 				log.FromContext(ctx).V(1).Info("Skipping chart version that is not valid semver",
 					"chart", chartName, "version", chartVersion.Version)
 
@@ -271,10 +208,8 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 	return charts, nil
 }
 
-// readIndexBody reads at most maxIndexSize bytes of the index. One extra byte is
-// requested so that hitting the limit is distinguishable from a document that
-// happens to end exactly at it.
 func readIndexBody(body io.Reader, url string) ([]byte, error) {
+	// One extra byte, so hitting the limit is distinguishable from ending exactly at it.
 	data, err := io.ReadAll(io.LimitReader(body, int64(maxIndexSize)+1))
 	if err != nil {
 		return nil, err
@@ -287,16 +222,8 @@ func readIndexBody(body io.Reader, url string) ([]byte, error) {
 	return data, nil
 }
 
-// classifyChartLocation records where an index entry publishes its version. Only the
-// first url is examined: the internal HelmChart resolves the version through the
-// internal HelmRepository and downloads urls[0], so an entry whose first url is a
-// registry reference cannot be served through the helm path at all, no matter what
-// the remaining urls offer.
-//
-// An unusable reference is a verdict about the index entry: recording it as such is
-// what keeps the addon from being sent down the helm path only to fail on the same
-// url with an opaque error from the source controller.
 func classifyChartLocation(version *ChartVersion, urls []string) {
+	// Only urls[0] matters: that is the one the internal HelmChart downloads.
 	if len(urls) == 0 || !strings.HasPrefix(urls[0], "oci://") {
 		return
 	}

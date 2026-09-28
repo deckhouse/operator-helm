@@ -56,16 +56,7 @@ func (s *Maintenance) Ensure(ctx context.Context, rel contract.Release) Maintena
 }
 
 // ChangeRequired reports whether the suspend flag on the internal HelmRelease still
-// has to be moved. What the spec asks for is compared against Managed, which is
-// written only by the pass that has moved the flag: a request that has not been
-// carried out yet leaves the two disagreeing, and one that has leaves them equal.
-//
-// Managed is only ever true or false here. A third reading, "unknown", used to be
-// treated as a request to lift maintenance, and it had a writer: until 55bb8d5 every
-// pass seeded the conditions it was about to fill with Unknown/Initialized, and that
-// branch is how a freshly seeded release reached Managed=True. Nothing has written it
-// since, and any release that carried it was healed by the first pass after 55bb8d5,
-// so the reading is gone and so is the branch.
+// has to be moved: what the spec asks for against what the last pass wrote as Managed.
 func (s *Maintenance) ChangeRequired(rel contract.Release) bool {
 	return rel.MaintenanceActivated() != rel.MaintenanceEnabled()
 }

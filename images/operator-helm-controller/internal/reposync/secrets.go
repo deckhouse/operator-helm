@@ -33,10 +33,8 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// Secrets owns the auth and TLS secrets a repository needs in the
-// target namespace, for either repository kind. The secrets outlive neither the
-// repository nor its internal source object, so the service that writes them also
-// removes them, and the repository services are left with the objects they own.
+// Secrets owns the auth and TLS secrets a repository needs in the target namespace, for
+// either repository kind, and removes them again.
 type Secrets struct {
 	client          client.Client
 	targetNamespace string
@@ -46,16 +44,8 @@ func NewSecrets(client client.Client, namespace string) *Secrets {
 	return &Secrets{client: client, targetNamespace: namespace}
 }
 
-// Ensure reconciles every auxiliary secret the repository needs. Its success is
-// the gate for attempting a catalog synchronization: without credentials there is
-// nothing to try.
-//
-// The auth secret's shape depends on the repository kind and the two are not
-// interchangeable: HelmRepository resolves HTTP basic auth from an Opaque
-// secret, while OCIRepository accepts only a kubernetes.io/dockerconfigjson
-// one. An unknown type is treated as helm, mirroring the deletion path — it is
-// unreachable here anyway, because an unparsable url is reported before any
-// secret is touched.
+// Ensure reconciles every auxiliary secret the repository needs. The auth secret's shape
+// depends on the repository kind and the two are not interchangeable.
 func (s *Secrets) Ensure(
 	ctx context.Context,
 	repo contract.Repository,
@@ -81,10 +71,8 @@ func (s *Secrets) Ensure(
 	return nil
 }
 
-// reconcileBasicAuthSecret reconciles the internal auth secret as an Opaque secret
-// holding username/password keys, the shape HelmRepository expects for HTTP basic
-// auth.
 func (s *Secrets) reconcileBasicAuthSecret(ctx context.Context, repo contract.Repository) error {
+	// Opaque username/password keys: the shape HelmRepository expects for HTTP basic auth.
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeOpaque,
 		func(auth *helmv1alpha1.RepositoryAuth) (map[string][]byte, error) {
 			return map[string][]byte{
@@ -95,10 +83,8 @@ func (s *Secrets) reconcileBasicAuthSecret(ctx context.Context, repo contract.Re
 	)
 }
 
-// reconcileDockerConfigAuthSecret reconciles the internal auth secret as a
-// kubernetes.io/dockerconfigjson secret, the only shape OCIRepository accepts in
-// its spec.secretRef.
 func (s *Secrets) reconcileDockerConfigAuthSecret(ctx context.Context, repo contract.Repository) error {
+	// dockerconfigjson: the only shape OCIRepository accepts in its spec.secretRef.
 	return s.reconcileAuthSecret(ctx, repo, corev1.SecretTypeDockerConfigJson,
 		func(auth *helmv1alpha1.RepositoryAuth) (map[string][]byte, error) {
 			config, err := utils.BuildDockerConfigJSON(repo.URL(), auth.Username, auth.Password)
@@ -127,10 +113,7 @@ func (s *Secrets) reconcileAuthSecret(
 		return nil
 	}
 
-	// The data is built in its stored form rather than as StringData: the API server
-	// folds StringData into Data and never gives it back, so a mutation writing it
-	// would differ from what was read on every pass and send a patch on every
-	// reconcile of every repository with credentials.
+	// Data, not StringData: the API server never gives StringData back, so every pass would patch.
 	data, err := buildData(repo.Auth())
 	if err != nil {
 		return fmt.Errorf("building auth secret data: %w", err)
@@ -154,9 +137,7 @@ func (s *Secrets) reconcileAuthSecret(
 	}
 
 	if staleRemoved {
-		// The informer cache can still serve the secret that was just deleted, which
-		// would turn CreateOrPatch into a patch of a missing object, so create the
-		// replacement outright.
+		// The informer can still serve the deleted secret, turning CreateOrPatch into a patch of a ghost.
 		if err := s.client.Create(ctx, authSecret); client.IgnoreAlreadyExists(err) != nil {
 			return fmt.Errorf("creating auth secret: %w", err)
 		}
@@ -167,8 +148,7 @@ func (s *Secrets) reconcileAuthSecret(
 	if _, err := controllerutil.CreateOrPatch(ctx, s.client, authSecret, func() error {
 		authSecret.Labels = labels
 		authSecret.Type = secretType
-		// Assigned rather than merged, so that credentials removed from the desired
-		// data do not linger in the secret.
+		// Assigned, not merged, so removed credentials do not linger in the secret.
 		authSecret.Data = data
 
 		return nil
@@ -179,10 +159,6 @@ func (s *Secrets) reconcileAuthSecret(
 	return nil
 }
 
-// removeAuthSecretOfOtherType deletes the auth secret when it exists with a type
-// other than the wanted one and reports whether it did. A secret type is immutable,
-// so a secret written with the wrong type (an Opaque one left by a version that fed
-// plain credentials to OCIRepository, say) can only be replaced, not patched.
 func (s *Secrets) removeAuthSecretOfOtherType(
 	ctx context.Context, nn types.NamespacedName, secretType corev1.SecretType,
 ) (bool, error) {
@@ -204,6 +180,7 @@ func (s *Secrets) removeAuthSecretOfOtherType(
 		return false, nil
 	}
 
+	// A secret type is immutable, so a secret of the wrong type can only be replaced.
 	if err := s.client.Delete(ctx, existing); client.IgnoreNotFound(err) != nil {
 		return false, fmt.Errorf("deleting auth secret of type %q: %w", existingType, err)
 	}
@@ -222,10 +199,7 @@ func (s *Secrets) reconcileTLSSecret(ctx context.Context, repo contract.Reposito
 		return nil
 	}
 
-	// The certificate is written as given. Its format is checked where it is used,
-	// by the repository client building the trust root for a read: a failure there is
-	// terminal and names the field, while a failure here would be an auxiliary
-	// resource failure and retried forever.
+	// The certificate is written as given; its format is checked by the repository client that reads with it.
 	tlsSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
@@ -236,8 +210,7 @@ func (s *Secrets) reconcileTLSSecret(ctx context.Context, repo contract.Reposito
 	if _, err := controllerutil.CreateOrPatch(ctx, s.client, tlsSecret, func() error {
 		tlsSecret.Labels = repo.SourceLabels()
 
-		// Data, not StringData, for the reason given in reconcileAuthSecret: only Data
-		// comes back from a read, so only Data can compare equal to what is stored.
+		// Data, not StringData, for the reason given in reconcileAuthSecret.
 		tlsSecret.Data = map[string][]byte{
 			"ca.crt": []byte(repo.CACertificate()),
 		}

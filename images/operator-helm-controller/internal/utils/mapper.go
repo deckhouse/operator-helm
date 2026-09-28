@@ -58,13 +58,8 @@ func MapInternalResources(controllerName, targetNamespace, labelManagedBy, label
 	}
 }
 
-// MapNamespacedInternalResources is MapInternalResources for a namespaced source
-// kind: the request it enqueues carries the namespace recorded in
-// labelSourceNamespace next to the name. Internal objects of every family live in
-// targetNamespace, so the name alone would not identify a namespaced source. An
-// object carrying only one of the two labels cannot be mapped and is skipped, at
-// debug verbosity, because internal objects of the other families legitimately
-// match the managed-by filter.
+// MapNamespacedInternalResources is MapInternalResources for a namespaced source kind: the
+// request it enqueues carries the namespace recorded in labelSourceNamespace next to the name.
 func MapNamespacedInternalResources(
 	controllerName, targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName, labelSourceNamespace string,
 ) handler.MapFunc {

@@ -33,14 +33,8 @@ import (
 )
 
 // internalChartInterval is how often source-controller re-checks the chart against
-// the HelmRepository it is built from. spec.interval is required upstream, and an
-// unset one is sent as "0s": GetRequeueAfter returns it verbatim and a successful
-// pass carries nothing else, so controller-runtime reads it as "do not requeue" and
-// a settled chart has no pass of its own. What still moved it - a spec change, a
-// force request, a retry after an error, a new revision of its source - all needs
-// something to happen; nothing re-checked a chart that had succeeded. It matches the
-// repository's own index interval, which is what its artifact can change on.
-const internalChartInterval = InternalRepositoryInterval
+// the HelmRepository it is built from.
+const internalChartInterval = InternalRepositoryInterval // Unset is sent as "0s", which controller-runtime reads as "do not requeue".
 
 var helmChartErrorRules = []ErrorConditionRule{
 	{Type: "FetchFailed", TriggerStatus: metav1.ConditionTrue, Reason: helmv1alpha1.ReasonChartFetchFailed},
@@ -93,10 +87,8 @@ func (s *Charts) Ensure(ctx context.Context, rel contract.Release, repo contract
 	}
 }
 
-// Cleanup issues a delete for the internal HelmChart and returns it
-// while it is still present, so the caller can inspect its conditions and wait
-// for source-controller to finish removing it. It returns nil once the
-// HelmChart is gone.
+// Cleanup issues a delete for the internal HelmChart and returns it while it is still
+// present, so the caller can wait for source-controller to finish removing it.
 func (s *Charts) Cleanup(ctx context.Context, names contract.ReleaseNames) (*sourcev1.HelmChart, error) {
 	nn := types.NamespacedName{Name: names.HelmChart, Namespace: s.targetNamespace}
 	chart := &sourcev1.HelmChart{}

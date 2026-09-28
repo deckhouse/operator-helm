@@ -25,53 +25,6 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 )
 
-// mergeChartVersions builds the desired version list from the fetched entries and the
-// ones already recorded. A recorded version the registry no longer lists is dropped,
-// unless a consumer still references it: then it is retained with RemovedFromRepository
-// and keeps both its media type and its recorded OCI reference, without either of
-// which the consumer's internal OCIRepository could not be built at all.
-//
-// An empty list of fetched entries is an input like any other, not a degenerate one:
-// it is how a chart the repository stopped offering altogether is merged (recordAbsence),
-// every recorded version of it being unlisted by definition.
-//
-// The same protection applies to a version that is still listed but whose tag was
-// re-pushed as a non-chart artifact: the fresh verdict carries no media type, but if a
-// consumer still references the version, its previously recorded media type is carried
-// forward alongside the fresh UnsupportedMediaType reason and message. Without the old
-// media type the internal OCIRepository could not be built at all, which would block
-// every change to the running consumer (values, maintenance mode, ...) rather than just
-// the pull that the new artifact actually breaks; the real pull failure is reported by
-// the source controller instead.
-//
-// unexamined names the versions the fetch offers no verdict about because it ran out of
-// its budget before reaching them. They are not absent from the repository and must not
-// be read as such: whatever a previous pass recorded for them is kept verbatim, which is
-// both the incremental state the next pass carries forward and the only honest answer
-// about a version nobody looked at. A version that is unexamined and unrecorded stays
-// out of the status entirely rather than being invented as pending.
-//
-// The mark a forced refresh leaves on a recorded version (ReexaminationRequired) is
-// only ever cleared here, never invented: MarkForReexamination puts it on every recorded
-// version before the registry is read, so by the time a pass is merged the request is
-// already written down for everything it could still owe. This merge decides which
-// half of it is now done. A version this pass put a verdict on has the mark cleared —
-// the question it asked has been answered — and a version this pass deferred keeps it,
-// because that is the work the passes after this one have to finish. A version that is
-// gone from the repository has it cleared too: a pass that saw the whole repository and
-// did not list the version has answered the question the mark asked — there is no
-// verdict left to refresh — and the RemovedFromRepository entry a consumer keeps alive
-// must not go on claiming work in a status a user reads. Should the tag be pushed again,
-// the pass that lists it examines it on the strength of that reason alone
-// (FetchOptions.NeedsExamination), mark or no mark.
-//
-// That a fetched entry may have been carried forward rather than probed costs this merge
-// nothing, because current and the verdicts the fetch was built from are the same read
-// (contract.CatalogSnapshot): a marked version makes NeedsExamination true, so it is
-// probed rather than carried, and an entry that was carried therefore had no mark to
-// clear. The merge puts no mark on anything either — only a forced refresh does that,
-// before the registry is read — so a mark only ever comes off here, by a probe, by a
-// confirmed absence or by the version being dropped.
 func mergeChartVersions(
 	fetched []repoclient.ChartVersion,
 	current []helmv1alpha1.ChartVersion,
@@ -98,11 +51,7 @@ func mergeChartVersions(
 		old, recorded := currentByVersion[name]
 
 		mediaType := version.MediaType
-		// The carry-forward only makes sense for a version that still resolves to an
-		// archive: a fresh entry that now carries an OCIRef must probe its own layer
-		// media type from scratch, or a stale value stamped here would be read by
-		// resolveMediaType before the force-reconcile cache bypass and the pull would
-		// fail forever with no way to correct it.
+		// A fresh entry that now carries an OCIRef must probe its own media type rather than inherit one.
 		if mediaType == "" && version.OCIRef == "" {
 			if _, referenced := inUse[name]; referenced {
 				if recorded && old.MediaType != "" {
@@ -125,14 +74,7 @@ func mergeChartVersions(
 			continue
 		}
 		if _, notExamined := deferred[version.Version]; notExamined {
-			// The repository still offers this version; this pass simply never got to
-			// it. Marking it removed would be a lie told by our own budget, and dropping
-			// it would throw away the verdict the next pass is meant to skip. The entry is
-			// kept verbatim, mark included: a version an outstanding refresh still owes a
-			// fresh verdict for is exactly one this pass did not get to, and clearing the
-			// mark here would end the refresh without doing the work it asked for. The mark
-			// this pass wrote is already on the entry — the marking mutated these very
-			// objects — so keeping the entry keeps the request.
+			// The repository still offers this version; this pass never got to it, so the entry is kept verbatim.
 			merged = append(merged, version)
 
 			continue
@@ -152,18 +94,8 @@ func mergeChartVersions(
 	return merged
 }
 
-// sortChartVersions orders versions by descending semver, breaking ties by a reverse
-// string comparison. A version that does not parse as semver sorts after every
-// version that does, ordered among themselves by the same reverse string comparison.
-// Parsability has to be the primary key: comparing a parsable and an unparsable
-// version by semver on one pair and by string on another can produce a cycle (e.g.
-// "6.10.0" > "6.9.0" by semver, "6.9.0" > "6.5.x" and "6.5.x" > "6.10.0" by string),
-// which is not a valid ordering for sort.SliceStable. Today's clients never write an
-// unparsable version, but legacy status data can still carry one, and the order has to
-// be deterministic regardless: the merge goes through maps, and an unstable order
-// would produce a status patch on every synchronization for a catalog that did not
-// change.
 func sortChartVersions(versions []helmv1alpha1.ChartVersion) {
+	// Parsability is the primary key: mixing semver and string comparison can produce a cycle.
 	sort.SliceStable(versions, func(i, j int) bool {
 		left, leftErr := semver.NewVersion(versions[i].Version)
 		right, rightErr := semver.NewVersion(versions[j].Version)

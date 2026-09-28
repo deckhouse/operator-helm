@@ -31,10 +31,8 @@ type ChartOutcome struct {
 	Internal InternalObjectState
 }
 
-// OCIRepoOutcome is the result of reconciling the internal OCIRepository of a
-// release. Besides the write failure and the object's own state it carries the
-// verdict of the artifact probe, which runs before the object is written and can
-// fail on its own.
+// OCIRepoOutcome is the result of reconciling the internal OCIRepository of a release.
+// It also carries the verdict of the artifact probe, which runs before the object is written.
 type OCIRepoOutcome struct {
 	Err      error
 	Artifact *meta.Artifact
@@ -43,31 +41,22 @@ type OCIRepoOutcome struct {
 	ProbeErr     error
 	ProbeReason  string
 	ProbeMessage string
-	// ProbeTerminal marks a verdict about the artifact itself — the registry rejected
-	// the request, or what it serves is not a packaged chart. Nothing about the
-	// release will make such a pull succeed, so it is reported as Stalled.
+	// ProbeTerminal marks a verdict about the artifact itself — the registry rejected the
+	// request, or what it serves is not a packaged chart — and is reported as Stalled.
 	ProbeTerminal bool
-	// ProbeRequeueAfter asks for another pass when the probe failed for a reason that
-	// may pass on its own. It is left unset by a verdict about the artifact itself,
-	// which no amount of retrying will change; there is no watch on a foreign
-	// registry, so this timer is the only thing that brings the other kind back.
+	// ProbeRequeueAfter asks for another pass when the probe failed for a reason that may
+	// pass on its own. It is left unset by a verdict about the artifact itself.
 	ProbeRequeueAfter time.Duration
 
-	// VersionRemoved reports that the catalog still records the version — which is
-	// what keeps the release reconcilable — while the repository no longer offers the
-	// tag. The pull cannot succeed, and naming that cause is better than leaving only
-	// the source controller's "not found". Version and RepositoryName are set with it,
-	// to name the pair in the message.
+	// VersionRemoved reports that the catalog still records the version while the
+	// repository no longer offers the tag. Version and RepositoryName are set with it.
 	VersionRemoved bool
 	Version        string
 	RepositoryName string
 }
 
-// ReleaseOutcome is the result of reconciling the internal HelmRelease.
-// ChartDeployed reports whether the revision the release currently has deployed is
-// the one the spec asks for: a chart-version change moves the artifact without
-// touching the HelmRelease spec or generation, so the object can still report the
-// previous revision as ready.
+// ReleaseOutcome is the result of reconciling the internal HelmRelease. ChartDeployed
+// reports whether the revision the release has deployed is the one the spec asks for.
 type ReleaseOutcome struct {
 	Err           error
 	History       helmv2.Snapshots
@@ -82,9 +71,8 @@ type MaintenanceOutcome struct {
 	Activated bool
 }
 
-// InternalRepositoryState describes the observed state of the internal FluxCD
-// repository object. Present is false for OCI repositories: they have no
-// internal object at the repository level, each addon creates its own.
+// InternalRepositoryState describes the observed state of the internal FluxCD repository
+// object. Present is false for OCI repositories, which have none at the repository level.
 type InternalRepositoryState struct {
 	Present bool
 	Ready   bool

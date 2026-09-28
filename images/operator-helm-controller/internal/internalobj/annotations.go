@@ -23,17 +23,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// setReconcileRequestAnnotations stamps the flux reconcile/force request
-// annotations so the controller owning obj reconciles it immediately instead of
-// waiting for its next interval. Both are stamped with the same timestamp:
-// ForceRequestAnnotation is only honoured when it matches
-// ReconcileRequestAnnotation.
 func setReconcileRequestAnnotations(obj metav1.Object) {
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
 
+	// One timestamp for both: ForceRequestAnnotation is honoured only when it matches the other.
 	ts := time.Now().UTC().Format(time.RFC3339)
 	annotations[meta.ForceRequestAnnotation] = ts
 	annotations[meta.ReconcileRequestAnnotation] = ts

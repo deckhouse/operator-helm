@@ -14,11 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package catalog writes the chart catalog of a repository into the chart
-// catalog kind of its family. It is the one place in the controller that is
-// generic over API types: the catalog objects must be created, listed and
-// status-patched with their concrete kind, and everything a kind contributes —
-// constructors, accessors, the naming function, who consumes the charts — arrives
-// through a Config. The result is exposed as contract.Catalog, so no generic type
-// leaks into the reposync.
+// Package catalog writes the chart catalog of a repository into the chart catalog kind of
+// its family. Everything a kind contributes arrives through a Config.
 package catalog

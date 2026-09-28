@@ -78,10 +78,7 @@ func (s *Releases) Ensure(
 
 	internal := reduceInternalConditions(existing.GetConditions(), existing.Generation, helmReleaseErrorRules)
 
-	// Whether the deployed revision is the one the spec asks for is a fact about the
-	// object, so it is reported rather than acted on here: a chart-version change
-	// updates the referenced HelmChart artifact without touching the HelmRelease spec
-	// or generation, so the object can go on reporting the previous revision ready.
+	// A chart-version change moves the artifact without touching the HelmRelease spec or generation.
 	deployed := artifactCurrent && isDesiredChartDeployed(rel, existing.Status.History.Latest(), artifactRevision)
 
 	if internal.Ready() && deployed {
@@ -96,10 +93,8 @@ func (s *Releases) Ensure(
 	}
 }
 
-// Cleanup issues a delete for the internal HelmRelease and returns it
-// while it is still present, so the caller can inspect its conditions and wait
-// for helm-controller to finish uninstalling before proceeding. It returns nil
-// once the HelmRelease is gone.
+// Cleanup issues a delete for the internal HelmRelease and returns it while it is still
+// present, so the caller can wait for helm-controller to finish uninstalling it.
 func (s *Releases) Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error) {
 	nn := types.NamespacedName{Name: names.HelmRelease, Namespace: s.targetNamespace}
 	release := &helmv2.HelmRelease{}
@@ -114,15 +109,8 @@ func (s *Releases) Cleanup(ctx context.Context, names contract.ReleaseNames) (*h
 	return release, nil
 }
 
-// SyncSpec re-applies the addon-derived fields onto an existing HelmRelease
-// while the addon is being deleted, without ever creating it, and always requests
-// a reconcile. A spec error propagated into the HelmRelease can make helm
-// uninstall fail, and helm-controller re-reads the spec on every deletion
-// reconcile, so re-applying the (possibly corrected) addon spec lets it retry
-// with the fix. The reconcile request is stamped unconditionally: the cause of a
-// failed uninstall may be external (e.g. kube-apiserver issues) and leave the
-// spec unchanged, so helm-controller must be nudged out of its error backoff to
-// retry on every pass regardless.
+// SyncSpec re-applies the addon-derived fields onto an existing HelmRelease while the addon
+// is being deleted, without ever creating it, and always requests a reconcile.
 func (s *Releases) SyncSpec(ctx context.Context, rel contract.Release, release *helmv2.HelmRelease) error {
 	base := release.DeepCopy()
 
@@ -132,9 +120,7 @@ func (s *Releases) SyncSpec(ctx context.Context, rel contract.Release, release *
 
 	setReconcileRequestAnnotations(release)
 
-	// The release may finish deleting between the caller's get and this patch;
-	// a NotFound then simply means the uninstall completed, so there is nothing
-	// left to sync.
+	// A NotFound means the uninstall completed between the caller's get and this patch.
 	if err := s.client.Patch(ctx, release, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("syncing helm release spec during deletion: %w", err)
 	}
@@ -163,12 +149,7 @@ func applyHelmReleaseSpec(rel contract.Release, existing *helmv2.HelmRelease, so
 		Mode: helmv2.DriftDetectionEnabled,
 	}
 
-	// A family that impersonates applies the chart as its own ServiceAccount, which
-	// lives in the operator namespace next to the HelmRelease; helm-controller then
-	// performs every cluster operation — the storage writes included — as that
-	// account, so the release storage has to sit where the account has rights: the
-	// target namespace. A family without a service account keeps helm-controller's
-	// own identity and the default storage location.
+	// helm-controller writes the release storage as this account, so it must sit where the account has rights.
 	if names.ServiceAccount != "" {
 		existing.Spec.ServiceAccountName = names.ServiceAccount
 		existing.Spec.StorageNamespace = rel.TargetNamespace()
@@ -200,24 +181,13 @@ func isDesiredChartDeployed(rel contract.Release, latest *helmv2.Snapshot, artif
 	}
 
 	if latest.OCIDigest != "" {
-		// The history says the deployed chart came from a registry, but the revision
-		// the source now offers need not: a version the index republishes as an
-		// archive is resolved through a HelmChart, whose revision is a bare version
-		// with no digest to compare against. That is a chart other than the deployed
-		// one, not a reason to index into a revision that has no digest part.
+		// A revision carrying no digest is a chart other than the deployed one, not one to index into.
 		_, latestDigest, ok := strings.Cut(artifactRevision, "@")
 		if !ok {
 			return false
 		}
 
-		// Whether this artifact belongs to the spec being asked about is settled before
-		// the call (see artifactCurrent above); what is left is which chart was deployed
-		// out of it, and the digest is what says so. The chart version cannot stand in
-		// for it:
-		// helm-controller records the version out of the packaged Chart.yaml, and a
-		// registry is free to publish that chart under a tag spelled differently
-		// (v1.2.3 for chart version 1.2.3, say), which kept a perfectly deployed release
-		// reported as still progressing for good.
+		// The digest, not the chart version: a registry may publish a chart under a differently spelled tag.
 		return recordedOCIDigest(latest.OCIDigest) == latestDigest
 	}
 
@@ -228,13 +198,8 @@ func isDesiredChartDeployed(rel contract.Release, latest *helmv2.Snapshot, artif
 	return false
 }
 
-// recordedOCIDigest is the artifact digest out of a history entry, in the shape the
-// source revision spells it. helm-controller stores the digest part of the revision
-// when the tag parses as a semantic version and the whole `<tag>@<algorithm>:<digest>`
-// revision when it does not (mutateChartWithSourceRevision in helm-controller's
-// internal/controller/helmrelease_controller.go), so a tag that survived into the
-// recorded value is cut off here to leave the digest in both cases.
 func recordedOCIDigest(ociDigest string) string {
+	// helm-controller records the digest alone for a semver tag and `<tag>@<algorithm>:<digest>` otherwise.
 	if _, digest, ok := strings.Cut(ociDigest, "@"); ok {
 		return digest
 	}

@@ -26,13 +26,7 @@ import (
 )
 
 // applyOwnedLabels brings the labels this controller owns on an internal object to
-// the desired set and leaves every other label alone. Replacing the whole map would
-// drop labels put there by someone else — a policy engine, a cost allocator — on
-// every pass and fight whoever set them; merging alone would never remove a label
-// the controller itself stopped wanting, so a stale one (the catalog label of the
-// repository kind a release used before it was pointed at another one) would linger
-// forever. Every internal object goes through this, so the policy is the same
-// everywhere.
+// the desired set and leaves every other label alone.
 func applyOwnedLabels(obj client.Object, desired map[string]string) {
 	labels := obj.GetLabels()
 	if labels == nil {
@@ -54,11 +48,8 @@ func applyOwnedLabels(obj client.Object, desired map[string]string) {
 	obj.SetLabels(labels)
 }
 
-// controllerOwnsLabel decides ownership by the label's domain rather than by a list
-// of keys: every label this controller sets is qualified with the API group, and a
-// list would have to be extended by hand each time a family or a catalog kind is
-// added.
 func controllerOwnsLabel(key string) bool {
+	// Ownership goes by domain: every label this controller sets is qualified with the API group.
 	domain, _, qualified := strings.Cut(key, "/")
 
 	return qualified && domain == helmv1alpha1.GroupName

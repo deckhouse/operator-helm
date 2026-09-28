@@ -51,34 +51,16 @@ func NewSynchronizer(client client.Client, factory RepoClientFactory, catalog co
 	}
 }
 
-// MigrateNames moves the repository's catalog objects to the names the current
-// scheme derives. It is separate from Sync because it must run whether or not the
-// remote can be reached: a consumer resolves a chart by the current name as soon as
-// the new controller starts, while the first fetch may be minutes away or never
-// succeed again.
+// MigrateNames moves the repository's catalog objects to the names the current scheme
+// derives. It is separate from Sync because it must run whether the remote answers or not.
 //
 // TRANSITIONAL: remove together with the catalog's own migration.
 func (s *Synchronizer) MigrateNames(ctx context.Context, repo contract.Repository) error {
 	return s.catalog.MigrateNames(ctx, repo)
 }
 
-// Sync reads the repository catalog and reconciles the chart catalog objects that
-// mirror it. The two phases are reported separately: a fetch failure is about the
-// remote, a catalog failure is about this cluster.
-//
-// The catalog is read once, at the start, and that one read is what the pass decides
-// everything from: which tags the fetch may skip, what a forced refresh marks, and the
-// object each write is patched against. Reading it twice is what lets a pass carry a
-// verdict forward from one state of the catalog and write it back over another.
-//
-// A forced pass over an OCI repository starts by writing the request into the catalog,
-// before anything is asked of the registry. The force annotation is consumed by the
-// pass that attempts the read, so this write is the only thing that makes the request
-// outlive it: without it a registry that is briefly unreachable ends with the annotation
-// gone and no version marked, and every pass after that skips the recorded verdicts —
-// including the re-pushed tag the refresh was asked for. Failing to write it is reported
-// before the fetch precisely so the caller keeps the annotation and retries the whole
-// thing.
+// Sync reads the repository catalog and reconciles the chart catalog objects that mirror it.
+// A fetch failure is about the remote, a catalog failure is about this cluster.
 func (s *Synchronizer) Sync(
 	ctx context.Context,
 	repo contract.Repository,
@@ -86,39 +68,23 @@ func (s *Synchronizer) Sync(
 ) SyncOutcome {
 	forced := repo.ForceReconcileRequired()
 
-	// A helm repository is marked for nothing: its client ignores FetchOptions outright
-	// (the index is one document carrying every version, and media types are not probed
-	// incrementally there), so no pass ever skips a recorded verdict and no mark can
-	// change what the next read does. Writing one would rewrite the whole version list of
-	// every chart object the index publishes — hundreds, on a large index — and rewrite
-	// them again to clear it, where an unchanged index produces no status diff at all; an
-	// index fetch that then failed would leave every version of every chart claiming a
-	// re-examination no pass is going to do. The request is still recorded as far as it
-	// goes: there is nothing to record, so nothing is waiting on the annotation either.
+	// A helm repository is marked for nothing: its client ignores FetchOptions, so no pass skips a verdict.
 	marking := forced && repoType == chartsource.OCI
 
 	snapshot, err := s.catalog.Snapshot(ctx, repo)
 	if err != nil {
-		// The registry was never contacted: FetchAttempted stays false so the
-		// caller does not mistake this cluster-side read failure for a fetch that
-		// ran (let alone succeeded). A pass that had a request to write down has not
-		// written it, so the annotation is all that is left of it and must be kept;
-		// a pass with nothing to record is holding nothing up.
+		// The registry was never contacted, and a request not written down still needs its annotation.
 		return SyncOutcome{ForceRequestRecorded: !marking, Catalog: CatalogOutcome{Err: err}}
 	}
 
 	if marking {
 		if err := snapshot.MarkForReexamination(ctx); err != nil {
-			// ForceRequestRecorded stays false: nothing holds the request but the
-			// annotation, and dropping it here would lose the refresh entirely.
+			// ForceRequestRecorded stays false: nothing holds the request but the annotation.
 			return SyncOutcome{Catalog: CatalogOutcome{Err: err}}
 		}
 	}
 
-	// Known is read after the marking, from the same objects the marking wrote on, so a
-	// version this pass just marked is one the fetch re-examines. Full asks for every
-	// tag regardless, which is what a forced refresh means for the tags nothing is
-	// recorded about.
+	// Known is read after the marking, so a version this pass just marked is one the fetch re-examines.
 	charts, fetch := s.fetchCharts(ctx, repo, repoType, repoclient.FetchOptions{
 		Known: snapshot.Known(),
 		Full:  forced,
@@ -178,9 +144,6 @@ func (s *Synchronizer) fetchCharts(
 	}
 }
 
-// countUnexamined counts the versions the client listed but never looked at. They are
-// the measure of how far short of the repository this pass stopped, and the caller
-// schedules the next one by it.
 func countUnexamined(charts []repoclient.Chart) int {
 	unexamined := 0
 	for _, chart := range charts {
