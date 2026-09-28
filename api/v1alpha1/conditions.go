@@ -129,10 +129,10 @@ const (
 	// the catalog but is no longer offered by the repository.
 	ReasonChartVersionRemoved = "ChartVersionRemoved"
 	// ReasonChartVersionNotFound marks a release the repository has answered in full
-	// and cannot serve; the message says which of the three shapes it is.
+	// and cannot serve; the message says why.
 	ReasonChartVersionNotFound = "ChartVersionNotFound"
 	// ReasonPartialSync marks a repository whose catalog does not mirror everything
-	// the repository offers; the message says which of the two cases it is.
+	// the repository offers; the message says what was left out.
 	ReasonPartialSync = "PartialSync"
 
 	// HelmRelease error reasons.
