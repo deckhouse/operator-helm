@@ -220,7 +220,8 @@ func resolveChartVersions(
 		remote.WithRetryBackoff(remote.Backoff{Duration: time.Millisecond, Factor: 1.0, Steps: 1}),
 	)
 
-	// One puller for the whole repository: it caches the auth handshake, where remote.Get would not.
+	// One puller for the whole repository: it caches the auth handshake, its failure included, so a
+	// first probe that cannot reach the registry is answered to every later tag from that cache.
 	puller, err := remote.NewPuller(tagOptions...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building the registry puller: %w", err)

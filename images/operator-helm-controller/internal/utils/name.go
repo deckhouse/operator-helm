@@ -133,7 +133,7 @@ func GetInternalHelmRepositoryName(addonRepositoryName string) string {
 	return strings.TrimRight(result, "-.") + postfix
 }
 
-const derivedPartLimit = 18 // Bounds the parts so the longest derived name stays under 63 characters.
+const derivedPartLimit = 18 // Truncates the namespace and the name; with the prefixes in use the result stays under 63 characters.
 
 // DerivedName builds the name of an internal object derived from a source of the application
 // family. The hash covers the kind, the namespace and the name; a cluster source has no namespace part.

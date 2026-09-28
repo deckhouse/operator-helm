@@ -78,8 +78,8 @@ type FetchOptions struct {
 	Full  bool
 }
 
-// NeedsExamination reports whether a listed tag has to be examined again. A recorded media
-// type or unsupported verdict is authoritative; a pending, marked or removed entry is not.
+// NeedsExamination reports whether a listed tag has to be examined again. A full pass examines
+// every tag; otherwise a recorded media type or unsupported verdict is taken as established.
 func (o FetchOptions) NeedsExamination(chartName, tag string) bool {
 	if o.Full {
 		return true

@@ -44,7 +44,8 @@ var ociRepositoryErrorRules = []ErrorConditionRule{
 	{Type: "SourceVerified", TriggerStatus: metav1.ConditionFalse, Reason: helmv1alpha1.ReasonOCIVerificationFailed},
 }
 
-// Nothing watches a foreign registry, so this requeue is what brings a recovering one back.
+// chartArtifactProbeRequeueInterval is how often a version whose artifact could not be examined
+// is retried. Nothing watches a foreign registry, so this requeue is what notices a recovery.
 const chartArtifactProbeRequeueInterval = 2 * time.Minute
 
 type OCIRepositories struct {
