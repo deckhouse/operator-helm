@@ -46,7 +46,8 @@ type (
 	conditionsFunc func(client.Object) []metav1.Condition
 )
 
-// conflictRetryDelay is how long a pass waits before judging an auxiliary resource again.
+// conflictRetryDelay is how long a pass waits after a conflicted delete before judging
+// an auxiliary resource again.
 const conflictRetryDelay = 10 * time.Second
 
 // reconciler re-caches values.yaml on a new artifact revision and deletes a resource once expired.

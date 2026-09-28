@@ -92,7 +92,7 @@ type Cache struct {
 	used  int64
 	sizes map[string]int64
 	// reserved covers the writes in flight: a claim is the staged temp file plus the entry's growth,
-	// which for a new key is twice its size though only one file is written before the rename.
+	// which for a new key is twice its on-disk size, though only one file is written before the rename.
 	reserved int64
 }
 

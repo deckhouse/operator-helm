@@ -146,14 +146,9 @@ spec:
       {{- include "helm_lib_tolerations" (tuple . "system") | nindent 6 }}
       volumes:
         - name: cache
-          # Emergency cap, not a cleanup mechanism: on overflow the kubelet
-          # evicts the pod, which restores the entries and fills the volume
-          # again. What actually bounds the cache is the controller's own
-          # --cache-budget-mb above, derived from this limit so the two cannot
-          # drift apart. The gap absorbs filesystem overhead and files rounded up
-          # to whole blocks. Both cover the pathological case of entries at the
-          # --max-chart-size-mb=100 ceiling, plus one extra copy while an atomic
-          # write stages its temp file. Real values.yaml are kilobytes.
+          # Emergency cap, not a cleanup mechanism: on overflow the kubelet evicts
+          # the pod. What bounds the cache is --cache-budget-mb above, derived from
+          # this limit; the gap between them is filesystem overhead.
           emptyDir:
             sizeLimit: {{ $cacheVolumeMB }}Mi
         - name: api-tls
