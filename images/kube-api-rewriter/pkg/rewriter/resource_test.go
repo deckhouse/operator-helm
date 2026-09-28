@@ -181,31 +181,9 @@ Host: 127.0.0.1
 	}
 }
 
-// TODO this rewrite will be enabled later. Uncomment TestRestoreUnknownCustomResourceListWithKnownKind after enabling.
-func TestNoRewriteForUnknownCustomResourceListWithKnownKind(t *testing.T) {
-	// Request list of  resources with known kind but with unknown apiGroup.
-	// Check that RestoreResourceList will not rewrite apiVersion.
-	listUnknownCR := `GET /apis/other.product.group.io/v1alpha1/someresources HTTP/1.1
-Host: 127.0.0.1
-
-`
-	req, err := http.ReadRequest(bufio.NewReader(bytes.NewBufferString(listUnknownCR)))
-	require.NoError(t, err, "should parse hardcoded http request")
-	require.NotNil(t, req.URL, "should parse url in hardcoded http request")
-
-	rwr := createTestRewriter()
-	targetReq := NewTargetRequest(rwr, req)
-	require.NotNil(t, targetReq, "should get TargetRequest")
-
-	require.False(t, targetReq.ShouldRewriteRequest(), "should not rewrite request")
-	require.False(t, targetReq.ShouldRewriteResponse(), "should not rewrite response")
-}
-
-// TODO Uncomment after enabling rewrite detection by apiVersion/kind for all resources.
-/*
 func TestRestoreUnknownCustomResourceListWithKnownKind(t *testing.T) {
-	// Request list of  resources with known kind but with unknown apiGroup.
-	// Check that RestoreResourceList will not rewrite apiVersion.
+	// Request list of resources with known kind but with unknown apiGroup.
+	// Check that apiVersion and kind stay as-is while metadata is restored.
 	listUnknownCR := `GET /apis/other.product.group.io/v1alpha1/someresources HTTP/1.1
 Host: 127.0.0.1
 
@@ -255,19 +233,16 @@ Host: 127.0.0.1
 	targetReq := NewTargetRequest(rwr, req)
 	require.NotNil(t, targetReq, "should get TargetRequest")
 
-	require.False(t, targetReq.ShouldRewriteRequest(), "should not rewrite request")
-	require.False(t, targetReq.ShouldRewriteResponse(), "should not rewrite response")
-
 	require.True(t, targetReq.ShouldRewriteRequest(), "should rewrite request")
 	require.True(t, targetReq.ShouldRewriteResponse(), "should rewrite response")
-	require.Equal(t, "original.group.io", targetReq.OrigGroup(), "should set proper orig group")
+	require.Equal(t, "other.product.group.io", targetReq.OrigGroup(), "should keep unknown group")
 
 	resultBytes, err := rwr.RewriteJSONPayload(targetReq, []byte(responseBody), Restore)
 	if err != nil {
-		t.Fatalf("should restore RevisionControllerList without error: %v", err)
+		t.Fatalf("should restore SomeResourceList without error: %v", err)
 	}
 	if resultBytes == nil {
-		t.Fatalf("should restore RevisionControllerList: %v", err)
+		t.Fatalf("should restore SomeResourceList: %v", err)
 	}
 
 	tests := []struct {
@@ -297,7 +272,65 @@ Host: 127.0.0.1
 		})
 	}
 }
-*/
+
+func TestRenameUnknownCustomResourceWithKnownKind(t *testing.T) {
+	// Create a resource with known kind but with unknown apiGroup.
+	// Check that apiVersion and kind stay as-is while metadata is renamed.
+	postUnknownCR := `POST /apis/other.product.group.io/v1alpha1/namespaces/ns-name/someresources HTTP/1.1
+Host: 127.0.0.1
+
+`
+	requestBody := `{
+"kind":"SomeResource",
+"apiVersion":"other.product.group.io/v1alpha1",
+"metadata": {
+	"name": "resource-name",
+	"namespace": "ns-name",
+	"labels": {
+		"component.labelgroup.io/labelName": "labelValue"
+	},
+	"annotations":{
+		"annogroup.io": "annoValue"
+	}
+},
+"data": {"somekey":"somevalue"}
+}`
+
+	req, err := http.ReadRequest(bufio.NewReader(bytes.NewBufferString(postUnknownCR + requestBody)))
+	require.NoError(t, err, "should parse hardcoded http request")
+	require.NotNil(t, req.URL, "should parse url in hardcoded http request")
+
+	rwr := createTestRewriter()
+	targetReq := NewTargetRequest(rwr, req)
+	require.NotNil(t, targetReq, "should get TargetRequest")
+	require.True(t, targetReq.ShouldRewriteRequest(), "should rewrite request")
+
+	resultBytes, err := rwr.RewriteJSONPayload(targetReq, []byte(requestBody), Rename)
+	require.NoError(t, err, "should rename without error")
+	require.NotNil(t, resultBytes, "should rename")
+
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{`kind`, "SomeResource"},
+		{`apiVersion`, "other.product.group.io/v1alpha1"},
+		{`metadata.labels.component\.labelgroup\.io/labelName`, ""},
+		{`metadata.labels.component\.replacedlabelgroup\.io/labelName`, "labelValue"},
+		{`metadata.annotations.annogroup\.io`, ""},
+		{`metadata.annotations.replacedanno\.io`, "annoValue"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			actual := gjson.GetBytes(resultBytes, tt.path).String()
+			if actual != tt.expected {
+				t.Log(string(resultBytes))
+				t.Fatalf("%s value should be %s, got %s", tt.path, tt.expected, actual)
+			}
+		})
+	}
+}
 
 func TestRenameKnownCustomResource(t *testing.T) {
 	postControllerRevision := `POST /apis/original.group.io/v1/someresources/namespaces/ns-name/resource-name HTTP/1.1

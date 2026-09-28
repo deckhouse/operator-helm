@@ -334,3 +334,32 @@ func TestCRDPathRewrite(t *testing.T) {
 		})
 	}
 }
+
+func TestCRDWithoutRuleKeepsBodyAndRewritesMetadata(t *testing.T) {
+	crd := `{
+"kind":"CustomResourceDefinition",
+"apiVersion":"apiextensions.k8s.io/v1",
+"metadata":{
+	"name":"gadgets.example.flant.com",
+	"labels":{"component.labelgroup.io/labelName":"labelValue"}
+},
+"spec":{"group":"example.flant.com","names":{"kind":"Gadget","plural":"gadgets"}}
+}`
+	rwr := createTestRewriter()
+
+	resultBytes, err := rwr.RewriteJSONPayload(nil, []byte(crd), Rename)
+	require.NoError(t, err, "should rename without error")
+	require.NotNil(t, resultBytes, "should keep body of CRD without rule")
+	require.Equal(t, "gadgets.example.flant.com", gjson.GetBytes(resultBytes, "metadata.name").String())
+	require.Equal(t, "example.flant.com", gjson.GetBytes(resultBytes, "spec.group").String())
+	require.Equal(t, "labelValue", gjson.GetBytes(resultBytes, `metadata.labels.component\.replacedlabelgroup\.io/labelName`).String())
+	require.False(t, gjson.GetBytes(resultBytes, `metadata.labels.component\.labelgroup\.io/labelName`).Exists())
+
+	renamed := string(resultBytes)
+	resultBytes, err = rwr.RewriteJSONPayload(nil, []byte(renamed), Restore)
+	require.NoError(t, err, "should restore without error")
+	require.NotNil(t, resultBytes, "should keep body of CRD without rule")
+	require.Equal(t, "gadgets.example.flant.com", gjson.GetBytes(resultBytes, "metadata.name").String())
+	require.Equal(t, "labelValue", gjson.GetBytes(resultBytes, `metadata.labels.component\.labelgroup\.io/labelName`).String())
+	require.False(t, gjson.GetBytes(resultBytes, `metadata.labels.component\.replacedlabelgroup\.io/labelName`).Exists())
+}

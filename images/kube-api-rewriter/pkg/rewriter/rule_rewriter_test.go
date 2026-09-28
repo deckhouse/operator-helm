@@ -416,3 +416,19 @@ Host: 127.0.0.1
 		})
 	}
 }
+
+func TestFilterExcludesListItemsByGroup(t *testing.T) {
+	// Items of a List response carry neither apiVersion nor kind, so the
+	// list's group decides whether original kinds are hidden.
+	rwr := createTestRewriter()
+	list := func(apiVersion string) []byte {
+		return []byte(`{"kind":"SomeResourceList","apiVersion":"` + apiVersion + `","items":[{"metadata":{"name":"a"}},{"metadata":{"name":"b"}}]}`)
+	}
+
+	_, err := rwr.FilterExcludes(list("original.group.io/v1"), Restore)
+	require.ErrorIs(t, err, SkipItem, "list of original kind in original group should be hidden")
+
+	resultBytes, err := rwr.FilterExcludes(list("other.product.group.io/v1alpha1"), Restore)
+	require.NoError(t, err)
+	require.Len(t, gjson.GetBytes(resultBytes, "items").Array(), 2, "same kind in other group should be kept")
+}
