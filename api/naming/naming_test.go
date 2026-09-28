@@ -105,9 +105,15 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 		},
 		{
 			name:  "long names with separators are truncated and collapsed",
-			repo:  "a very long repository name here",
-			chart: "an extremely long chart name here",
-			want:  "a-very-long-reposito-chart-an-extremely-long-ch-bbf8569a7775",
+			repo:  "a very long  repository  name here",
+			chart: "an  extremely long chart  name here",
+			want:  "a-very-long-reposit-chart-an-extremely-long-c-f348d6ed2e45",
+		},
+		{
+			name:  "a dot between two alphanumerics is kept",
+			repo:  "repo",
+			chart: "a.b",
+			want:  "repo-chart-a.b-ce05cc273120",
 		},
 	}
 
@@ -122,8 +128,8 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 	}
 }
 
-// assertNameIsValid checks that a derived name is a DNS-1123 subdomain, fits a
-// DNS-1123 label, and carries no run of dashes.
+// assertNameIsValid checks that a derived name is a DNS-1123 subdomain no longer
+// than a label, and carries no run of dashes.
 func assertNameIsValid(t *testing.T, name string) {
 	t.Helper()
 
@@ -131,8 +137,11 @@ func assertNameIsValid(t *testing.T, name string) {
 		t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", name, errs)
 	}
 
-	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
-		t.Fatalf("%q is not a valid DNS-1123 label: %v", name, errs)
+	// A dot is legal here: the name addresses an object, and an object name is a
+	// subdomain. Only the length of a label is borrowed, so the name fits wherever
+	// one segment is all there is room for.
+	if len(name) > validation.DNS1123LabelMaxLength {
+		t.Fatalf("%q is %d bytes, longer than a DNS-1123 label", name, len(name))
 	}
 
 	if strings.Contains(name, "--") {
@@ -332,6 +341,31 @@ func TestChartNameSanitizesAnIllegalDot(t *testing.T) {
 	for _, chart := range charts {
 		t.Run(chart, func(t *testing.T) {
 			assertNameIsValid(t, HelmClusterAddonChartName("repo", chart))
+		})
+	}
+}
+
+func TestCollapseDashes(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "an empty string is left alone", in: "", want: ""},
+		{name: "a single dash is kept", in: "-", want: "-"},
+		{name: "a string of dashes becomes one", in: "-----", want: "-"},
+		{name: "a leading run collapses", in: "--a", want: "-a"},
+		{name: "a trailing run collapses", in: "a--", want: "a-"},
+		{name: "runs of different lengths each collapse", in: "a--b---c----d", want: "a-b-c-d"},
+		{name: "single dashes are untouched", in: "a-b-c", want: "a-b-c"},
+		{name: "dots are not collapsed", in: "a..b", want: "a..b"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := collapseDashes(tc.in); got != tc.want {
+				t.Fatalf("collapseDashes(%q) = %q, want %q", tc.in, got, tc.want)
+			}
 		})
 	}
 }
