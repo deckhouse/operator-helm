@@ -27,25 +27,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// watcherOption tunes the certificate watcher before it is started; the server takes the defaults and only tests pass one.
 type watcherOption func(*certwatcher.CertWatcher)
 
-// withWatchInterval replaces the 10s poll backstop.
 func withWatchInterval(interval time.Duration) watcherOption {
 	return func(watcher *certwatcher.CertWatcher) {
 		_ = watcher.WithWatchInterval(interval)
 	}
 }
 
-// withReloadCallback reports every pair the watcher installs, starting with the one it read while being constructed.
 func withReloadCallback(callback func(tls.Certificate)) watcherOption {
 	return func(watcher *certwatcher.CertWatcher) {
 		watcher.RegisterCallback(callback)
 	}
 }
 
-// newTLSConfig serves the key pair from memory through GetCertificate, reloaded by controller-runtime's
-// certwatcher (fsnotify plus a 10s poll) so a reissued certificate is picked up without a restart.
+// newTLSConfig serves the key pair through GetCertificate, reloaded by a certwatcher.
 func newTLSConfig(ctx context.Context, certFile, keyFile string, opts ...watcherOption) (*tls.Config, error) {
 	watcher, err := certwatcher.New(certFile, keyFile)
 	if err != nil {
@@ -57,7 +53,7 @@ func newTLSConfig(ctx context.Context, certFile, keyFile string, opts ...watcher
 	}
 
 	go func() {
-		// A shutdown landing while Start is still registering the file watches comes back as a cancelled context, which is the normal way the process stops.
+		// A shutdown landing while Start registers the file watches comes back as a cancelled context.
 		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.FromContext(ctx).Error(err, "TLS certificate watcher stopped",
 				"cert", certFile, "key", keyFile)

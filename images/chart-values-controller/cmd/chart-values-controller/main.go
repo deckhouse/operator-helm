@@ -77,7 +77,6 @@ func main() {
 		tokenAudiences  string
 	)
 
-	// Metrics stay on loopback: the kube-rbac-proxy sidecar is the only intended reader.
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "127.0.0.1:8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":9440", "The address the health probe endpoint binds to.")
 	flag.StringVar(&apiAddr, "api-bind-address", "127.0.0.1:8081", "The address the chart-values HTTP API binds to.")
@@ -85,11 +84,10 @@ func main() {
 	flag.StringVar(&apiTLSKeyFile, "api-tls-key-file", "", "Path to the PEM-encoded private key for the chart-values HTTP API; enables TLS together with --api-tls-cert-file.")
 	flag.StringVar(&cacheDir, "cache-dir", "/cache", "Directory used to cache extracted values.yaml files.")
 	flag.DurationVar(&cacheTTL, "chart-values-cache-ttl", time.Hour, "Lifetime of auxiliary source resources and their cache entries; refreshed on each request.")
-	// Deliberately below the sizeLimit of the cache emptyDir (512Mi in templates/chart-values-controller/deployment.yaml), the gap absorbing the rounding of files to whole filesystem blocks.
+	// Below the cache emptyDir's 512Mi sizeLimit; the gap is filesystem overhead, not block rounding.
 	flag.IntVar(&cacheBudgetMB, "cache-budget-mb", 384, "Total size in MiB the cache directory is allowed to occupy, counting writes in flight; entries that do not fit are not cached.")
 	flag.DurationVar(&sourceInterval, "source-interval", 10*time.Minute, "Reconcile interval set on auxiliary source resources.")
 	flag.IntVar(&maxChartSizeMB, "max-chart-size-mb", 100, "Maximum accepted chart artifact size in MiB; larger artifacts are rejected.")
-	// Empty keeps the API server checking the token against its own default audience, which any valid ServiceAccount token of the cluster passes.
 	flag.StringVar(&tokenAudiences, "api-token-audience", "", "Comma-separated audiences a bearer token of the chart-values HTTP API must be issued for; empty accepts any token the API server authenticates.")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -109,7 +107,6 @@ func main() {
 		os.Exit(1)
 	}
 	cacheBudgetBytes := int64(cacheBudgetMB) << 20
-	// An atomic write peaks at two copies of the content, so a chart at the accepted ceiling needs twice its size to be cacheable at all.
 	if cacheBudgetBytes < 2*maxArtifactBytes {
 		logger.Info("cache budget is below twice the accepted artifact size; the largest charts will not be cached",
 			"cacheBudgetMB", cacheBudgetMB, "maxChartSizeMB", maxChartSizeMB)

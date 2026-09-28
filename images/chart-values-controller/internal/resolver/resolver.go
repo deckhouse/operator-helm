@@ -105,7 +105,7 @@ type Resolver struct {
 	maxArtifactBytes int64
 	prober           chartartifact.Prober
 
-	// downloads collapses concurrent cache misses on one key into a single download and extraction, keyed exactly like the cache.
+	// downloads collapses concurrent misses on one key into a single download, keyed like the cache.
 	downloads inflight
 }
 
@@ -125,7 +125,6 @@ func New(c client.Client, valuesCache *cache.Cache, httpClient *http.Client, nam
 // Resolve dispatches on the repository kind and, when the artifact is ready, returns the
 // chart's values.yaml. A returned error is an internal failure; every expected state is an Outcome.
 func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
-	// Kind is case-insensitive, and the lower-cased form is what dispatches and feeds the resource name hash.
 	requested := req.Kind
 	req.Kind = RepositoryKind(strings.ToLower(string(req.Kind)))
 
@@ -139,19 +138,18 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (Result, error) {
 	}
 
 	if !family.Namespaced {
-		// For a cluster-scoped family the namespace is the caller's authorization context only, and must reach neither the resource name nor the lookups.
+		// For a cluster-scoped family the namespace is the caller's authorization context only.
 		req.Namespace = ""
 	}
 
 	return r.resolveChart(ctx, family, req)
 }
 
-// chartVersion finds the catalog entry for the requested version; a missing chart object or a missing version is pending. A non-nil Result means the caller must stop and return it.
 func (r *Resolver) chartVersion(ctx context.Context, family repositoryFamily, req Request) (*helmv1alpha1.ChartVersion, *Result, error) {
 	versions, err := family.ChartVersions(ctx, r.client, req.Namespace, req.RepositoryName, req.Chart)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// The chart object is created by operator-helm-controller when it synchronizes the repository.
+			// The chart object is created by operator-helm-controller when it syncs the repository.
 			return nil, &Result{Outcome: OutcomePending}, nil
 		}
 
@@ -165,7 +163,6 @@ func (r *Resolver) chartVersion(ctx context.Context, family repositoryFamily, re
 		}
 
 		if version.UnavailableReason == helmv1alpha1.UnavailableReasonInvalidChartReference {
-			// Left through, this version would fall to the archive path and fail on the very same url as an opaque fetch error.
 			return nil, &Result{
 				Outcome: OutcomeValuesNotFound,
 				Message: fmt.Sprintf("chart version %s is not readable (%s)", req.Version, versionDetail(version)),
@@ -178,18 +175,16 @@ func (r *Resolver) chartVersion(ctx context.Context, family repositoryFamily, re
 	return nil, &Result{Outcome: OutcomePending}, nil
 }
 
-// ociMediaType reports the layer media type the catalog recorded for a version of an oci:// repository. A non-nil Result means the caller must stop and return it.
 func ociMediaType(req Request, version *helmv1alpha1.ChartVersion) (string, *Result) {
 	if version.MediaType != "" {
 		return version.MediaType, nil
 	}
 
 	if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending || version.UnavailableReason == "" {
-		// An empty reason alongside an empty media type is the pre-upgrade shape of a version entry, which the operator re-resolves like ResolvePending.
+		// An empty reason with an empty media type is the pre-upgrade shape, re-resolved like pending.
 		return "", &Result{Outcome: OutcomePending}
 	}
 
-	// Every other reason is a durable verdict that will not change without a change in the repository.
 	return "", &Result{
 		Outcome: OutcomeValuesNotFound,
 		Message: fmt.Sprintf("chart version %s is not readable (%s)", req.Version, versionDetail(version)),
@@ -205,9 +200,7 @@ func versionDetail(version *helmv1alpha1.ChartVersion) string {
 	return detail
 }
 
-// resolveChart ensures the auxiliary source resource for one chart exists, inspects its status and returns the chart's values.yaml once the artifact is ready.
 func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, req Request) (Result, error) {
-	// Read first because the resource name, and with it the cache entry, carries the identity of the repository object the values came from.
 	repo, err := family.GetRepository(ctx, r.client, req.Namespace, req.RepositoryName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -218,7 +211,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 
 	name := naming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version, repo.Identity)
 
-	// Freshness is the auxiliary-resource controller's statement — it replaces or removes an entry whose revision moved — so a hit is served without reading the source object.
+	// The auxiliary-resource controller keeps the entry fresh, so a hit is served without a read.
 	if values, ok := r.cache.Get(name); ok {
 		return Result{Outcome: OutcomeReady, Values: values}, nil
 	}
@@ -235,12 +228,10 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 
 	var conditions []metav1.Condition
 	var art *meta.Artifact
-	// Which source object to ask is decided in the switch below and known nowhere after it.
 	var current currentDigestFunc
 
 	switch {
 	case version.OCIRef != "":
-		// The index publishes this version in a registry, so a HelmChart would send the source controller at the index url over HTTP and fail on the oci:// scheme.
 		ociRepo, done, err := r.ensureHybridOCIRepository(ctx, family, repo, req, name, expiresAt, version)
 		if err != nil {
 			return Result{}, err
@@ -283,7 +274,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 	return r.readValues(ctx, name, art, current)
 }
 
-// currentDigestFunc reports the digest of the artifact the auxiliary source object publishes now, read from the manager's informer cache.
+// currentDigestFunc reports the digest the auxiliary source object publishes now, from an informer.
 type currentDigestFunc func(ctx context.Context) (string, error)
 
 func (r *Resolver) helmChartDigest(name string) currentDigestFunc {
@@ -308,7 +299,6 @@ func (r *Resolver) ociRepositoryDigest(name string) currentDigestFunc {
 	}
 }
 
-// artifactDigest reads the revision off an artifact that may not be published at all.
 func artifactDigest(art *meta.Artifact) string {
 	if art == nil {
 		return ""
@@ -317,7 +307,6 @@ func artifactDigest(art *meta.Artifact) string {
 	return art.Digest
 }
 
-// readValues downloads the artifact and returns the chart's values.yaml, caching it under the same key the next request looks it up by, once per key however many requests miss together.
 func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact, current currentDigestFunc) (Result, error) {
 	values, _, err := r.downloads.do(ctx, name, func() ([]byte, error) {
 		values, err := artifact.FetchValues(ctx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
@@ -325,7 +314,6 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 			return nil, err
 		}
 
-		// The entry names the revision it came from, and the guard is the cache's last word before the rename: a revision that moved while this downloaded means the values are served without being kept.
 		if err := r.cache.PutUnless(name, art.Digest, values, func() bool {
 			return r.stillCurrent(ctx, name, current, art.Digest)
 		}); err != nil {
@@ -346,7 +334,6 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 			return Result{Outcome: OutcomeValuesNotFound, Message: "chart has no values.yaml"}, nil
 		}
 
-		// A call that ended on a clock says nothing about the chart, and an http.Client timeout reads as a deadline too (since Go 1.23).
 		if isTransient(err) {
 			return Result{Outcome: OutcomePending}, nil
 		}
@@ -357,7 +344,6 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 	return Result{Outcome: OutcomeReady, Values: values}, nil
 }
 
-// stillCurrent reports whether the artifact a finished download came from is the one the source object publishes by now; an object that cannot be read at all answers no.
 func (r *Resolver) stillCurrent(ctx context.Context, name string, current currentDigestFunc, downloaded string) bool {
 	digest, err := current(ctx)
 	if err != nil {
@@ -373,7 +359,6 @@ func (r *Resolver) stillCurrent(ctx context.Context, name string, current curren
 	return true
 }
 
-// isTransient reports whether an error only describes how a call ended, rather than anything about the artifact.
 func isTransient(err error) bool {
 	return errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
@@ -386,7 +371,7 @@ func (r *Resolver) ensureHelmChart(ctx context.Context, family repositoryFamily,
 		return nil, false, err
 	}
 	if helmRepoName == "" {
-		// The backing HelmRepository is created by operator-helm-controller when it reconciles the repository.
+		// The backing HelmRepository is created by operator-helm-controller.
 		return nil, true, nil
 	}
 
@@ -415,7 +400,6 @@ func (r *Resolver) ensureHelmChart(ctx context.Context, family repositoryFamily,
 	return chart, false, nil
 }
 
-// ensureOCIRepository creates or updates the auxiliary OCIRepository at the given address and tag; credentials and tls say whether the repository's own secrets describe that host.
 func (r *Resolver) ensureOCIRepository(
 	ctx context.Context,
 	family repositoryFamily,
@@ -467,7 +451,6 @@ func (r *Resolver) ensureOCIRepository(
 	return ociRepo, nil
 }
 
-// ensureHybridOCIRepository builds the source object for a version that a helm repository's index publishes in a registry, probing the media type the catalog does not record.
 func (r *Resolver) ensureHybridOCIRepository(
 	ctx context.Context,
 	family repositoryFamily,
@@ -478,11 +461,10 @@ func (r *Resolver) ensureHybridOCIRepository(
 ) (*sourcev1.OCIRepository, *Result, error) {
 	url, tag, err := helmv1alpha1.SplitOCIRef(version.OCIRef, "")
 	if err != nil {
-		// The operator validates the reference when it records it, so a failure here means the field was written by hand.
 		return nil, &Result{Outcome: OutcomeFetchFailed, Message: err.Error()}, nil
 	}
 
-	// The repository's transport settings describe the host it names, so a registry only its index names is reached as a public one.
+	// The repository's transport settings describe the host it names, so another registry is public.
 	sameHost := sameRegistryHost(repo.URL, url)
 
 	mediaType := version.MediaType
@@ -491,7 +473,6 @@ func (r *Resolver) ensureHybridOCIRepository(
 		if sameHost {
 			rt, err = chartartifact.Transport(repo.CACertificate, repo.InsecureSkipVerify)
 			if err != nil {
-				// Until the caCertificate is corrected the repository cannot be reached over TLS at all, which retrying will not change.
 				return nil, &Result{Outcome: OutcomeFetchFailed, Message: err.Error()}, nil
 			}
 		}
@@ -499,11 +480,9 @@ func (r *Resolver) ensureHybridOCIRepository(
 		mediaType, err = r.prober.ChartLayerMediaType(ctx, version.OCIRef, rt)
 		if err != nil {
 			if errors.Is(err, chartartifact.ErrNotAChart) || errors.Is(err, chartartifact.ErrTagNotFound) {
-				// A verdict about the artifact, reported like a version the catalog found unreadable.
 				return nil, &Result{Outcome: OutcomeValuesNotFound, Message: err.Error()}, nil
 			}
 
-			// Anything else — a rate limit, a transport failure — may pass on its own.
 			log.FromContext(ctx).Info("Probing the chart artifact failed", "ref", version.OCIRef, "error", err.Error())
 
 			return nil, &Result{Outcome: OutcomePending}, nil
@@ -518,7 +497,6 @@ func (r *Resolver) ensureHybridOCIRepository(
 	return ociRepo, nil, nil
 }
 
-// sameRegistryHost reports whether the artifact lives on the host the repository itself names; an unparsable url on either side is not the same host.
 func sameRegistryHost(repoURL, artifactURL string) bool {
 	repoHost, err := neturl.Parse(repoURL)
 	if err != nil || repoHost.Host == "" {
@@ -533,7 +511,6 @@ func sameRegistryHost(repoURL, artifactURL string) bool {
 	return repoHost.Host == artifactHost.Host
 }
 
-// findHelmRepositoryName finds the internal HelmRepository operator-helm-controller derived from this repository, selected by the source labels of the repository's kind.
 func (r *Resolver) findHelmRepositoryName(ctx context.Context, family repositoryFamily, req Request) (string, error) {
 	var list sourcev1.HelmRepositoryList
 	if err := r.client.List(
@@ -563,7 +540,7 @@ func (r *Resolver) findRepositorySecretNames(ctx context.Context, family reposit
 
 	for i := range list.Items {
 		secret := &list.Items[i]
-		// The auth secret is Opaque with username/password for HelmRepository and dockerconfigjson for OCIRepository, so either key marks it.
+		// The auth secret carries username/password or dockerconfigjson, so either key marks it.
 		_, hasBasicAuth := secret.Data["username"]
 		_, hasDockerConfig := secret.Data[corev1.DockerConfigJsonKey]
 		if hasBasicAuth || hasDockerConfig {
@@ -578,7 +555,6 @@ func (r *Resolver) findRepositorySecretNames(ctx context.Context, family reposit
 	return auth, tls, nil
 }
 
-// classify maps the source resource conditions and artifact to one of OutcomeReady, OutcomeFetchFailed and OutcomePending.
 func classify(conditions []metav1.Condition, art *meta.Artifact) (Outcome, string) {
 	if ready := apimeta.FindStatusCondition(conditions, "Ready"); ready != nil &&
 		ready.Status == metav1.ConditionTrue && art != nil {

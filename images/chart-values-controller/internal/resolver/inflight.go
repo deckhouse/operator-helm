@@ -22,26 +22,23 @@ import (
 	"sync"
 )
 
-// errCallAborted is what a waiter is handed when the call it waited on ended without producing anything.
 var errCallAborted = errors.New("the in-flight call did not complete")
 
-// inflight collapses concurrent work sharing one key into a single call, the other callers waiting for its result. The zero value is ready for use.
 type inflight struct {
 	mu    sync.Mutex
 	calls map[string]*inflightCall
 
-	// onJoin, when set, is called once by every caller that waits on a running call instead of starting its own; only tests set it.
+	// onJoin, when set, is called by every caller that waits on a running call; only tests set it.
 	onJoin func()
 }
 
 type inflightCall struct {
-	// done is closed once the result fields are final, which a waiter reads after receiving from it.
+	// done is closed once the result fields are final.
 	done   chan struct{}
 	values []byte
 	err    error
 }
 
-// do runs fn for key unless a call for the same key is already running, in which case it waits for that call; shared reports which of the two happened.
 func (g *inflight) do(ctx context.Context, key string, fn func() ([]byte, error)) (values []byte, shared bool, err error) {
 	g.mu.Lock()
 	if call, ok := g.calls[key]; ok {
@@ -55,6 +52,7 @@ func (g *inflight) do(ctx context.Context, key string, fn func() ([]byte, error)
 		case <-call.done:
 			return call.values, true, call.err
 		case <-ctx.Done():
+			// A waiter's cancellation ends its own wait; the leader keeps working for the others.
 			return nil, true, ctx.Err()
 		}
 	}
@@ -67,7 +65,6 @@ func (g *inflight) do(ctx context.Context, key string, fn func() ([]byte, error)
 	g.mu.Unlock()
 
 	completed := false
-	// A panic and a runtime.Goexit take this path too, and the entry is gone before any waiter is released.
 	defer func() {
 		if !completed {
 			call.err = errCallAborted

@@ -37,7 +37,6 @@ type repositorySpec struct {
 	Identity string
 }
 
-// repositoryFamily is everything that differs between the repository kinds: how the repository and its catalog are read, and how its internal objects are recognised.
 type repositoryFamily struct {
 	Kind       RepositoryKind
 	Namespaced bool
@@ -131,7 +130,6 @@ var families = map[RepositoryKind]repositoryFamily{
 	},
 }
 
-// familyFor looks a kind up. The kind is already lower-cased by Resolve.
 func familyFor(kind RepositoryKind) (repositoryFamily, bool) {
 	family, ok := families[kind]
 
@@ -148,12 +146,11 @@ func specOf(meta metav1.ObjectMeta, spec helmv1alpha1.RepositorySpec) *repositor
 	}
 }
 
-// identityOf names the repository object a chart is read from by its UID and generation, so a recreated or re-pointed repository is a different source of the same chart name.
+// identityOf names a repository object by UID and generation, unmoved by status and catalog writes.
 func identityOf(meta metav1.ObjectMeta) string {
 	return fmt.Sprintf("%s@%d", meta.UID, meta.Generation)
 }
 
-// requireNamespace reports the request-shape error of a family: a namespaced kind needs a namespace, a cluster-scoped one accepts any.
 func (f repositoryFamily) requireNamespace(namespace string) error {
 	if f.Namespaced && namespace == "" {
 		return fmt.Errorf("repository kind %q is namespaced: namespace is required", f.Kind)

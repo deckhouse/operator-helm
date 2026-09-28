@@ -34,8 +34,8 @@ const (
 	maxNamespacedPartLen = 12
 )
 
-// AuxResourceName returns a deterministic DNS-1123 name (<=63 chars) for the auxiliary source resource of a (kind, namespace, repository, chart, version) tuple read from the repository object named by identity.
-// namespace is empty for a cluster-scoped kind; the readable parts are hints only, and the hash over the full tuple is what makes the name unique.
+// AuxResourceName returns a deterministic DNS-1123 name for the auxiliary source resource of a
+// (kind, namespace, repository, chart, version) tuple and a repository identity, hashed to be unique.
 func AuxResourceName(kind, namespace, repository, chart, version, identity string) string {
 	if namespace == "" {
 		sum := sha256.Sum256([]byte(kind + "\x00" + repository + "/" + chart + "@" + version + "\x00" + identity))

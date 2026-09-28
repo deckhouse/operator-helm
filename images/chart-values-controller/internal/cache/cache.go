@@ -26,18 +26,14 @@ import (
 	"sync"
 )
 
-// blockSize is what a file costs the volume: a filesystem hands out whole blocks, so this budget is accounted in blocks rather than in bytes.
 const blockSize = 4096
 
-// onDisk rounds a length up to what it occupies.
 func onDisk(n int64) int64 {
 	return (n + blockSize - 1) / blockSize * blockSize
 }
 
-// tempPrefix marks a staging file of an atomic write. One process owns the cache directory, so a temp file found at construction time is left over from a crash.
 const tempPrefix = ".tmp-"
 
-// entryHeaderPrefix opens the one line an entry file carries ahead of the values: the digest of the artifact they were extracted from, published by the same rename.
 const entryHeaderPrefix = "#chart-values-cache/v1 digest="
 
 // DigestUnknown is the revision of an entry that does not say which artifact it came
@@ -51,7 +47,6 @@ type Entry struct {
 	Digest string
 }
 
-// encodeEntry lays out the pair as the single file a rename publishes atomically.
 func encodeEntry(digest string, content []byte) []byte {
 	// A digest carrying a newline would forge a header, so it is refused into unknown.
 	if strings.ContainsAny(digest, "\r\n") {
@@ -66,7 +61,6 @@ func encodeEntry(digest string, content []byte) []byte {
 	return append(out, content...)
 }
 
-// decodeEntry reads the pair back, treating a file without the header — an entry written before this format — as values of an unknown revision.
 func decodeEntry(raw []byte) Entry {
 	if !bytes.HasPrefix(raw, []byte(entryHeaderPrefix)) {
 		return Entry{Values: raw, Digest: DigestUnknown}
@@ -90,14 +84,15 @@ var ErrBudgetExhausted = errors.New("cache budget exhausted")
 // keyed by the auxiliary resource name both the HTTP handler and the controller derive.
 type Cache struct {
 	dir string
-	// budget is what committed entries plus the peak of the writes in flight may reach; it is sized below the volume's own sizeLimit.
+	// budget is what committed entries plus the peak of the writes in flight may reach.
 	budget int64
 
 	mu sync.Mutex
 	// used is the summed size of the files accounted under dir, sizes their per-file breakdown.
 	used  int64
 	sizes map[string]int64
-	// reserved covers the writes in flight, each of which briefly occupies the volume twice.
+	// reserved covers the writes in flight: a claim is the staged temp file plus the entry's growth,
+	// which for a new key is twice its size though only one file is written before the rename.
 	reserved int64
 }
 
@@ -110,7 +105,6 @@ func New(dir string, budgetBytes int64) *Cache {
 	return c
 }
 
-// scan accounts for pre-existing entries and sweeps leftover temp files; an unreadable directory reads as the empty cache.
 func (c *Cache) scan() {
 	entries, err := os.ReadDir(c.dir)
 	if err != nil {
@@ -127,7 +121,7 @@ func (c *Cache) scan() {
 				continue
 			}
 
-			// A temp file that will not go away still occupies the volume, so it is charged under its own name.
+			// A temp file that will not go away is charged under its own name.
 			info, err := e.Info()
 			if err != nil {
 				continue
@@ -178,7 +172,6 @@ func (c *Cache) GetEntry(key string) (Entry, bool) {
 	return decodeEntry(raw), true
 }
 
-// reserve admits a write of n bytes and returns what it claimed: the peak of the staged temp file plus however much the entry grows by.
 func (c *Cache) reserve(name string, n int64) (int64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -211,10 +204,9 @@ func (c *Cache) Put(key, digest string, content []byte) error {
 // temp file and the rename. Nothing was published and the budget is left as it was.
 var ErrSuperseded = errors.New("cache entry superseded")
 
-// PutUnless is Put with a guard on whether the entry still deserves to be published, asked under the
-// lock the rename happens beneath. The guard must not touch this cache and must not go to the network.
+// PutUnless is Put with a guard on whether the entry still deserves publishing, asked under the
+// lock the rename happens beneath. The guard reads a synced informer, not the cache or the network.
 func (c *Cache) PutUnless(key, digest string, content []byte, guard func() bool) error {
-	// The budget is charged for the bytes that are actually written, header included.
 	stored := encodeEntry(digest, content)
 
 	size := int64(len(stored))
@@ -225,7 +217,6 @@ func (c *Cache) PutUnless(key, digest string, content []byte, guard func() bool)
 		return fmt.Errorf("caching %s: %w", key, ErrBudgetExhausted)
 	}
 
-	// Releases the claim on every path that does not reach the rename below, which accounts for itself.
 	committed := false
 	defer func() {
 		if !committed {
@@ -242,7 +233,6 @@ func (c *Cache) PutUnless(key, digest string, content []byte, guard func() bool)
 		return fmt.Errorf("creating temp cache file: %w", err)
 	}
 	tmpName := tmp.Name()
-	// Best-effort cleanup: harmless no-op once the temp file has been renamed.
 	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := tmp.Write(stored); err != nil {
@@ -254,7 +244,7 @@ func (c *Cache) PutUnless(key, digest string, content []byte, guard func() bool)
 		return fmt.Errorf("closing cache entry: %w", err)
 	}
 
-	// The rename and the accounting it implies happen under one hold of the lock: a Delete in between would leave them disagreeing.
+	// The rename and the accounting it implies happen under one hold of the lock.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -278,7 +268,6 @@ func (c *Cache) PutUnless(key, digest string, content []byte, guard func() bool)
 // Delete removes the cache entry for a key and gives the space it took back to the
 // budget. A missing entry is not an error.
 func (c *Cache) Delete(key string) error {
-	// Held across the removal for the same reason Put holds it across the rename.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

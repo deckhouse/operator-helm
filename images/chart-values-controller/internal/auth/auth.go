@@ -46,8 +46,8 @@ type Result struct {
 	Username      string
 }
 
-// Reviewer authenticates bearer tokens via TokenReview and authorizes the resulting
-// subject via SubjectAccessReview, against the audiences a token must be valid for.
+// Reviewer authenticates bearer tokens via TokenReview, against the audiences they must be issued
+// for, and authorizes the resulting subject via SubjectAccessReview.
 type Reviewer struct {
 	tokenReviews  authnclientv1.TokenReviewInterface
 	accessReviews authzclientv1.SubjectAccessReviewInterface
@@ -74,7 +74,7 @@ func (r *Reviewer) Review(ctx context.Context, token string, access Access) (Res
 	if !reviewed.Status.Authenticated {
 		return Result{Authenticated: false}, nil
 	}
-	// status.Audiences is the intersection of what was asked for and what the token is valid for, so a token minted for somebody else authenticates with none of them.
+	// status.Audiences is the intersection of what was asked for and what the token is valid for.
 	if len(r.audiences) > 0 && !slices.ContainsFunc(r.audiences, func(want string) bool {
 		return slices.Contains(reviewed.Status.Audiences, want)
 	}) {

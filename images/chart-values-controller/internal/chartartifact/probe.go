@@ -45,11 +45,9 @@ var ErrNotAChart = errors.New("artifact is not a packaged helm chart")
 // Also a verdict rather than a transient failure.
 var ErrTagNotFound = errors.New("registry has no such tag")
 
-// ProbeTimeout bounds one probe end to end, and applies even when the caller's context carries
-// no deadline. It is exported so the HTTP API can pin that its per-request budget outlasts it.
+// ProbeTimeout bounds one probe end to end, including when the caller's context carries no deadline.
 const ProbeTimeout = 20 * time.Second
 
-// probeContext bounds ctx by ProbeTimeout, keeping a caller's own shorter deadline.
 func probeContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, ProbeTimeout)
 }
@@ -70,7 +68,7 @@ func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt ht
 	ctx, cancel := probeContext(ctx)
 	defer cancel()
 
-	// A transport built by Transport is single-use, so its pool must be drained here rather than outliving this call.
+	// A transport built by Transport is single-use, so its pool is drained here.
 	if closer, ok := rt.(interface{ CloseIdleConnections() }); ok {
 		defer closer.CloseIdleConnections()
 	}
@@ -129,8 +127,8 @@ var ErrInvalidCACertificate = errors.New(
 	`caCertificate holds no PEM encoded certificate (it is the same value the operator mirrors into the "ca.crt" key of the repository's internal tls secret)`,
 )
 
-// Transport builds the transport settings for reaching a registry the repository names, as a clone of
-// http.DefaultTransport, or nil when it has none. It is built per probe, whose caller closes it.
+// Transport builds the transport settings for reaching a registry the repository names, as a clone
+// of http.DefaultTransport, or nil when it has none. It is built per probe, whose caller closes it.
 func Transport(caCertificate string, insecure bool) (http.RoundTripper, error) {
 	if caCertificate == "" && !insecure {
 		return nil, nil

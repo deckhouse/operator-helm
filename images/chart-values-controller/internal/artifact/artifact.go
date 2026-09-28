@@ -42,32 +42,29 @@ var ErrArtifactTooLarge = errors.New("chart artifact exceeds the configured size
 var ErrArtifactTooManyEntries = errors.New("chart archive holds too many entries")
 
 const (
-	// maxArchiveEntries bounds how many tar entries are walked before the archive is refused, about an order of magnitude over the largest real chart.
+	// maxArchiveEntries bounds how many tar entries are walked before the archive is refused.
 	maxArchiveEntries = 10_000
 
-	// maxDecompressionRatio bounds the decompressed stream at a multiple of the archive it came from; a real chart of templates and CRDs reaches ratios around ten.
+	// maxDecompressionRatio bounds the decompressed stream at a multiple of the compressed archive.
 	maxDecompressionRatio = 50
 
-	// minDecompressedBytes is the floor under that bound; it clears what maxArchiveEntries tar headers cost on their own (512 bytes each, about 5 MiB).
+	// minDecompressedBytes is the floor under that bound, above what the tar headers alone cost.
 	minDecompressedBytes = 8 << 20
 
-	// maxDecompressedBytes is the ceiling over it, so a large archive cannot license a multi-gigabyte read on the ratio alone.
+	// maxDecompressedBytes is the ceiling over it, whatever the ratio would allow.
 	maxDecompressedBytes = 512 << 20
 )
 
-// budget is what the whole extraction is allowed to cost, counted at what leaves gzip, which every byte the archive carries passes — skipped entries included.
 type budget struct {
 	ctx   context.Context
 	limit int64
 	read  int64
 }
 
-// reader returns r bounded by this budget and by ctx, and is what keeps the counter.
 func (b *budget) reader(r io.Reader) io.Reader {
 	return &boundedReader{budget: b, r: r}
 }
 
-// afford reports whether an entry that declares size fits in what is left, booking nothing. It catches the sparse entry, whose holes tar fabricates out of nothing (archive/tar zeroReader) and so never pass a reader.
 func (b *budget) afford(size int64) error {
 	if size > b.limit-b.read {
 		return b.tooLarge()
@@ -108,7 +105,6 @@ func (b *boundedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// cancellableReader carries ctx into a reader that consumes many small pieces per Read of its own, as gzip does walking concatenated members (compress/gzip gunzip.go).
 type cancellableReader struct {
 	ctx context.Context
 	r   io.Reader
@@ -122,7 +118,6 @@ func (c *cancellableReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
-// decompressedLimit is the total an archive of compressed bytes may expand to; the division keeps the multiplication from overflowing.
 func decompressedLimit(compressed int64) int64 {
 	if compressed > maxDecompressedBytes/maxDecompressionRatio {
 		return maxDecompressedBytes
@@ -194,7 +189,6 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 	tr := tar.NewReader(spent.reader(gz))
 
 	for entries := 0; ; entries++ {
-		// The byte budget is only consulted while bytes move, and a header-only entry moves almost none.
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -210,7 +204,6 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 		if err != nil {
 			if errors.Is(err, ErrArtifactTooLarge) || errors.Is(err, context.Canceled) ||
 				errors.Is(err, context.DeadlineExceeded) {
-				// The reader's own verdict, reported as itself rather than as a tar failure.
 				return nil, err
 			}
 
@@ -221,14 +214,13 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 			continue
 		}
 
-		// A packaged chart stores files under a single top-level directory, e.g. "podinfo/values.yaml".
 		parts := strings.Split(path.Clean(header.Name), "/")
 		if len(parts) == 2 && parts[1] == "values.yaml" {
 			if err := spent.afford(header.Size); err != nil {
 				return nil, err
 			}
 
-			// maxBytes bounds this one file on top of the budget, being smaller than what the archive may cost to walk.
+			// maxBytes bounds this one file, on top of and independently of the extraction budget.
 			content, err := io.ReadAll(io.LimitReader(&cancellableReader{ctx: ctx, r: tr}, maxBytes+1))
 			if err != nil {
 				if errors.Is(err, ErrArtifactTooLarge) || errors.Is(err, context.Canceled) ||

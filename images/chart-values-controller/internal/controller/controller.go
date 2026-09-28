@@ -46,10 +46,10 @@ type (
 	conditionsFunc func(client.Object) []metav1.Condition
 )
 
-// conflictRetryDelay is how long a pass waits before judging an auxiliary resource again after its delete was refused; the write that refused it may carry no event past the predicate.
+// conflictRetryDelay is how long a pass waits before judging an auxiliary resource again.
 const conflictRetryDelay = 10 * time.Second
 
-// reconciler re-caches values.yaml whenever an auxiliary source resource publishes a new artifact revision, and deletes the resource once its expires-at annotation has passed.
+// reconciler re-caches values.yaml on a new artifact revision and deletes a resource once expired.
 type reconciler struct {
 	client           client.Client
 	cache            *cache.Cache
@@ -89,7 +89,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	// The refresh can outlast the expiry this pass judged to be ahead of it, and controller-runtime schedules only a positive RequeueAfter.
+	// The refresh can outlast the expiry this pass judged to be ahead of it.
 	if remaining := time.Until(expiresAt); remaining > 0 {
 		return reconcile.Result{RequeueAfter: remaining}, nil
 	}
@@ -97,7 +97,6 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return r.deleteExpired(ctx, obj, name)
 }
 
-// deleteExpired removes the exact auxiliary resource this pass read and judged expired, preconditioned on its UID and resourceVersion, and drops its cache entry once it is gone.
 func (r *reconciler) deleteExpired(ctx context.Context, obj client.Object, name string) (reconcile.Result, error) {
 	uid, resourceVersion := obj.GetUID(), obj.GetResourceVersion()
 
@@ -126,7 +125,7 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 		return
 	}
 
-	// The entry itself records the revision it was extracted from; what this process last wrote would be the wrong fact, since the resolver caches on every miss too.
+	// The entry records the revision it came from, which the resolver's own writes keep true too.
 	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest != cache.DigestUnknown && entry.Digest == art.Digest {
 		return
 	}
@@ -137,7 +136,6 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 			log.FromContext(ctx).Error(err, "failed to refresh cached values.yaml", "name", name)
 		}
 
-		// The artifact moved and this pass could not read the new revision, which is judged exactly as a refused write is.
 		r.invalidateOutdated(ctx, name, art.Digest)
 
 		return
@@ -156,7 +154,6 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 	}
 }
 
-// invalidateOutdated drops the entry under a key whose refresh could not be completed, unless the entry records the very revision that was being refreshed.
 func (r *reconciler) invalidateOutdated(ctx context.Context, name, digest string) {
 	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest != cache.DigestUnknown && entry.Digest == digest {
 		return
@@ -227,7 +224,6 @@ func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient 
 	return nil
 }
 
-// changePredicate limits reconciliation to managed resources and, for updates, to a new artifact revision or a refreshed expires-at.
 func changePredicate(artifactOf artifactFunc) predicate.Predicate {
 	managed := func(o client.Object) bool {
 		return o.GetLabels()[labels.ManagedBy] == labels.ManagedByValue
