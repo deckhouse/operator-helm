@@ -57,7 +57,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/internalobj"
 	"github.com/deckhouse/operator-helm/internal/namespace"
 	"github.com/deckhouse/operator-helm/internal/rbac"
-	"github.com/deckhouse/operator-helm/internal/reconcile/pass"
+	"github.com/deckhouse/operator-helm/internal/reconcile/lifecycle"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -2508,9 +2508,9 @@ func TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone(t *testing.T) {
 		if err != nil {
 			t.Fatalf("attempt %d: Reconcile returned %v", attempt, err)
 		}
-		if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
+		if result.RequeueAfter != lifecycle.InternalResourceDeletionRequeueInterval {
 			t.Fatalf("attempt %d: requeueAfter = %v, want %v",
-				attempt, result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+				attempt, result.RequeueAfter, lifecycle.InternalResourceDeletionRequeueInterval)
 		}
 
 		settled := &helmv1alpha1.HelmApplication{}
@@ -2659,8 +2659,8 @@ func TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminati
 	if err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
-	if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
-		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+	if result.RequeueAfter != lifecycle.InternalResourceDeletionRequeueInterval {
+		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, lifecycle.InternalResourceDeletionRequeueInterval)
 	}
 
 	if objectExists(t, c, accountKey, &corev1.ServiceAccount{}) {
@@ -2798,8 +2798,8 @@ func TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight(t 
 	if err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
-	if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
-		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+	if result.RequeueAfter != lifecycle.InternalResourceDeletionRequeueInterval {
+		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, lifecycle.InternalResourceDeletionRequeueInterval)
 	}
 
 	repaired := &rbacv1.RoleBinding{}
@@ -2883,8 +2883,8 @@ func TestReconcileDeleteOfAnAddonRepairsNoIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
-	if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
-		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+	if result.RequeueAfter != lifecycle.InternalResourceDeletionRequeueInterval {
+		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, lifecycle.InternalResourceDeletionRequeueInterval)
 	}
 
 	if identity.ensureCalls != 1 {
@@ -2949,9 +2949,9 @@ func TestReconcileDeleteKeepsWaitingWhenTheIdentityRepairIsBlockedByAForeignObje
 		if err != nil {
 			t.Fatalf("attempt %d: a terminal repair failure must not be handed to the work queue: %v", attempt, err)
 		}
-		if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
+		if result.RequeueAfter != lifecycle.InternalResourceDeletionRequeueInterval {
 			t.Fatalf("attempt %d: requeueAfter = %v, want %v",
-				attempt, result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+				attempt, result.RequeueAfter, lifecycle.InternalResourceDeletionRequeueInterval)
 		}
 	}
 
@@ -3094,8 +3094,8 @@ func TestReconcileDeleteOfAnAddonIgnoresATerminatingTargetNamespace(t *testing.T
 	if err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
-	if result.RequeueAfter != pass.InternalResourceDeletionRequeueInterval {
-		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, pass.InternalResourceDeletionRequeueInterval)
+	if result.RequeueAfter != lifecycle.InternalResourceDeletionRequeueInterval {
+		t.Fatalf("requeueAfter = %v, want %v", result.RequeueAfter, lifecycle.InternalResourceDeletionRequeueInterval)
 	}
 
 	if identity.removeCalls != 0 {

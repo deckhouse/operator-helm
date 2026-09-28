@@ -14,9 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package pass holds what one reconcile pass does the same way whichever kind it runs on:
+// Package lifecycle holds the steps a reconcile pass takes around the object's own lifecycle:
 // consuming the force reconcile annotation and waiting on an internal resource's deletion.
-package pass
+package lifecycle
 
 import (
 	"context"
