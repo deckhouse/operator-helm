@@ -21,14 +21,8 @@ rules:
   - deletecollection
   - patch
   - update
-# Reading a repository is granted here rather than in the user capability: the registry
-# password lives in the spec, so it must not reach a read-only level.
-#
-# The cluster-scoped catalog an application may also pick a chart from,
-# HelmClusterApplicationChart, is deliberately not listed: a namespace capability is
-# only ever bound with a RoleBinding, so a rule on a cluster-scoped kind would never
-# authorize anything and would only pretend to. That catalog is read through the
-# system-scoped view capability of this module instead.
+# Grants reading a repository here rather than in the user capability, and lists no
+# cluster-scoped kind.
 - apiGroups:
   - helm.deckhouse.io
   resources:

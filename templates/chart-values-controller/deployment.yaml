@@ -1,11 +1,6 @@
 {{- $priorityClassName := include "priorityClassName" . }}
 
-{{- /*
-  The cache volume and the budget the controller keeps inside it are one decision,
-  so they are one number here: the budget is three quarters of the volume, leaving
-  a quarter for filesystem overhead and for entries rounded up to whole blocks.
-  Deriving it is what keeps a later edit of one from silently outgrowing the other.
-*/}}
+{{- /* The cache budget is three quarters of the cache volume. */}}
 {{- $cacheVolumeMB := 512 }}
 {{- $cacheBudgetMB := div (mul $cacheVolumeMB 3) 4 }}
 
@@ -146,9 +141,7 @@ spec:
       {{- include "helm_lib_tolerations" (tuple . "system") | nindent 6 }}
       volumes:
         - name: cache
-          # Emergency cap, not a cleanup mechanism: on overflow the kubelet evicts
-          # the pod. What bounds the cache is --cache-budget-mb above, derived from
-          # this limit; the gap between them is filesystem overhead.
+          # Caps the cache volume; on overflow the kubelet evicts the pod.
           emptyDir:
             sizeLimit: {{ $cacheVolumeMB }}Mi
         - name: api-tls

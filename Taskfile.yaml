@@ -8,12 +8,8 @@ vars:
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
   golangciLintVersion: "v2.13.2"
 
-# Only the modules this repository authors are listed, including tools/internalcrds.
-# images/kube-api-rewriter is a separate upstream module vendored in for the build, and
-# images/helm-controller and images/source-controller carry nothing but their werf
-# files, so none of them is ours to lint, format or test here. The one exception is
-# the rewriter's operatornelm package, which is this module's own rule table: its
-# tests run from test:rewrite-rules below.
+# Lists only the modules this repository authors, including tools/internalcrds. The
+# rewriter's operatornelm package is covered by test:rewrite-rules below.
 includes:
   api:
     taskfile: ./api/Taskfile.dist.yaml
@@ -116,12 +112,8 @@ tasks:
       - |
         git diff --exit-code crds/embedded || (echo "Please run task generate:internal-crds and commit changes" && exit 1)
 
-  # The shared deps task installs golangci-lint through the upstream install.sh,
-  # whose checksum lookup is an unanchored grep: releases now ship an SBOM entry
-  # next to the archive, both lines match, and the verification fails for every
-  # version past v2.8.0. Building the binary with the toolchain already present
-  # sidesteps the download and keeps the linter new enough to read a module that
-  # targets this repository's Go version.
+  # Builds golangci-lint with the local toolchain instead of the upstream
+  # install.sh used by the shared deps task.
   install:golangci-lint:
     desc: "Install golangci-lint binary to bin/golangci-lint-<version>."
     status:
@@ -142,11 +134,8 @@ tasks:
       - task: internalcrds:test:unit
       - task: test:rewrite-rules
 
-  # The rule table and the generated definitions are two halves of one
-  # agreement, and only a live cluster reports a disagreement: a request the
-  # proxy renames to a group, kind or resource type no definition declares is
-  # answered "not found". The test compares the two, and reads the definitions
-  # from outside its own module, which the test cache does not track.
+  # Compares the proxy rule table against the generated definitions, uncached
+  # because the definitions live outside the test's own module.
   test:rewrite-rules:
     desc: "Check the proxy rewrite rules against the generated definitions."
     cmds:
