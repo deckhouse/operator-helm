@@ -92,11 +92,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		ConditionTypes:     rel.Object().GetConditionTypesForUpdate(),
 	}
 
-	// Claimed before the finalizer, so a duplicate that loses the race accrues none to clean up.
+	// Released before acquiring, so a pass that goes on to fail acquisition still frees what it left.
 	if err := r.deps.Claims.DropStale(ctx, rel); err != nil {
 		return reconcile.Result{}, fmt.Errorf("releasing stale chart claims: %w", err)
 	}
 
+	// Claimed before the finalizer, so a duplicate that loses the race accrues none to clean up.
 	acquired, holder, err := r.deps.Claims.Acquire(ctx, rel)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("acquiring chart claim: %w", err)
@@ -448,12 +449,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 
 	names := rel.InternalNames()
 
-	// Torn down in order - release, then sources, then identity - each waited on before the next.
+	// A terminating namespace is the one case that order cannot serve, so it is handled first.
 	identityRemoved, err := r.removeIdentityOfTerminatingNamespace(ctx, rel)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
 
+	// Torn down in order - release, then sources, then identity - each waited on before the next.
 	release, err := r.deps.Releases.Cleanup(ctx, names)
 	if err != nil {
 		return reconcile.Result{}, err

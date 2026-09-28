@@ -96,6 +96,9 @@ func (v *HelmClusterAddonWebhookValidator) ValidateDelete(_ context.Context, add
 
 // validateNameFitsTheLabel rejects a name that is not a valid label value, since every
 // internal object derived from an addon repeats it in the source-name label.
+//
+// CREATE only, and deliberately not a CEL rule: a rule on the object runs on every write, so an
+// addon that already carries a longer name could not update its status nor shed its finalizer.
 func validateNameFitsTheLabel(addon *helmv1alpha1.HelmClusterAddon) error {
 	errs := validation.IsValidLabelValue(addon.Name)
 	if len(errs) == 0 {

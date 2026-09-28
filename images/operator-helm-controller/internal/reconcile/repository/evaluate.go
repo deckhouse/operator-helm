@@ -149,8 +149,8 @@ func Evaluate(in Inputs) Decision {
 		}
 
 		if fetchSucceeded && !catalogFailed && !fetchIncomplete {
-			// Written with pending tags included, but never by a pass that ran out of its budget:
-			// only then is the catalog the repository's full answer as to which versions exist.
+			// Written with pending tags included, but never by a pass that ran out of its budget,
+			// whose catalog is not the repository's full answer as to which versions exist.
 			status.LastSyncedGeneration = in.Generation
 
 			if in.Fetch.Pending == 0 {
@@ -277,7 +277,7 @@ func partialSyncMessage(in Inputs) string {
 	}
 
 	if in.Fetch != nil && in.Fetch.Pending > 0 && in.Current.LastSuccessfulSyncTime == nil {
-		// Only on the first pass: afterwards the frozen Last Sync time carries the same signal.
+		// Only until a full sync has succeeded: afterwards the frozen Last Sync time carries it.
 		parts = append(parts, fmt.Sprintf("The first repository read left %d chart versions unresolved", in.Fetch.Pending))
 	}
 

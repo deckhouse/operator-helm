@@ -137,7 +137,7 @@ func (s *Claims) Drop(ctx context.Context, rel contract.Release) error {
 }
 
 // DropStale deletes the claim Leases this addon still owns for repository/chart pairs it no
-// longer references, found by the source-name label every claim carries.
+// longer references and has recorded moving off, found by the source-name label on each claim.
 func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
 	// An absent record reads as unknown, not as "nothing deployed", so nothing is freed.
 	last := rel.LastAppliedChart()
@@ -147,6 +147,7 @@ func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
 
 	current := s.leaseKey(rel).Name
 	if utils.GetChartClaimLeaseName(last.Repository.Name, last.Chart) != current {
+		// Freed only once the record names the current pair: the one it still names may be deployed.
 		return nil
 	}
 

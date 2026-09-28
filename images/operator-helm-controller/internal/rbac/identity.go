@@ -45,6 +45,8 @@ const ApplicationRoleName = "operator-helm-application"
 // Identity provides the identity a release is applied with: a ServiceAccount in the operator
 // namespace, a Role in the target namespace and a RoleBinding tying the two together.
 type Identity struct {
+	// Reads bypass the manager's cache, which holds no accounts and only labelled bindings,
+	// so an unlabelled foreign object is seen rather than read as absent.
 	client          client.Client
 	targetNamespace string
 }

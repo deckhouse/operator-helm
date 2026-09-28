@@ -31,7 +31,8 @@ import (
 	"github.com/deckhouse/operator-helm/internal/rbac"
 )
 
-// mapRoleToApplications enqueues every application of the namespace a change to the shared Role reaches.
+// mapRoleToApplications enqueues every application of the namespace a change to the shared
+// Role reaches.
 func mapRoleToApplications(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		// Matched by name: a Role stripped of the managed-by label arrives here as a deletion.
