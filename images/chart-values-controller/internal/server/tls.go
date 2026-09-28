@@ -27,9 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// watcherOption tunes the certificate watcher before it is started. The server
-// takes the defaults; the options exist for the tests, which need the poll
-// backstop to fire in milliseconds and a signal to wait for instead of a sleep.
+// watcherOption tunes the certificate watcher before it is started; the server takes the defaults and only tests pass one.
 type watcherOption func(*certwatcher.CertWatcher)
 
 // withWatchInterval replaces the 10s poll backstop.
@@ -39,31 +37,15 @@ func withWatchInterval(interval time.Duration) watcherOption {
 	}
 }
 
-// withReloadCallback reports every pair the watcher installs, starting with the
-// one it read while being constructed.
+// withReloadCallback reports every pair the watcher installs, starting with the one it read while being constructed.
 func withReloadCallback(callback func(tls.Certificate)) watcherOption {
 	return func(watcher *certwatcher.CertWatcher) {
 		watcher.RegisterCallback(callback)
 	}
 }
 
-// newTLSConfig builds the TLS configuration the API is served with, so that a
-// certificate reissued by the tls-certificates-controller hook is picked up
-// without restarting the process: the pair is served from memory through
-// GetCertificate and reloaded when the mounted files change.
-//
-// The reload is controller-runtime's certwatcher — the same machinery the
-// validating webhook of operator-helm-controller gets from the manager's
-// webhook server, which serves its certificate out of a mounted Secret the
-// same way. It watches the two paths with fsnotify and re-reads them on a
-// 10s poll as a backstop, so a handshake never touches the disk, a pair
-// caught half-written fails tls.X509KeyPair and is logged and dropped
-// instead of replacing the working one, and the next event or poll picks up
-// the complete pair.
-//
-// The watcher runs until ctx is done; an initial read that fails is fatal,
-// because there is no previous pair to fall back to and the API could not be
-// served at all.
+// newTLSConfig serves the key pair from memory through GetCertificate, reloaded by controller-runtime's
+// certwatcher (fsnotify plus a 10s poll) so a reissued certificate is picked up without a restart.
 func newTLSConfig(ctx context.Context, certFile, keyFile string, opts ...watcherOption) (*tls.Config, error) {
 	watcher, err := certwatcher.New(certFile, keyFile)
 	if err != nil {
@@ -75,10 +57,7 @@ func newTLSConfig(ctx context.Context, certFile, keyFile string, opts ...watcher
 	}
 
 	go func() {
-		// A shutdown that lands while Start is still registering the file
-		// watches comes back as a cancelled context. That is the normal way
-		// the process stops, and the e2e suite fails a run on any error a
-		// controller logs, so it must not be reported as one.
+		// A shutdown landing while Start is still registering the file watches comes back as a cancelled context, which is the normal way the process stops.
 		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.FromContext(ctx).Error(err, "TLS certificate watcher stopped",
 				"cert", certFile, "key", keyFile)

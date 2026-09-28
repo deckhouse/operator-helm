@@ -29,10 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// Access is the resource permission a request must hold. It maps directly onto a
-// SubjectAccessReview resource attribute check. Namespace is empty for a
-// cluster-scoped resource; for a namespaced one it must be set, or the API server
-// answers for the cluster scope — a different question with a different answer.
+// Access is the resource permission a request must hold, as a SubjectAccessReview
+// resource attribute check. Namespace is empty only for a cluster-scoped resource.
 type Access struct {
 	Group     string
 	Resource  string
@@ -48,14 +46,8 @@ type Result struct {
 	Username      string
 }
 
-// Reviewer authenticates bearer tokens via TokenReview and authorizes the
-// resulting subject via SubjectAccessReview.
-// audiences, when set, are the audiences a token has to be valid for. They are
-// sent to the API server and re-checked against what it answers with, so a token
-// minted for some other recipient — another service the caller also talks to —
-// cannot be replayed here. Empty means no audience is required and the API
-// server falls back to its own default audience, which accepts any valid token
-// of the cluster.
+// Reviewer authenticates bearer tokens via TokenReview and authorizes the resulting
+// subject via SubjectAccessReview, against the audiences a token must be valid for.
 type Reviewer struct {
 	tokenReviews  authnclientv1.TokenReviewInterface
 	accessReviews authzclientv1.SubjectAccessReviewInterface
@@ -70,9 +62,8 @@ func New(tokenReviews authnclientv1.TokenReviewInterface, accessReviews authzcli
 	}
 }
 
-// Review authenticates the token and, if authentication succeeds, checks whether
-// the subject is allowed the given access. A returned error indicates an
-// internal failure; expected states are reported via Result.
+// Review authenticates the token and, if that succeeds, checks whether the subject is
+// allowed the given access. A returned error is an internal failure, not a verdict.
 func (r *Reviewer) Review(ctx context.Context, token string, access Access) (Result, error) {
 	reviewed, err := r.tokenReviews.Create(ctx, &authnv1.TokenReview{
 		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: slices.Clone(r.audiences)},
@@ -83,9 +74,7 @@ func (r *Reviewer) Review(ctx context.Context, token string, access Access) (Res
 	if !reviewed.Status.Authenticated {
 		return Result{Authenticated: false}, nil
 	}
-	// status.Audiences is the intersection of what was asked for and what the
-	// token is actually valid for, so an empty one means the token was minted for
-	// somebody else even though it authenticated.
+	// status.Audiences is the intersection of what was asked for and what the token is valid for, so a token minted for somebody else authenticates with none of them.
 	if len(r.audiences) > 0 && !slices.ContainsFunc(r.audiences, func(want string) bool {
 		return slices.Contains(reviewed.Status.Audiences, want)
 	}) {

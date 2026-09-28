@@ -34,74 +34,40 @@ import (
 // values.yaml file.
 var ErrValuesNotFound = errors.New("values.yaml not found in chart archive")
 
-// ErrArtifactTooLarge is returned when a chart artifact exceeds the configured
-// size limit. It guards against memory exhaustion from a malicious or broken
-// source.
+// ErrArtifactTooLarge is returned when a chart artifact exceeds the configured size limit.
 var ErrArtifactTooLarge = errors.New("chart artifact exceeds the configured size limit")
 
-// ErrArtifactTooManyEntries is returned when a chart archive holds more files
-// than any chart plausibly does. Entry headers cost time rather than memory, so
-// the byte budget alone does not bound them.
+// ErrArtifactTooManyEntries is returned when a chart archive holds more files than any
+// chart plausibly does, which the byte budget alone does not bound.
 var ErrArtifactTooManyEntries = errors.New("chart archive holds too many entries")
 
 const (
-	// maxArchiveEntries bounds how many tar entries are walked before the archive
-	// is refused. A packaged chart — templates, CRDs and every vendored subchart —
-	// stays in the hundreds, so this is roughly an order of magnitude of headroom
-	// over the largest real chart and still refuses an archive built purely of
-	// headers.
+	// maxArchiveEntries bounds how many tar entries are walked before the archive is refused, about an order of magnitude over the largest real chart.
 	maxArchiveEntries = 10_000
 
-	// maxDecompressionRatio bounds the whole decompressed stream at a multiple of
-	// the archive it came from. A chart is text, and text gzips well — a chart of
-	// repetitive templates and CRDs reaches ratios around ten — so this leaves a
-	// legitimate chart room while refusing the bomb, whose ratio runs into the
-	// thousands.
+	// maxDecompressionRatio bounds the decompressed stream at a multiple of the archive it came from; a real chart of templates and CRDs reaches ratios around ten.
 	maxDecompressionRatio = 50
 
-	// minDecompressedBytes is the floor under that bound: gzip's own framing makes
-	// the ratio of a very small archive meaningless, and every real chart fits
-	// here anyway. It has to clear what maxArchiveEntries entries cost in tar
-	// headers alone (512 bytes each, about 5 MiB), or the byte bound would refuse
-	// an archive of many small files before the entry bound ever judged it.
+	// minDecompressedBytes is the floor under that bound; it clears what maxArchiveEntries tar headers cost on their own (512 bytes each, about 5 MiB).
 	minDecompressedBytes = 8 << 20
 
-	// maxDecompressedBytes is the ceiling over it, so an archive near the
-	// configured artifact size cannot license a multi-gigabyte read on the ratio
-	// alone.
+	// maxDecompressedBytes is the ceiling over it, so a large archive cannot license a multi-gigabyte read on the ratio alone.
 	maxDecompressedBytes = 512 << 20
 )
 
-// budget is what the whole extraction is allowed to cost. Its counter follows one
-// place only — what leaves gzip — because that is where every byte the archive
-// actually carries passes, entries the walk skips over included: skipping still
-// decompresses them. The one cost it cannot see there is the sparse entry, whose
-// holes tar fabricates out of nothing (archive/tar zeroReader); that one is weighed
-// by afford, against the counter rather than into it.
+// budget is what the whole extraction is allowed to cost, counted at what leaves gzip, which every byte the archive carries passes — skipped entries included.
 type budget struct {
 	ctx   context.Context
 	limit int64
 	read  int64
 }
 
-// reader returns r bounded by this budget and by ctx, and is what keeps the
-// counter. Every Read consults both, so a cancelled request stops mid-copy rather
-// than at the next entry header.
+// reader returns r bounded by this budget and by ctx, and is what keeps the counter.
 func (b *budget) reader(r io.Reader) io.Reader {
 	return &boundedReader{budget: b, r: r}
 }
 
-// afford reports whether an entry that declares size can still be produced within
-// what is left. It books nothing: the bytes of an ordinary entry are counted as
-// they pass through the readers this budget wraps, and booking them here as well
-// would halve what every chart is allowed to weigh.
-//
-// What this catches is the entry whose bytes never pass a reader at all. tar
-// fabricates the holes of a sparse file out of nothing, so its declared size is
-// both the only thing to judge it on and enough to judge it — tar hands out no
-// more than it declared. The check runs on the header, before the entry is read,
-// so an ordinary file is weighed against a budget its own bytes have not yet
-// touched.
+// afford reports whether an entry that declares size fits in what is left, booking nothing. It catches the sparse entry, whose holes tar fabricates out of nothing (archive/tar zeroReader) and so never pass a reader.
 func (b *budget) afford(size int64) error {
 	if size > b.limit-b.read {
 		return b.tooLarge()
@@ -128,8 +94,7 @@ func (b *boundedReader) Read(p []byte) (int, error) {
 		return 0, b.tooLarge()
 	}
 
-	// Read one byte past the limit, so reaching it exactly is still a complete
-	// archive and only the next byte is a breach.
+	// Read one byte past the limit, so reaching it exactly is still a complete archive.
 	if remaining := b.limit + 1 - b.read; remaining < int64(len(p)) {
 		p = p[:remaining]
 	}
@@ -143,10 +108,7 @@ func (b *boundedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// cancellableReader carries ctx into a reader that consumes many small pieces per
-// Read of its own. gzip walks concatenated members inside a single Read
-// (compress/gzip gunzip.go), returning no bytes until one of them holds data, so an
-// archive of empty members would otherwise run to its end whatever ctx said.
+// cancellableReader carries ctx into a reader that consumes many small pieces per Read of its own, as gzip does walking concatenated members (compress/gzip gunzip.go).
 type cancellableReader struct {
 	ctx context.Context
 	r   io.Reader
@@ -160,8 +122,7 @@ func (c *cancellableReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
-// decompressedLimit is the total the archive of compressed bytes may expand to.
-// The division keeps the multiplication from overflowing on an absurd limit.
+// decompressedLimit is the total an archive of compressed bytes may expand to; the division keeps the multiplication from overflowing.
 func decompressedLimit(compressed int64) int64 {
 	if compressed > maxDecompressedBytes/maxDecompressionRatio {
 		return maxDecompressedBytes
@@ -170,12 +131,8 @@ func decompressedLimit(compressed int64) int64 {
 	return max(compressed*maxDecompressionRatio, minDecompressedBytes)
 }
 
-// FetchValues downloads the chart artifact from url, verifies its integrity
-// against digest (format "sha256:<hex>"), and returns the raw bytes of the
-// chart's top-level values.yaml. Artifacts larger than maxBytes are rejected
-// with ErrArtifactTooLarge, as are archives that decompress past
-// decompressedLimit or hold more than maxArchiveEntries entries. Extraction
-// stops as soon as ctx is done.
+// FetchValues downloads the chart artifact from url, verifies it against digest (format
+// "sha256:<hex>") and returns the raw bytes of the chart's top-level values.yaml.
 func FetchValues(ctx context.Context, httpClient *http.Client, url, digest string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -196,8 +153,7 @@ func FetchValues(ctx context.Context, httpClient *http.Client, url, digest strin
 		return nil, fmt.Errorf("%w (%d bytes > %d bytes)", ErrArtifactTooLarge, resp.ContentLength, maxBytes)
 	}
 
-	// Read one byte past the limit so an oversized body is detected rather than
-	// silently truncated (which would otherwise surface as a digest mismatch).
+	// Read one byte past the limit so an oversized body is detected rather than silently truncated.
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading artifact body: %w", err)
@@ -238,8 +194,7 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 	tr := tar.NewReader(spent.reader(gz))
 
 	for entries := 0; ; entries++ {
-		// The byte budget is only consulted while bytes move; a header-only entry
-		// moves almost none, so cancellation is checked here as well.
+		// The byte budget is only consulted while bytes move, and a header-only entry moves almost none.
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -255,8 +210,7 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 		if err != nil {
 			if errors.Is(err, ErrArtifactTooLarge) || errors.Is(err, context.Canceled) ||
 				errors.Is(err, context.DeadlineExceeded) {
-				// The reader's own verdict, reported as itself: wrapping it as a tar
-				// failure would read as a broken chart rather than a refused one.
+				// The reader's own verdict, reported as itself rather than as a tar failure.
 				return nil, err
 			}
 
@@ -267,16 +221,14 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 			continue
 		}
 
-		// A packaged chart stores files under a single top-level directory,
-		// e.g. "podinfo/values.yaml". Match values.yaml at exactly that depth.
+		// A packaged chart stores files under a single top-level directory, e.g. "podinfo/values.yaml".
 		parts := strings.Split(path.Clean(header.Name), "/")
 		if len(parts) == 2 && parts[1] == "values.yaml" {
 			if err := spent.afford(header.Size); err != nil {
 				return nil, err
 			}
 
-			// maxBytes bounds this one file on top of the budget, since what the caller
-			// can be handed is smaller than what the archive may cost to walk.
+			// maxBytes bounds this one file on top of the budget, being smaller than what the archive may cost to walk.
 			content, err := io.ReadAll(io.LimitReader(&cancellableReader{ctx: ctx, r: tr}, maxBytes+1))
 			if err != nil {
 				if errors.Is(err, ErrArtifactTooLarge) || errors.Is(err, context.Canceled) ||

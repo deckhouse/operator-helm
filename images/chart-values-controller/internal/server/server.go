@@ -34,60 +34,29 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// retryAfterSeconds is advertised to clients while an artifact is still being
-// prepared, so polling clients back off consistently.
+// retryAfterSeconds is advertised to clients while an artifact is still being prepared.
 const retryAfterSeconds = 3
 
 const (
-	// maxRequestBodyBytes bounds the request body before it is decoded. A
-	// legitimate request is five short string fields (repositoryKind, namespace,
-	// repositoryName, chart, version); 4 KiB is generous headroom over that and
-	// still small enough that an unauthenticated caller cannot use the body to
-	// hold the handler on an oversized read.
+	// maxRequestBodyBytes bounds the request body before it is decoded, generously over the five short string fields a legitimate request carries.
 	maxRequestBodyBytes = 4 << 10
 
-	// requestTimeout is the budget for one request from end to end. Answering runs
-	// a chain of steps — the token and access reviews, the auxiliary source object,
-	// the registry probe, the download and the extraction of the artifact — and each
-	// bounds only itself, so their sum is bounded by nothing. The budget is put on
-	// the request's context, which every one of those steps already takes, so they
-	// all inherit it and the chain as a whole ends on time.
-	//
-	// It is set well above the slowest answer the resolver can legitimately
-	// produce (a probe followed by the download of a whole chart artifact) so that
-	// it ends only a request that has actually stopped making progress.
+	// requestTimeout is the budget for one request end to end, carried on its context so every step inherits it. It is set above the slowest legitimate answer: a probe followed by the download of a whole chart artifact.
 	requestTimeout = 90 * time.Second
 
-	// readTimeout and writeTimeout bound how long a connection may take to send
-	// its request body or receive its response, closing the gap
-	// ReadHeaderTimeout alone leaves open: an unauthenticated client could
-	// otherwise hold either half of the exchange open indefinitely.
-	//
-	// WriteTimeout runs from the moment the headers are read, so it covers the
-	// handler's own work as well as the write, and it ends a request by dropping
-	// the connection. It is therefore derived from the request budget plus
-	// writeResponseMargin rather than chosen on its own: the budget has to expire
-	// first, leaving the handler room to write its answer (and covering the body
-	// read that happens on the same clock), or a client that should have been told
-	// why it got nothing gets a reset connection instead.
+	// readTimeout and writeTimeout bound how long a connection may take to send its body or receive its response.
+	// WriteTimeout runs from the moment the headers are read, so it is requestTimeout plus room for the handler to write its answer.
 	readTimeout         = 10 * time.Second
 	writeResponseMargin = 30 * time.Second
 	writeTimeout        = requestTimeout + writeResponseMargin
 
-	// maxChartLen bounds the chart field. Chart names are not restricted to a
-	// naming grammar — an index entry may legally contain a space — so only a
-	// generous length ceiling is enforced.
+	// maxChartLen bounds the chart field, which carries no naming grammar of its own.
 	maxChartLen = 253
 
-	// maxRepositoryNameLen bounds the repositoryName field at what every repository
-	// CRD enforces on metadata.name: the name travels on as a label value, and that
-	// is the length one can hold.
+	// maxRepositoryNameLen bounds the repositoryName field at what every repository CRD enforces on metadata.name, which is the length a label value holds.
 	maxRepositoryNameLen = 63
 
-	// maxVersionLen bounds the version field at the OCI Distribution Spec's own
-	// tag length limit (128 characters): a version may travel on as an OCI tag,
-	// and a Helm repository index version is always far shorter. It is not
-	// validated as semver, because an OCI tag is not one.
+	// maxVersionLen bounds the version field at the OCI Distribution Spec's tag length limit, since a version may travel on as an OCI tag.
 	maxVersionLen = 128
 )
 
@@ -99,8 +68,8 @@ type tokenReviewer interface {
 	Review(ctx context.Context, token string, access auth.Access) (auth.Result, error)
 }
 
-// Server exposes the chart-values HTTP API as a controller-runtime Runnable.
-// It does not require leader election so it can serve from any replica.
+// Server exposes the chart-values HTTP API as a controller-runtime Runnable that
+// needs no leader election.
 type Server struct {
 	addr        string
 	resolver    chartValuesResolver
@@ -138,8 +107,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		// The manager context is already cancelled here, so shutdown must run on a
-		// fresh context with its own deadline.
+		// The manager context is already cancelled here, so shutdown runs on a fresh one.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx) //nolint:contextcheck // parent ctx is done, a fresh one is required for graceful shutdown
@@ -153,9 +121,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		srv.TLSConfig = tlsConfig
 
-		// Both arguments are empty on purpose: the pair comes from TLSConfig's
-		// GetCertificate, which keeps serving a reissued certificate without a
-		// restart. Passing the paths here would read them once and pin that read.
+		// Both arguments are empty on purpose: passing the paths would read them once and pin that read, instead of serving TLSConfig's GetCertificate.
 		serve = func() error {
 			return srv.ListenAndServeTLS("", "")
 		}
@@ -168,11 +134,7 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-// handler builds the API's routes under the request budget. The deadline sits in
-// a middleware over the mux rather than inside the handler, because it bounds
-// every request the API serves — including the ones a later route adds — and
-// because it then wraps the whole handler, routing and response writing included,
-// instead of only the part of it that runs after the handler took over.
+// handler builds the API's routes under the request budget, which a middleware over the mux puts on every request the API serves.
 func (s *Server) handler() http.Handler {
 	return withRequestDeadline(requestTimeout, s.routes())
 }
@@ -184,9 +146,7 @@ func (s *Server) routes() *http.ServeMux {
 	return mux
 }
 
-// withRequestDeadline gives every request one deadline that all of its steps
-// inherit through the context. It only narrows: a client that sent its own
-// shorter deadline, or a shutting-down server, still ends the request sooner.
+// withRequestDeadline gives every request one deadline that all of its steps inherit through the context, and only ever narrows it.
 func withRequestDeadline(timeout time.Duration, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
@@ -196,10 +156,7 @@ func withRequestDeadline(timeout time.Duration, next http.Handler) http.Handler 
 	})
 }
 
-// newHTTPServer builds the http.Server the API is served through, with every
-// timeout that keeps an unauthenticated client from holding a connection open
-// indefinitely: ReadHeaderTimeout for the request line and headers,
-// ReadTimeout for the body, and WriteTimeout for the response.
+// newHTTPServer builds the http.Server the API is served through, with a timeout on each of the request line, the body and the response.
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
@@ -221,9 +178,7 @@ type chartValuesRequest struct {
 func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 	logger := log.FromContext(r.Context())
 
-	// The bearer token is read from the header alone, so this check can run
-	// before the body is even looked at: an unauthenticated caller is rejected
-	// without the cost of reading or decoding whatever it sent.
+	// The bearer token is read from the header alone, so an unauthenticated caller is rejected before the body is read.
 	token, ok := bearerToken(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "missing or malformed Authorization header")
@@ -249,9 +204,7 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Answering exposes the values that feed into the resource of the repository's
-	// family, so the caller must be allowed to create one — in the namespace it
-	// would be created in, when that resource is namespaced.
+	// Answering exposes the values that feed into the resource of the repository's family, so the caller must be allowed to create one.
 	access, displayKind, namespaced, ok := accessFor(req.RepositoryKind, req.Namespace)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "UNSUPPORTED_REPOSITORY_KIND",
@@ -259,9 +212,7 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if namespaced {
-		// A name no namespace could carry would otherwise travel as far as the
-		// access review and come back as a 403, which tells the caller nothing
-		// about the field they got wrong.
+		// A name no namespace could carry would otherwise come back from the access review as a 403.
 		if errs := validation.IsDNS1123Label(req.Namespace); len(errs) > 0 {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
 				"namespace is required for this repository kind and must be a valid namespace name")
@@ -274,8 +225,7 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The access review itself needs the resource derived above, so it cannot run
-	// any earlier than this.
+	// The access review needs the resource derived above, so it cannot run any earlier.
 	if !s.authorize(w, r, token, access, displayKind) {
 		return
 	}
@@ -297,11 +247,7 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A step that ran out of budget reports it as its own kind of failure — an
-	// aborted download reads as a fetch failure, an aborted probe as pending — so
-	// the budget is consulted before the outcome is mapped, or the client would be
-	// told the chart is unreachable when it was the clock. A ready result is not
-	// second-guessed: the values are in hand and correct however late it is.
+	// A step that ran out of budget reports it as its own kind of failure, so the budget is consulted before the outcome is mapped.
 	if result.Outcome != resolver.OutcomeReady && budgetExhausted(w, r) {
 		return
 	}
@@ -334,14 +280,7 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// accessFor maps a repository kind to the permission that answering for it
-// requires, plus the Kubernetes kind that permission is expressed in (for use in a
-// message to the caller) and whether that permission is a namespaced question. Both
-// application kinds are namespaced: even the cluster-wide repository's values reach
-// a HelmApplication that lives in a namespace. Values of a chart from an application
-// repository — namespaced or cluster-wide — feed into a HelmApplication in the
-// request's namespace, so that is what the caller must be allowed to create; values
-// from an addon repository feed into the cluster-scoped HelmClusterAddon.
+// accessFor maps a repository kind to the permission answering for it requires, the Kubernetes kind that permission names, and whether it is a namespaced question.
 func accessFor(kind, namespace string) (access auth.Access, displayKind string, namespaced, ok bool) {
 	switch strings.ToLower(kind) {
 	case string(resolver.RepositoryKindHelmClusterAddon):
@@ -362,14 +301,7 @@ func accessFor(kind, namespace string) (access auth.Access, displayKind string, 
 	}
 }
 
-// repositoryNameMinLen returns the minimum length kind's own repository CRD
-// enforces on metadata.name, so a repositoryName that could never have been created
-// is rejected here instead of reaching the resolver and reading back as
-// repository_not_found. Zero means the CRD imposes none: HelmClusterAddonRepository
-// shipped without a minimum and cannot gain one without invalidating the short names
-// already in use, while HelmApplicationRepository and HelmClusterApplicationRepository
-// both require three characters. The maximum is not per-kind — every repository CRD
-// caps the name at the length a label value can hold.
+// repositoryNameMinLen returns the minimum length kind's own repository CRD enforces on metadata.name; zero means it imposes none, as HelmClusterAddonRepository shipped without one.
 func repositoryNameMinLen(kind string) int {
 	switch strings.ToLower(kind) {
 	case string(resolver.RepositoryKindHelmApplication), string(resolver.RepositoryKindHelmClusterApplication):
@@ -390,9 +322,7 @@ func validateChartValuesFields(req chartValuesRequest) error {
 		return fmt.Errorf("repositoryName must be at most %d characters long", maxRepositoryNameLen)
 	}
 
-	// chart and version carry no naming grammar of their own — a repository index
-	// entry may legally contain a space, and an OCI tag is not semver — so only a
-	// whitespace-only value and a generous length bound are rejected.
+	// chart and version carry no naming grammar of their own: an index entry may contain a space and an OCI tag is not semver.
 	if strings.TrimSpace(req.Chart) == "" {
 		return errors.New("chart must not be blank")
 	}
@@ -410,10 +340,7 @@ func validateChartValuesFields(req chartValuesRequest) error {
 	return nil
 }
 
-// authorize reviews token against access and reports whether the request may
-// proceed. On any negative outcome it writes the response itself and returns
-// false. displayKind names the Kubernetes kind access.Resource stands for, for the
-// FORBIDDEN message.
+// authorize reviews token against access and reports whether the request may proceed, writing the response itself on every negative outcome.
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, token string, access auth.Access, displayKind string) bool {
 	logger := log.FromContext(r.Context())
 
@@ -439,15 +366,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, token string,
 	return true
 }
 
-// budgetExhausted reports whether the request's own budget is what ended the step
-// that just failed, answering the client itself when it is. The answer is a 504
-// rather than a dropped connection, and it is the same shape as the 502 a failing
-// upstream already gets: what ran out was the time to reach source-controller and
-// the API server, not anything the caller can fix in its request.
-//
-// Only the request's context is consulted, so a deadline that came from somewhere
-// else — a client that gave up, an upstream timeout of its own — keeps being
-// reported the way it already was.
+// budgetExhausted reports whether the request's own budget ended the step that just failed, answering the client with a 504 when it did.
 func budgetExhausted(w http.ResponseWriter, r *http.Request) bool {
 	if !errors.Is(r.Context().Err(), context.DeadlineExceeded) {
 		return false

@@ -33,18 +33,11 @@ type repositorySpec struct {
 	CACertificate      string
 	InsecureSkipVerify bool
 
-	// Identity is which repository object this is, not what it is called; see
-	// identityOf.
+	// Identity is which repository object this is, not what it is called; see identityOf.
 	Identity string
 }
 
-// repositoryFamily is everything that differs between the repository kinds: how the
-// repository and its chart catalog are read, and how the internal objects the
-// operator derived from that repository are recognised. Namespaced says whether a
-// request must carry a namespace.
-//
-// The functions take the client rather than closing over one because the resolver
-// owns a single client and a family is a value, not a service.
+// repositoryFamily is everything that differs between the repository kinds: how the repository and its catalog are read, and how its internal objects are recognised.
 type repositoryFamily struct {
 	Kind       RepositoryKind
 	Namespaced bool
@@ -55,9 +48,8 @@ type repositoryFamily struct {
 	// ChartVersions reads the catalog entry of one chart. A NotFound error means the
 	// catalog has not caught up yet and the caller should report pending.
 	ChartVersions func(ctx context.Context, c client.Client, namespace, repository, chart string) ([]helmv1alpha1.ChartVersion, error)
-	// InternalLabels selects the internal objects operator-helm-controller derived
-	// from this repository — its HelmRepository and its auth/TLS secrets, all of
-	// which live in the operator namespace and carry the source labels of their kind.
+	// InternalLabels selects the internal objects operator-helm-controller derived from
+	// this repository: its HelmRepository and its auth/TLS secrets.
 	InternalLabels func(namespace, repository string) map[string]string
 }
 
@@ -156,27 +148,12 @@ func specOf(meta metav1.ObjectMeta, spec helmv1alpha1.RepositorySpec) *repositor
 	}
 }
 
-// identityOf names the repository object a chart is read from, so that everything
-// derived from it — the auxiliary source object and the cached values — belongs to
-// that object rather than to its name. A name is reusable: delete a repository and
-// create another one under it, or point the existing one at another url, and the
-// same request would otherwise be answered from what the previous source held.
-//
-// The UID covers deletion and recreation (a new object, whatever its spec says) and
-// the generation covers an edit of the surviving object's spec — url, credentials,
-// TLS. Both repository kinds have a status subresource, so the generation moves only
-// with the spec: the conditions, the observed generation and the catalog the
-// operator writes back on every synchronization leave the cache entry valid, and
-// nothing here re-downloads a chart that did not change.
+// identityOf names the repository object a chart is read from by its UID and generation, so a recreated or re-pointed repository is a different source of the same chart name.
 func identityOf(meta metav1.ObjectMeta) string {
 	return fmt.Sprintf("%s@%d", meta.UID, meta.Generation)
 }
 
-// requireNamespace reports the request-shape error of a family: a namespaced kind
-// needs a namespace to identify its repository. A cluster-scoped kind accepts any
-// namespace, including a non-empty one: for such a kind the namespace is not part of
-// the chart's identity but the caller's authorization context (e.g. the namespace it
-// intends to create a HelmApplication in), which this resolver does not use.
+// requireNamespace reports the request-shape error of a family: a namespaced kind needs a namespace, a cluster-scoped one accepts any.
 func (f repositoryFamily) requireNamespace(namespace string) error {
 	if f.Namespaced && namespace == "" {
 		return fmt.Errorf("repository kind %q is namespaced: namespace is required", f.Kind)

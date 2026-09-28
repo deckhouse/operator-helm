@@ -46,16 +46,10 @@ type (
 	conditionsFunc func(client.Object) []metav1.Condition
 )
 
-// conflictRetryDelay is how long a pass waits before judging an auxiliary resource
-// again after its delete was refused. The write that refused it may well have been
-// filtered out by the predicate (a status change that moved neither the artifact
-// digest nor expires-at), so waiting for an event instead could wait forever.
+// conflictRetryDelay is how long a pass waits before judging an auxiliary resource again after its delete was refused; the write that refused it may carry no event past the predicate.
 const conflictRetryDelay = 10 * time.Second
 
-// reconciler keeps the values cache in sync with an auxiliary source resource
-// (HelmChart or OCIRepository) and deletes the resource once its expires-at
-// annotation has passed. It downloads and re-caches values.yaml whenever the
-// artifact revision changes, so HTTP requests can be served straight from cache.
+// reconciler re-caches values.yaml whenever an auxiliary source resource publishes a new artifact revision, and deletes the resource once its expires-at annotation has passed.
 type reconciler struct {
 	client           client.Client
 	cache            *cache.Cache
@@ -95,11 +89,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	// The refresh downloads an artifact, which can outlast the expiry this pass
-	// judged to be ahead of it. Asking for a requeue in the past is asking for
-	// nothing: controller-runtime schedules only a positive RequeueAfter. Nothing
-	// else would come either — an unchanged revision is filtered by the predicate —
-	// so the object and its entry would sit there for good.
+	// The refresh can outlast the expiry this pass judged to be ahead of it, and controller-runtime schedules only a positive RequeueAfter.
 	if remaining := time.Until(expiresAt); remaining > 0 {
 		return reconcile.Result{RequeueAfter: remaining}, nil
 	}
@@ -107,16 +97,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	return r.deleteExpired(ctx, obj, name)
 }
 
-// deleteExpired removes the exact auxiliary resource this pass read and judged
-// expired. Between that read and here the resolver may have extended the annotation
-// or recreated the object under the same name for a new request, so the delete
-// carries the read's identity as a precondition: the API server then refuses to take
-// away an object somebody is already waiting on. A refusal is an ordinary outcome of
-// the pass, not a failure — the next pass reads the object again and judges it anew.
-//
-// The cache entry is dropped only once the object is really gone. Dropping it first
-// would leave a live object without its values and every request for it answered
-// with a retry until they are downloaded again.
+// deleteExpired removes the exact auxiliary resource this pass read and judged expired, preconditioned on its UID and resourceVersion, and drops its cache entry once it is gone.
 func (r *reconciler) deleteExpired(ctx context.Context, obj client.Object, name string) (reconcile.Result, error) {
 	uid, resourceVersion := obj.GetUID(), obj.GetResourceVersion()
 
@@ -125,8 +106,7 @@ func (r *reconciler) deleteExpired(ctx context.Context, obj client.Object, name 
 	case apierrors.IsConflict(err):
 		return reconcile.Result{RequeueAfter: conflictRetryDelay}, nil
 	case apierrors.IsNotFound(err):
-		// Already gone, by another pass or by a deleted namespace: nothing is waiting
-		// on it, so its cache entry goes too.
+		// Already gone, by another pass or by a deleted namespace, so its cache entry goes too.
 	case err != nil:
 		return reconcile.Result{}, fmt.Errorf("deleting %s: %w", name, err)
 	}
@@ -146,13 +126,7 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 		return
 	}
 
-	// What may be skipped is a key that already holds this revision, and the entry is
-	// what says so: it records the digest it was extracted from. Remembering instead
-	// what this process last wrote would gate on the wrong fact — the resolver caches
-	// on every miss too, and a download it started before this revision was published
-	// can land after this pass, leaving an earlier revision under a key this
-	// controller believes it made current. The entry is the only statement about what
-	// a request would actually be served, and it survives a restart besides.
+	// The entry itself records the revision it was extracted from; what this process last wrote would be the wrong fact, since the resolver caches on every miss too.
 	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest != cache.DigestUnknown && entry.Digest == art.Digest {
 		return
 	}
@@ -163,10 +137,7 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 			log.FromContext(ctx).Error(err, "failed to refresh cached values.yaml", "name", name)
 		}
 
-		// The artifact moved and this pass could not read the new revision — the
-		// network, a refused size, or a republish that dropped values.yaml. What is
-		// under the key is then judged exactly as it is on a refused write: the
-		// failure says nothing about the entry, only that it was not replaced.
+		// The artifact moved and this pass could not read the new revision, which is judged exactly as a refused write is.
 		r.invalidateOutdated(ctx, name, art.Digest)
 
 		return
@@ -185,25 +156,7 @@ func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name s
 	}
 }
 
-// invalidateOutdated settles what stays under one key whose refresh could not be
-// completed, whatever stopped it. The artifact has moved off whatever the entry
-// holds unless the entry itself says otherwise, so serving it would answer a request
-// for the chart's values with an earlier revision's, and the response carries nothing
-// that would let the caller notice. Dropping the entry costs the next request a
-// download — it misses, the resolver prepares the artifact and the client is either
-// served the current values or told to retry — which is the honest answer, and it
-// gives the budget back the room the write needed.
-//
-// Which revision the entry holds is not guessed: the entry records the digest it was
-// extracted from, and both writers (this controller and the resolver, which caches on
-// every miss) record it. An entry already holding the revision being refreshed is
-// current, so it stays, or a tight budget would have every pass throw away what the
-// previous request cached.
-//
-// An entry whose digest is unknown can only come from a container image older than
-// this format, since every write since records one. Nothing attributes it to the
-// current revision and nothing short of a download could, so it goes: once, after
-// which the next request has the resolver write it back with its revision named.
+// invalidateOutdated drops the entry under a key whose refresh could not be completed, unless the entry records the very revision that was being refreshed.
 func (r *reconciler) invalidateOutdated(ctx context.Context, name, digest string) {
 	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest != cache.DigestUnknown && entry.Digest == digest {
 		return
@@ -234,9 +187,8 @@ func isReady(conditions []metav1.Condition) bool {
 	return c != nil && c.Status == metav1.ConditionTrue
 }
 
-// SetupWithManager registers cache-sync/cleanup reconcilers for both auxiliary
-// resource kinds, filtered to resources managed by this controller and triggered
-// on artifact-revision or expires-at changes.
+// SetupWithManager registers cache-sync and cleanup reconcilers for both auxiliary
+// resource kinds, filtered to the resources this controller manages.
 func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient *http.Client, maxArtifactBytes int64) error {
 	helmChart := &reconciler{
 		client:           mgr.GetClient(),
@@ -275,9 +227,7 @@ func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient 
 	return nil
 }
 
-// changePredicate limits reconciliation to managed resources and, for updates,
-// to changes that matter here: a new artifact revision (content changed) or a
-// refreshed expires-at (TTL extended).
+// changePredicate limits reconciliation to managed resources and, for updates, to a new artifact revision or a refreshed expires-at.
 func changePredicate(artifactOf artifactFunc) predicate.Predicate {
 	managed := func(o client.Object) bool {
 		return o.GetLabels()[labels.ManagedBy] == labels.ManagedByValue

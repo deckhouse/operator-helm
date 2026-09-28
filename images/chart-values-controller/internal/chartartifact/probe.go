@@ -14,15 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package chartartifact reads an OCI artifact's manifest to find the layer that holds
-// a packaged Helm chart.
-//
-// A chart version that a helm repository's index publishes in a registry carries no
-// recorded media type: the operator resolves it when an addon is deployed and does not
-// persist it, so this service has to look for itself before it can build the source
-// object that fetches values.yaml. What counts as a chart is not decided here — the
-// media types come from the API module, so this service and the operator cannot drift
-// into disagreeing about the same artifact.
+// Package chartartifact reads an OCI artifact's manifest to find the layer that holds a
+// packaged Helm chart, against the media types the API module defines.
 package chartartifact
 
 import (
@@ -52,21 +45,11 @@ var ErrNotAChart = errors.New("artifact is not a packaged helm chart")
 // Also a verdict rather than a transient failure.
 var ErrTagNotFound = errors.New("registry has no such tag")
 
-// ProbeTimeout bounds one probe end to end: the TLS handshake, the couple of
-// retries remote.WithRetryBackoff attempts internally, and reading the manifest
-// body. It applies even when the caller's context carries no deadline of its own,
-// so a slow or unresponsive registry cannot hold the probe open indefinitely. The
-// probe reads only a small manifest, so this is well under the timeout used to
-// download a full chart artifact.
-//
-// It is exported so the HTTP API can pin that its per-request budget outlasts it:
-// the retry answer a client gets while an artifact is still being prepared has to
-// arrive well before that budget runs out.
+// ProbeTimeout bounds one probe end to end, and applies even when the caller's context carries
+// no deadline. It is exported so the HTTP API can pin that its per-request budget outlasts it.
 const ProbeTimeout = 20 * time.Second
 
-// probeContext bounds ctx by ProbeTimeout. context.WithTimeout keeps whichever
-// deadline is sooner, so a caller's own shorter deadline still wins; only a
-// caller with none at all falls back to ProbeTimeout.
+// probeContext bounds ctx by ProbeTimeout, keeping a caller's own shorter deadline.
 func probeContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, ProbeTimeout)
 }
@@ -81,19 +64,13 @@ var Default Prober = registryProber{}
 
 type registryProber struct{}
 
-// ChartLayerMediaType reads the manifest behind ref and returns the media type of the
-// layer holding the chart.
-//
-// No credentials are ever sent: a version published through a third-party index is
-// pulled anonymously by the source object this answer feeds, so a probe that
-// authenticated would report a chart the pull could not fetch. rt carries transport
-// settings only and may be nil.
+// ChartLayerMediaType reads the manifest behind ref and returns the media type of the layer
+// holding the chart. No credentials are sent; rt carries transport settings only and may be nil.
 func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt http.RoundTripper) (string, error) {
 	ctx, cancel := probeContext(ctx)
 	defer cancel()
 
-	// A transport built by Transport is single-use: fresh per probe and never
-	// shared, so its pool must be drained here rather than outliving this call.
+	// A transport built by Transport is single-use, so its pool must be drained here rather than outliving this call.
 	if closer, ok := rt.(interface{ CloseIdleConnections() }); ok {
 		defer closer.CloseIdleConnections()
 	}
@@ -146,27 +123,14 @@ func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt ht
 	return "", fmt.Errorf("%w: %s has no supported chart layer", ErrNotAChart, ref)
 }
 
-// ErrInvalidCACertificate means the repository's caCertificate holds no PEM
-// encoded certificate. Like the verdicts above it cannot be resolved by trying
-// again: a pool that accepted nothing is still a valid, empty trust root, so
-// ignoring it would turn the fault into a "certificate signed by unknown
-// authority" on every probe, naming the registry instead of the field at fault.
+// ErrInvalidCACertificate means the repository's caCertificate holds no PEM encoded
+// certificate. Like the verdicts above it cannot be resolved by trying again.
 var ErrInvalidCACertificate = errors.New(
 	`caCertificate holds no PEM encoded certificate (it is the same value the operator mirrors into the "ca.crt" key of the repository's internal tls secret)`,
 )
 
-// Transport builds the transport settings for reaching a registry the repository
-// itself names. It returns nil when the repository has nothing to say about the
-// transport, which leaves the caller on the default one.
-//
-// The result is a clone of http.DefaultTransport rather than a bare struct, so it
-// keeps the default's dial and idle-connection timeouts instead of inheriting
-// none of them. It is built fresh for each probe and is not cached across calls:
-// a repository's TLS settings are read (and can change, e.g. a rotated CA) on
-// every hybrid probe, and the probe is rare enough — only while a version's
-// media type is still unresolved — that caching would add a keyed cache and its
-// invalidation for no measurable benefit. Because it is single-use, the caller
-// closes its idle connections once the probe finishes.
+// Transport builds the transport settings for reaching a registry the repository names, as a clone of
+// http.DefaultTransport, or nil when it has none. It is built per probe, whose caller closes it.
 func Transport(caCertificate string, insecure bool) (http.RoundTripper, error) {
 	if caCertificate == "" && !insecure {
 		return nil, nil
