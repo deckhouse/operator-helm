@@ -178,8 +178,6 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(binding.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelManagedBy, apiv1alpha1.LabelManagedByValue))
 	})
 
-	// Nothing here forces a reconciliation: the watches on both kinds are what has to
-	// turn the edit into one, and asking for a reconciliation would hide their absence.
 	It("should restore a narrowed role on its own", func() {
 		By("Narrowing the role the way a namespace owner would")
 		narrowed := []rbacv1.PolicyRule{{

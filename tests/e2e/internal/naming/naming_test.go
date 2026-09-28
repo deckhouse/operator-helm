@@ -18,14 +18,6 @@ package naming
 
 import "testing"
 
-// TestApplicationServiceAccountName pins ApplicationServiceAccountName's output,
-// including against the value operator-helm-controller's DerivedName produces for
-// the same inputs.
-//
-// The first case is the twin of TestDerivedName's
-// `DerivedName("hap", "HelmApplication", "e2e-app-ns", "e2e-test-app")` case in
-// images/operator-helm-controller/internal/utils/name_test.go: a change on either
-// side that is not mirrored on the other breaks one of the two tests.
 func TestApplicationServiceAccountName(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -52,9 +44,6 @@ func TestApplicationServiceAccountName(t *testing.T) {
 			want:      "hap-abcdefghijklmnopq-stable-2b3b33a25854",
 		},
 		{
-			// Twin of the "a truncation that ends in a dot drops it" case in
-			// TestDerivedName
-			// (images/operator-helm-controller/internal/utils/name_test.go).
 			name:      "a truncation that ends in a dot drops it",
 			namespace: "team-a",
 			object:    "abcdefghijklmnopq.x",
@@ -72,11 +61,6 @@ func TestApplicationServiceAccountName(t *testing.T) {
 	}
 }
 
-// TestApplicationReleaseName pins ApplicationReleaseName's output, including
-// against the value operator-helm-controller's HashedReleaseName produces for the
-// same "hap-"-prefixed input. That is the function a HelmApplication's release name
-// comes from (adapter.ApplicationRelease.ReleaseName); HelmReleaseName serves the
-// addon family and agrees with it only for names past the limit.
 func TestApplicationReleaseName(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -89,11 +73,6 @@ func TestApplicationReleaseName(t *testing.T) {
 			want:   "hap-e2e-test-app-helm-eaa08759b576",
 		},
 		{
-			// Twin of the case of the same name in
-			// TestHashedReleaseNameCutsALongName
-			// (images/operator-helm-controller/internal/utils/name_test.go): a
-			// change on either side that is not mirrored on the other breaks one of
-			// the two tests.
 			name:   "a long name is cut to 40 characters and hashed",
 			object: "very-long-application-name-that-is-definitely-over-fifty-three-characters-long",
 			want:   "hap-very-long-application-name-that-is-d-3080981cd4e1",
@@ -110,9 +89,6 @@ func TestApplicationReleaseName(t *testing.T) {
 	}
 }
 
-// TestApplicationRepositoryInternalName pins ApplicationRepositoryInternalName's
-// output, including against the value operator-helm-controller's DerivedName
-// produces for the same inputs.
 func TestApplicationRepositoryInternalName(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -121,21 +97,12 @@ func TestApplicationRepositoryInternalName(t *testing.T) {
 		want      string
 	}{
 		{
-			// Twin of TestDerivedName's "namespaced source carries namespace, name
-			// and a hash" case in
-			// images/operator-helm-controller/internal/utils/name_test.go: a
-			// change on either side that is not mirrored on the other breaks one
-			// of the two tests.
 			name:      "twin of DerivedName(hapr, HelmApplicationRepository, team-a, stable)",
 			namespace: "team-a",
 			object:    "stable",
 			want:      "hapr-team-a-stable-42df68033b1e",
 		},
 		{
-			// Twin of TestDerivedName's "long parts are truncated to 18 characters
-			// each" case: the repository side is derived from the same inputs as
-			// the account side, and only a fixture whose parts are cut shows that
-			// both implementations cut them in the same place.
 			name:      "long parts are truncated to 18 characters each",
 			namespace: "very-long-namespace-name-exceeding",
 			object:    "very-long-repository-name-exceeding",

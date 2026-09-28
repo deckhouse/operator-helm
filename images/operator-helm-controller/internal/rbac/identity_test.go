@@ -51,11 +51,6 @@ func newIdentity(t *testing.T, objects ...client.Object) (*Identity, client.Clie
 	return NewIdentity(c, testNamespace), c
 }
 
-// TestIdentityEnsureCreatesTheIdentity pins the three objects and their shape: the
-// account lives in the operator namespace without a token, the Role and the binding
-// live in the application namespace, and the binding names the account by its
-// operator-namespace identity — helm-controller impersonates
-// system:serviceaccount:<operator namespace>:<name>.
 func TestIdentityEnsureCreatesTheIdentity(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newIdentity(t)
@@ -112,9 +107,6 @@ func TestIdentityEnsureCreatesTheIdentity(t *testing.T) {
 	}
 }
 
-// TestIdentityEnsureRewritesAnEditedRole pins that a Role of ours is reconciled rather
-// than seeded: rules narrowed out of band are written back, and the managed-by label
-// is kept. A label someone else put there survives, as on the account and the binding.
 func TestIdentityEnsureRewritesAnEditedRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	edited := &rbacv1.Role{
@@ -152,12 +144,6 @@ func TestIdentityEnsureRewritesAnEditedRole(t *testing.T) {
 	}
 }
 
-// TestIdentityEnsureRefusesARoleThatIsNotOurs pins the ownership test on the shared
-// Role. Its name is fixed, so a namespace owner can have put their own Role there;
-// widening it to full rights and binding every application of the namespace to it
-// is not a decision to make on their behalf. The verdict is terminal because the
-// watch on the kind selects on the very label the object lacks: nothing observes it
-// being removed either.
 func TestIdentityEnsureRefusesARoleThatIsNotOurs(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	rules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}}
@@ -193,11 +179,6 @@ func TestIdentityEnsureRefusesARoleThatIsNotOurs(t *testing.T) {
 	}
 }
 
-// TestIdentityEnsureRefusesABindingThatIsNotOurs pins the same ownership test on the
-// binding. The derived name is fully computable by anyone, so a binding found under
-// it may belong to someone else; adding our account to it would grant that account
-// whatever the binding grants. The object is left exactly as it was — deleting a
-// binding we did not create is not ours to do either.
 func TestIdentityEnsureRefusesABindingThatIsNotOurs(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	foreign := &rbacv1.RoleBinding{
@@ -236,10 +217,6 @@ func TestIdentityEnsureRefusesABindingThatIsNotOurs(t *testing.T) {
 	}
 }
 
-// TestIdentityEnsureReplacesOurBindingThatNamesAnotherRole pins the other side of the
-// ownership test: a binding carrying our label is ours to shape whatever state it is
-// found in, and a roleRef naming some other role is drift like any other. roleRef is
-// immutable, so putting it right means replacing the object rather than patching it.
 func TestIdentityEnsureReplacesOurBindingThatNamesAnotherRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	names := rel.InternalNames()
@@ -278,10 +255,6 @@ func TestIdentityEnsureReplacesOurBindingThatNamesAnotherRole(t *testing.T) {
 	}
 }
 
-// TestIdentityEnsureSurvivesLosingTheRoleCreateRace pins the one object of the three
-// that two applications can race for: the Role is shared by the namespace, so the
-// application that reads it as missing a moment too late is refused the create. It
-// must reach the same end state, not report a failure.
 func TestIdentityEnsureSurvivesLosingTheRoleCreateRace(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 
@@ -295,8 +268,6 @@ func TestIdentityEnsureSurvivesLosingTheRoleCreateRace(t *testing.T) {
 					return cl.Create(ctx, obj, opts...)
 				}
 
-				// The winner of the race stores the Role; this pass learns of it the
-				// way the API server would report it.
 				refused = true
 				if err := cl.Create(ctx, role.DeepCopy(), opts...); err != nil {
 					return err
@@ -324,11 +295,6 @@ func TestIdentityEnsureSurvivesLosingTheRoleCreateRace(t *testing.T) {
 	}
 }
 
-// swapOnce replaces the stored object with replacement the first time the write
-// under test reaches the client: it deletes what is there and creates the
-// replacement, which is what an object taken over by someone else looks like — a
-// new UID and a resource version of its own. It stands for the instant between the
-// ownership test and the write, the one the optimistic lock exists to close.
 func swapOnce(t *testing.T, replacement client.Object) (func(ctx context.Context, cl client.WithWatch), *bool) {
 	t.Helper()
 
@@ -353,12 +319,6 @@ func swapOnce(t *testing.T, replacement client.Object) (func(ctx context.Context
 	}, &swapped
 }
 
-// TestIdentityEnsureRefusesToPatchARoleSwappedAfterTheOwnershipTest pins that the
-// ownership test and the write are one decision. The Role read carried our label;
-// by the time the patch is sent someone else's Role holds the name, and a patch
-// without the resource version it was read at would widen that Role to full rights.
-// The conflict is not terminal: nothing about it says a retry cannot succeed, and
-// the next pass judges what it then finds on its own labels.
 func TestIdentityEnsureRefusesToPatchARoleSwappedAfterTheOwnershipTest(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	ours := &rbacv1.Role{
@@ -366,7 +326,6 @@ func TestIdentityEnsureRefusesToPatchARoleSwappedAfterTheOwnershipTest(t *testin
 			Name: ApplicationRoleName, Namespace: "team-a", UID: "ours",
 			Labels: applicationRBACLabels(),
 		},
-		// Narrowed out of band, so this pass has a patch to send at all.
 		Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}},
 	}
 	theirRules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"get"}}}
@@ -416,18 +375,13 @@ func TestIdentityEnsureRefusesToPatchARoleSwappedAfterTheOwnershipTest(t *testin
 	}
 }
 
-// TestIdentityEnsureRefusesToPatchARoleBindingSwappedAfterTheOwnershipTest is the
-// same window on the binding: the one that was read was ours, the one the patch
-// would land on is not, and merging our subject into it would hand our account
-// whatever that binding grants.
 func TestIdentityEnsureRefusesToPatchARoleBindingSwappedAfterTheOwnershipTest(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	name := rel.InternalNames().ServiceAccount
 	ours := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", UID: "ours", Labels: applicationRBACLabels()},
 		RoleRef:    applicationRoleRef(),
-		// Drifted out of band, so this pass has a patch to send at all.
-		Subjects: []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "drifted"}},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "drifted"}},
 	}
 	theirSubjects := []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "someone-else"}}
 	theirs := &rbacv1.RoleBinding{
@@ -474,11 +428,6 @@ func TestIdentityEnsureRefusesToPatchARoleBindingSwappedAfterTheOwnershipTest(t 
 	}
 }
 
-// TestIdentityCleanupRefusesToDeleteARoleBindingSwappedAfterTheOwnershipTest is the
-// delete side of the same window. Cleanup deletes only a binding carrying our
-// label; a binding recreated by someone else in between carries none, and without
-// the preconditions naming the object that was read it would be deleted on the
-// strength of a label it never had.
 func TestIdentityCleanupRefusesToDeleteARoleBindingSwappedAfterTheOwnershipTest(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	name := rel.InternalNames().ServiceAccount
@@ -543,10 +492,6 @@ func TestIdentityEnsureRecreatesADeletedRole(t *testing.T) {
 	}
 }
 
-// TestIdentityEnsureKeepsForeignLabelsOnTheServiceAccountAndBinding pins that a label
-// put there by someone else (a policy engine, a cost allocator) survives a
-// reconcile: only the keys we own are kept authoritative, mirroring how
-// applyHelmReleaseSpec and applyHelmChartSpec merge their labels.
 func TestIdentityEnsureKeepsForeignLabelsOnTheServiceAccountAndBinding(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	names := rel.InternalNames()
@@ -609,9 +554,6 @@ func TestIdentityEnsureIsANoopForAFamilyWithoutAServiceAccount(t *testing.T) {
 	}
 }
 
-// TestIdentityCleanupRemovesTheAccountAndBindingButKeepsTheRole pins spec 9.4: the
-// account and the binding belong to one application; the Role belongs to the
-// namespace and may have been edited by its owner, so it is never deleted.
 func TestIdentityCleanupRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newIdentity(t)
@@ -643,10 +585,6 @@ func TestIdentityCleanupRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T)
 	}
 }
 
-// TestIdentityCleanupLeavesAForeignRoleBindingAlone pins the delete-side mirror of
-// TestIdentityEnsureRefusesToAdoptAForeignRoleBinding: the derived name is fully
-// computable by anyone, so a binding found under it may belong to someone else.
-// Such a binding is left alone, and that must not block the rest of the cleanup.
 func TestIdentityCleanupLeavesAForeignRoleBindingAlone(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	names := rel.InternalNames()
@@ -674,13 +612,6 @@ func TestIdentityCleanupLeavesAForeignRoleBindingAlone(t *testing.T) {
 	}
 }
 
-// TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer pins what a Delete
-// actually promises: the object is marked for deletion, not gone. A finalizer put
-// on the account or the binding by someone else (another operator, a policy
-// controller) keeps it Terminating, and neither object carries an ownerReference
-// to collect it later — so cleanup has to keep reporting it and the release has to
-// keep its own finalizer until it really disappears. The shared Role is not part of
-// that wait: it belongs to the namespace, not to this application.
 func TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer(t *testing.T) {
 	const foreignFinalizer = "policy.example.com/protect"
 
@@ -718,10 +649,6 @@ func TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer(t *testing.T) {
 			heldKey := client.ObjectKeyFromObject(tt.held)
 			service, c := newIdentity(t, tt.held, tt.free, role)
 
-			// The first pass issues both deletes and reports whichever object it found,
-			// as a delete that was issued is not a delete that finished; the passes after
-			// it narrow onto the one a finalizer still holds. None of them may report the
-			// cleanup as finished.
 			for pass := 1; pass <= 3; pass++ {
 				pending, err := service.Cleanup(context.Background(), rel)
 				if err != nil {
@@ -745,7 +672,6 @@ func TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer(t *testing.T) {
 				t.Fatalf("the shared role must be neither deleted nor waited on: %v", err)
 			}
 
-			// Whoever owns the finalizer finally releases it.
 			if err := c.Get(context.Background(), heldKey, tt.held); err != nil {
 				t.Fatalf("getting the held object: %v", err)
 			}

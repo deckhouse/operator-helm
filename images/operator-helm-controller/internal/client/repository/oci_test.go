@@ -113,19 +113,11 @@ const (
 	legacyChartMediaType  = "application/tar+gzip"
 )
 
-// fakeRegistry is an in-memory OCI registry that can count manifest reads and force a
-// status code for a specific tag. Counting is what proves the incremental behaviour:
-// the number of manifest requests, not the returned versions, is the point of D3.
 type fakeRegistry struct {
-	inner  http.Handler
-	mu     sync.Mutex
-	gets   map[string]int
-	forced map[string]int
-	// stalledTags makes the manifest reads of the named tags hang until stall is
-	// closed, which models the registry that accepts the request and then says
-	// nothing. It is per tag so that one pass can be observed with both kinds of
-	// answer: the tags that are left stalling are exactly the ones a pass has to
-	// report as unexamined rather than guess a verdict for.
+	inner       http.Handler
+	mu          sync.Mutex
+	gets        map[string]int
+	forced      map[string]int
 	stalledTags map[string]bool
 	stall       chan struct{}
 }
@@ -142,8 +134,6 @@ func newFakeRegistry(t *testing.T) (*fakeRegistry, string) {
 	}
 	server := httptest.NewServer(f)
 	t.Cleanup(server.Close)
-	// Registered last and therefore run first: a stalled handler outlives the request
-	// that started it, and httptest waits for its handlers before closing.
 	t.Cleanup(func() { close(f.stall) })
 
 	return f, strings.TrimPrefix(server.URL, "http://")
@@ -177,8 +167,6 @@ func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.inner.ServeHTTP(w, r)
 }
 
-// manifestTag reports the tag of a manifest read request. Digest references are
-// ignored: only tag reads are counted and forced.
 func manifestTag(r *http.Request) (string, bool) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return "", false
@@ -195,9 +183,6 @@ func manifestTag(r *http.Request) (string, bool) {
 	return ref, true
 }
 
-// stallTag makes manifest reads of one tag hang while every other tag keeps being
-// served, which is what a pass that must publish some versions and defer one looks like.
-// Tag listing keeps working, so a pass reaches the per-tag probes either way.
 func (f *fakeRegistry) stallTag(tag string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -217,9 +202,6 @@ func (f *fakeRegistry) manifestGets(tag string) int {
 	return f.gets[tag]
 }
 
-// reset clears the recorded manifest request counts. remote.Write can itself read
-// manifests while pushing test fixtures, so tests that assert on request counts must
-// reset the counter after the setup pushes and before the measured call.
 func (f *fakeRegistry) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -386,19 +368,6 @@ func TestFetchChartsOCIEscalatesUnauthorized(t *testing.T) {
 	}
 }
 
-// TestFetchChartsOCIResolveVersionsSurfacesCancelledContext exercises resolveChartVersions
-// directly rather than through FetchCharts: remote.List already fails a cancelled context
-// on its own (unaffected by this fix), so reproducing the bug end-to-end would require
-// cancelling the context after the listing but during the per-tag resolve, which is timing
-// dependent. Calling the resolve stage directly reproduces it deterministically: without
-// the ctx.Err() check, every goroutine's remote.Get fails with a wrapped context.Canceled
-// that is not a *transport.Error, so it falls through to a fabricated ResolvePending verdict
-// and resolveChartVersions returns a clean result with a nil error.
-//
-// A cancelled parent is the one context error the pass does not survive: an expired pass
-// budget publishes what it examined, but a parent that is gone means the controller is
-// shutting down or the reconcile deadline has passed, and there is nobody left to write
-// the catalog this pass would hand over.
 func TestFetchChartsOCIResolveVersionsSurfacesCancelledContext(t *testing.T) {
 	_, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
@@ -433,9 +402,6 @@ func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 	pushChart(t, host, "1.0.3", helmConfigMediaType, currentChartMediaType)
 	reg.reset()
 
-	// The message a previous pass recorded for the unsupported verdict. A skipped tag
-	// is carried through verbatim, so this is test data rather than a message that
-	// examineManifest would actually produce for this fixture.
 	const unsupportedMessage = "config media type recorded by a previous pass is not a helm chart config"
 
 	known := KnownCharts{"podinfo": KnownVersions{
@@ -445,7 +411,6 @@ func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 			UnavailableMessage: unsupportedMessage,
 		},
 		"1.0.2": {UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending},
-		// An entry written before media types were recorded: the upgrade migration.
 		"1.0.3": {},
 	}}
 
@@ -495,20 +460,11 @@ func TestFetchChartsOCIFullIgnoresKnown(t *testing.T) {
 	}
 }
 
-// TestFetchChartsOCIReexaminesATagRecordedAsRemoved covers the one way a tag comes
-// back. A version recorded as removed is kept only because a consumer references it,
-// and the media type next to that reason is the deleted artifact's. A listing that
-// offers the tag again therefore describes content that was pushed after the verdict
-// was reached, and carrying the recorded verdict forward would republish the media type
-// of an artifact the registry no longer holds — with nothing left to correct it, since
-// the entry no longer looks removed to any later pass either.
 func TestFetchChartsOCIReexaminesATagRecordedAsRemoved(t *testing.T) {
 	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
 	reg.reset()
 
-	// The recorded media type is the one the deleted artifact had, so a carried verdict
-	// is distinguishable from a fresh one.
 	known := KnownCharts{"podinfo": KnownVersions{"1.0.0": {
 		MediaType:          legacyChartMediaType,
 		UnavailableReason:  helmv1alpha1.UnavailableReasonRemovedFromRepository,
@@ -532,8 +488,6 @@ func TestFetchChartsOCIReexaminesATagRecordedAsRemoved(t *testing.T) {
 }
 
 func TestTruncateCutsOnARuneBoundary(t *testing.T) {
-	// Every rune here is a 3-byte UTF-8 sequence (☃, U+2603), chosen so that the byte
-	// limit lands in the middle of one of them: a naive byte slice would corrupt it.
 	message := strings.Repeat("☃", unavailableMessageLimit/3+2)
 
 	got := truncate(message)
@@ -557,8 +511,6 @@ func TestTruncateLeavesAShortMessageUnchanged(t *testing.T) {
 	}
 }
 
-// shortenOCILimits replaces the registry call bounds for one test, so the behaviour
-// they guard can be exercised without waiting out real minutes.
 func shortenOCILimits(t *testing.T, list, probe, pass time.Duration) {
 	t.Helper()
 
@@ -571,14 +523,9 @@ func shortenOCILimits(t *testing.T, list, probe, pass time.Duration) {
 	})
 }
 
-// hangingRegistryHost starts a server that accepts every request and never answers
-// it, which is the failure no transport-level timeout of go-containerregistry catches:
-// the dial and the TLS handshake both succeed. It returns the host to address it by.
 func hangingRegistryHost(t *testing.T) string {
 	t.Helper()
 
-	// The handlers outlive their requests on purpose and are released before the
-	// server is closed, since httptest waits for its handlers.
 	hang := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
@@ -594,11 +541,6 @@ func hangingRegistryHost(t *testing.T) string {
 	return strings.TrimPrefix(server.URL, "http://")
 }
 
-// TestFetchChartsOCIAbandonsARegistryThatNeverAnswersTheListing pins that the tag
-// listing is bounded. Without a budget the call inherits the reconcile context, which
-// has no deadline, and go-containerregistry's transport bounds the dial and the
-// handshake but not the wait for a response: one such repository holds a worker of
-// the repository controller — which runs two — until the process restarts.
 func TestFetchChartsOCIAbandonsARegistryThatNeverAnswersTheListing(t *testing.T) {
 	shortenOCILimits(t, 300*time.Millisecond, chartProbeTimeout, chartResolvePassBudget)
 
@@ -624,23 +566,7 @@ func TestFetchChartsOCIAbandonsARegistryThatNeverAnswersTheListing(t *testing.T)
 	}
 }
 
-// TestFetchChartsOCIPublishesWhatAnExpiredPassExamined pins what the pass budget is
-// for: it bounds how much one pass does, not whether the pass counts. A repository
-// with more unexamined tags than the budget allows would otherwise never converge —
-// every pass would throw away what it had resolved, so every next pass would start
-// from the same empty known state and die at the same point, forever.
-//
-// The three tags stand for the three outcomes such a pass has: one already carries a
-// recorded verdict, one is examined in time, and one stalls until the budget is gone.
-// The stalled one is the delicate case — its probe fails on the pass's own context,
-// which resolveChartVersion cannot tell from a registry failure and turns into a
-// ResolvePending entry. Publishing that would be our own timeout recorded as the
-// registry's answer — a verdict shown to users and counted in the status for a tag the
-// registry was never given the time to answer about — so it must be reported as
-// unexamined instead: no entry at all.
 func TestFetchChartsOCIPublishesWhatAnExpiredPassExamined(t *testing.T) {
-	// The probe timeout is deliberately far above the pass budget: this test is
-	// about the whole pass expiring, not about one tag doing so.
 	shortenOCILimits(t, tagListBudget, 10*time.Second, 500*time.Millisecond)
 
 	reg, host := newFakeRegistry(t)
@@ -670,8 +596,6 @@ func TestFetchChartsOCIPublishesWhatAnExpiredPassExamined(t *testing.T) {
 	if got := versionByTag(t, charts[0], "1.0.0").MediaType; got != currentChartMediaType {
 		t.Fatalf("a tag examined before the budget expired must be published, got media type %q", got)
 	}
-	// A recorded verdict costs no request, so an expired budget is no reason to lose
-	// it: dropping it would shrink the known state the next pass builds on.
 	if got := versionByTag(t, charts[0], "1.0.2").MediaType; got != legacyChartMediaType {
 		t.Fatalf("a carried verdict must survive an expired budget, got media type %q", got)
 	}
@@ -684,21 +608,12 @@ func TestFetchChartsOCIPublishesWhatAnExpiredPassExamined(t *testing.T) {
 	if got := charts[0].UnexaminedVersions; len(got) != 1 || got[0] != "1.0.1" {
 		t.Fatalf("unexamined versions = %v, want exactly the stalled tag", got)
 	}
-	// The pass is reported as incomplete only because a tag was left over, not because
-	// the registry was asked and failed to answer about it.
 	if reg.manifestGets("1.0.1") == 0 {
 		t.Fatal("the stalled tag must have been attempted at all")
 	}
 }
 
-// TestFetchChartsOCIAbandonsThePassWhenTheParentDeadlineIsGone is the boundary of the
-// test above: the pass survives its own budget, but not the caller's. passCtx.Err()
-// cannot tell the two apart — the parent's deadline propagates into it — so the parent
-// context has to be consulted directly, or a controller shutting down would publish a
-// half-read catalog as a synchronization that advanced.
 func TestFetchChartsOCIAbandonsThePassWhenTheParentDeadlineIsGone(t *testing.T) {
-	// A pass budget far above the parent deadline: whatever ends this pass, it is not
-	// the budget.
 	shortenOCILimits(t, tagListBudget, 10*time.Second, 30*time.Second)
 
 	reg, host := newFakeRegistry(t)
@@ -728,10 +643,6 @@ func TestFetchChartsOCIAbandonsThePassWhenTheParentDeadlineIsGone(t *testing.T) 
 	}
 }
 
-// TestFetchChartsOCIRecordsASingleStalledTagAsPending is the other side of the same
-// boundary: one tag that stalls is a verdict about that tag, not a failed pass. The
-// probe timeout expires well inside the pass budget, so the tag that answers is
-// published and the stalled one is examined again by the next synchronization.
 func TestFetchChartsOCIRecordsASingleStalledTagAsPending(t *testing.T) {
 	shortenOCILimits(t, tagListBudget, 300*time.Millisecond, 30*time.Second)
 
@@ -768,29 +679,11 @@ func TestFetchChartsOCIRecordsASingleStalledTagAsPending(t *testing.T) {
 	}
 }
 
-// TestFetchChartsOCIExaminesANeverSeenTagAheadOfAStalledOne pins the examination
-// order, which is what makes repeated passes converge. Publishing what a pass reached
-// is not enough on its own: a tag recorded as ResolvePending is examined again by
-// every pass, so a block of permanently stalling tags at the head of the listing is
-// re-probed first every time and spends the whole budget before the tags behind it are
-// reached even once. Those tags would never be examined, however often the
-// synchronization ran, and the published prefix would be exactly the part that keeps
-// being re-probed.
-//
-// A tag with no recorded verdict has never been asked, while a pending one was asked
-// and did not answer, so the never-asked ones go first: the set of tags nobody has a
-// verdict for only shrinks, which is the guarantee that every tag is examined
-// eventually. The second half of the test is the other side of it — the pending tags
-// are not dropped from the pass, they are probed with the budget left after the new
-// ones.
 func TestFetchChartsOCIExaminesANeverSeenTagAheadOfAStalledOne(t *testing.T) {
 	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
 
 	reg, host := newFakeRegistry(t)
 
-	// More stalling tags than one budget can probe: eight concurrent probes of 200ms
-	// each get through some forty of them in a second, so a tag listed behind all
-	// eighty is out of reach of any pass that asks them first.
 	const (
 		stallingTags = 80
 		healthyTag   = "9.0.0"
@@ -806,22 +699,16 @@ func TestFetchChartsOCIExaminesANeverSeenTagAheadOfAStalledOne(t *testing.T) {
 
 	pushChart(t, host, healthyTag, helmConfigMediaType, currentChartMediaType)
 
-	// Stalled only after the fixtures are pushed: remote.Write reads manifests too.
 	for _, tag := range stalled {
 		reg.stallTag(tag)
 	}
 
-	// The first pass has no recorded verdict for anything, so every tag is a new one
-	// and the listing order decides: the healthy tag sits behind eighty stalling ones
-	// and is left unexamined. This is the situation the order has to get out of.
 	first := fetchOne(t, host, FetchOptions{})
 	if !slices.Contains(first.UnexaminedVersions, healthyTag) {
 		t.Fatalf("the first pass was expected to run out of budget before %s; unexamined = %v",
 			healthyTag, first.UnexaminedVersions)
 	}
 
-	// What the passes that probed the stalling tags left behind: a pending verdict
-	// each, which NeedsExamination asks about again.
 	known := make(KnownVersions, len(stalled))
 	for _, tag := range stalled {
 		known[tag] = KnownVersion{UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending}
@@ -845,35 +732,11 @@ func TestFetchChartsOCIExaminesANeverSeenTagAheadOfAStalledOne(t *testing.T) {
 	}
 }
 
-// TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne extends the ordering rule to
-// the two groups a pass can see between the never seen tags and the stalling ones. A
-// tag whose recorded verdict is marked for re-examination has an answer, unlike a never
-// seen one, but the answer is known to be out of date; a tag recorded as removed from
-// the repository that this listing offers again has one that was reached about content
-// the registry deleted; a tag recorded as ResolvePending has no answer and is asked
-// again by every pass, whether or not it ever replies. Ordered the other way round, a
-// block of permanently stalling tags spends the whole budget before either of the first
-// two is reached, and a forced refresh whose remainder they sit behind would never
-// finish — which is the failure this whole mechanism exists to prevent. Ahead of the
-// stalling ones bounds it: both groups drain, because the pass that examines a marked
-// tag clears the mark and the pass that examines a relisted one replaces the removed
-// verdict, while the stalling group never does.
-//
-// The relisted tag carries no mark, which is why it needs a priority of its own. A tag
-// is examined on the strength of the listing alone once it is recorded as removed
-// (NeedsExamination), so the mark it may once have carried is already cleared — by the
-// forced pass that reached it, or by the pass that confirmed the version gone — and a
-// re-push needs no force request at all. Left in the last group it would sit behind the
-// stalling tags on every pass, which is what the repeated ordinary passes below show:
-// each of them retries the same prefix, and nothing ever raises the relisted tag's
-// priority, so the catalog would go on publishing the media type of a deleted artifact.
 func TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne(t *testing.T) {
 	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
 
 	reg, host := newFakeRegistry(t)
 
-	// More stalling tags than one budget can probe, as in the never-seen case: eight
-	// concurrent probes of 200ms get through some forty of them in a second.
 	const (
 		stallingTags = 80
 		markedTag    = "9.0.0"
@@ -889,29 +752,19 @@ func TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne(t *testing.T) {
 	}
 
 	pushChart(t, host, markedTag, helmConfigMediaType, currentChartMediaType)
-	// Listed after every stalling tag and recorded with a media type: without the mark
-	// this tag would not be requested at all, and with it it must be requested first.
 	known[markedTag] = KnownVersion{MediaType: legacyChartMediaType, ReexaminationRequired: true}
 
 	pushChart(t, host, relistedTag, helmConfigMediaType, currentChartMediaType)
-	// The tag was deleted, a consumer kept the entry alive with the deleted artifact's
-	// media type, and it has now been pushed again. No force was asked for, so nothing
-	// marked it.
 	known[relistedTag] = KnownVersion{
 		MediaType:          legacyChartMediaType,
 		UnavailableReason:  helmv1alpha1.UnavailableReasonRemovedFromRepository,
 		UnavailableMessage: "the repository no longer offers this version",
 	}
 
-	// Stalled only after the fixtures are pushed: remote.Write reads manifests too.
 	for i := range stallingTags {
 		reg.stallTag(fmt.Sprintf("0.0.%d", i+1))
 	}
 
-	// Two ordinary passes, each starting from the state the previous one left behind
-	// the way the catalog builds it: a pass that does not reach the relisted tag hands
-	// the next one the same removed entry, so a tag ordered behind the stalling block
-	// is starved on every pass rather than on one.
 	for pass := 1; pass <= 2; pass++ {
 		reg.reset()
 
@@ -944,12 +797,6 @@ func TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne(t *testing.T) {
 	}
 }
 
-// TestFetchChartsOCIOrdersAForcedPassByWhatIsRecorded pins the one thing a forced pass
-// must keep taking from the recorded state. Full says the verdicts are not to be
-// trusted, so every listed tag is examined — but it says nothing about the order, and
-// the order is what decides which tags a pass that runs out of its budget reaches.
-// Read off "does this tag need a request", every tag of a forced pass falls into one
-// group, the listing order decides, and the forced pass publishes an arbitrary prefix.
 func TestFetchChartsOCIOrdersAForcedPassByWhatIsRecorded(t *testing.T) {
 	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
 
@@ -968,8 +815,6 @@ func TestFetchChartsOCIOrdersAForcedPassByWhatIsRecorded(t *testing.T) {
 		known[tag] = KnownVersion{MediaType: currentChartMediaType}
 	}
 
-	// Listed last, recorded nowhere: a forced pass has to reach it just as an ordinary
-	// one does, and only the recorded state can tell it apart from the eighty ahead.
 	pushChart(t, host, newTag, helmConfigMediaType, currentChartMediaType)
 
 	for i := range stallingTags {
@@ -985,9 +830,6 @@ func TestFetchChartsOCIOrdersAForcedPassByWhatIsRecorded(t *testing.T) {
 	}
 }
 
-// markAll is what forcing a refresh writes into the catalog before anything is asked
-// of the registry (contract.Catalog.MarkForReexamination): every recorded verdict is
-// now owed a fresh one.
 func markAll(known KnownVersions) KnownVersions {
 	marked := make(KnownVersions, len(known))
 	for tag, version := range known {
@@ -998,13 +840,6 @@ func markAll(known KnownVersions) KnownVersions {
 	return marked
 }
 
-// nextKnown is the state the next pass starts from, the way the catalog builds it:
-// every version this pass reached carries its fresh verdict and no mark, every version
-// it did not reach keeps what was recorded for it, mark included.
-// internal/catalog/merge.go owns this rule — TestAForcedPassKeepsTheMarkOnTheVersionsIt-
-// DidNotReach pins it there, and TestSynchronizerSyncFinishesAForcedRefreshOverSeveral-
-// IncompletePasses drives the real merge over a whole refresh — and it is restated here
-// only so the two passes of the scenario below can be run against a real registry.
 func nextKnown(previous KnownVersions, chart Chart) KnownVersions {
 	next := make(KnownVersions, len(previous))
 
@@ -1025,22 +860,7 @@ func nextKnown(previous KnownVersions, chart Chart) KnownVersions {
 	return next
 }
 
-// TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach is the scenario the
-// whole mechanism exists for, run against a registry over two passes.
-//
-// Someone re-pushes a tag the catalog already holds a verdict for. No ordinary pass
-// will ever look at it again — a recorded media type is exactly what NeedsExamination
-// reads as answered — so they force a refresh. The forced pass runs out of its budget
-// among the tags ahead of it and never reaches the re-pushed one, which is where this
-// used to end: the request was consumed, the next pass skipped the tag, and the catalog
-// kept publishing the media type of an artifact that no longer exists, with nothing
-// anywhere saying so.
-//
-// The pass records the mark instead, and the ordinary pass that follows examines the
-// marked tag first and sees the new content.
 func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing.T) {
-	// A budget that admits at most two rounds of probes, against forty tags that never
-	// answer: the re-pushed tag, listed last, is out of the forced pass's reach.
 	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, 400*time.Millisecond)
 
 	reg, host := newFakeRegistry(t)
@@ -1058,8 +878,6 @@ func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing
 		known[tag] = KnownVersion{MediaType: currentChartMediaType}
 	}
 
-	// The registry holds the new content; the catalog still records what the tag
-	// carried when it was last examined.
 	pushChart(t, host, repushedTag, helmConfigMediaType, currentChartMediaType)
 	known[repushedTag] = KnownVersion{MediaType: legacyChartMediaType}
 
@@ -1068,8 +886,6 @@ func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing
 	}
 	reg.reset()
 
-	// Forcing the refresh records the request on every verdict the catalog holds, and
-	// only then is the registry read.
 	known = markAll(known)
 
 	forced := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}, Full: true})
@@ -1081,8 +897,6 @@ func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing
 
 	known = nextKnown(known, forced)
 
-	// The second pass is an ordinary one: the force annotation was consumed by the pass
-	// above, and everything that is left to do is in the recorded state.
 	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, 10*time.Second)
 	reg.reset()
 

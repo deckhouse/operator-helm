@@ -92,8 +92,6 @@ func TestHelmClusterApplicationRepositoryForceReconcileRequired(t *testing.T) {
 	}
 }
 
-// TestApplicationRepositoryTypesAreShared pins that both repository kinds are built on
-// one pair of spec and status types: a per-kind copy stops this assignment from compiling.
 func TestApplicationRepositoryTypesAreShared(t *testing.T) {
 	namespaced := &HelmApplicationRepository{}
 	cluster := &HelmClusterApplicationRepository{}

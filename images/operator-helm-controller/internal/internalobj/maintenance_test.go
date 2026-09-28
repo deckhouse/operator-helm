@@ -26,10 +26,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/adapter"
 )
 
-// TestChangeRequiredComparesTheRequestAgainstWhatWasCarriedOut pins the two states
-// that need no work and the two that do. The condition is what says the flag moved,
-// so a release nobody has asked anything of — no request, no condition — is left
-// alone, and one whose request is already recorded is not asked twice.
 func TestChangeRequiredComparesTheRequestAgainstWhatWasCarriedOut(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -42,9 +38,6 @@ func TestChangeRequiredComparesTheRequestAgainstWhatWasCarriedOut(t *testing.T) 
 		{name: "requested and already recorded", requested: true, recorded: ptr.To(metav1.ConditionFalse), want: false},
 		{name: "withdrawn while still recorded", requested: false, recorded: ptr.To(metav1.ConditionFalse), want: true},
 		{name: "withdrawn and already lifted", requested: false, recorded: ptr.To(metav1.ConditionTrue), want: false},
-		// A seeded-but-unfilled condition, written by versions up to 55bb8d5, reads as
-		// "nothing recorded": it said a pass was about to decide, not that maintenance
-		// was on. Lifting on it would suspend nothing and unsuspend nothing.
 		{name: "nothing requested and the condition only seeded", requested: false, recorded: ptr.To(metav1.ConditionUnknown), want: false},
 		{name: "requested and the condition only seeded", requested: true, recorded: ptr.To(metav1.ConditionUnknown), want: true},
 	} {

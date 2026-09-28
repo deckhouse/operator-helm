@@ -93,13 +93,6 @@ func newSynchronizerWithInterceptor(
 	return NewSynchronizer(c, factory, adapter.NewAddonCatalog(c, c)), c
 }
 
-// newSynchronizerWithLaggingCache wires the synchronization the way the manager does,
-// with the two readers kept apart: writes and cached reads go through the intercepted
-// client, while the catalog reads the store directly, as it does through the API reader
-// in production. funcs therefore describe an informer that has not caught up — and
-// nothing else — so a test can state exactly what the lag would cost. The store is
-// returned, because what a pass wrote is a question about the cluster, not about the
-// cache in front of it.
 func newSynchronizerWithLaggingCache(
 	t *testing.T,
 	stub repoclient.ClientInterface,
@@ -321,14 +314,6 @@ func TestSynchronizerSyncRequestsFullPassOnForceReconcile(t *testing.T) {
 	}
 }
 
-// TestSynchronizerSyncRecordsAForcedRefreshBeforeTheRegistryIsRead covers the failure
-// a forced refresh used to disappear into. The annotation is consumed by the pass that
-// attempts the read, so if the read is all that carries the request, a registry that is
-// briefly unreachable ends the refresh: the annotation is gone, no version is marked,
-// and every pass after that skips the versions whose media type is recorded — including
-// the re-pushed tag the refresh was asked for — while the repository reports one
-// successful synchronization after another. The request is written into the catalog
-// before the registry is contacted, so the failed read costs the refresh nothing.
 func TestSynchronizerSyncRecordsAForcedRefreshBeforeTheRegistryIsRead(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -353,8 +338,6 @@ func TestSynchronizerSyncRecordsAForcedRefreshBeforeTheRegistryIsRead(t *testing
 		t.Fatalf("recorded versions = %+v, want the forced refresh written onto them", marked)
 	}
 
-	// The next pass is an ordinary one — the annotation was consumed by the failed pass —
-	// and it must still re-examine the version the refresh was asked for.
 	ordinary := testRepository()
 	stub := &recordingRepoClient{charts: []repoclient.Chart{{
 		Name:     "podinfo",
@@ -379,19 +362,6 @@ func TestSynchronizerSyncRecordsAForcedRefreshBeforeTheRegistryIsRead(t *testing
 	}
 }
 
-// TestSynchronizerSyncRecordsAForcedRefreshOnlyWhereItMeansSomething pins which
-// repositories pay for the durable form of the request. The mark exists to stop a later
-// pass from skipping a recorded verdict, and only the OCI client skips anything: the
-// helm client ignores FetchOptions outright, because the index is one document carrying
-// every version and media types are not probed incrementally there. Marking a helm
-// repository would rewrite the whole version list of every chart the index publishes —
-// hundreds of status writes on a large index, and as many again to clear them — where an
-// unchanged index produces no status diff at all, and an index fetch that failed would
-// leave every version of every chart claiming a re-examination no pass is going to do.
-//
-// The request counts as recorded either way: a repository with nothing to record has
-// nothing left waiting on the annotation, and keeping it would force the repository on
-// every pass forever.
 func TestSynchronizerSyncRecordsAForcedRefreshOnlyWhereItMeansSomething(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -413,9 +383,6 @@ func TestSynchronizerSyncRecordsAForcedRefreshOnlyWhereItMeansSomething(t *testi
 			)
 
 			patches := 0
-			// The read fails, so the only writes this pass can make are the marking ones:
-			// the catalog is never reconciled, and every patch counted here is the request
-			// being written down.
 			service, c := newSynchronizerWithInterceptor(t,
 				stubRepoClient{err: errors.New("dial tcp: connection refused")},
 				interceptor.Funcs{
@@ -462,15 +429,6 @@ func TestSynchronizerSyncRecordsAForcedRefreshOnlyWhereItMeansSomething(t *testi
 	}
 }
 
-// TestSynchronizerSyncKeepsAForcedRefreshWhenTheCatalogCannotBeRead covers the failure
-// that comes before anything is written. A pass reads the catalog once, and a forced
-// pass writes its request onto what that read returned; a read that fails has therefore
-// recorded nothing, and the annotation is the only thing left carrying the refresh.
-// Reporting it as recorded there would consume it for work no pass has done.
-//
-// A repository nothing is marked for is the other case: there was never anything to
-// write down, so the failed read holds nothing up and keeping the annotation would force
-// the repository again on every pass forever.
 func TestSynchronizerSyncKeepsAForcedRefreshWhenTheCatalogCannotBeRead(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -530,11 +488,6 @@ func TestSynchronizerSyncKeepsAForcedRefreshWhenTheCatalogCannotBeRead(t *testin
 	}
 }
 
-// budgetedRepoClient is a repository client with a budget, as the OCI one has: it
-// examines at most budget of the versions that still need examining and reports the
-// rest as unexamined, carrying forward the recorded verdict of every version it is
-// allowed to skip. mediaType is what the registry holds now — every tag was re-pushed —
-// so a version that was examined is distinguishable from one that was only carried.
 type budgetedRepoClient struct {
 	chartName string
 	tags      []string
@@ -559,8 +512,6 @@ func (b *budgetedRepoClient) FetchCharts(_ context.Context, _ string, _ *repocli
 			})
 		case left == 0:
 			if !recorded {
-				// A version nothing is recorded for and nothing was observed about
-				// carries no entry at all, exactly as the real client leaves it.
 				continue
 			}
 
@@ -578,13 +529,6 @@ func (b *budgetedRepoClient) FetchCharts(_ context.Context, _ string, _ *repocli
 	return []repoclient.Chart{chart}, nil
 }
 
-// TestSynchronizerSyncFinishesAForcedRefreshOverSeveralIncompletePasses runs the whole
-// mechanism end to end against the production catalog: a forced pass that does not get
-// through the repository, then ordinary passes under the same budget, each rebuilding
-// what it knows from the catalog objects the previous one wrote. Every pass but the
-// last is incomplete, so the refresh is carried entirely by what the catalog records,
-// and it has to end exactly where one unbounded forced pass would have ended: every
-// version re-examined, nothing left marked.
 func TestSynchronizerSyncFinishesAForcedRefreshOverSeveralIncompletePasses(t *testing.T) {
 	const (
 		recorded = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
@@ -602,18 +546,14 @@ func TestSynchronizerSyncFinishesAForcedRefreshOverSeveralIncompletePasses(t *te
 	}
 
 	service, c := newSynchronizer(t, stubRepoClient{}, forced, existingChart(forced.Name, "podinfo", versions...))
-	// One version per pass: three passes are needed, and none of them sees the whole
-	// repository.
 	service.clientFactory = func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return &budgetedRepoClient{chartName: "podinfo", tags: tags, mediaType: repushed, budget: 1}, nil
 	}
 
 	ordinary := testRepository()
 	passes := []struct {
-		name string
-		repo *helmv1alpha1.HelmClusterAddonRepository
-		// examined is how many versions carry the re-pushed media type once the pass
-		// has been written into the catalog.
+		name     string
+		repo     *helmv1alpha1.HelmClusterAddonRepository
 		examined int
 	}{
 		{name: "the forced pass", repo: forced, examined: 1},
@@ -659,12 +599,6 @@ func TestSynchronizerSyncFinishesAForcedRefreshOverSeveralIncompletePasses(t *te
 	}
 }
 
-// TestSynchronizerSyncExaminesAMarkedVersionAndClearsItByAnswering pins what an
-// ordinary pass does with a mark a forced pass left behind: the annotation was consumed
-// by that forced pass, so the mark is the whole of the request, and the verdicts this
-// pass skips tags by come from the same read the mark is on. NeedsExamination therefore
-// sees it, the version is probed rather than carried, and the answer clears the mark —
-// which is what keeps a refresh from repeating forever.
 func TestSynchronizerSyncExaminesAMarkedVersionAndClearsItByAnswering(t *testing.T) {
 	const (
 		recorded = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
@@ -676,8 +610,6 @@ func TestSynchronizerSyncExaminesAMarkedVersionAndClearsItByAnswering(t *testing
 		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: recorded, ReexaminationRequired: true},
 	)
 
-	// The repository carries no force annotation: this is an ordinary pass, and it
-	// marks nothing itself.
 	service, c := newSynchronizer(t,
 		&budgetedRepoClient{chartName: "podinfo", tags: []string{"6.7.1"}, mediaType: repushed, budget: 1},
 		repo, marked)
@@ -746,12 +678,6 @@ func TestSynchronizerSyncRetainsReferencedVersionRemovedFromRepository(t *testin
 	}
 }
 
-// TestSynchronizerSyncRetainsMediaTypeForReferencedUnsupportedVersion covers D4's fourth row: a
-// version whose tag was re-pushed as a non-chart artifact must keep its previously
-// recorded media type as long as an addon still references it, so the addon's internal
-// OCIRepository can still be built and the pull failure surfaces from the source
-// controller instead of the deploy gate. The same version, unreferenced, must not carry
-// the old media type forward: retention is scoped to in-use versions only.
 func TestSynchronizerSyncRetainsMediaTypeForReferencedUnsupportedVersion(t *testing.T) {
 	repo := testRepository()
 	chart := existingChart(repo.Name, "podinfo",
@@ -884,11 +810,6 @@ func TestSynchronizerSyncKeepsChartReferencedByAddon(t *testing.T) {
 	}
 }
 
-// TestSynchronizerSyncReportsNoFetchAttemptOnClusterReadFailure covers the knownCharts failure
-// path: the registry is never contacted, so the outcome must say so. Reporting
-// FetchAttempted: true here (or a zero-value Fetch with Err == nil) would make a
-// cluster-side read failure look like a successful repository fetch to a caller
-// that only checks Fetch.Err.
 func TestSynchronizerSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T) {
 	repo := testRepository()
 	scheme := testScheme(t)
@@ -930,11 +851,6 @@ func TestSynchronizerSyncReportsNoFetchAttemptOnClusterReadFailure(t *testing.T)
 	}
 }
 
-// TestSynchronizerSyncReportsTheVersionsAPassLeftUnexamined pins the signal that
-// travels from the client to the reconciler. A pass that ran out of its budget did
-// publish a catalog, so it is not a fetch failure, and it did not finish, so it must
-// not read as a completed synchronization either: the count is what the reconciler
-// schedules the next pass by.
 func TestSynchronizerSyncReportsTheVersionsAPassLeftUnexamined(t *testing.T) {
 	repo := testRepository()
 	incomplete := chartFixture("podinfo", "6.7.1")
@@ -957,11 +873,6 @@ func TestSynchronizerSyncReportsTheVersionsAPassLeftUnexamined(t *testing.T) {
 	}
 }
 
-// laggingChartCache builds the interceptor of a cache that has not caught up: every
-// chart object a cached read returns is the one the store holds, rewritten by mutate
-// into the state an older observation of it was in. Both reads are covered, because a
-// cache lags in all of them and a fixture that lagged in only one would be describing a
-// cache that does not exist.
 func laggingChartCache(mutate func(*helmv1alpha1.HelmClusterAddonChart)) interceptor.Funcs {
 	return interceptor.Funcs{
 		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -994,38 +905,22 @@ func laggingChartCache(mutate func(*helmv1alpha1.HelmClusterAddonChart)) interce
 	}
 }
 
-// TestASecondForceIsRecordedWhenTheCachedCatalogStillShowsTheFirst covers the force that
-// is consumed having recorded nothing. Marking skips the objects that already carry the
-// mark everywhere, which is right — a refresh asked for twice over an unreachable
-// registry must not rewrite the catalog twice — but only if "already marked" is a
-// statement about the catalog. Decided from a cached read it is not: the cache here
-// still holds the object from while the first refresh was outstanding, while a pass that
-// has since finished answered it and cleared the mark on the server.
-//
-// A pass that took that read at its word would write nothing, and the annotation is
-// consumed by this very pass (SyncOutcome.ForceRequestRecorded): with the fetch then
-// failing, the second refresh would be gone with nothing anywhere recording that it was
-// ever asked for, and every later pass would go on skipping the recorded verdict.
 func TestASecondForceIsRecordedWhenTheCachedCatalogStillShowsTheFirst(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
 	forced := testRepository()
 	forced.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: ""}
 
-	// The store: the first refresh has been answered and the mark cleared.
 	answered := existingChart(forced.Name, "podinfo",
 		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: mediaType},
 	)
 
-	// The cache: the object as it was while the first refresh was still outstanding.
 	stale := laggingChartCache(func(chart *helmv1alpha1.HelmClusterAddonChart) {
 		for i := range chart.Status.Versions {
 			chart.Status.Versions[i].ReexaminationRequired = true
 		}
 	})
 
-	// The registry is unreachable, which is the case the durable record exists for: the
-	// pass ends having written the request and nothing else.
 	service, store := newSynchronizerWithLaggingCache(t,
 		stubRepoClient{err: errors.New("dial tcp: connection refused")}, stale, forced, answered)
 
@@ -1046,17 +941,6 @@ func TestASecondForceIsRecordedWhenTheCachedCatalogStillShowsTheFirst(t *testing
 	}
 }
 
-// TestAVerdictCarriedByAPassCannotOverwriteANewerOne covers the other half of the same
-// rule, on a pass that writes successfully. The verdicts a fetch skips tags by and the
-// object the write is patched against have to be one read: a pass that took them
-// separately could carry a verdict forward from the older of the two and publish it over
-// the newer one, with the optimistic lock powerless to stop it because the object it was
-// patched against is current.
-//
-// Here the catalog holds the media type a completed pass established, while the cache
-// still shows the one it replaced. The pass asks the registry nothing about the version —
-// its verdict is recorded and unmarked — so whatever it carries is what the catalog ends
-// up publishing, and an ordinary pass would go on skipping the tag forever.
 func TestAVerdictCarriedByAPassCannotOverwriteANewerOne(t *testing.T) {
 	const (
 		established = "application/tar+gzip"
@@ -1068,7 +952,6 @@ func TestAVerdictCarriedByAPassCannotOverwriteANewerOne(t *testing.T) {
 		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: established},
 	)
 
-	// The cache: the object as it was before the pass that established the media type.
 	stale := laggingChartCache(func(chart *helmv1alpha1.HelmClusterAddonChart) {
 		for i := range chart.Status.Versions {
 			chart.Status.Versions[i].MediaType = replaced
@@ -1100,19 +983,6 @@ func TestAVerdictCarriedByAPassCannotOverwriteANewerOne(t *testing.T) {
 	}
 }
 
-// TestSynchronizerSyncRejectsACatalogWriteOvertakenByAnotherWriter covers the window
-// the optimistic lock exists for. A pass reads the catalog once and writes it at the
-// end, and between the two lies the whole fetch — long enough for another writer to
-// record something this pass knows nothing about. A merge patch on a list ships the
-// whole array, so the write would replace that state wholesale with one computed
-// without it.
-//
-// What is lost is worst for a mark: the writer here is a forced pass that recorded a
-// refresh and had its annotation consumed for it, so the mark is the only record of the
-// request. Under the lock the base carries the resource version it was read at, the
-// server rejects the patch as a conflict, the pass reports it, and the retry — computed
-// from a read taken after the mark — examines exactly the version it asks about and
-// clears it by answering.
 func TestSynchronizerSyncRejectsACatalogWriteOvertakenByAnotherWriter(t *testing.T) {
 	const (
 		recorded = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
@@ -1124,9 +994,6 @@ func TestSynchronizerSyncRejectsACatalogWriteOvertakenByAnotherWriter(t *testing
 		helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: recorded},
 	)
 
-	// The competing writer runs once, just before this pass's own status patch: the
-	// object it marks is the one the pass read before its fetch, and everything the
-	// pass is about to write was computed from that earlier state.
 	overtaken := false
 	funcs := interceptor.Funcs{
 		SubResourcePatch: func(
@@ -1158,8 +1025,6 @@ func TestSynchronizerSyncRejectsACatalogWriteOvertakenByAnotherWriter(t *testing
 		},
 	}
 
-	// The registry published one more tag, so the array this pass computed differs from
-	// what it read and the patch is a real write rather than a no-op.
 	client := &budgetedRepoClient{
 		chartName: "podinfo",
 		tags:      []string{"6.7.2", "6.7.1"},
@@ -1185,8 +1050,6 @@ func TestSynchronizerSyncRejectsACatalogWriteOvertakenByAnotherWriter(t *testing
 		t.Fatalf("6.7.1 media type = %q, want %q: a rejected patch must leave the catalog as it was", got, recorded)
 	}
 
-	// The retry the work queue runs: its read is taken after the mark, so the pass sees
-	// it, examines the version it asks about and answers it.
 	retried := service.Sync(context.Background(), addonRepo, chartsource.OCI)
 	if retried.Fetch.Err != nil || retried.Catalog.Err != nil {
 		t.Fatalf("the retry returned fetch %v, catalog %v: a read nothing has overtaken must be writable", retried.Fetch.Err, retried.Catalog.Err)

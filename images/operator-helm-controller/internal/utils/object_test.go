@@ -27,10 +27,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// TestDeleteIfPresent pins the distinction the callers requeue on: exists reports
-// whether the object was still there when the delete was issued, not whether the
-// delete finished. A downstream controller holding a finalizer keeps the object
-// present, and the caller has to be told to come back for it.
 func TestDeleteIfPresent(t *testing.T) {
 	nn := types.NamespacedName{Namespace: "d8-operator-helm", Name: "leftover"}
 	present := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{

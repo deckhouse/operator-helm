@@ -64,8 +64,6 @@ func namespaceFixture(name string, terminating bool) *corev1.Namespace {
 	if terminating {
 		now := metav1.Now()
 		ns.DeletionTimestamp = &now
-		// The fake client refuses an object carrying a deletion timestamp with no
-		// finalizer holding it; a real terminating namespace always has one.
 		ns.Finalizers = []string{"kubernetes"}
 	}
 
@@ -88,9 +86,6 @@ func systemNamespaceCases() []struct {
 	}
 }
 
-// TestValidateCreateRejectsASystemNamespace pins the fast-reject CREATE performs
-// on the obvious duplicate/misplacement case; the reconciler enforces the same
-// rule as a backstop (internal/reconcile/release/reconciler.go).
 func TestValidateCreateRejectsASystemNamespace(t *testing.T) {
 	for _, tt := range systemNamespaceCases() {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,8 +120,6 @@ func TestValidateUpdateRejectsASystemNamespace(t *testing.T) {
 	}
 }
 
-// TestValidateDeleteRefusesAMaintainedApplication is the rule itself: maintenance
-// mode is what keeps an application from being deleted by mistake.
 func TestValidateDeleteRefusesAMaintainedApplication(t *testing.T) {
 	app := maintainedApplication()
 	v := newValidator(t, interceptor.Funcs{}, namespaceFixture("team-a", false))
@@ -136,10 +129,6 @@ func TestValidateDeleteRefusesAMaintainedApplication(t *testing.T) {
 	}
 }
 
-// TestValidateDeleteAllowsAnApplicationWhoseNamespaceIsGoing pins the exception.
-// Namespace deletion deletes the namespace's objects one by one and waits for each
-// of them, so a DELETE this webhook denies would leave the namespace Terminating
-// with no way out.
 func TestValidateDeleteAllowsAnApplicationWhoseNamespaceIsGoing(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -160,9 +149,6 @@ func TestValidateDeleteAllowsAnApplicationWhoseNamespaceIsGoing(t *testing.T) {
 	}
 }
 
-// TestValidateDeleteFailsClosedOnANamespaceReadError pins the direction of the
-// doubt: an API error is not evidence that the namespace is going away, so the
-// refusal stands rather than becoming a way past it.
 func TestValidateDeleteFailsClosedOnANamespaceReadError(t *testing.T) {
 	unreadable := interceptor.Funcs{
 		Get: func(_ context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
@@ -176,8 +162,6 @@ func TestValidateDeleteFailsClosedOnANamespaceReadError(t *testing.T) {
 	}
 }
 
-// TestValidateDeleteAllowsAnUnmaintainedApplication is the ordinary case: nothing
-// about the namespace is even read.
 func TestValidateDeleteAllowsAnUnmaintainedApplication(t *testing.T) {
 	app := &helmv1alpha1.HelmApplication{ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "team-a"}}
 	v := newValidator(t, interceptor.Funcs{})

@@ -36,13 +36,6 @@ func internalRepository(namespace string, labels map[string]string) client.Objec
 	}
 }
 
-// TestMapInternalResourcesReachesTheNamespacedRepositoryThatOwnsTheObject pins the
-// two facts this kind's wiring carries and its cluster-scoped siblings do not: the
-// source is recognized by *this* family's source-name label, so the internal
-// objects of the other two repository kinds — which live in the same namespace
-// under the same managed-by label — do not enqueue a request here; and the request
-// carries the source namespace, without which the name would name a repository in
-// every namespace at once.
 func TestMapInternalResourcesReachesTheNamespacedRepositoryThatOwnsTheObject(t *testing.T) {
 	ours := map[string]string{
 		helmv1alpha1.LabelManagedBy:                           helmv1alpha1.LabelManagedByValue,

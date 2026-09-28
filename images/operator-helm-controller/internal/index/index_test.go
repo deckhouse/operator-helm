@@ -44,11 +44,6 @@ func addonFixture(repository, chart string) *helmv1alpha1.HelmClusterAddon {
 	}
 }
 
-// TestApplicationRepositoryIndexerKeysByKindAndNamespace pins what the index value
-// has to carry for a repository write to reach exactly its own consumers: the kind,
-// because a namespaced and a cluster repository may share a name, and the namespace
-// of the application itself for the namespaced kind, because a namespaced
-// repository is only ever referenced from its own namespace.
 func TestApplicationRepositoryIndexerKeysByKindAndNamespace(t *testing.T) {
 	tests := []struct {
 		name string
@@ -86,10 +81,6 @@ func TestApplicationRepositoryIndexerKeysByKindAndNamespace(t *testing.T) {
 	}
 }
 
-// TestApplicationRepositoryIndexerSeparatesSameNamedRepositories is the same rule
-// stated as the property that matters: three repositories called "stable" — one per
-// namespace and one cluster-wide — must never share an index value, or a write to
-// one of them would enqueue the consumers of the others.
 func TestApplicationRepositoryIndexerSeparatesSameNamedRepositories(t *testing.T) {
 	values := map[string]string{
 		"namespaced in team-a": ApplicationRepositoryIndexer(applicationFixture("team-a",
@@ -109,10 +100,6 @@ func TestApplicationRepositoryIndexerSeparatesSameNamedRepositories(t *testing.T
 	}
 }
 
-// TestApplicationChartIndexerNarrowsTheRepositoryKeyToOneChart pins that the chart
-// key extends the repository key: a catalog object concerns only the applications
-// using that one chart, while everything the repository key separates stays
-// separated.
 func TestApplicationChartIndexerNarrowsTheRepositoryKeyToOneChart(t *testing.T) {
 	tests := []struct {
 		name string
@@ -149,8 +136,6 @@ func TestApplicationChartIndexerNarrowsTheRepositoryKeyToOneChart(t *testing.T) 
 		})
 	}
 
-	// Two charts of one repository must key apart, or a write to one chart's catalog
-	// object would wake the applications of every other chart in that repository.
 	redisKey := ApplicationChartIndexer(applicationFixture("team-a",
 		helmv1alpha1.HelmApplicationChartRef{Repository: "stable", Name: "redis"}))[0]
 	postgresKey := ApplicationChartIndexer(applicationFixture("team-a",
@@ -159,12 +144,6 @@ func TestApplicationChartIndexerNarrowsTheRepositoryKeyToOneChart(t *testing.T) 
 		t.Fatalf("two charts of one repository share the chart key %q", redisKey)
 	}
 
-	// The same cluster repository referenced from two namespaces must key the same.
-	// The lookup side has no namespace to offer: mapChartToApplications keys by the
-	// catalog object's own namespace, which is empty for the cluster-scoped
-	// HelmClusterApplicationChart, and ListApplicationReleases by the repository's,
-	// equally empty. A key carrying the consumer's namespace would therefore match
-	// nothing and a cluster repository could never reach its applications.
 	teamAKey := ApplicationChartIndexer(applicationFixture("team-a",
 		helmv1alpha1.HelmApplicationChartRef{ClusterRepository: "stable", Name: "redis"}))[0]
 	teamBKey := ApplicationChartIndexer(applicationFixture("team-b",
@@ -174,9 +153,6 @@ func TestApplicationChartIndexerNarrowsTheRepositoryKeyToOneChart(t *testing.T) 
 	}
 }
 
-// TestAddonChartIndexerKeysThePairTheWebhookLooksUp pins the index the uniqueness
-// check reads: two addons on the same repository/chart pair must collide, and a
-// difference in either half must not.
 func TestAddonChartIndexerKeysThePairTheWebhookLooksUp(t *testing.T) {
 	pair := AddonChartIndexer(addonFixture("stable", "redis"))
 
@@ -200,9 +176,6 @@ func TestAddonChartIndexerKeysThePairTheWebhookLooksUp(t *testing.T) {
 	}
 }
 
-// TestAddonRepositoryIndexerSkipsAnAddonWithoutARepository keeps an unreferenced
-// addon out of the index: indexing it under the empty name would make every
-// repository write whose name is likewise empty enqueue it.
 func TestAddonRepositoryIndexerSkipsAnAddonWithoutARepository(t *testing.T) {
 	tests := []struct {
 		name  string

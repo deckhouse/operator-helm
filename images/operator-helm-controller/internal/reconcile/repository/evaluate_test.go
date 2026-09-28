@@ -59,9 +59,6 @@ func readyStatus(generation int64) helmv1alpha1.RepositoryStatus {
 	}
 }
 
-// stalledStatus builds a status like readyStatus, plus a Stalled=True condition
-// recorded for staleGeneration — used to test that a generation bump voids a
-// carried-forward Stalled reason that described the previous spec.
 func stalledStatus(generation, staleGeneration int64, reason string) helmv1alpha1.RepositoryStatus {
 	status := readyStatus(generation)
 	status.Conditions = append(status.Conditions, metav1.Condition{
@@ -75,10 +72,6 @@ func stalledStatus(generation, staleGeneration int64, reason string) helmv1alpha
 	return status
 }
 
-// syncedNotReadyStatus builds the status left behind by the pass on which the
-// first fetch succeeded while the internal repository was still unhealthy:
-// Synced records the successful read, but Ready was written False by the
-// higher-priority internal-repository rule, so Ready alone carries no evidence.
 func syncedNotReadyStatus(generation int64) helmv1alpha1.RepositoryStatus {
 	return helmv1alpha1.RepositoryStatus{
 		ObservedGeneration: generation,
@@ -110,9 +103,6 @@ func syncedNotReadyStatus(generation int64) helmv1alpha1.RepositoryStatus {
 	}
 }
 
-// catalogFailedStatus builds the status left behind by a pass whose fetch
-// succeeded and whose catalog write failed: Ready stays latched True, Synced is
-// False with CatalogUpdateFailed and Reconciling carries the retry.
 func catalogFailedStatus(generation int64) helmv1alpha1.RepositoryStatus {
 	status := readyStatus(generation)
 	apimeta.SetStatusCondition(&status.Conditions, metav1.Condition{
@@ -152,8 +142,8 @@ func TestEvaluateConditions(t *testing.T) {
 		wantReady       metav1.ConditionStatus
 		wantReadyReason string
 		wantSynced      metav1.ConditionStatus
-		wantReconciling string // reason; "" means the condition must be absent
-		wantStalled     string // reason; "" means the condition must be absent
+		wantReconciling string
+		wantStalled     string
 	}{
 		{
 			name: "healthy repository",
@@ -260,10 +250,6 @@ func TestEvaluateConditions(t *testing.T) {
 			wantStalled: helmv1alpha1.ReasonAuthenticationFailed,
 		},
 		{
-			// An unparsable spec.caCertificate travels as a terminal fetch outcome, so
-			// this is where "not retried" is observable: the repository is Stalled on
-			// the reason that names the field, instead of collecting SyncFailed passes
-			// against bytes no attempt can parse.
 			name: "invalid ca certificate",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: readyStatus(1),
@@ -330,11 +316,6 @@ func TestEvaluateConditions(t *testing.T) {
 			wantSynced: metav1.ConditionTrue,
 		},
 		{
-			// The fetch succeeded on an earlier pass, but the internal repository
-			// was unhealthy then, so the higher-priority rule owned Ready and wrote
-			// it False. Ready alone therefore carries no evidence; Synced=True on
-			// this generation does, and must keep the repository from falling back
-			// to Unknown/AwaitingInitialSync until the next scheduled sync.
 			name: "synced carries the evidence when Ready was owned by another rule",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: syncedNotReadyStatus(1),
@@ -344,10 +325,6 @@ func TestEvaluateConditions(t *testing.T) {
 			wantSynced: metav1.ConditionTrue,
 		},
 		{
-			// The work-queue retry after a catalog write failure runs a pass with no
-			// attempt. Without a carry-forward the repository would show Ready=True,
-			// Synced=False and no abnormal-true condition at all — Current to
-			// kstatus — and ConsecutiveFetchFailures never escalates it to Stalled.
 			name: "catalog write failure keeps Reconciling on a pass with no attempt",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: catalogFailedStatus(1),
@@ -401,12 +378,10 @@ func TestEvaluateConditions(t *testing.T) {
 			assertAbnormal(t, got.Status, helmv1alpha1.ConditionTypeReconciling, tc.wantReconciling)
 			assertAbnormal(t, got.Status, helmv1alpha1.ConditionTypeStalled, tc.wantStalled)
 
-			// I3: the processed generation is always recorded.
 			if got.Status.ObservedGeneration != tc.in.Generation {
 				t.Fatalf("status.observedGeneration is %d, want %d", got.Status.ObservedGeneration, tc.in.Generation)
 			}
 
-			// I1 and I2: exactly one abnormal-true condition while unhealthy, none while healthy.
 			healthy := ready.Status == metav1.ConditionTrue && synced != nil && synced.Status == metav1.ConditionTrue
 			abnormal := 0
 			for _, conditionType := range []string{helmv1alpha1.ConditionTypeReconciling, helmv1alpha1.ConditionTypeStalled} {
@@ -424,12 +399,6 @@ func TestEvaluateConditions(t *testing.T) {
 	}
 }
 
-// TestEvaluateDecisionErr pins the filter behind Decision.Err: only failures that
-// belong on the controller-runtime work queue reach it (auxiliary resources,
-// the internal repository object, the chart catalog write). Repository-read
-// failures (Fetch, ConfigErr) are deliberately excluded — their retry is
-// scheduled through nextSyncTime instead, and routing them into the work queue
-// as well would double-schedule the retry.
 func TestEvaluateDecisionErr(t *testing.T) {
 	secretsErr := errors.New("failed to reconcile secret")
 	internalErr := errors.New("failed to reconcile internal repository object")
@@ -502,13 +471,6 @@ func TestEvaluateDecisionErr(t *testing.T) {
 	}
 }
 
-// TestEvaluatePreservesFailuresWhenNoFetchWasAttempted covers the case where a
-// synchronization pass ran (Attempted: true, e.g. its knownCharts read failed
-// before the registry was ever contacted) but Fetch is nil: nextFailureCount must
-// carry ConsecutiveFetchFailures forward rather than resetting it as if the
-// registry had just answered successfully, Ready must not be written
-// True/Success off that phantom fetch, and Synced must report the catalog
-// failure.
 func TestEvaluatePreservesFailuresWhenNoFetchWasAttempted(t *testing.T) {
 	catalogErr := errors.New("listing charts of repository \"example\": etcdserver: request timed out")
 
@@ -652,11 +614,6 @@ func TestEvaluateFullSyncAdvancesLastSuccessfulSyncTime(t *testing.T) {
 	}
 }
 
-// TestEvaluateLastSyncedGenerationSurvivesAFailedPass pins the property releases
-// depend on: the field says which spec the published catalog belongs to, so a pass
-// that failed without touching the catalog must leave it alone. The Synced
-// condition cannot answer that question — it is the verdict of the latest pass, and
-// goes False over a catalog that is complete and current.
 func TestEvaluateLastSyncedGenerationSurvivesAFailedPass(t *testing.T) {
 	earlier := metav1.NewTime(time.Now().UTC().Add(-time.Hour))
 	published := helmv1alpha1.RepositoryStatus{
@@ -681,8 +638,6 @@ func TestEvaluateLastSyncedGenerationSurvivesAFailedPass(t *testing.T) {
 		t.Fatalf("lastSyncedGeneration is %d, want it left at 1", decision.Status.LastSyncedGeneration)
 	}
 
-	// The same failure after a spec change must not claim the new generation
-	// either: the catalog on record is still the previous url's.
 	edited := Evaluate(Inputs{
 		Generation: 2,
 		Now:        time.Now().UTC(),
@@ -696,11 +651,6 @@ func TestEvaluateLastSyncedGenerationSurvivesAFailedPass(t *testing.T) {
 	}
 }
 
-// TestEvaluatePendingTagsStillPublishACatalog pins the distinction between the two
-// fields: a tag the registry has not answered about leaves the repository not fully
-// mirrored, but the catalog still lists every version that exists, which is the
-// only question releases ask of it. A repository with one permanently unreadable
-// tag must not hold every release on it in limbo.
 func TestEvaluatePendingTagsStillPublishACatalog(t *testing.T) {
 	decision := Evaluate(Inputs{
 		Generation: 2,
@@ -719,9 +669,6 @@ func TestEvaluatePendingTagsStillPublishACatalog(t *testing.T) {
 	}
 }
 
-// TestEvaluateLastSyncedGenerationWaitsForTheCatalog pins the other half: a spec
-// change does not carry the previous catalog's generation forward, and neither does
-// a pass that read the repository but could not write the catalog.
 func TestEvaluateLastSyncedGenerationWaitsForTheCatalog(t *testing.T) {
 	published := helmv1alpha1.RepositoryStatus{ObservedGeneration: 1, LastSyncedGeneration: 1}
 
@@ -752,11 +699,6 @@ func TestEvaluateLastSyncedGenerationWaitsForTheCatalog(t *testing.T) {
 	}
 }
 
-// TestEvaluateChartCount pins what the field means: how many charts the catalog
-// holds for the repository as of the last successful read. A pointer, so that a
-// repository never read apart from one offering nothing is not reported as offering
-// nothing, and a failed read leaves the last known answer rather than replacing it
-// with zero.
 func TestEvaluateChartCount(t *testing.T) {
 	never := Evaluate(Inputs{Generation: 1, Now: testNow})
 	if never.Status.ChartCount != nil {
@@ -794,14 +736,6 @@ func TestEvaluateChartCount(t *testing.T) {
 	}
 }
 
-// TestEvaluateChartCountDescribesTheReadWhenTheCatalogUpdateFails pins what the
-// field falls back to when the catalog write does not finish. The catalog gives up
-// on the first object it cannot write, so it may have published nothing at all,
-// while chartCount still reports what the read found: the number describes the
-// repository, not the objects in the cluster. Keeping the read's answer is what
-// makes a failed pass readable — the user sees the size of the index the retry has
-// to publish — and the failing Synced condition is what says the catalog is behind
-// it.
 func TestEvaluateChartCountDescribesTheReadWhenTheCatalogUpdateFails(t *testing.T) {
 	decision := Evaluate(Inputs{
 		Generation: 1, Now: testNow,
@@ -825,11 +759,6 @@ func TestEvaluateChartCountDescribesTheReadWhenTheCatalogUpdateFails(t *testing.
 	}
 }
 
-// TestEvaluateAccountsForTheChartsTheCatalogCannotPublish pins the one thing that
-// makes chartCount checkable: it is the number of chart objects the user can find in
-// the cluster, not the length of the repository's index. A chart whose name the API
-// cannot record never becomes an object, so counting it would leave a difference
-// nothing in the status explains — and Synced is where the explanation goes.
 func TestEvaluateAccountsForTheChartsTheCatalogCannotPublish(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -857,8 +786,6 @@ func TestEvaluateAccountsForTheChartsTheCatalogCannotPublish(t *testing.T) {
 			wantMessage: []string{"leaves out 1 chart whose", `"my chart"`},
 		},
 		{
-			// A message is capped at 32768 bytes by the API server, so an index that
-			// names nothing the API accepts must not make the status unwritable.
 			name:        "more skipped charts than fit in a message are counted in full and named in part",
 			charts:      5,
 			skipped:     []string{"a b", "c d", "e f", "g h", "i j"},
@@ -895,8 +822,6 @@ func TestEvaluateAccountsForTheChartsTheCatalogCannotPublish(t *testing.T) {
 				}
 			}
 
-			// A skipped chart is not a failure: the pass read the repository and wrote
-			// everything it could, so nothing about it may escalate.
 			if ready := conditionOf(t, decision.Status, helmv1alpha1.ConditionTypeReady); ready == nil ||
 				ready.Status != metav1.ConditionTrue {
 				t.Fatalf("Ready is %+v, want True", ready)
@@ -913,10 +838,6 @@ func TestEvaluateAccountsForTheChartsTheCatalogCannotPublish(t *testing.T) {
 	}
 }
 
-// TestEvaluateSkippedChartsAreReportedWithoutChurn pins that saying it on every pass
-// is free. The catalog is re-read every few minutes and the verdict on a name the API
-// cannot hold never changes, so the report would be noise if each pass rewrote the
-// condition; an unchanged reason and message leave the transition time alone.
 func TestEvaluateSkippedChartsAreReportedWithoutChurn(t *testing.T) {
 	in := Inputs{
 		Generation: 1, Now: testNow,
@@ -945,9 +866,6 @@ func TestEvaluateSkippedChartsAreReportedWithoutChurn(t *testing.T) {
 	}
 }
 
-// TestEvaluateReportsSkippedChartsAndUnresolvedVersionsTogether pins that the two
-// ways a catalog can fall short of the repository do not hide each other: they share
-// one condition, and a user fixing one must still see the other.
 func TestEvaluateReportsSkippedChartsAndUnresolvedVersionsTogether(t *testing.T) {
 	decision := Evaluate(Inputs{
 		Generation: 1, Now: testNow,
@@ -967,12 +885,6 @@ func TestEvaluateReportsSkippedChartsAndUnresolvedVersionsTogether(t *testing.T)
 	}
 }
 
-// TestEvaluateDescribesTheSameSkippedChartsTheSameWay pins that the message depends
-// on the set of skipped charts and not on the order they arrive in. A Helm index is
-// a map on the wire, so two passes over an unchanged repository hand the same names
-// over in different orders; if that reached the message, every pass would rewrite
-// the condition and patch the repository over a state that never changed. The
-// transition time would stay put — it follows the status — but the write would not.
 func TestEvaluateDescribesTheSameSkippedChartsTheSameWay(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -1002,10 +914,6 @@ func TestEvaluateDescribesTheSameSkippedChartsTheSameWay(t *testing.T) {
 	}
 }
 
-// TestEvaluateNamesTheSameSkippedChartsWhateverOrderTheyArriveIn pins the same
-// property where it can actually break: with more names than the message shows, the
-// order decides which ones are left out, not just how they are spelled. Two passes
-// over an unchanged repository must still pick the same three.
 func TestEvaluateNamesTheSameSkippedChartsWhateverOrderTheyArriveIn(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -1034,10 +942,6 @@ func TestEvaluateNamesTheSameSkippedChartsWhateverOrderTheyArriveIn(t *testing.T
 	}
 }
 
-// TestEvaluateDoesNotMutateTheSkippedChartsItIsGiven pins that Evaluate is a pure
-// function of its inputs. The outcome it reads belongs to the caller, which logs it
-// and hands it on; sorting the names in place would reorder somebody else's slice as
-// a side effect of writing a status message.
 func TestEvaluateDoesNotMutateTheSkippedChartsItIsGiven(t *testing.T) {
 	skipped := []string{"my chart", "_internal", "z chart", "a chart"}
 	before := slices.Clone(skipped)
@@ -1054,11 +958,6 @@ func TestEvaluateDoesNotMutateTheSkippedChartsItIsGiven(t *testing.T) {
 	}
 }
 
-// TestEvaluateNamesChartsThatAreNotPlainASCII pins that a name the API rejects is
-// still safe to put in a message. Such a name is arbitrary text: it may be built
-// from multi-byte runes, which must not be cut in half or mangled, and it may hold
-// bytes that quoting turns into escapes, which must stay escaped so the message
-// remains one readable line.
 func TestEvaluateNamesChartsThatAreNotPlainASCII(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -1071,9 +970,7 @@ func TestEvaluateNamesChartsThatAreNotPlainASCII(t *testing.T) {
 			want:    `"диаграмма-графики"`,
 		},
 		{
-			name: "a long name of multi-byte runes is cut on a rune boundary",
-			// 200 runes, 400 bytes: past maxChartNameRunes either way, so a cut made
-			// in bytes would land inside a character.
+			name:    "a long name of multi-byte runes is cut on a rune boundary",
 			skipped: strings.Repeat("я", 200),
 			want:    `"` + strings.Repeat("я", maxChartNameRunes) + `..."`,
 		},
@@ -1100,8 +997,6 @@ func TestEvaluateNamesChartsThatAreNotPlainASCII(t *testing.T) {
 	}
 }
 
-// messageFor returns the Synced message of a pass that read the repository and
-// skipped the given charts.
 func messageFor(t *testing.T, skipped []string) string {
 	t.Helper()
 
@@ -1120,13 +1015,7 @@ func messageFor(t *testing.T, skipped []string) string {
 	return synced.Message
 }
 
-// TestEvaluateBoundsTheLengthOfANamedChart pins the other half of the message
-// bound. Limiting how many names are shown is not enough: an index may publish
-// names far longer than anything a condition can hold, and a message the API server
-// rejects would cost the repository every other verdict in the same status write.
 func TestEvaluateBoundsTheLengthOfANamedChart(t *testing.T) {
-	// Not a label value, so it is skipped for its grammar as well as its length,
-	// and long enough that three of them would blow past the 32768-byte limit.
 	huge := strings.Repeat("a b", 20000)
 
 	decision := Evaluate(Inputs{
@@ -1140,7 +1029,6 @@ func TestEvaluateBoundsTheLengthOfANamedChart(t *testing.T) {
 	if synced == nil || synced.Reason != helmv1alpha1.ReasonPartialSync {
 		t.Fatalf("Synced is %+v, want %s", synced, helmv1alpha1.ReasonPartialSync)
 	}
-	// The limit the API server enforces on a condition message.
 	if len(synced.Message) > 32768 {
 		t.Fatalf("Synced message is %d bytes, want at most 32768", len(synced.Message))
 	}
@@ -1172,9 +1060,6 @@ func assertAbnormal(t *testing.T, status helmv1alpha1.RepositoryStatus, conditio
 	}
 }
 
-// TestEvaluateForcedAttemptStampsLastForceReconcileTime pins the contract that
-// makes the field readable: the stamp is written exactly on the pass that
-// consumes the force annotation, which is the pass that attempted.
 func TestEvaluateForcedAttemptStampsLastForceReconcileTime(t *testing.T) {
 	now := time.Now().UTC()
 	decision := Evaluate(Inputs{
@@ -1191,10 +1076,6 @@ func TestEvaluateForcedAttemptStampsLastForceReconcileTime(t *testing.T) {
 	}
 }
 
-// TestEvaluateFailedForcedAttemptStampsLastForceReconcileTime: the stamp answers
-// "when was my force request processed", not "when did it succeed". A forced pass
-// whose read failed still consumes the annotation, so it must still be stamped —
-// otherwise an empty field could not be told apart from a request never made.
 func TestEvaluateFailedForcedAttemptStampsLastForceReconcileTime(t *testing.T) {
 	now := time.Now().UTC()
 	decision := Evaluate(Inputs{
@@ -1214,9 +1095,6 @@ func TestEvaluateFailedForcedAttemptStampsLastForceReconcileTime(t *testing.T) {
 	}
 }
 
-// TestEvaluateForcedPassWithoutAttemptKeepsLastForceReconcileTime covers the pass
-// that carries a force request it could not act on — a structural failure stops it
-// before the attempt, so the annotation survives and the stamp must not move.
 func TestEvaluateForcedPassWithoutAttemptKeepsLastForceReconcileTime(t *testing.T) {
 	previous := metav1.NewTime(testNow.Add(-time.Hour))
 	current := readyStatus(1)
@@ -1237,9 +1115,6 @@ func TestEvaluateForcedPassWithoutAttemptKeepsLastForceReconcileTime(t *testing.
 	}
 }
 
-// TestEvaluateScheduledSyncKeepsLastForceReconcileTime is the complement: an
-// ordinary scheduled synchronization must not touch the stamp, or it would
-// report a force request that was never made.
 func TestEvaluateScheduledSyncKeepsLastForceReconcileTime(t *testing.T) {
 	previous := metav1.NewTime(testNow.Add(-time.Hour))
 	current := readyStatus(1)
@@ -1261,14 +1136,6 @@ func TestEvaluateScheduledSyncKeepsLastForceReconcileTime(t *testing.T) {
 	}
 }
 
-// TestEvaluateSchedulesAnotherPassAfterAnIncompleteRead pins how a pass that read the
-// repository but ran out of its own budget is reported. It is not a failure — the
-// catalog advanced and the failure counter must not move towards Stalled — and it is
-// not a finished synchronization either: lastSyncedGeneration says which spec the
-// published catalog answers for, and this catalog answers for only part of it, so a
-// release asking about a version nobody examined has to wait rather than be told the
-// repository does not offer it. The next pass is due well before the normal interval,
-// because it is what finishes this one.
 func TestEvaluateSchedulesAnotherPassAfterAnIncompleteRead(t *testing.T) {
 	decision := Evaluate(Inputs{
 		Generation: 2,
@@ -1317,9 +1184,6 @@ func TestEvaluateSchedulesAnotherPassAfterAnIncompleteRead(t *testing.T) {
 	}
 }
 
-// TestEvaluateCompletesTheGenerationOnceNothingIsLeftUnexamined is the other half:
-// the hold on lastSyncedGeneration is released by the pass that covers the repository,
-// so the convergence actually ends.
 func TestEvaluateCompletesTheGenerationOnceNothingIsLeftUnexamined(t *testing.T) {
 	decision := Evaluate(Inputs{
 		Generation: 2,
@@ -1341,16 +1205,7 @@ func TestEvaluateCompletesTheGenerationOnceNothingIsLeftUnexamined(t *testing.T)
 	}
 }
 
-// TestEvaluateSchedulesTheNextPassFromTheEndOfTheRead pins what the wait between two
-// incomplete passes is measured from. Now is captured before the read, and a read that
-// ran out of its own budget spent minutes: measured from Now, the one-minute wait is
-// already in the past when the pass ends, nextSyncTime is stale on arrival, and the
-// catalog write that enqueues the repository starts the next full-budget pass
-// immediately — the pause the delay exists for never happens, and the repository holds
-// a worker back to back while the ones queued behind it wait.
 func TestEvaluateSchedulesTheNextPassFromTheEndOfTheRead(t *testing.T) {
-	// A read far longer than the delay it is followed by: this is the ordinary shape
-	// of an incomplete pass, which by definition used its whole budget.
 	const readDuration = 3 * time.Minute
 
 	syncEnd := testNow.Add(readDuration)
@@ -1378,9 +1233,6 @@ func TestEvaluateSchedulesTheNextPassFromTheEndOfTheRead(t *testing.T) {
 	}
 }
 
-// TestEvaluateSchedulesFromNowWhenNoAttemptRan is the other side: a pass that read
-// nothing has no end of its own, so the schedule it reports is still measured from the
-// instant the pass was stamped with.
 func TestEvaluateSchedulesFromNowWhenNoAttemptRan(t *testing.T) {
 	next := testNow.Add(2 * time.Minute)
 
@@ -1399,14 +1251,6 @@ func TestEvaluateSchedulesFromNowWhenNoAttemptRan(t *testing.T) {
 	}
 }
 
-// TestEvaluateReportsAnIncompleteCatalogAfterAGenerationSynced pins the signal a
-// release reads. lastSyncedGeneration protects only the first sync of a generation:
-// once one has synced completely, new tags appear in the registry without any edit to
-// the spec, so a later incomplete pass leaves lastSyncedGeneration equal to the
-// generation and the catalog looks like the repository's full answer while it is
-// missing versions nobody examined. A release asking for one of those would be told
-// the repository does not offer it — a fault of its own spec — instead of waiting for
-// the pass that finds out, which is exactly the case that field is held back for.
 func TestEvaluateReportsAnIncompleteCatalogAfterAGenerationSynced(t *testing.T) {
 	decision := Evaluate(Inputs{
 		Generation: 1,
@@ -1430,9 +1274,6 @@ func TestEvaluateReportsAnIncompleteCatalogAfterAGenerationSynced(t *testing.T) 
 	}
 }
 
-// TestEvaluateClearsTheIncompleteCatalogOnceAPassCoversTheRepository is the other
-// half: the mark is taken away by the pass that examines the rest, or releases would
-// wait on a catalog that is complete.
 func TestEvaluateClearsTheIncompleteCatalogOnceAPassCoversTheRepository(t *testing.T) {
 	decision := Evaluate(Inputs{
 		Generation: 1,
@@ -1452,10 +1293,6 @@ func TestEvaluateClearsTheIncompleteCatalogOnceAPassCoversTheRepository(t *testi
 	}
 }
 
-// TestEvaluateKeepsTheIncompleteCatalogThroughAFailedPass pins that the mark
-// describes the catalog in front of a reader rather than the latest pass. A read that
-// failed published nothing, so it neither proves the catalog complete nor makes it
-// less so — the same reasoning that keeps lastSyncedGeneration through a failure.
 func TestEvaluateKeepsTheIncompleteCatalogThroughAFailedPass(t *testing.T) {
 	decision := Evaluate(Inputs{
 		Generation: 1,
@@ -1476,20 +1313,6 @@ func TestEvaluateKeepsTheIncompleteCatalogThroughAFailedPass(t *testing.T) {
 	}
 }
 
-// TestEvaluateReportsACatalogWriteRejectedByItsLockAsALostRace covers what a user is
-// told, and how soon the write is redone, when a catalog patch is refused because the
-// read it was computed from has been overtaken (catalog.lockedTo). Nothing is broken:
-// the pass read the repository and lost a race with a write it could not see, and the
-// next pass computes the same catalog from a read that has caught up.
-//
-// Both halves of that are verdicts of their own. The message must not be the verbatim
-// "the object has been modified; please apply your changes to the latest version and
-// try again", which a user reads as a defect in the operator; nor may it blame another
-// party, since the writer that overtook this pass is most often this controller itself. And the retry must not
-// wait a full synchronization interval: the work queue does retry the failed pass at
-// once, but that retry attempts no synchronization while the schedule says the next one
-// is minutes away (ShouldAttempt), so the schedule this pass writes is what decides when
-// the catalog is actually rewritten.
 func TestEvaluateReportsACatalogWriteRejectedByItsLockAsALostRace(t *testing.T) {
 	conflict := apierrors.NewConflict(
 		schema.GroupResource{Group: helmv1alpha1.GroupName, Resource: "helmapplicationcharts"},

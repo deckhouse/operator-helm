@@ -36,12 +36,6 @@ func internalSecret(namespace string, labels map[string]string) client.Object {
 	}
 }
 
-// TestMapInternalResourcesReachesTheClusterRepositoryThatOwnsTheObject pins the
-// two facts this kind's wiring carries: the source is recognized by *this*
-// family's source-name label, so the internal objects of the other two repository
-// kinds — same namespace, same managed-by label — enqueue nothing here; and the
-// request names a cluster-scoped object, so it must carry no namespace even though
-// the object it came from lives in the operator namespace.
 func TestMapInternalResourcesReachesTheClusterRepositoryThatOwnsTheObject(t *testing.T) {
 	ours := map[string]string{
 		helmv1alpha1.LabelManagedBy:                                  helmv1alpha1.LabelManagedByValue,

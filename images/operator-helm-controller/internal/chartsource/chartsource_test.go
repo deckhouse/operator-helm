@@ -38,8 +38,6 @@ func TestResolve(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			// The whole point of the feature: the index entry decides, not the
-			// repository scheme.
 			name: "index entry pointing at a registry wins over the repository scheme",
 			repo: helmRepo,
 			version: helmv1alpha1.ChartVersion{

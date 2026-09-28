@@ -65,9 +65,6 @@ func clusterApp(namespace, name, repo string) *helmv1alpha1.HelmApplication {
 	return app
 }
 
-// TestApplicationReleaseResolvesTheRepositoryReference pins the one place the XOR of
-// spec.chart.repository / spec.chart.clusterRepository is read: everything
-// downstream sees a kind, a namespace and a name.
 func TestApplicationReleaseResolvesTheRepositoryReference(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -116,9 +113,6 @@ func TestApplicationReleaseNamesAndLabels(t *testing.T) {
 	if rel.Kind() != helmv1alpha1.HelmApplicationKind {
 		t.Fatalf("Kind = %q", rel.Kind())
 	}
-	// The hash is what keeps two application names from meeting in one release, so
-	// it is present even on a name far below the limit. The literal is pinned rather
-	// than recomputed: calling the same helper the adapter calls would assert nothing.
 	if rel.ReleaseName() != "hap-my-app-7d0dcc45388e" {
 		t.Fatalf("ReleaseName = %q, want the prefixed name with its hash", rel.ReleaseName())
 	}
@@ -147,9 +141,6 @@ func TestApplicationReleaseNamesAndLabels(t *testing.T) {
 	}
 }
 
-// TestApplicationReleaseReplacesLastAppliedChartWholesale pins the rule from the API
-// design: a merge into lastAppliedChart would leave a stale repository next to a new
-// clusterRepository and pin IsChartStatusInfoOutdated to true forever.
 func TestApplicationReleaseReplacesLastAppliedChartWholesale(t *testing.T) {
 	app := namespacedApp("team-a", "my-app", "stable")
 	rel := NewApplicationRelease(app)
@@ -213,9 +204,6 @@ func TestApplicationRepositoryResolverPicksTheKind(t *testing.T) {
 	}
 }
 
-// TestListApplicationReleasesIsScopedByRepositoryNamespace is the property the
-// namespaced catalog depends on: a repository named "stable" in team-a must not see
-// the applications using "stable" in team-b.
 func TestListApplicationReleasesIsScopedByRepositoryNamespace(t *testing.T) {
 	c := applicationClient(t,
 		namespacedApp("team-a", "a1", "stable"),

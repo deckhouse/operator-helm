@@ -62,9 +62,6 @@ func deletionOwner() *helmv1alpha1.HelmClusterAddon {
 	}
 }
 
-// deletingRelease is an internal object partway through its own deletion, which is
-// what makes its Ready condition describe the teardown rather than whatever came
-// before it.
 func deletingRelease(ready *metav1.Condition) *helmv2.HelmRelease {
 	deleted := metav1.Now()
 	release := &helmv2.HelmRelease{
@@ -99,8 +96,6 @@ func requireCondition(t *testing.T, owner *helmv1alpha1.HelmClusterAddon, condit
 	return *cond
 }
 
-// TestMarkDeletionPendingWaits pins what an owner reports while an internal
-// resource it must outlive is still going away: work in flight, not a failure.
 func TestMarkDeletionPendingWaits(t *testing.T) {
 	owner := deletionOwner()
 	manager, c := newDeletionManager(t, owner)
@@ -126,9 +121,6 @@ func TestMarkDeletionPendingWaits(t *testing.T) {
 	}
 }
 
-// TestMarkDeletionPendingReportsAFailingResource pins the other half: once the
-// resource's own deletion has started, its Ready=False describes the teardown and
-// the owner says so.
 func TestMarkDeletionPendingReportsAFailingResource(t *testing.T) {
 	owner := deletionOwner()
 	manager, c := newDeletionManager(t, owner)
@@ -153,9 +145,6 @@ func TestMarkDeletionPendingReportsAFailingResource(t *testing.T) {
 	}
 }
 
-// TestMarkDeletionPendingIgnoresAFailureFromBeforeTheDeletion pins the guard: a
-// Ready=False left over from a failed install says nothing about the teardown, and
-// reporting it as a deletion failure would be misleading.
 func TestMarkDeletionPendingIgnoresAFailureFromBeforeTheDeletion(t *testing.T) {
 	owner := deletionOwner()
 	manager, c := newDeletionManager(t, owner)
@@ -180,9 +169,6 @@ func TestMarkDeletionPendingIgnoresAFailureFromBeforeTheDeletion(t *testing.T) {
 	}
 }
 
-// TestMarkUninstallPendingReportsAFailedUninstall pins the polarity of the two
-// conditions: the abnormal-true one is raised, and Ready carries the same reason
-// and message inverted.
 func TestMarkUninstallPendingReportsAFailedUninstall(t *testing.T) {
 	owner := deletionOwner()
 	manager, c := newDeletionManager(t, owner)
@@ -213,8 +199,6 @@ func TestMarkUninstallPendingReportsAFailedUninstall(t *testing.T) {
 	}
 }
 
-// TestMarkUninstallPendingLeavesBothUnknownWhileRunning pins that an uninstall
-// still in flight is not a failure on either condition.
 func TestMarkUninstallPendingLeavesBothUnknownWhileRunning(t *testing.T) {
 	owner := deletionOwner()
 	manager, c := newDeletionManager(t, owner)
@@ -250,8 +234,6 @@ func TestMarkDeletionFailedNamesTheCause(t *testing.T) {
 	}
 }
 
-// TestPatchStatusSkipsAnUnchangedStatus pins the guard every status write relies
-// on: repeating a verdict must not put a write on the API server.
 func TestPatchStatusSkipsAnUnchangedStatus(t *testing.T) {
 	owner := deletionOwner()
 	manager, c := newDeletionManager(t, owner)

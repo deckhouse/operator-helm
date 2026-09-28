@@ -57,9 +57,6 @@ entries:
     - version: 21.0.0
 `
 
-// shortenIndexLimits shrinks the fetch limits for the duration of one test, so the
-// behaviour they guard can be exercised without waiting out real minutes or
-// streaming real megabytes.
 func shortenIndexLimits(t *testing.T, attempt, budget time.Duration, size int) {
 	t.Helper()
 
@@ -72,11 +69,6 @@ func shortenIndexLimits(t *testing.T, attempt, budget time.Duration, size int) {
 	})
 }
 
-// TestFetchChartsRetriesAfterAnAttemptStalls pins that a stalled attempt costs only
-// its own deadline and not the whole budget. The first request never answers, so
-// with a single deadline shared by all attempts the fetch would end with that one
-// request and report a timeout; the second request proves the retry still had time
-// of its own.
 func TestFetchChartsRetriesAfterAnAttemptStalls(t *testing.T) {
 	shortenIndexLimits(t, 200*time.Millisecond, 10*time.Second, maxIndexSize)
 
@@ -84,7 +76,6 @@ func TestFetchChartsRetriesAfterAnAttemptStalls(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if requests.Add(1) == 1 {
-			// Hang until the attempt gives up on its own deadline.
 			<-r.Context().Done()
 
 			return
@@ -106,12 +97,6 @@ func TestFetchChartsRetriesAfterAnAttemptStalls(t *testing.T) {
 	}
 }
 
-// TestFetchChartsRejectsAnOversizeIndex pins that the response body is bounded. The
-// served document is valid YAML all the way through, so an unbounded read would
-// either hold all of it in memory or — once cut at a limit — decode the truncated
-// prefix as a smaller but perfectly valid repository and prune the rest of the
-// catalog. The fetch must fail instead, saying why, and must not retry a download
-// whose size will not change.
 func TestFetchChartsRejectsAnOversizeIndex(t *testing.T) {
 	const limit = 1 << 20
 
@@ -124,7 +109,6 @@ func TestFetchChartsRejectsAnOversizeIndex(t *testing.T) {
 
 		_, _ = w.Write([]byte("apiVersion: v1\nentries:\n"))
 
-		// Comfortably past the limit, one well-formed entry at a time.
 		for i := range 40000 {
 			_, _ = fmt.Fprintf(w, "  chart-%d:\n    - version: 1.0.0\n", i)
 		}
@@ -146,9 +130,6 @@ func TestFetchChartsRejectsAnOversizeIndex(t *testing.T) {
 	}
 }
 
-// TestFetchChartsAcceptsAnIndexAtTheLimit pins the boundary: the limit is on the
-// document, not on what fits under it, so an index of exactly maxIndexSize bytes is
-// still a good index.
 func TestFetchChartsAcceptsAnIndexAtTheLimit(t *testing.T) {
 	index := testIndex + strings.Repeat("# pad\n", 4)
 
@@ -216,8 +197,6 @@ func TestFetchChartsServerErrorIsNotTerminal(t *testing.T) {
 	if _, ok := AsTerminal(err); ok {
 		t.Fatalf("5xx must stay retriable, got terminal error: %v", err)
 	}
-	// The exhausted backoff must report what actually went wrong rather than the
-	// bare "timed out waiting for the condition" the wait helper returns.
 	if !strings.Contains(err.Error(), "500") {
 		t.Fatalf("expected the status code in the reported cause, got %v", err)
 	}
@@ -244,10 +223,6 @@ func TestFetchChartsSkipsInvalidVersion(t *testing.T) {
 	}
 }
 
-// TestFetchChartsHelmRecordsOCIReferences pins how an index entry is classified. Only
-// urls[0] is examined, because the internal HelmChart downloads exactly that url:
-// picking an archive from urls[1] would send the version down the helm path where the
-// source controller would still trip over urls[0].
 func TestFetchChartsHelmRecordsOCIReferences(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(testHybridIndex))
@@ -277,7 +252,6 @@ func TestFetchChartsHelmRecordsOCIReferences(t *testing.T) {
 		t.Fatalf("24.0.0 oci ref = %q, want empty: its first url is an archive", got)
 	}
 
-	// The tag is made explicit on write, so the recorded reference is self-contained.
 	if got := byVersion["23.0.0"].OCIRef; got != "oci://registry-1.docker.io/bitnamicharts/airflow:23.0.0" {
 		t.Fatalf("23.0.0 oci ref = %q, want the entry version as the tag", got)
 	}
@@ -298,12 +272,6 @@ func TestFetchChartsHelmRecordsOCIReferences(t *testing.T) {
 	}
 }
 
-// TestFetchChartsRejectsAResponseWithoutAnIndex pins that a response carrying no
-// index document is a failed fetch. yaml accepts every one of these bodies without
-// an error and leaves the entries mapping absent, so reporting success would hand
-// the caller an empty chart list and prune the repository's whole catalog — over a
-// proxy that answered 200 with nothing, a 204 (which is not a terminal status), or
-// an error page. The failure must stay retriable: the repository resource is fine.
 func TestFetchChartsRejectsAResponseWithoutAnIndex(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -348,20 +316,11 @@ func TestFetchChartsRejectsAResponseWithoutAnIndex(t *testing.T) {
 	}
 }
 
-// TestFetchChartsAcceptsAnIndexWithoutCharts is the guard on the check above: a
-// repository is allowed to publish an index that lists nothing, and that is a
-// successful fetch of zero charts — the catalog reconciler then prunes correctly,
-// because the repository really did go empty.
 func TestFetchChartsAcceptsAnIndexWithoutCharts(t *testing.T) {
 	for name, body := range map[string]string{
-		// The shape helm and chartmuseum publish: the mapping is there and empty.
-		"empty entries mapping": "apiVersion: v1\nentries: {}\n",
-		// The same repository as another server may spell it. The value decodes to nil,
-		// exactly as an absent key would, so only apiVersion tells the two apart.
-		"entries with no value":   "apiVersion: v1\nentries:\n",
-		"explicitly null entries": "apiVersion: v1\nentries: null\n",
-		// No apiVersion, but the document is about charts: a repository answering for
-		// itself, not a proxy answering for the repository.
+		"empty entries mapping":         "apiVersion: v1\nentries: {}\n",
+		"entries with no value":         "apiVersion: v1\nentries:\n",
+		"explicitly null entries":       "apiVersion: v1\nentries: null\n",
 		"charts without an api version": "entries:\n  podinfo:\n    - version: 6.7.1\n      urls: [https://example.test/podinfo-6.7.1.tgz]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -374,8 +333,6 @@ func TestFetchChartsAcceptsAnIndexWithoutCharts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("an index that lists no charts must be accepted, got %v", err)
 			}
-			// Non-nil: the caller distinguishes nothing here, it prunes whatever the
-			// catalog holds beyond this list.
 			if charts == nil {
 				t.Fatal("expected a chart list, got nil")
 			}
@@ -383,11 +340,6 @@ func TestFetchChartsAcceptsAnIndexWithoutCharts(t *testing.T) {
 	}
 }
 
-// TestFetchChartsThrottleIsRetriedNotDecoded pins that a throttled read is never
-// mistaken for an empty repository. A throttle is deliberately not terminal, and the
-// body registries send with it is JSON, which decodes into an empty index without
-// error — so letting it reach the decoder would report a successful fetch of zero
-// charts and prune the repository's whole catalog.
 func TestFetchChartsThrottleIsRetriedNotDecoded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)

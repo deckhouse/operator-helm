@@ -55,8 +55,6 @@ func newChartMapperClient(t *testing.T, objects ...client.Object) client.Client 
 				addon.Spec.Chart.HelmClusterAddonChartName,
 			)}
 		}).
-		// The same function the manager registers, so the repository mapper's lookup
-		// is the one it performs in the cluster.
 		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonRepository, index.AddonRepositoryIndexer).
 		Build()
 }
@@ -87,11 +85,6 @@ func addonUsingChart(repoName, chartName, version string) *helmv1alpha1.HelmClus
 	}
 }
 
-// TestmapChartToAddonsEnqueuesTheClaimingAddon covers the reason this watch exists:
-// after a terminal probe verdict the addon has no internal HelmChart or OCIRepository
-// left for any other watch to catch, so a status change on the chart itself must be
-// the thing that wakes it.
-
 func TestMapChartToAddonsEnqueuesTheClaimingAddon(t *testing.T) {
 	chart := chartObject("repo-a", "podinfo")
 	addon := addonUsingChart("repo-a", "podinfo", "6.7.1")
@@ -108,10 +101,6 @@ func TestMapChartToAddonsEnqueuesTheClaimingAddon(t *testing.T) {
 	}
 }
 
-// TestMapRepositoryToAddonsEnqueuesOnlyItsOwnConsumers pins the other hand-written
-// watch of this controller: a repository write must wake the addons installing from
-// that repository, whatever chart of it they use, and no one else. The addons are
-// cluster-scoped, so the request carries a name and no namespace.
 func TestMapRepositoryToAddonsEnqueuesOnlyItsOwnConsumers(t *testing.T) {
 	consumer := addonUsingChart("repo-a", "podinfo", "6.7.1")
 
@@ -142,9 +131,6 @@ func TestMapRepositoryToAddonsEnqueuesOnlyItsOwnConsumers(t *testing.T) {
 	}
 }
 
-// TestMapRepositoryToAddonsIgnoresAnUnrelatedRepository pins the empty case: a
-// repository nothing installs from must not enqueue the addons of other
-// repositories, which an index value of the wrong shape would do.
 func TestMapRepositoryToAddonsIgnoresAnUnrelatedRepository(t *testing.T) {
 	c := newChartMapperClient(t, addonUsingChart("repo-a", "podinfo", "6.7.1"))
 
@@ -165,10 +151,6 @@ func TestMapChartToAddonsNoAddonClaimsTheChart(t *testing.T) {
 	}
 }
 
-// TestmapChartToAddonsMissingLabels covers a chart object with no repository or chart
-// label: the catalog synchronization treats that the same way (fail open, log and move
-// on), and this map function must not panic or list every addon by an empty index
-// value.
 func TestMapChartToAddonsMissingLabels(t *testing.T) {
 	chart := &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{Name: "orphan-chart"},

@@ -74,8 +74,6 @@ func newValidatorWithFaults(t *testing.T, faults interceptor.Funcs, objects ...c
 		WithScheme(scheme).
 		WithObjects(objects...).
 		WithInterceptorFuncs(faults).
-		// The same index function the manager registers, so the lookup the check
-		// performs is the one it performs in the cluster.
 		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonChart, index.AddonChartIndexer).
 		Build()
 
@@ -85,8 +83,6 @@ func newValidatorWithFaults(t *testing.T, faults interceptor.Funcs, objects ...c
 	}
 }
 
-// addonUsing is an addon on an explicit repository/chart pair; the fixture above
-// puts every addon on stable/redis, which is exactly what uniqueness forbids.
 func addonUsing(name, repository, chart string) *helmv1alpha1.HelmClusterAddon {
 	addon := addonFixture(name)
 	addon.Spec.Chart.HelmClusterAddonRepository = repository
@@ -95,8 +91,6 @@ func addonUsing(name, repository, chart string) *helmv1alpha1.HelmClusterAddon {
 	return addon
 }
 
-// claimFixture is the Lease the reconciler creates for a pair: the webhook reads it
-// to recognize the addon that already owns the pair.
 func claimFixture(repository, chart, holder string) *coordinationv1.Lease {
 	return &coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -113,11 +107,6 @@ func requestBy(username string) context.Context {
 	})
 }
 
-// TestValidateCreateRejectsANameTooLongForTheSourceLabel pins the one place the
-// bound belongs: the name goes on every internal object as a label value, which
-// stops at 63 characters. CREATE only — a rule evaluated on every write would also
-// block the status updates and the finalizer removal of an addon that already
-// carries a longer name, leaving it undeletable.
 func TestValidateCreateRejectsANameTooLongForTheSourceLabel(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -144,8 +133,6 @@ func TestValidateCreateRejectsANameTooLongForTheSourceLabel(t *testing.T) {
 	}
 }
 
-// TestValidateCreateExplainsWhyTheNameIsBounded keeps the rejection actionable: the
-// limit only makes sense together with the label that imposes it.
 func TestValidateCreateExplainsWhyTheNameIsBounded(t *testing.T) {
 	v := newValidator(t)
 
@@ -158,10 +145,6 @@ func TestValidateCreateExplainsWhyTheNameIsBounded(t *testing.T) {
 	}
 }
 
-// TestValidateUpdateAllowsAnExistingOverlongName is the reason the check is not a
-// CEL rule on the type: an addon created before the bound existed must still be
-// able to report status and to shed its cleanup finalizer, or it becomes
-// undeletable.
 func TestValidateUpdateAllowsAnExistingOverlongName(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -205,8 +188,6 @@ func TestValidateUpdateAllowsAnExistingOverlongName(t *testing.T) {
 	}
 }
 
-// TestValidateDeleteAllowsAnExistingOverlongName is the other half of the same
-// reason: the DELETE itself must go through.
 func TestValidateDeleteAllowsAnExistingOverlongName(t *testing.T) {
 	addon := addonFixture(strings.Repeat("a", 120))
 	v := newValidator(t, addon)
@@ -216,11 +197,6 @@ func TestValidateDeleteAllowsAnExistingOverlongName(t *testing.T) {
 	}
 }
 
-// TestValidateCreateRejectsAChartAlreadyUsedByAnotherAddon is the rule the webhook
-// exists for: one repository/chart pair, one addon. The check is advisory — two
-// concurrent creates can both pass it, and the Lease in internal/claim is what
-// actually settles the race — so what is pinned here is that an already visible
-// duplicate is refused with the name of the addon holding the pair.
 func TestValidateCreateRejectsAChartAlreadyUsedByAnotherAddon(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -272,10 +248,6 @@ func TestValidateCreateRejectsAChartAlreadyUsedByAnotherAddon(t *testing.T) {
 	}
 }
 
-// TestValidateAllowsTheAddonThatHoldsTheClaim covers the two ways an addon is not
-// its own duplicate: it is the object listed under the pair, or the claim Lease
-// already records it as the holder — the state a re-created addon whose Lease
-// outlived it comes back to.
 func TestValidateAllowsTheAddonThatHoldsTheClaim(t *testing.T) {
 	t.Run("the listed object is the addon itself", func(t *testing.T) {
 		addon := addonUsing("mine", "stable", "redis")
@@ -298,10 +270,6 @@ func TestValidateAllowsTheAddonThatHoldsTheClaim(t *testing.T) {
 	})
 }
 
-// TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged pins the one
-// exemption: annotating an addon to force a reconcile must go through even while it
-// is the losing duplicate of a pair, or a conflict could never be re-driven. A write
-// that also moves the chart reference is a new claim and is checked again.
 func TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -323,9 +291,6 @@ func TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged(t *testin
 			wantErr: true,
 		},
 		{
-			// The other half of the pair: moving the addon to another repository is a
-			// new claim just as much as moving it to another chart, and the annotation
-			// riding along must not excuse it.
 			name: "the annotation changed together with the repository reference",
 			mutate: func(addon *helmv1alpha1.HelmClusterAddon) {
 				addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "now"}
@@ -348,7 +313,6 @@ func TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged(t *testin
 			newAddon := oldAddon.DeepCopy()
 			tt.mutate(newAddon)
 
-			// Both pairs are taken by an incumbent, so any check that runs refuses.
 			v := newValidator(t,
 				addonUsing("incumbent", "stable", "redis"),
 				addonUsing("other-incumbent", "stable", "postgres"),
@@ -367,10 +331,6 @@ func TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged(t *testin
 	}
 }
 
-// TestUniquenessIsBypassedForTheControllerItself pins the exemption the controller
-// needs: its own writes — status, finalizers, the chart reference it normalizes —
-// must not be refused because the addon is a known duplicate, or a conflicting
-// addon could not even record the conflict. Every other user is checked.
 func TestUniquenessIsBypassedForTheControllerItself(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -397,10 +357,6 @@ func TestUniquenessIsBypassedForTheControllerItself(t *testing.T) {
 				}
 			})
 
-			// UPDATE is the operation the controller actually performs — the status,
-			// the finalizer, the normalized chart reference are all updates — so the
-			// bypass has to hold there too. The reference moves onto the taken pair,
-			// which is what the force-reconcile exemption above does not cover.
 			t.Run("on update", func(t *testing.T) {
 				oldAddon := addonUsing("newcomer", "stable", "postgres")
 				newAddon := addonUsing("newcomer", "stable", "redis")
@@ -418,9 +374,6 @@ func TestUniquenessIsBypassedForTheControllerItself(t *testing.T) {
 	}
 }
 
-// TestUniquenessFailsClosedWhenItCannotBeChecked pins that neither read is allowed
-// to be skipped silently: an unreadable claim or an unreadable list must refuse the
-// write rather than admit an unchecked duplicate.
 func TestUniquenessFailsClosedWhenItCannotBeChecked(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -455,9 +408,6 @@ func TestUniquenessFailsClosedWhenItCannotBeChecked(t *testing.T) {
 	}
 }
 
-// TestValidateRejectsASystemTargetNamespace keeps an addon from installing a chart
-// into the platform's own namespaces, on both operations: the field is mutable, so
-// CREATE alone would not hold the rule.
 func TestValidateRejectsASystemTargetNamespace(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -490,8 +440,6 @@ func TestValidateRejectsASystemTargetNamespace(t *testing.T) {
 	}
 }
 
-// TestValidateDeleteRefusesAMaintainedAddon pins what maintenance mode buys: an
-// addon under it is not deleted by mistake, and the release it installed stays.
 func TestValidateDeleteRefusesAMaintainedAddon(t *testing.T) {
 	addon := addonFixture("maintained")
 	addon.Spec.Maintenance = string(helmv1alpha1.NoResourceReconciliation)

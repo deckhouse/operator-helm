@@ -70,10 +70,6 @@ func TestConsumeForceAnnotationRemovesTheRequest(t *testing.T) {
 	}
 }
 
-// TestConsumeForceAnnotationSkipsAnObjectWithoutTheRequest pins that an object
-// carrying unrelated annotations is not written on every pass. Guarding on the map
-// instead of on the annotation itself sends an empty PATCH each time, which costs a
-// write and an update event for every object in the cluster.
 func TestConsumeForceAnnotationSkipsAnObjectWithoutTheRequest(t *testing.T) {
 	addon := addonWithAnnotations(map[string]string{"example.io/unrelated": "value"})
 	c := newForceClient(t, addon)

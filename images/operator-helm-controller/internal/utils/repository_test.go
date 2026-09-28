@@ -145,9 +145,6 @@ func TestSplitOCIRef(t *testing.T) {
 			wantTag:  "6.7.1",
 		},
 		{
-			// The address must keep the spelling of the index: go-containerregistry
-			// rewrites docker.io to index.docker.io, and the internal OCIRepository
-			// has to address the registry the repository actually named.
 			name:     "docker.io is not rewritten",
 			ref:      "oci://docker.io/bitnamicharts/airflow:25.0.2",
 			fallback: "25.0.2",

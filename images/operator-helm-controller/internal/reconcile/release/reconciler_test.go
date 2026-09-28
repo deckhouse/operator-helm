@@ -108,18 +108,11 @@ func addonChartFixture(repoName, chartName string, versions ...helmv1alpha1.Char
 	}
 }
 
-// TestGetHelmClusterAddonChart pins the gate that decides whether an addon has
-// enough information to be deployed. For an OCI repository, a catalog entry is
-// usable exactly when it carries a media type; for a Helm repository the media
-// type is never checked, so an entry is usable as soon as the version is present.
 func TestGetHelmClusterAddonChart(t *testing.T) {
 	addon := testAddon()
 
 	tests := []struct {
-		name string
-		// version is the sole entry seeded into the HelmClusterAddonChart's
-		// Status.Versions. Its own Version field decides whether the lookup by
-		// addon.Spec.Chart.Version ("6.7.1") hits or misses.
+		name           string
 		version        helmv1alpha1.ChartVersion
 		repoType       chartsource.Kind
 		staleRepo      bool
@@ -135,9 +128,6 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			repoType: chartsource.OCI,
 		},
 		{
-			// Deliberate: the tag disappeared from the repository, but the entry is
-			// retained with its media type so the addon keeps reconciling everything
-			// else. The real pull failure is reported by the source controller.
 			name: "oci version removed from repository but with a media type still passes",
 			version: helmv1alpha1.ChartVersion{
 				Version:           "6.7.1",
@@ -168,9 +158,6 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			wantErrContain: "UnsupportedMediaType",
 		},
 		{
-			// Same empty-media-type entry as above, but a Helm repository's versions
-			// never carry a media type: a stricter gate here would break every Helm
-			// addon, so the presence check alone must let it through.
 			name: "the same empty media type entry passes for a helm repository",
 			version: helmv1alpha1.ChartVersion{
 				Version:           "6.7.1",
@@ -179,9 +166,6 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			repoType: chartsource.Helm,
 		},
 		{
-			// The repository's URL just switched from oci:// to https://: the
-			// catalog entry is still OCI-era (it carries a media type from the last
-			// OCI sync), but the Helm gate never reads the media type, so it passes.
 			name: "oci-era entry with a media type still passes right after switching to a helm repository",
 			version: helmv1alpha1.ChartVersion{
 				Version:   "6.7.1",
@@ -190,10 +174,6 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			repoType: chartsource.Helm,
 		},
 		{
-			// The repository's URL just switched from https:// to oci://, but the
-			// first OCI sync has not resolved the tag's media type yet: the entry is
-			// still Helm-era (no media type, no reason), so the OCI gate must reject
-			// it rather than let an unresolved layer through.
 			name: "helm-era entry with no media type is rejected right after switching to an oci repository",
 			version: helmv1alpha1.ChartVersion{
 				Version: "6.7.1",
@@ -203,10 +183,6 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			wantErrContain: "has not resolved it yet",
 		},
 		{
-			// A pending verdict over metadata an earlier sync did resolve. The version
-			// is deployable from what is recorded, and no later sync will re-examine
-			// it precisely because that metadata is there, so blocking the release on
-			// it would hold it on a registry failure it has already outlived.
 			name: "a pending verdict over resolved metadata does not hold the release",
 			version: helmv1alpha1.ChartVersion{
 				Version:            "6.7.1",
@@ -219,10 +195,6 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			// The repository's catalog is of the previous spec, but it already lists
-			// the version the release asks for. Waiting for the resync to confirm what
-			// is in front of us would stall a release for no gain: the version either
-			// survives the resync, or the catalog write that drops it wakes us.
 			name:      "a version already in a catalog of a previous spec is deployed",
 			version:   helmv1alpha1.ChartVersion{Version: "6.7.1"},
 			repoType:  chartsource.Helm,
@@ -237,9 +209,6 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			wantErrContain: `does not have version "6.7.1"`,
 		},
 		{
-			// The hybrid case: the version lives in a registry, so its media type is
-			// resolved at deploy time and is deliberately absent here. The gate must
-			// not read that absence as "unresolved".
 			name: "helm repository version published in a registry passes without a media type",
 			version: helmv1alpha1.ChartVersion{
 				Version: "6.7.1",
@@ -248,8 +217,6 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 			repoType: chartsource.Helm,
 		},
 		{
-			// Left through, this version would be sent down the helm path and would
-			// fail on the same unusable url with an opaque source controller error.
 			name: "version with an unusable index reference is rejected",
 			version: helmv1alpha1.ChartVersion{
 				Version:            "6.7.1",
@@ -310,31 +277,20 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 	}
 }
 
-// TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog pins the
-// difference the release's status turns on. A catalog with no versions in it says
-// nothing about the version asked for — the repository controller has not written it
-// yet — while a populated catalog without that version is the repository's full
-// answer, and the spec names something it does not offer.
 func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.T) {
 	addon := testAddon()
 
 	tests := []struct {
-		name         string
-		versions     []helmv1alpha1.ChartVersion
-		noCatalog    bool
-		synced       bool
-		staleSync    bool
-		failedResync bool
-		incomplete   bool
-		wantReason   string
-		wantBadInput bool
-		// wantRetried is whether the failure goes to the work queue. The three cases
-		// differ in what brings the release back: the two early ones are enqueued by
-		// the catalog watches the moment the repository controller writes, so handing
-		// them to the rate limiter as well would re-run a pass whose input has not
-		// moved and log a controller error for a state that is merely early.
-		wantRetried bool
-		// wantRetryAfter is the timer the failure asks for, zero for none.
+		name           string
+		versions       []helmv1alpha1.ChartVersion
+		noCatalog      bool
+		synced         bool
+		staleSync      bool
+		failedResync   bool
+		incomplete     bool
+		wantReason     string
+		wantBadInput   bool
+		wantRetried    bool
 		wantRetryAfter time.Duration
 	}{
 		{
@@ -356,8 +312,6 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetryAfter: awaitSyncInterval,
 		},
 		{
-			// The repository answered in full and offers no chart under that name: a
-			// typo in the chart name, which used to look exactly like a slow sync.
 			name:         "after a sync an absent catalog object is a fault of the spec",
 			noCatalog:    true,
 			synced:       true,
@@ -366,9 +320,6 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetried:  false,
 		},
 		{
-			// A chart every one of whose entries the index marks removed, or publishes
-			// under a version this operator cannot address, is recorded with no
-			// versions and stays that way until the repository changes.
 			name:         "after a sync an empty catalog is durable, not transient",
 			versions:     nil,
 			synced:       true,
@@ -385,9 +336,6 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetried:  false,
 		},
 		{
-			// The repository has a catalog, but of the spec it carried before the url
-			// was edited. Reading a chart's absence from it as final would answer
-			// about a repository the release no longer points at.
 			name:           "a catalog from before a spec change is not the repository's answer",
 			noCatalog:      true,
 			staleSync:      true,
@@ -397,11 +345,6 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetryAfter: awaitSyncInterval,
 		},
 		{
-			// A pass that ran out of its budget published the verdicts it reached and
-			// said how many versions it never examined. The catalog belongs to the
-			// current spec — lastSyncedGeneration was released by an earlier, complete
-			// pass — and is still missing versions the repository offers, which is
-			// what makes the absence of this one no answer at all.
 			name:           "a version absent from an incomplete catalog is not the repository's answer",
 			versions:       []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
 			synced:         true,
@@ -412,9 +355,6 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetryAfter: awaitSyncInterval,
 		},
 		{
-			// The same for a catalog object that holds no version yet: with versions
-			// left unexamined it is not the durable emptiness of a chart the
-			// repository offers nothing usable for.
 			name:           "an empty catalog of an incomplete read is not durable",
 			versions:       nil,
 			synced:         true,
@@ -425,10 +365,6 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetryAfter: awaitSyncInterval,
 		},
 		{
-			// A transient failure on a healthy repository turns Synced False without
-			// touching the catalog. Reading that as "not current" would put every
-			// release on this repository back to waiting, and a mistyped version
-			// would oscillate between bad input and progress every five minutes.
 			name:         "a failed pass does not unpublish the catalog it did not touch",
 			versions:     []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
 			failedResync: true,
@@ -437,9 +373,6 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetried:  false,
 		},
 		{
-			// The catalog is full, but of the previous url. A version the new url
-			// offers is absent from it, and calling that a fault of the spec would be
-			// wrong for as long as the resync takes.
 			name:           "a populated catalog from before a spec change is not the answer either",
 			versions:       []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
 			staleSync:      true,
@@ -449,11 +382,6 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetryAfter: awaitSyncInterval,
 		},
 		{
-			// A version the repository lists without having reached a verdict on how
-			// it is published. It may well become deployable, and the write that says
-			// so is to the catalog object the release already watches. The wait also
-			// carries a timer: a registry that keeps failing the same way leaves the
-			// entry unchanged, so no watch event follows.
 			name: "a version still being resolved is progress, not bad input",
 			versions: []helmv1alpha1.ChartVersion{{
 				Version:            "6.7.1",
@@ -467,9 +395,6 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetryAfter: awaitSyncInterval,
 		},
 		{
-			// The version is listed, and the repository published it at a reference
-			// that cannot be addressed. Only a republish changes that, and the catalog
-			// watches deliver it; the work queue would spin on an unchanged input.
 			name: "a version the repository published unusably is not retried either",
 			versions: []helmv1alpha1.ChartVersion{{
 				Version:            "6.7.1",
@@ -499,20 +424,14 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 				repo = syncedRepositoryFixture()
 			}
 			if tt.staleSync {
-				// The spec moved on; the catalog still belongs to the previous one.
 				repo = syncedRepositoryFixture()
 				repo.Generation++
 				repo.Status.ObservedGeneration = repo.Generation
 			}
 			if tt.incomplete {
-				// The repository read itself, published what it examined and recorded
-				// how much it left: the count is the catalog's own report that it does
-				// not list everything the repository offers.
 				repo.Status.UnexaminedVersions = 400
 			}
 			if tt.failedResync {
-				// A published catalog whose repository's latest pass failed: the
-				// condition says False over a catalog that is complete and current.
 				repo = syncedRepositoryFixture()
 				apimeta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
 					Type:               helmv1alpha1.ConditionTypeSynced,
@@ -583,15 +502,10 @@ func helmRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 	}
 }
 
-// syncedRepositoryFixture is the same repository after it has finished a sync at
-// least once. That is what makes its catalog a complete answer rather than a
-// half-built one, and several verdicts turn on the difference.
 func syncedRepositoryFixture() *helmv1alpha1.HelmClusterAddonRepository {
 	repo := helmRepositoryFixture()
 	repo.Status.LastSuccessfulSyncTime = &metav1.Time{Time: time.Now().UTC()}
 	repo.Status.ObservedGeneration = repo.Generation
-	// The generation of the published catalog is the evidence that matters: it is
-	// written only by a pass that completed one, and survives later failures.
 	repo.Status.LastSyncedGeneration = repo.Generation
 
 	return repo
@@ -607,10 +521,6 @@ func newForceTestReconciler(
 	return newFullReconciler(t, nil, interceptors, objects...)
 }
 
-// newFullReconciler builds a reconciler with the full service set, so a test can
-// drive a complete pass rather than a single helper. resolver is handed to the OCI
-// service; nil selects the real one, which tests that never reach the hybrid path can
-// use safely.
 func newFullReconciler(
 	t *testing.T,
 	resolver repoclient.ChartResolverInterface,
@@ -652,11 +562,6 @@ func newFullReconciler(
 	}), c
 }
 
-// newApplicationFullReconciler is the sibling of newFullReconciler for the
-// application family: the same services, wired to the namespaced adapters. It is
-// what lets a test prove that one reconciler serves both families. identity is the
-// identity the release is applied with; nil selects the real one over the same fake
-// client.
 func newApplicationFullReconciler(
 	t *testing.T,
 	identity Identity,
@@ -747,9 +652,6 @@ func reconcileApplication(t *testing.T, r *Reconciler, app *helmv1alpha1.HelmApp
 	}
 }
 
-// markInternalChartReady stands in for source-controller: the internal
-// HelmChart only reports an artifact once that controller has pulled it, and the
-// release stage is reached only when it has.
 func markInternalChartReady(t *testing.T, c client.Client, name string) {
 	t.Helper()
 
@@ -767,16 +669,11 @@ func markInternalChartReady(t *testing.T, c client.Client, name string) {
 		ObservedGeneration: chart.Generation,
 		LastTransitionTime: metav1.Now(),
 	}}
-	// A plain Update, not Status().Update: the fake client is not told to give
-	// HelmChart a status subresource, and the controller never writes that status
-	// itself, so there is nothing for a subresource to protect here.
 	if err := c.Update(context.Background(), chart); err != nil {
 		t.Fatalf("updating internal helm chart status: %v", err)
 	}
 }
 
-// markInternalReleaseDeployed stands in for helm-controller: the internal
-// HelmRelease reports the revision it installed only once that controller has run.
 func markInternalReleaseDeployed(t *testing.T, c client.Client, name, version string) {
 	t.Helper()
 
@@ -799,13 +696,6 @@ func markInternalReleaseDeployed(t *testing.T, c client.Client, name, version st
 	}
 }
 
-// TestReconcileReportsProgressUntilTheReleaseSettles walks the progress condition
-// through one install. It is raised while an internal object still has work to do,
-// carries that object's own verdict rather than a fixed message, and is taken away
-// by the pass that finds the release settled — without which kstatus would read a
-// healthy release as one that never finishes. The passes in between are driven by
-// the watches on the internal objects, which is what a status write on either of
-// them produces in the real controller.
 func TestReconcileReportsProgressUntilTheReleaseSettles(t *testing.T) {
 	app := testApplication()
 
@@ -850,11 +740,6 @@ func TestReconcileReportsProgressUntilTheReleaseSettles(t *testing.T) {
 	}
 }
 
-// TestReconcileStallsWhenTheInternalReleaseGivesUp wires the two halves of the
-// verdict together on the path a test cluster actually took: bad values leave the
-// internal release Stalled once its remediation attempts are spent. The services
-// layer has to carry that out of the object's conditions and the evaluation has to
-// act on it; each is covered on its own, and this is what proves they meet.
 func TestReconcileStallsWhenTheInternalReleaseGivesUp(t *testing.T) {
 	const cause = "Helm upgrade failed: .spec.replicas: expected numeric (int or float), got string"
 
@@ -916,10 +801,6 @@ func TestReconcileStallsWhenTheInternalReleaseGivesUp(t *testing.T) {
 	}
 }
 
-// TestReconcileApplicationAppliesTheChartAsItsOwnIdentity is the central claim of
-// the namespaced family: the release is created in the operator namespace, but it
-// is applied as an account of the application's own making, and its storage lives
-// in the application's namespace — so an application can never reach outside it.
 func TestReconcileApplicationAppliesTheChartAsItsOwnIdentity(t *testing.T) {
 	app := testApplication()
 
@@ -927,8 +808,6 @@ func TestReconcileApplicationAppliesTheChartAsItsOwnIdentity(t *testing.T) {
 
 	names := adapter.NewApplicationRelease(app).InternalNames()
 
-	// The first pass adds the finalizer and creates the internal chart; the second
-	// one reaches the release, once that chart reports an artifact.
 	reconcileApplication(t, r, app)
 	markInternalChartReady(t, c, names.HelmChart)
 	reconcileApplication(t, r, app)
@@ -960,10 +839,6 @@ func TestReconcileApplicationAppliesTheChartAsItsOwnIdentity(t *testing.T) {
 	}
 }
 
-// TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace is the other
-// half of the same claim: everything the controller runs on lives in the operator
-// namespace. The application namespace only ever receives the two RBAC objects
-// that grant the identity its rights there.
 func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *testing.T) {
 	app := testApplication()
 
@@ -1034,12 +909,6 @@ func (failingIdentity) Cleanup(context.Context, contract.Release) (status.Deleti
 
 func (failingIdentity) RemoveAccount(context.Context, contract.Release) error { return nil }
 
-// TestReconcileApplicationReportsRBACSetupFailure pins that the pass stops at the
-// identity. A release applied without one would run as helm-controller itself,
-// which is exactly the privilege the namespaced family exists to avoid, so the
-// failure has to be reported instead of worked around. It must also be returned
-// as an error: nothing watches the ServiceAccount/RoleBinding this step manages,
-// so the work queue's rate limiter is the only thing that will retry it.
 func TestReconcileApplicationReportsRBACSetupFailure(t *testing.T) {
 	app := testApplication()
 
@@ -1070,10 +939,6 @@ func TestReconcileApplicationReportsRBACSetupFailure(t *testing.T) {
 	}
 }
 
-// intermittentIdentity fails the first call to Ensure and delegates to a real
-// Identity afterwards, standing in for a transient failure (an API hiccup, a
-// momentary admission rejection) that clears on its own by the next pass. real is
-// set after construction, once the reconciler's own client exists.
 type intermittentIdentity struct {
 	real  Identity
 	calls int
@@ -1099,10 +964,6 @@ func (a *intermittentIdentity) RemoveAccount(ctx context.Context, rel contract.R
 	return a.real.RemoveAccount(ctx, rel)
 }
 
-// TestReconcileApplicationRecoversAfterTransientRBACSetupFailure pins the fix for
-// the gap in TestReconcileApplicationReportsRBACSetupFailure: a failed
-// Ensure must not just be reported, it must get the application requeued, so
-// a transient failure recovers on its own once the cause is gone.
 func TestReconcileApplicationRecoversAfterTransientRBACSetupFailure(t *testing.T) {
 	app := testApplication()
 
@@ -1144,11 +1005,6 @@ func TestReconcileApplicationRecoversAfterTransientRBACSetupFailure(t *testing.T
 	}
 }
 
-// TestReconcileStallsOnAnUnreadableRepositoryURL pins the release-side mirror of the
-// repository's own configuration verdict. The fault is in the repository, not here,
-// and the repository reports it as Stalled too; retrying from this side would only
-// rediscover it, so the release says so and waits for the repository's generation to
-// move — which is what correcting the url does.
 func TestReconcileStallsOnAnUnreadableRepositoryURL(t *testing.T) {
 	app := testApplication()
 	fixtures := applicationFixtures()
@@ -1183,11 +1039,6 @@ func TestReconcileStallsOnAnUnreadableRepositoryURL(t *testing.T) {
 	}
 }
 
-// TestReconcileApplicationStallsOnAForeignRole pins the end of the terminal path an
-// application reaches when the namespace already holds a Role under the name the
-// identity needs. Nothing observes such an object — the informer behind the watch on
-// the kind selects on the very label it lacks — so the pass must say so on the status
-// rather than come back through the work queue and rediscover it.
 func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
 	app := testApplication()
 	rules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}}
@@ -1252,10 +1103,6 @@ func (accessCleanupFails) Cleanup(context.Context, contract.Release) (status.Del
 
 func (accessCleanupFails) RemoveAccount(context.Context, contract.Release) error { return nil }
 
-// TestReconcileDeleteReportsRBACCleanupFailure pins that a failed Cleanup
-// leaves the status saying so. By the time this step runs the internal release and
-// sources are already gone, so nothing else on the object would otherwise explain
-// why the finalizer is still there.
 func TestReconcileDeleteReportsRBACCleanupFailure(t *testing.T) {
 	now := metav1.Now()
 	app := &helmv1alpha1.HelmApplication{
@@ -1321,10 +1168,6 @@ func reconcileAddon(t *testing.T, r *Reconciler, name string) {
 	}
 }
 
-// TestReconcileHybridVersionUsesInternalOCIRepository is the end-to-end shape of the
-// feature: the repository is a classic helm one, and only the index entry of the
-// version points at a registry. The addon must be served by an internal
-// OCIRepository addressed by that entry, and no internal HelmChart must be created.
 func TestReconcileHybridVersionUsesInternalOCIRepository(t *testing.T) {
 	addon := testAddon()
 	resolver := &stubChartResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
@@ -1368,9 +1211,6 @@ func TestReconcileHybridVersionUsesInternalOCIRepository(t *testing.T) {
 	}
 }
 
-// TestReconcileArchiveVersionOfHelmRepositoryStaysOnTheHelmPath is the complement:
-// the same repository, a version without an index reference, and nothing about the
-// hybrid path must engage.
 func TestReconcileArchiveVersionOfHelmRepositoryStaysOnTheHelmPath(t *testing.T) {
 	addon := testAddon()
 
@@ -1403,14 +1243,6 @@ func TestReconcileArchiveVersionOfHelmRepositoryStaysOnTheHelmPath(t *testing.T)
 	}
 }
 
-// TestReconcileVersionMovedOutOfRegistrySupersedesTheOCIRepository is the mirror flip:
-// the index re-published a version the addon is already running as an archive from an
-// internal OCIRepository, either because the user repointed the repository or because
-// the index re-published it out of the registry. The superseded internal OCIRepository
-// is removed even though the new source has not produced an artifact yet, for the same
-// reason as its HelmChart counterpart: a repository retracting a location is a fact
-// the addon state has to reflect, and keeping the old source would let the addon keep
-// deploying from a place the repository no longer offers.
 func TestReconcileVersionMovedOutOfRegistrySupersedesTheOCIRepository(t *testing.T) {
 	addon := testAddon()
 	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
@@ -1452,13 +1284,6 @@ func TestReconcileVersionMovedOutOfRegistrySupersedesTheOCIRepository(t *testing
 	}
 }
 
-// TestReconcileVersionMovedIntoRegistrySupersedesTheHelmChart is the flip: the index
-// re-published a version the addon is already running as an OCI artifact. The
-// superseded internal HelmChart is removed even though the new source has not
-// produced an artifact yet — a repository retracting a location is a fact the addon
-// state has to reflect, and keeping the old source would let the addon keep deploying
-// from a place the repository no longer offers. The running release is not torn down
-// by that: helm-controller does not uninstall a release because its source is gone.
 func TestReconcileVersionMovedIntoRegistrySupersedesTheHelmChart(t *testing.T) {
 	addon := testAddon()
 	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
@@ -1504,12 +1329,6 @@ func TestReconcileVersionMovedIntoRegistrySupersedesTheHelmChart(t *testing.T) {
 	}
 }
 
-// TestLogSourceKindFlipIgnoresStaleEntryFromADifferentChartOrRepository pins the
-// guard added to logSourceKindFlip: LastAppliedChart carries its own repository/chart
-// identity and can lag behind Spec.Chart, so a version string that happens to match
-// is not enough on its own — the repository and chart name have to match too, or an
-// addon that switched to an unrelated chart reusing the same version string would be
-// misreported as its current chart having changed where it is published.
 func TestLogSourceKindFlipIgnoresStaleEntryFromADifferentChartOrRepository(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1526,8 +1345,6 @@ func TestLogSourceKindFlipIgnoresStaleEntryFromADifferentChartOrRepository(t *te
 			wantLogged: true,
 		},
 		{
-			// The version string coincides, but it belongs to a different chart's
-			// history: the addon was repointed, not flipped.
 			name: "same version but a different chart name is not a flip",
 			last: &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
 				HelmClusterAddonRepository: "example",
@@ -1537,8 +1354,6 @@ func TestLogSourceKindFlipIgnoresStaleEntryFromADifferentChartOrRepository(t *te
 			wantLogged: false,
 		},
 		{
-			// Same reasoning, the other field: the version string coincides, but it
-			// belongs to a different repository's history.
 			name: "same version but a different repository is not a flip",
 			last: &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
 				HelmClusterAddonRepository: "other-repo",
@@ -1570,10 +1385,6 @@ func TestLogSourceKindFlipIgnoresStaleEntryFromADifferentChartOrRepository(t *te
 	}
 }
 
-// TestReconcileForcedAddonReportsProgressBeforeWorking pins that Reconciling is
-// published before the internal source is touched. The user annotated the addon a
-// moment ago and is watching it; a condition written only after the release has
-// been reconciled would report progress that is already over.
 func TestReconcileForcedAddonReportsProgressBeforeWorking(t *testing.T) {
 	addon := testAddon()
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
@@ -1581,9 +1392,6 @@ func TestReconcileForcedAddonReportsProgressBeforeWorking(t *testing.T) {
 	var inFlight *metav1.Condition
 	var c client.Client
 
-	// The internal source is reconciled with CreateOrPatch, so the first write to
-	// it is a Create on a fresh addon and a Patch on an existing one; hook both so
-	// the test does not depend on which one this fixture takes.
 	captureAddonStatus := func(ctx context.Context) {
 		if inFlight != nil {
 			return
@@ -1645,8 +1453,6 @@ func TestReconcileForcedAddonRecordsCompletion(t *testing.T) {
 
 	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
 
-	// metav1.Time serialises at second precision, so the stored stamp can land
-	// just before an untruncated wall-clock reading of the same second.
 	before := time.Now().UTC().Truncate(time.Second)
 
 	reconcileAddon(t, r, addon.Name)
@@ -1656,9 +1462,6 @@ func TestReconcileForcedAddonRecordsCompletion(t *testing.T) {
 		t.Fatalf("getting addon: %v", err)
 	}
 
-	// The request itself is over, so the reason it raised must be gone; the pass
-	// kicked off a rollout that is still running, and the progress condition is
-	// handed over to the ordinary verdict rather than taken away.
 	cond := apimeta.FindStatusCondition(settled.Status.Conditions, helmv1alpha1.ConditionTypeReconciling)
 	if cond == nil {
 		t.Fatalf("Reconciling must still report the rollout, conditions: %v", settled.Status.Conditions)
@@ -1678,8 +1481,6 @@ func TestReconcileForcedAddonRecordsCompletion(t *testing.T) {
 	}
 }
 
-// TestReconcileUnforcedAddonRecordsNoForceReconcile is the complement: an ordinary
-// pass must not report a force request that was never made.
 func TestReconcileUnforcedAddonRecordsNoForceReconcile(t *testing.T) {
 	addon := testAddon()
 
@@ -1702,9 +1503,6 @@ func TestReconcileUnforcedAddonRecordsNoForceReconcile(t *testing.T) {
 	}
 }
 
-// maintainedAddon builds an addon asking for maintenance mode, carrying a force
-// request and the progress condition a forced pass publishes before it works. That
-// is the state a pass interrupted between the two writes leaves behind.
 func maintainedAddon() *helmv1alpha1.HelmClusterAddon {
 	addon := testAddon()
 	addon.Spec.Maintenance = string(helmv1alpha1.NoResourceReconciliation)
@@ -1720,10 +1518,6 @@ func maintainedAddon() *helmv1alpha1.HelmClusterAddon {
 	return addon
 }
 
-// TestReconcileEnteringMaintenanceDiscardsForceReconcile covers the pass that puts
-// the addon into maintenance. The controller has just decided to stop reconciling
-// it, so a force request it will never act on must not be left claiming progress —
-// kstatus reads a standing Reconciling as work in flight.
 func TestReconcileEnteringMaintenanceDiscardsForceReconcile(t *testing.T) {
 	addon := maintainedAddon()
 
@@ -1751,10 +1545,6 @@ func TestReconcileEnteringMaintenanceDiscardsForceReconcile(t *testing.T) {
 	}
 }
 
-// TestReconcileSittingInMaintenanceDiscardsForceReconcile is the same guarantee for
-// an addon already in maintenance, which takes the early return instead of the
-// maintenance-change branch. Without it a request annotated onto a maintained addon
-// would sit on the object forever.
 func TestReconcileSittingInMaintenanceDiscardsForceReconcile(t *testing.T) {
 	addon := maintainedAddon()
 	addon.Status.Conditions = append(addon.Status.Conditions, metav1.Condition{
@@ -1786,9 +1576,6 @@ func TestReconcileSittingInMaintenanceDiscardsForceReconcile(t *testing.T) {
 	}
 }
 
-// TestReconcileLeavingMaintenanceHonoursForceReconcile is the complement. Lifting
-// maintenance does not end the pass: reconciliation resumes in it, so the request
-// becomes actionable here and this very pass is the one that honours it.
 func TestReconcileLeavingMaintenanceHonoursForceReconcile(t *testing.T) {
 	addon := testAddon()
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
@@ -1821,14 +1608,8 @@ func TestReconcileLeavingMaintenanceHonoursForceReconcile(t *testing.T) {
 	}
 }
 
-// TestReconcileLogsAFailureItDoesNotHandBack pins the one report a quietly failing
-// pass leaves behind. Only the identity failure is handed to the work queue, which
-// logs it on the way past; every other failure ends the pass with no error at all,
-// and several of them report a fixed message, so without this line the cause is
-// written down nowhere.
 func TestReconcileLogsAFailureItDoesNotHandBack(t *testing.T) {
 	addon := testAddon()
-	// No repository object is created, so resolving the one the addon names fails.
 	r, _ := newFullReconciler(t, &stubChartResolver{}, interceptor.Funcs{}, addon)
 
 	var logged []string
@@ -1857,10 +1638,6 @@ func TestReconcileLogsAFailureItDoesNotHandBack(t *testing.T) {
 	}
 }
 
-// internalReleaseFixture is the internal HelmRelease of an installed addon, in the
-// suspend state maintenance mode leaves it in. It is what the maintenance switch
-// acts on: with no such object there is nothing to suspend and the switch cannot
-// fail.
 func internalReleaseFixture(addon *helmv1alpha1.HelmClusterAddon, suspended bool) *helmv2.HelmRelease {
 	return &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1871,8 +1648,6 @@ func internalReleaseFixture(addon *helmv1alpha1.HelmClusterAddon, suspended bool
 	}
 }
 
-// maintainedAddonInStatus is an addon resting in maintenance: the switch was made
-// and confirmed, which is the only thing that writes Managed=False.
 func maintainedAddonInStatus() *helmv1alpha1.HelmClusterAddon {
 	addon := testAddon()
 	addon.Status.Conditions = []metav1.Condition{{
@@ -1886,8 +1661,6 @@ func maintainedAddonInStatus() *helmv1alpha1.HelmClusterAddon {
 	return addon
 }
 
-// failHelmReleasePatch makes the write behind the maintenance switch fail the way a
-// busy API server does: the suspend flag is read, the patch is refused.
 func failHelmReleasePatch() interceptor.Funcs {
 	return interceptor.Funcs{
 		Patch: func(
@@ -1906,10 +1679,6 @@ func failHelmReleasePatch() interceptor.Funcs {
 	}
 }
 
-// TestReconcileLeavingMaintenanceResumesTheChartInTheSamePass pins that lifting
-// maintenance does not end the pass. Nothing wakes a release that is managed again —
-// the spec change was already consumed by this pass — so a pass that stopped at the
-// switch would leave an addon reported as managed and ready with no chart deployed.
 func TestReconcileLeavingMaintenanceResumesTheChartInTheSamePass(t *testing.T) {
 	addon := maintainedAddonInStatus()
 
@@ -1949,10 +1718,6 @@ func TestReconcileLeavingMaintenanceResumesTheChartInTheSamePass(t *testing.T) {
 	}
 }
 
-// TestReconcileFailedMaintenanceEntryIsRetried pins that a switch that did not land
-// leaves Managed where it was. Managed=False is read as "resting in maintenance" by
-// everything that asks, including the check that decides whether a switch is still
-// required, so writing it from a failed attempt would end the retries for good.
 func TestReconcileFailedMaintenanceEntryIsRetried(t *testing.T) {
 	addon := testAddon()
 	addon.Spec.Maintenance = string(helmv1alpha1.NoResourceReconciliation)
@@ -1988,9 +1753,6 @@ func TestReconcileFailedMaintenanceEntryIsRetried(t *testing.T) {
 	}
 }
 
-// TestReconcileFailedMaintenanceExitIsRetriedAndStaysUnready is the same guarantee
-// the other way round: the addon is still suspended, so it is still unmanaged and
-// still not ready, and the attempt is retried rather than reported as a resumption.
 func TestReconcileFailedMaintenanceExitIsRetriedAndStaysUnready(t *testing.T) {
 	addon := maintainedAddonInStatus()
 
@@ -2031,10 +1793,6 @@ func TestReconcileFailedMaintenanceExitIsRetriedAndStaysUnready(t *testing.T) {
 	}
 }
 
-// maintenanceProbe watches the addon at the moment the switch is attempted. The
-// condition published before the write is the only thing that says the switch is
-// being made, and it cannot be observed afterwards: the pass that lands it takes it
-// away again.
 type maintenanceProbe struct {
 	inner   Maintenance
 	observe func(ctx context.Context)
@@ -2050,10 +1808,6 @@ func (p maintenanceProbe) Ensure(ctx context.Context, rel contract.Release) inte
 	return p.inner.Ensure(ctx, rel)
 }
 
-// TestReconcileMaintenanceSwitchReportsProgressBeforeItIsMade pins that an attempted
-// switch says so. Whoever edited spec.maintenance is watching the object, and
-// between the edit and the write on the internal release the addon is neither in
-// maintenance nor out of it.
 func TestReconcileMaintenanceSwitchReportsProgressBeforeItIsMade(t *testing.T) {
 	addon := testAddon()
 	addon.Spec.Maintenance = string(helmv1alpha1.NoResourceReconciliation)
@@ -2080,9 +1834,6 @@ func TestReconcileMaintenanceSwitchReportsProgressBeforeItIsMade(t *testing.T) {
 		t.Fatalf("Reconciling = %+v at the moment of the switch, want True", inFlight)
 	}
 
-	// The same pass has to end in the state the progress was announced for: the
-	// internal release suspended, the addon reported unmanaged and unready, and
-	// nothing left in flight.
 	internal := &helmv2.HelmRelease{}
 	releaseKey := client.ObjectKey{
 		Name:      adapter.NewAddonRelease(addon).InternalNames().HelmRelease,
@@ -2117,10 +1868,6 @@ func TestReconcileMaintenanceSwitchReportsProgressBeforeItIsMade(t *testing.T) {
 	}
 }
 
-// TestReconcileTransientNamespaceFailureIsRetried pins the scheduling behind a
-// cluster step that failed on its way to a write. The namespace was not created, so
-// there is nothing for a watch to fire on; without the work queue the addon would
-// sit in its failed status until something else touched it.
 func TestReconcileTransientNamespaceFailureIsRetried(t *testing.T) {
 	addon := testAddon()
 
@@ -2161,11 +1908,6 @@ func TestReconcileTransientNamespaceFailureIsRetried(t *testing.T) {
 	}
 }
 
-// TestReconcileRejectedNamespaceNameIsNotRetried is the other half of the same
-// decision. A namespace name the API server refuses as invalid is refused the same
-// way on every attempt: nothing about the spec changes by trying again, so the work
-// queue would only log the rejection forever. The verdict is recorded as stalled
-// instead, and correcting the spec is what brings the addon back.
 func TestReconcileRejectedNamespaceNameIsNotRetried(t *testing.T) {
 	addon := testAddon()
 
@@ -2216,13 +1958,6 @@ func TestReconcileRejectedNamespaceNameIsNotRetried(t *testing.T) {
 	}
 }
 
-// TestBadInputIsNotLoggedAsAControllerError guards the e2e log gate as much as the
-// log itself. The suite fails the run on any error line a controller emits that is
-// not explicitly excluded (tests/e2e/default_config.yaml), and neither a release
-// naming a chart version its repository does not offer nor one waiting on a
-// repository that has not synced yet is a defect — both are answered in the status,
-// the controller did nothing wrong and has nothing to retry. The wait is the louder
-// of the two: it repeats on its timer for as long as it lasts.
 func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -2273,8 +2008,6 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// funcr writes an "error"= key for Error and never for Info, so the key is
-			// what tells the two levels apart in the rendered line.
 			var atError, logged bool
 			var line string
 			logger := funcr.New(func(prefix, args string) {
@@ -2303,8 +2036,6 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 				t.Fatalf("logged at error level = %v, want %v", atError, tt.wantAtError)
 			}
 
-			// Not logging at all would pass the check above and lose the one record of
-			// why the release is not ready.
 			if !logged {
 				t.Fatal("the failure was not logged at any level")
 			}
@@ -2318,12 +2049,6 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 	}
 }
 
-// TestReconcileAnswersAVersionTheCatalogLacksWithoutPromisingARetry runs the whole
-// pass, not just the verdict, for the shape a typo in the spec takes: the repository
-// answered, its catalog is complete, and the version the release names is not in it.
-// The release has to say that plainly — no Reconciling, nothing on the work queue —
-// while staying reversible, because publishing that version to the repository must
-// bring the release back without anyone touching its spec.
 func TestReconcileAnswersAVersionTheCatalogLacksWithoutPromisingARetry(t *testing.T) {
 	addon := testAddon()
 	addon.Finalizers = []string{helmv1alpha1.FinalizerName}
@@ -2371,19 +2096,10 @@ func TestReconcileAnswersAVersionTheCatalogLacksWithoutPromisingARetry(t *testin
 	}
 }
 
-// TestReconcileSchedulesItselfWhileTheRepositoryHasNotSyncedYet covers the one wait
-// nothing wakes the release from. A release created before its repository first
-// syncs — or one naming a chart the repository does not have, which never gets a
-// catalog object and so never a catalog event — learns that the sync finished only
-// from the repository's status, and the release watches repositories by generation,
-// which a status write does not bump. Without a timer of its own the release would
-// sit claiming progress until something unrelated disturbed it.
 func TestReconcileSchedulesItselfWhileTheRepositoryHasNotSyncedYet(t *testing.T) {
 	addon := testAddon()
 	addon.Finalizers = []string{helmv1alpha1.FinalizerName}
 
-	// The repository exists and has never finished a sync: no catalog object for
-	// the chart, nothing for a watch to fire on.
 	r, c := newFullReconciler(t, nil, interceptor.Funcs{}, addon, helmRepositoryFixture())
 
 	result, err := r.Reconcile(context.Background(), reconcile.Request{
@@ -2410,10 +2126,6 @@ func TestReconcileSchedulesItselfWhileTheRepositoryHasNotSyncedYet(t *testing.T)
 	}
 }
 
-// TestReconcileAnswersAnApplicationTheSameWayAsAnAddon proves the verdict is a
-// property of the shared reconciler rather than of the addon adapter: the namespaced
-// family asks a repository in its own namespace, through different adapters, and has
-// to get the same straight answer for a version the catalog does not list.
 func TestReconcileAnswersAnApplicationTheSameWayAsAnAddon(t *testing.T) {
 	app := testApplication()
 	app.Finalizers = []string{helmv1alpha1.FinalizerName}
@@ -2424,8 +2136,6 @@ func TestReconcileAnswersAnApplicationTheSameWayAsAnAddon(t *testing.T) {
 	if !ok {
 		t.Fatalf("the first application fixture is %T, want a repository", fixtures[0])
 	}
-	// The repository has answered in full for the spec it carries, which is what
-	// makes the catalog's silence about 9.9.9 final rather than early.
 	repo.Status.LastSuccessfulSyncTime = &metav1.Time{Time: time.Now().UTC()}
 	repo.Status.ObservedGeneration = repo.Generation
 	repo.Status.LastSyncedGeneration = repo.Generation
@@ -2458,14 +2168,6 @@ func TestReconcileAnswersAnApplicationTheSameWayAsAnAddon(t *testing.T) {
 	}
 }
 
-// TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone pins the end of the
-// deletion path against the one thing a Delete does not promise: that the object
-// is gone. A foreign finalizer on the RoleBinding keeps it Terminating, and the
-// binding carries no ownerReference — dropping the application's finalizer then
-// would leave it behind for good, and the next application of the namespace would
-// find it under the same derived name and stall on it as foreign. The application
-// therefore keeps its finalizer and comes back, exactly as it does for an internal
-// resource that is still being deleted.
 func TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone(t *testing.T) {
 	now := metav1.Now()
 	app := &helmv1alpha1.HelmApplication{
@@ -2526,7 +2228,6 @@ func TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone(t *testing.T) {
 		t.Fatalf("the shared role must survive the application: %v", err)
 	}
 
-	// Whoever owns the finalizer releases it, and the binding finally goes away.
 	held := &rbacv1.RoleBinding{}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(binding), held); err != nil {
 		t.Fatalf("getting the terminating role binding: %v", err)
@@ -2550,12 +2251,6 @@ func TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone(t *testing.T) {
 	}
 }
 
-// deletingApplicationFixtures are one application being deleted, its identity and
-// the internal HelmRelease helm-controller is still holding on to: everything the
-// teardown path walks through, in the state it finds it in halfway through. The
-// HelmRelease carries helm-controller's own finalizer, which is what makes the
-// object stay Terminating until that controller is done with it — and what the
-// wait in reconcileDelete is a wait for.
 func deletingApplicationFixtures(namespaceTerminating bool) (*helmv1alpha1.HelmApplication, []client.Object) {
 	now := metav1.Now()
 	app := &helmv1alpha1.HelmApplication{
@@ -2572,8 +2267,6 @@ func deletingApplicationFixtures(namespaceTerminating bool) (*helmv1alpha1.HelmA
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: app.Namespace}}
 	if namespaceTerminating {
-		// A namespace being deleted keeps the kubernetes finalizer until its contents
-		// are gone; the fake client needs a finalizer to hold a deleted object at all.
 		ns.Finalizers = []string{"kubernetes"}
 		ns.DeletionTimestamp = &now
 	}
@@ -2619,9 +2312,6 @@ func objectExists(t *testing.T, c client.Client, key client.ObjectKey, obj clien
 	}
 }
 
-// releaseHelmControllerFinalizer stands in for helm-controller finishing with the
-// internal HelmRelease: it drops its finalizer, and the object — already carrying a
-// deletion timestamp — goes away.
 func releaseHelmControllerFinalizer(t *testing.T, c client.Client, key client.ObjectKey) {
 	t.Helper()
 
@@ -2636,14 +2326,6 @@ func releaseHelmControllerFinalizer(t *testing.T, c client.Client, key client.Ob
 	}
 }
 
-// TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminating
-// pins the one teardown that the ordinary order cannot finish. The namespace
-// controller deletes the Role and the RoleBinding of the application, while the
-// ServiceAccount lives in the operator's namespace and survives, so helm-controller
-// would impersonate an account that exists and may do nothing: its uninstall reads
-// the Helm storage secret in the terminating namespace, is refused, and the wait on
-// the internal HelmRelease never ends. helm-controller skips the uninstall for an
-// account that is absent, so the account has to be gone before that wait begins.
 func TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminating(t *testing.T) {
 	app, objects := deletingApplicationFixtures(true)
 	names := adapter.NewApplicationRelease(app).InternalNames()
@@ -2683,12 +2365,6 @@ func TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminati
 		t.Fatal("the finalizer must stay while the internal release is still there")
 	}
 
-	// The repair of a still-present release's identity must not undo this. A
-	// terminating namespace stays terminating for as long as its contents are being
-	// collected, so the pass above is followed by more of exactly its kind, with the
-	// internal release still there and the account already gone: if the repair ran on
-	// those, it would put back the very account whose absence is what lets the
-	// uninstall be skipped, and the wait would never end.
 	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("second Reconcile returned %v", err)
 	}
@@ -2699,9 +2375,6 @@ func TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminati
 		t.Fatal("the internal release must still be there: the pass must still be the waiting one")
 	}
 
-	// With the account gone helm-controller skips the uninstall and lets the
-	// HelmRelease go, and the namespace controller takes the binding with the
-	// namespace. The teardown then finishes on its own.
 	releaseHelmControllerFinalizer(t, c, releaseKey)
 
 	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
@@ -2720,11 +2393,6 @@ func TestReconcileDeleteRemovesTheServiceAccountFirstWhenTheNamespaceIsTerminati
 	}
 }
 
-// TestReconcileDeleteKeepsTheServiceAccountUntilTheInternalReleaseIsGone is the
-// property the branch above must not cost: in a namespace that is not going
-// anywhere, helm-controller really does uninstall as the application's account, so
-// the identity is still removed last — after the internal HelmRelease has actually
-// disappeared.
 func TestReconcileDeleteKeepsTheServiceAccountUntilTheInternalReleaseIsGone(t *testing.T) {
 	app, objects := deletingApplicationFixtures(false)
 	names := adapter.NewApplicationRelease(app).InternalNames()
@@ -2750,8 +2418,6 @@ func TestReconcileDeleteKeepsTheServiceAccountUntilTheInternalReleaseIsGone(t *t
 
 	releaseHelmControllerFinalizer(t, c, releaseKey)
 
-	// From here the teardown runs to the end: the identity is deleted and then
-	// waited on, so it takes one more pass than the deletes themselves.
 	for attempt := 1; attempt <= 3 && objectExists(t, c, key, &helmv1alpha1.HelmApplication{}); attempt++ {
 		if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
 			t.Fatalf("attempt %d: Reconcile returned %v", attempt, err)
@@ -2769,13 +2435,6 @@ func TestReconcileDeleteKeepsTheServiceAccountUntilTheInternalReleaseIsGone(t *t
 	}
 }
 
-// TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight pins the
-// one repair a teardown cannot do without. helm-controller uninstalls the release by
-// impersonating its ServiceAccount, so a RoleBinding taken away mid-teardown — by a
-// human, a policy engine, a namespace sweeper — leaves every uninstall attempt
-// refused: the internal HelmRelease never goes away and the finalizer never comes
-// off. The watches on the Role and the binding do bring the release back, so the
-// pass that lands here is the one that has to put the binding back.
 func TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight(t *testing.T) {
 	app, objects := deletingApplicationFixtures(false)
 	names := adapter.NewApplicationRelease(app).InternalNames()
@@ -2787,7 +2446,6 @@ func TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight(t 
 	bindingKey := client.ObjectKey{Namespace: app.Namespace, Name: names.ServiceAccount}
 	releaseKey := client.ObjectKey{Namespace: helmv1alpha1.TargetNamespace, Name: names.HelmRelease}
 
-	// The binding goes away out of band, with the uninstall still in flight.
 	if err := c.Delete(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
 		Name: names.ServiceAccount, Namespace: app.Namespace,
 	}}); err != nil {
@@ -2836,8 +2494,6 @@ func TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight(t 
 	}
 }
 
-// ensureCountingIdentity records the identity repairs a teardown asked for, over a
-// real identity service that answers them.
 type ensureCountingIdentity struct {
 	Identity
 	ensureCalls int
@@ -2849,11 +2505,6 @@ func (s *ensureCountingIdentity) Ensure(ctx context.Context, rel contract.Releas
 	return s.Identity.Ensure(ctx, rel)
 }
 
-// TestReconcileDeleteOfAnAddonRepairsNoIdentity pins where family safety lives. The
-// repair above is asked for whatever the family — the teardown does not branch on it
-// — and an addon, applied by helm-controller under its own cluster-wide identity,
-// names no ServiceAccount, which is what makes Ensure a no-op for it. Nothing may
-// appear in the cluster because of the call.
 func TestReconcileDeleteOfAnAddonRepairsNoIdentity(t *testing.T) {
 	now := metav1.Now()
 	addon := testAddon()
@@ -2872,8 +2523,6 @@ func TestReconcileDeleteOfAnAddonRepairsNoIdentity(t *testing.T) {
 		}},
 	)
 
-	// The real identity service, so the guard being tested is the one in Ensure and
-	// not a stub standing in for it.
 	identity := &ensureCountingIdentity{Identity: rbac.NewIdentity(c, helmv1alpha1.TargetNamespace)}
 	r.deps.Identity = identity
 
@@ -2911,14 +2560,6 @@ func TestReconcileDeleteOfAnAddonRepairsNoIdentity(t *testing.T) {
 	}
 }
 
-// TestReconcileDeleteKeepsWaitingWhenTheIdentityRepairIsBlockedByAForeignObject pins
-// the terminal half of the repair. A binding under the derived name that is not ours
-// is never taken over, and no retry changes that: the informers behind both watches
-// select on the managed-by label it does not carry, so nothing even observes it
-// going away. Handing that to the work queue would spin the rate limiter forever, so
-// the teardown writes the blocking reason on the object and stays on the wait for the
-// internal release — never reporting the pass as a success that removed the
-// finalizer.
 func TestReconcileDeleteKeepsWaitingWhenTheIdentityRepairIsBlockedByAForeignObject(t *testing.T) {
 	app, objects := deletingApplicationFixtures(false)
 	names := adapter.NewApplicationRelease(app).InternalNames()
@@ -2930,7 +2571,6 @@ func TestReconcileDeleteKeepsWaitingWhenTheIdentityRepairIsBlockedByAForeignObje
 	bindingKey := client.ObjectKey{Namespace: app.Namespace, Name: names.ServiceAccount}
 	releaseKey := client.ObjectKey{Namespace: helmv1alpha1.TargetNamespace, Name: names.HelmRelease}
 
-	// Ours goes, and someone else's takes the derived name.
 	if err := c.Delete(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
 		Name: names.ServiceAccount, Namespace: app.Namespace,
 	}}); err != nil {
@@ -2984,8 +2624,6 @@ func TestReconcileDeleteKeepsWaitingWhenTheIdentityRepairIsBlockedByAForeignObje
 	}
 }
 
-// identityRepairFails is an identity whose repair fails the way a passing API fault
-// does: not terminal, so the pass belongs in the work queue.
 type identityRepairFails struct {
 	Identity
 }
@@ -3000,10 +2638,6 @@ func (identityRepairFails) Ensure(context.Context, contract.Release) rbac.Identi
 	}
 }
 
-// TestReconcileDeleteRetriesATransientIdentityRepairFailure pins the other half of
-// the decision: a repair that failed for a passing reason is worth retrying, so it
-// is handed back for the work queue's backoff rather than swallowed into a wait that
-// would report the teardown as merely pending.
 func TestReconcileDeleteRetriesATransientIdentityRepairFailure(t *testing.T) {
 	app, objects := deletingApplicationFixtures(false)
 
@@ -3031,7 +2665,6 @@ func TestReconcileDeleteRetriesATransientIdentityRepairFailure(t *testing.T) {
 	}
 }
 
-// countingNamespaces records whether the teardown asked about the target namespace.
 type countingNamespaces struct {
 	Namespaces
 	terminatingCalls int
@@ -3043,7 +2676,6 @@ func (s *countingNamespaces) Terminating(ctx context.Context, rel contract.Relea
 	return s.Namespaces.Terminating(ctx, rel)
 }
 
-// countingIdentity records whether the teardown removed an account early.
 type countingIdentity struct {
 	NoIdentity
 	removeCalls int
@@ -3055,11 +2687,6 @@ func (s *countingIdentity) RemoveAccount(context.Context, contract.Release) erro
 	return nil
 }
 
-// TestReconcileDeleteOfAnAddonIgnoresATerminatingTargetNamespace pins that the
-// branch belongs to the family it was written for. An addon is applied by
-// helm-controller under its own cluster-wide identity — there is no account to
-// impersonate and none a namespace deletion could disarm — so nothing about its
-// teardown changes, down to not reading the namespace at all.
 func TestReconcileDeleteOfAnAddonIgnoresATerminatingTargetNamespace(t *testing.T) {
 	now := metav1.Now()
 	addon := testAddon()
@@ -3116,18 +2743,7 @@ func TestReconcileDeleteOfAnAddonIgnoresATerminatingTargetNamespace(t *testing.T
 	}
 }
 
-// TestReconcileReleasesAnAbandonedClaimEvenWhenTheNewPairIsTaken pins the order of
-// the two claim operations against the one condition that lets a pair go. Releasing
-// runs before acquiring, because a claim is only ever released by the release
-// holding it and acquiring may not be granted — but a pass that cannot reach the
-// chart it now names has not moved off the one it is running, so what it releases
-// is everything except that. Here the recorded chart is the one it moved to, so the
-// move is done and the pair it came from is free even though this pass got nothing.
 func TestReconcileReleasesAnAbandonedClaimEvenWhenTheNewPairIsTaken(t *testing.T) {
-	// The addon runs nginx and has it recorded, so its move onto nginx is settled and
-	// the podinfo lease it still carries from an earlier spec is free to go. The pass
-	// nevertheless gets nothing: another addon holds the pair, which is what makes
-	// this the ordering case — releasing runs even when acquiring will not be granted.
 	addon := testAddon()
 	addon.Spec.Chart.HelmClusterAddonChartName = "nginx"
 	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
@@ -3153,14 +2769,11 @@ func TestReconcileReleasesAnAbandonedClaimEvenWhenTheNewPairIsTaken(t *testing.T
 		t.Fatalf("requeueAfter is %v, want the claim conflict interval", result.RequeueAfter)
 	}
 
-	// The pair it gave up is free for whoever wants it, although this pass got
-	// nothing it asked for.
 	err = c.Get(context.Background(), types.NamespacedName{Namespace: helmv1alpha1.TargetNamespace, Name: abandoned.Name}, &coordinationv1.Lease{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("the abandoned claim survived a pass that lost the new one: %v", err)
 	}
 
-	// And the one it could not have is left exactly as its holder left it.
 	held := &coordinationv1.Lease{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: helmv1alpha1.TargetNamespace, Name: taken.Name}, held); err != nil {
 		t.Fatalf("reading the contested claim: %v", err)
@@ -3170,8 +2783,6 @@ func TestReconcileReleasesAnAbandonedClaimEvenWhenTheNewPairIsTaken(t *testing.T
 	}
 }
 
-// claimLease builds a claim Lease held by holder, labelled as that holder's, in the
-// namespace the claims service works in.
 func claimLease(name, holder, labelSource string) *coordinationv1.Lease {
 	return &coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -3186,10 +2797,6 @@ func claimLease(name, holder, labelSource string) *coordinationv1.Lease {
 	}
 }
 
-// TestReconcileDeleteReleasesTheClaimsItNeverGotToGiveUp pins teardown against a
-// release deleted right after a chart change. Drop frees the pair the spec names;
-// the pair it moved off is held by a Lease whose only possible releaser is this
-// object, and once teardown removes the finalizer there is nobody left who may.
 func TestReconcileDeleteReleasesTheClaimsItNeverGotToGiveUp(t *testing.T) {
 	addon := testAddon()
 	addon.Spec.Chart.HelmClusterAddonChartName = "nginx"

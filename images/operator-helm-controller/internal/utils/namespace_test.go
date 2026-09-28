@@ -18,10 +18,6 @@ package utils
 
 import "testing"
 
-// TestIsSystemNamespace pins where an application may not be installed. The rule
-// matters more than it did: until this family existed, only a cluster administrator
-// could create anything namespaced here, and installing an application seeds a Role
-// granting everything inside its namespace.
 func TestIsSystemNamespace(t *testing.T) {
 	cases := []struct {
 		namespace string
@@ -30,9 +26,6 @@ func TestIsSystemNamespace(t *testing.T) {
 		{"kube-system", true},
 		{"kube-node-lease", true},
 		{"kube-public", true},
-		// A reserved-looking prefix is not itself a verdict: an addon may already
-		// be installed in such a namespace, and this predicate is what would park
-		// it as permanently failed.
 		{"kube-anything", false},
 		{"kube-prometheus", false},
 		{"default", false},

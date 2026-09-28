@@ -86,9 +86,6 @@ func TestHelmRepositoriesEnsureReportsNotObservedAsNotReady(t *testing.T) {
 
 func TestHelmRepositoriesEnsureMirrorsConditions(t *testing.T) {
 	repo := testRepository()
-	// The spec and labels must already match what applyHelmRepositorySpec writes:
-	// otherwise CreateOrPatch mutates the object, the fake client bumps its
-	// generation, and the Ready condition stops counting as observed.
 	internal := &sourcev1.HelmRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      utils.GetInternalHelmRepositoryName(repo.Name),
@@ -116,9 +113,6 @@ func TestHelmRepositoriesEnsureMirrorsConditions(t *testing.T) {
 	}
 
 	service := newHelmRepositories(t, repo, internal)
-
-	// The fixture is created with generation 0 and the condition observes 0, so
-	// the state must mirror the condition rather than report "not observed yet".
 
 	state, err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo))
 	if err != nil {
@@ -168,13 +162,6 @@ func TestHelmRepositoriesEnsureReportsStalled(t *testing.T) {
 	}
 }
 
-// TestHelmRepositoriesEnsureIgnoresAStallFromAnOlderGeneration covers a repository
-// whose secret reference has just been fixed. source-controller drops Stalled at the
-// head of the pass that acts on the new spec, so in the gap before that pass starts
-// the condition of the rejected spec is still there at generation 2; reading it
-// would report as abandoned a repository that is about to be fetched again. The
-// fixture matches what applyHelmRepositorySpec writes, so
-// CreateOrPatch is a no-op and the generation stays where it is put.
 func TestHelmRepositoriesEnsureIgnoresAStallFromAnOlderGeneration(t *testing.T) {
 	repo := testRepository()
 	internal := &sourcev1.HelmRepository{
@@ -219,12 +206,6 @@ func TestHelmRepositoriesEnsureIgnoresAStallFromAnOlderGeneration(t *testing.T) 
 	}
 }
 
-// TestHelmRepositoriesEnsureStalledPrecedesReady pins the precedence rule:
-// Stalled=True must win even when a healthy, observed Ready=True condition sits
-// right next to it. The fixture's spec and labels already match what
-// applyHelmRepositorySpec writes (same reason as the mirroring test above), so
-// CreateOrPatch is a no-op and the internal object's generation stays at 1 -
-// which is what lets the Ready condition below count as observed.
 func TestHelmRepositoriesEnsureStalledPrecedesReady(t *testing.T) {
 	repo := testRepository()
 	internal := &sourcev1.HelmRepository{
@@ -280,13 +261,6 @@ func TestHelmRepositoriesEnsureStalledPrecedesReady(t *testing.T) {
 	}
 }
 
-// TestHelmRepositoriesEnsureReturnsAPIError verifies the split this task
-// exists to create: an API failure while reconciling the internal object is the
-// caller's problem and comes back as a non-nil error (still with Present: true,
-// since the internal object does exist as far as the caller is concerned), not
-// swallowed into the state. The failure is injected on Create because the fixture
-// has no pre-existing internal HelmRepository, so CreateOrPatch's Get finds
-// nothing and falls through to Create.
 func TestHelmRepositoriesEnsureReturnsAPIError(t *testing.T) {
 	repo := testRepository()
 	scheme := sourceScheme(t)
@@ -316,10 +290,6 @@ func TestHelmRepositoriesEnsureReturnsAPIError(t *testing.T) {
 	}
 }
 
-// TestHelmRepositoriesEnsureKeepsForeignLabels pins that the internal
-// HelmRepository follows the same label policy as every other internal object: a
-// label somebody else put on it survives, while an owned label that is no longer
-// desired goes away.
 func TestHelmRepositoriesEnsureKeepsForeignLabels(t *testing.T) {
 	repo := testRepository()
 	internal := &sourcev1.HelmRepository{
@@ -359,13 +329,6 @@ func TestHelmRepositoriesEnsureKeepsForeignLabels(t *testing.T) {
 	}
 }
 
-// TestHelmRepositoriesEnsureClearsPassCredentialsWithTheSecretItBelongsTo pins the
-// field to the reference that justifies it. spec.passCredentials tells
-// source-controller to keep sending the repository's credentials when a request is
-// redirected to another host; it is only ever meaningful next to a secretRef. A
-// repository whose auth is taken away has its secretRef cleared on the same pass, and
-// leaving the permission behind would hand it to whatever credentials the repository
-// is given next.
 func TestHelmRepositoriesEnsureClearsPassCredentialsWithTheSecretItBelongsTo(t *testing.T) {
 	repo := testRepository()
 	internal := &sourcev1.HelmRepository{
@@ -400,8 +363,6 @@ func TestHelmRepositoriesEnsureClearsPassCredentialsWithTheSecretItBelongsTo(t *
 	}
 }
 
-// TestHelmRepositoriesEnsureSetsPassCredentialsWithTheAuthSecret is the other side:
-// the field is still set for a repository that does carry credentials.
 func TestHelmRepositoriesEnsureSetsPassCredentialsWithTheAuthSecret(t *testing.T) {
 	repo := testRepository()
 	repo.Spec.Auth = &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"}

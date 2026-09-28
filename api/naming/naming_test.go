@@ -49,25 +49,18 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 			want:  "repo-chart-8549288388a9",
 		},
 		{
-			// A repository name is a DNS subdomain and a chart name comes from
-			// the index, so either may carry a dot at the truncation boundary.
 			name:  "a truncation that ends in a dot drops it",
 			repo:  "abcdefghijklmnopqrs.x",
 			chart: "podinfo",
 			want:  "abcdefghijklmnopqrs-chart-podinfo-0fe4a214e986",
 		},
 		{
-			// A repository name at or under the length limit is not truncated,
-			// but a trailing dot still has to be dropped before the separator:
-			// the final trim only reaches the end of the whole name.
 			name:  "an untruncated name ending in a dot still drops it",
 			repo:  "abcdefghijklmnopqrs.",
 			chart: "podinfo",
 			want:  "abcdefghijklmnopqrs-chart-podinfo-b5579464eede",
 		},
 		{
-			// Chart and repository names can carry upper case, e.g. from an OCI
-			// tag or a repository index entry.
 			name:  "upper case is lowered",
 			repo:  "REPO",
 			chart: "CHART",
@@ -128,8 +121,6 @@ func TestHelmClusterAddonChartName(t *testing.T) {
 	}
 }
 
-// assertNameIsValid checks that a derived name is a DNS-1123 subdomain no longer
-// than a label, and carries no run of dashes.
 func assertNameIsValid(t *testing.T, name string) {
 	t.Helper()
 
@@ -137,9 +128,6 @@ func assertNameIsValid(t *testing.T, name string) {
 		t.Fatalf("%q is not a valid DNS-1123 subdomain: %v", name, errs)
 	}
 
-	// A dot is legal here: the name addresses an object, and an object name is a
-	// subdomain. Only the length of a label is borrowed, so the name fits wherever
-	// one segment is all there is room for.
 	if len(name) > validation.DNS1123LabelMaxLength {
 		t.Fatalf("%q is %d bytes, longer than a DNS-1123 label", name, len(name))
 	}
@@ -175,17 +163,12 @@ func TestApplicationChartName(t *testing.T) {
 			want:  "repo-chart-8549288388a9",
 		},
 		{
-			// A repository name is a DNS subdomain and a chart name comes from
-			// the index, so either may carry a dot at the truncation boundary.
 			name:  "a truncation that ends in a dot drops it",
 			repo:  "abcdefghijklmnopqrs.x",
 			chart: "podinfo",
 			want:  "abcdefghijklmnopqrs-chart-podinfo-0fe4a214e986",
 		},
 		{
-			// A repository name at or under the length limit is not truncated,
-			// but a trailing dot still has to be dropped before the separator:
-			// the final trim only reaches the end of the whole name.
 			name:  "an untruncated name ending in a dot still drops it",
 			repo:  "abcdefghijklmnopqrs.",
 			chart: "podinfo",
@@ -272,11 +255,6 @@ func TestClusterApplicationChartName(t *testing.T) {
 	}
 }
 
-// TestChartNameSchemeIsShared pins the decision that every chart catalog kind is
-// named by one scheme. The objects differ in kind, and the namespaced and cluster
-// variants live in different scopes, so identical names cannot collide — while a
-// scheme that silently diverged per family would break the round trip from an
-// object name back to the repository/chart pair.
 func TestChartNameSchemeIsShared(t *testing.T) {
 	const (
 		repo  = "yandex-cloud-marketplace-mirror"
@@ -294,10 +272,6 @@ func TestChartNameSchemeIsShared(t *testing.T) {
 	}
 }
 
-// TestChartNameSeparatesAnAmbiguousPair pins the reason the hash is taken over the
-// two parts joined by a NUL rather than over the readable name: the readable join
-// is ambiguous, so hashing it would reproduce exactly the collision the hash exists
-// to resolve. Both pairs below build the same readable part.
 func TestChartNameSeparatesAnAmbiguousPair(t *testing.T) {
 	left := HelmClusterAddonChartName("abc", "def-chart-ghi")
 	right := HelmClusterAddonChartName("abc-chart-def", "ghi")
@@ -307,9 +281,6 @@ func TestChartNameSeparatesAnAmbiguousPair(t *testing.T) {
 	}
 }
 
-// TestChartNameSeparatesATrailingDot pins a second ambiguity the join alone cannot
-// carry: a part ending in a dot is trimmed inside the readable name, so two charts
-// that differ only by it would otherwise share an object.
 func TestChartNameSeparatesATrailingDot(t *testing.T) {
 	withDot := HelmClusterAddonChartName("foo", "bar.")
 	withoutDot := HelmClusterAddonChartName("foo", "bar")
@@ -319,12 +290,6 @@ func TestChartNameSeparatesATrailingDot(t *testing.T) {
 	}
 }
 
-// TestChartNameSanitizesAnIllegalDot pins that a chart name from an index or an OCI
-// tag list cannot produce an invalid object name. A dot is legal in a DNS-1123
-// subdomain only between two alphanumerics, so a name that carries one next to a
-// separator — or next to another dot — must not reach the API server as is:
-// CreateOrPatch would reject the object, and the catalog synchronization of the
-// whole repository stops on the first rejection.
 func TestChartNameSanitizesAnIllegalDot(t *testing.T) {
 	charts := []string{
 		"my chart. v2",

@@ -28,12 +28,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// TestConsumersForceReconcileStampsOnlyItsOwnAddons covers the force
-// reconcile annotation applied to an oci:// HelmClusterAddonRepository: unlike the
-// helm:// path, where the internal HelmRepository re-indexes and the HelmCharts
-// follow, an OCI repository has no intermediate source object, so the request must
-// be pushed onto the internal OCIRepository of each addon that references it - and
-// only of those addons.
 func TestConsumersForceReconcileStampsOnlyItsOwnAddons(t *testing.T) {
 	addon := testAddon()
 	foreign := testAddon()
@@ -72,10 +66,6 @@ func TestConsumersForceReconcileStampsOnlyItsOwnAddons(t *testing.T) {
 	}
 }
 
-// TestConsumersForceReconcileToleratesMissingSource covers the addon
-// that has no internal OCIRepository yet - it has just been created, or it never
-// reached the point of building one. A force on the repository must not fail
-// because of it, otherwise the request is retried forever.
 func TestConsumersForceReconcileToleratesMissingSource(t *testing.T) {
 	addon := testAddon()
 	_, c := newOCIRepositories(t, addon)

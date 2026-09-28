@@ -22,8 +22,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// TestHelmApplicationRepositoryGetConditions checks that GetConditions hands out a
-// pointer into the status, not a copy.
 func TestHelmApplicationRepositoryGetConditions(t *testing.T) {
 	repo := &HelmApplicationRepository{}
 

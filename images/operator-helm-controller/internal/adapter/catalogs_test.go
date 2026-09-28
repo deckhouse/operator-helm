@@ -53,9 +53,6 @@ func addonClient(t *testing.T, objects ...client.Object) client.Client {
 		Build()
 }
 
-// TestAddonCatalogInUseVersionsCountsDesiredAndLastApplied reproduces the addon
-// in-use rule that moved here from services: the desired version and the last
-// applied one both count, the latter only while it still names this chart.
 func TestAddonCatalogInUseVersionsCountsDesiredAndLastApplied(t *testing.T) {
 	addon := &helmv1alpha1.HelmClusterAddon{
 		ObjectMeta: metav1.ObjectMeta{Name: "consumer"},
@@ -74,8 +71,6 @@ func TestAddonCatalogInUseVersionsCountsDesiredAndLastApplied(t *testing.T) {
 			Chart:     helmv1alpha1.HelmClusterAddonChartRef{HelmClusterAddonRepository: "example", HelmClusterAddonChartName: "nginx", Version: "3.0.0"},
 		},
 		Status: helmv1alpha1.HelmClusterAddonStatus{
-			// Last applied still names podinfo, but Spec moved to nginx: podinfo's
-			// index entry no longer lists this addon, so 9.9.9 must not be protected.
 			LastAppliedChart: &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{HelmClusterAddonRepository: "example", HelmClusterAddonChartName: "podinfo", Version: "9.9.9"},
 		},
 	}
@@ -102,9 +97,6 @@ func TestAddonCatalogInUseVersionsCountsDesiredAndLastApplied(t *testing.T) {
 	}
 }
 
-// TestApplicationCatalogInUseVersionsSeesOnlyItsOwnNamespace pins spec 6.2: the
-// in-use versions of a namespaced repository's chart come from the applications of
-// that namespace, or a same-named repository elsewhere would keep versions alive.
 func TestApplicationCatalogInUseVersionsSeesOnlyItsOwnNamespace(t *testing.T) {
 	inA := namespacedApp("team-a", "a1", "stable")
 	inB := namespacedApp("team-b", "b1", "stable")

@@ -28,13 +28,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// TestBuildTLSTransportKeepsTheBoundsOfTheDefaultTransport pins that configuring TLS
-// on a repository does not silently remove every timeout the registry client would
-// otherwise have had: a bare &http.Transport{} bounds neither the dial nor the
-// handshake, so a repository with a pinned CA would hang where the same repository
-// without one would fail. ResponseHeaderTimeout is asserted separately because the
-// default transport does not set it and it is the bound that a registry accepting the
-// connection and then going silent runs into.
 func TestBuildTLSTransportKeepsTheBoundsOfTheDefaultTransport(t *testing.T) {
 	built, err := BuildTLSTransport(&RepoConfig{Insecure: true})
 	if err != nil {
@@ -46,8 +39,6 @@ func TestBuildTLSTransportKeepsTheBoundsOfTheDefaultTransport(t *testing.T) {
 		t.Fatalf("remote.DefaultTransport is %T, the comparison below assumes *http.Transport", remote.DefaultTransport)
 	}
 
-	// A nil DialContext means the zero-value dialer, which never gives up on a
-	// connect; the default transport carries a dialer with a 30s timeout.
 	if built.DialContext == nil {
 		t.Fatal("a custom-TLS transport must dial through a bounded dialer, not the zero-value one")
 	}
@@ -71,11 +62,6 @@ func TestBuildTLSTransportKeepsTheBoundsOfTheDefaultTransport(t *testing.T) {
 	}
 }
 
-// TestNeedsExaminationPerRecordedVerdict pins which recorded entries are a verdict
-// the next pass may trust and which are not. The pending-with-a-media-type case is
-// the one production actually produces: the catalog merge carries the previous media
-// type onto a failed probe of a version still in use, so the media type alone cannot
-// mean "examined".
 func TestNeedsExaminationPerRecordedVerdict(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -107,12 +93,6 @@ func TestNeedsExaminationPerRecordedVerdict(t *testing.T) {
 			want: true,
 		},
 		{
-			// The entry survives only because a consumer references it, and its media type
-			// belongs to an artifact the registry deleted. Being asked about the tag at all
-			// means the listing offers it again, so there is new content behind that verdict
-			// and the tag has to be probed; carrying it forward would republish the deleted
-			// artifact's media type and drop the removed marker that is the only sign
-			// anything is wrong with it.
 			name:  "a version the repository removed and now lists again",
 			known: KnownVersions{"1.0.0": {MediaType: mediaType, UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository}},
 			want:  true,
@@ -137,20 +117,12 @@ func TestNeedsExaminationPerRecordedVerdict(t *testing.T) {
 	}
 }
 
-// testServerCACertificate returns the PEM encoding of the certificate a TLS test
-// server presents, which is the shape a repository's spec.caCertificate carries.
 func testServerCACertificate(t *testing.T, server *httptest.Server) string {
 	t.Helper()
 
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
 }
 
-// TestBuildTLSTransportTrustsAValidCACertificate pins that a well-formed
-// certificate still produces a pool that actually verifies the remote: the check
-// added for the malformed case must not cost the working one. Verification is
-// proven by a real handshake rather than by inspecting the pool, because an empty
-// pool is indistinguishable from a populated one by shape alone — that is exactly
-// what made the unchecked append invisible.
 func TestBuildTLSTransportTrustsAValidCACertificate(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -178,11 +150,6 @@ func TestBuildTLSTransportTrustsAValidCACertificate(t *testing.T) {
 	}
 }
 
-// TestBuildTLSTransportRejectsACACertificateWithoutAnyCertificate pins the fault
-// the unchecked append used to swallow. Both shapes reach an empty pool — bytes
-// that are not PEM at all, and PEM that carries something other than a certificate
-// — and both must be reported as terminal with the reason that names the field,
-// because no number of retries can parse them.
 func TestBuildTLSTransportRejectsACACertificateWithoutAnyCertificate(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -233,11 +200,6 @@ func TestBuildTLSTransportRejectsACACertificateWithoutAnyCertificate(t *testing.
 	}
 }
 
-// TestFetchChartsRejectsAnUnparsableCACertificate pins the propagation: the
-// verdict has to leave the client as a terminal error, because that is what
-// reposync turns into a terminal fetch outcome and the repository into Stalled. A
-// transport error swallowed inside the fetch would be retried at the sync cadence
-// instead.
 func TestFetchChartsRejectsAnUnparsableCACertificate(t *testing.T) {
 	client := &helmRepositoryClient{}
 
@@ -260,10 +222,6 @@ func TestFetchChartsRejectsAnUnparsableCACertificate(t *testing.T) {
 	}
 }
 
-// TestResolveChartArtifactRejectsAnUnparsableCACertificate pins the same verdict on
-// the other user of the transport: a version examined at deploy time must fail the
-// same way, rather than reporting the artifact unreadable for a fault that is in
-// the repository's own spec.
 func TestResolveChartArtifactRejectsAnUnparsableCACertificate(t *testing.T) {
 	resolver := &ociChartResolver{}
 

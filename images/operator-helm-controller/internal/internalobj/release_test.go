@@ -66,10 +66,6 @@ func ensureRelease(t *testing.T, service *Releases, c client.Client, rel contrac
 	return release
 }
 
-// TestReleasesEnsureAppliesAnApplicationAsItsOwnIdentity pins the two fields
-// that make an application release run as itself: helm-controller impersonates the
-// named account, and because that account only has rights inside the application's
-// namespace, the release storage has to live there too.
 func TestReleasesEnsureAppliesAnApplicationAsItsOwnIdentity(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newReleases(t)
@@ -84,10 +80,6 @@ func TestReleasesEnsureAppliesAnApplicationAsItsOwnIdentity(t *testing.T) {
 	}
 }
 
-// TestReleasesEnsureLeavesTheAddonIdentityAlone is the complement: an addon
-// family names no service account, so helm-controller keeps its own identity and
-// the default storage location. Setting either field for it would change where
-// every existing addon's release history is kept.
 func TestReleasesEnsureLeavesTheAddonIdentityAlone(t *testing.T) {
 	rel := adapter.NewAddonRelease(testAddon())
 	service, c := newReleases(t)
@@ -102,8 +94,6 @@ func TestReleasesEnsureLeavesTheAddonIdentityAlone(t *testing.T) {
 	}
 }
 
-// TestReleasesEnsureKeepsForeignLabels is the same guarantee on the release:
-// our labels are merged in, not written over what someone else put there.
 func TestReleasesEnsureKeepsForeignLabels(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	existing := &helmv2.HelmRelease{
@@ -127,13 +117,6 @@ func TestReleasesEnsureKeepsForeignLabels(t *testing.T) {
 	}
 }
 
-// TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest pins what identifies a
-// chart pulled from a registry: the artifact digest, and nothing else. The version in
-// the history is the one helm-controller read out of the packaged Chart.yaml (with the
-// digest appended as build metadata), while the version the release asks for is the
-// registry tag, and a registry may publish a chart under a tag spelled differently
-// from its chart version. Comparing the two would leave such a release reported as
-// never finished rolling out, forever.
 func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
@@ -162,8 +145,6 @@ func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 			want:             true,
 		},
 		{
-			// A tag that is no semantic version at all makes helm-controller record the
-			// whole revision, tag included, as the digest of the deployed artifact.
 			name:             "a recorded digest that kept the tag in front of it",
 			version:          "stable",
 			artifactRevision: "stable@" + digest,
@@ -206,9 +187,6 @@ func TestIsDesiredChartDeployedIdentifiesAnOCIChartByItsDigest(t *testing.T) {
 	}
 }
 
-// TestIsDesiredChartDeployedComparesVersionsForAnArchiveChart is the other branch: a
-// release served by a HelmChart has no digest to go by, so the version the release
-// asks for is compared to the version in the history as it stands.
 func TestIsDesiredChartDeployedComparesVersionsForAnArchiveChart(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -249,11 +227,6 @@ func TestIsDesiredChartDeployedComparesVersionsForAnArchiveChart(t *testing.T) {
 	}
 }
 
-// TestIsDesiredChartDeployedSurvivesASourceKindFlip pins that a revision carrying no
-// digest is read as "not the desired chart" rather than indexed into. A release
-// installed from a registry keeps an OCI digest in its history; when the repository
-// index republishes that version as an archive, the chart is resolved through a
-// HelmChart whose revision is a bare version, and the two shapes meet here.
 func TestIsDesiredChartDeployedSurvivesASourceKindFlip(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 
@@ -281,14 +254,6 @@ func TestIsDesiredChartDeployedSurvivesASourceKindFlip(t *testing.T) {
 	}
 }
 
-// TestReleasesEnsureReportsNothingDeployedFromAnArtifactOfAnotherSpec pins the gate
-// in front of the digest comparison. A source that fails to fetch keeps the artifact
-// of the spec before, and reports that failure under the current generation: the
-// digest on it is then the digest of the chart the release is still running, and
-// every comparison against it says "deployed" about a chart nobody has fetched. The
-// revision alone cannot show this - a repository moved to another path under the
-// same tag produces the same revision string - so what the artifact is evidence
-// about is decided by the source, and handed in.
 func TestReleasesEnsureReportsNothingDeployedFromAnArtifactOfAnotherSpec(t *testing.T) {
 	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 

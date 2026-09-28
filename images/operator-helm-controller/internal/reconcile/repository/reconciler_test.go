@@ -53,19 +53,12 @@ import (
 )
 
 type stubRepoClient struct {
-	charts []repoclient.Chart
-	err    error
-	// onFetch runs at the moment the repository is read, which is the only point
-	// from which a test can observe the status the controller publishes *while* it
-	// is working rather than the one it leaves behind.
+	charts  []repoclient.Chart
+	err     error
 	onFetch func()
-	// options records what each pass asked for, in order. Full is the half of it a
-	// force request travels in, and a test about force can only see it here.
 	options []repoclient.FetchOptions
 }
 
-// The receiver is a pointer so a test can change what the repository returns
-// between reconcile passes.
 func (s *stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, opts repoclient.FetchOptions) ([]repoclient.Chart, error) {
 	s.options = append(s.options, opts)
 
@@ -140,9 +133,6 @@ func newReconcilerWithInterceptor(
 	return r, c
 }
 
-// newApplicationReconciler wires the reconciler for the namespaced kind. The
-// addon fixture above stays the default; this one exists to prove the same
-// reconciler composes with a namespaced adapter and catalog.
 func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object) (*Reconciler, client.Client) {
 	t.Helper()
 
@@ -202,8 +192,6 @@ func reconcileUntilStable(t *testing.T, r *Reconciler, name string) reconcile.Re
 	t.Helper()
 
 	var result reconcile.Result
-	// The first pass only adds the finalizer path; two passes are enough to reach
-	// a stable state for a repository whose source responds.
 	for range 2 {
 		var err error
 		result, err = r.Reconcile(context.Background(), reconcile.Request{
@@ -268,7 +256,6 @@ func TestReconcileSkipsFetchBeforeSchedule(t *testing.T) {
 		t.Fatalf("getting repository: %v", err)
 	}
 
-	// A watch-driven pass before nextSyncTime must not move the schedule.
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: repo.Name},
 	}); err != nil {
@@ -286,13 +273,6 @@ func TestReconcileSkipsFetchBeforeSchedule(t *testing.T) {
 	}
 }
 
-// TestReconcileMigratesCatalogNamesWithoutAFetch pins that the catalog rename does
-// not wait on the remote. A consumer resolves the current name from the moment this
-// controller starts, so a repository that is not due for a sync yet, or whose
-// registry is gone for good, must still get its objects moved — otherwise its
-// consumers never resolve their chart again.
-//
-// TRANSITIONAL: remove together with the catalog's own migration.
 func TestReconcileMigratesCatalogNamesWithoutAFetch(t *testing.T) {
 	repo := ociRepository()
 	legacy := &helmv1alpha1.HelmClusterAddonChart{
@@ -332,12 +312,6 @@ func TestReconcileMigratesCatalogNamesWithoutAFetch(t *testing.T) {
 	}
 }
 
-// TestReconcileReportsAFailedMigration pins that a rename the cluster refuses does
-// not silence the repository. Returning the failure out of Reconcile would skip the
-// status write entirely, leaving an object with no conditions at all while its
-// consumers cannot resolve their chart — the one state nobody can diagnose.
-//
-// TRANSITIONAL: remove together with the catalog's own migration.
 func TestReconcileReportsAFailedMigration(t *testing.T) {
 	repo := ociRepository()
 	legacy := &helmv1alpha1.HelmClusterAddonChart{
@@ -352,8 +326,6 @@ func TestReconcileReportsAFailedMigration(t *testing.T) {
 	}
 
 	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
-		// Only the rename's own delete is refused; the ordinary pruning below must
-		// stay reachable, or the test would be about something else.
 		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 			if obj.GetName() == "e2e-repo-chart-podinfo" {
 				return errors.New("forbidden")
@@ -363,8 +335,6 @@ func TestReconcileReportsAFailedMigration(t *testing.T) {
 		},
 	}, &stubRepoClient{}, repo, legacy)
 
-	// The refused object also survives into the pruning loop, so the pass may report
-	// either failure. What matters is that the status was written regardless.
 	for range 2 {
 		_, _ = r.Reconcile(context.Background(), reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: repo.Name},
@@ -389,13 +359,6 @@ func TestReconcileReportsAFailedMigration(t *testing.T) {
 	}
 }
 
-// TestReconcileReportsAFailedMigrationWithoutAnAttempt pins the half of the rename
-// path the previous test cannot reach. The rename runs on every pass, including one
-// that is not due for a synchronization, and on such a pass the repository would
-// otherwise keep the Synced=True its last successful sync left behind — reporting
-// health while its consumers cannot resolve their chart.
-//
-// TRANSITIONAL: remove together with the catalog's own migration.
 func TestReconcileReportsAFailedMigrationWithoutAnAttempt(t *testing.T) {
 	repo := ociRepository()
 	refuse := false
@@ -415,8 +378,6 @@ func TestReconcileReportsAFailedMigrationWithoutAnAttempt(t *testing.T) {
 		},
 	}, stub, repo)
 
-	// A clean run first, so the repository ends up healthy with a schedule ahead of
-	// it: only then is the next pass one that attempts nothing.
 	reconcileUntilStable(t, r, repo.Name)
 
 	synced := &helmv1alpha1.HelmClusterAddonRepository{}
@@ -465,17 +426,6 @@ func TestReconcileReportsAFailedMigrationWithoutAnAttempt(t *testing.T) {
 	}
 }
 
-// TestUnfinishedRenameDoesNotOverwriteTheCatalog pins the sequencing that makes the
-// rename safe. A version the repository no longer offers survives only in the status
-// of the object under the old name; writing the fetched versions into the new,
-// still-empty object would make the next pass consider the carry-over done and
-// delete that last copy. So a pass whose rename did not finish must not synchronize.
-//
-// This goes through Reconcile rather than the catalog directly: the defect lived in
-// the reconciler's gate, and a test double that stops at the first error cannot see
-// it.
-//
-// TRANSITIONAL: remove together with the catalog's own migration.
 func TestUnfinishedRenameDoesNotOverwriteTheCatalog(t *testing.T) {
 	repo := ociRepository()
 	legacy := &helmv1alpha1.HelmClusterAddonChart{
@@ -506,7 +456,6 @@ func TestUnfinishedRenameDoesNotOverwriteTheCatalog(t *testing.T) {
 		},
 	}
 
-	// The repository dropped 1.0.0: only the legacy object still knows about it.
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
 		Name:     "podinfo",
 		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("2.0.0")}},
@@ -586,18 +535,11 @@ func TestReconcileTerminalFetchFailureStalls(t *testing.T) {
 	if apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeReconciling) != nil {
 		t.Fatal("Reconciling and Stalled must be mutually exclusive")
 	}
-	// The fake client bumps generation on the finalizer update, so compare with
-	// the live object rather than with the fixture.
 	if updated.Status.ObservedGeneration != updated.Generation {
 		t.Fatalf("observedGeneration is %d, want %d", updated.Status.ObservedGeneration, updated.Generation)
 	}
 }
 
-// TestReconcileRemovesStalledOnRecovery pins that an abnormal-true condition is
-// removed from the STORED object and not merely from the in-memory status.
-// Removal rides on the JSON merge patch client.MergeFrom produces, which
-// replaces the whole conditions array; were that ever to stop holding, a
-// repository would keep reporting Failed to kstatus forever after one stall.
 func TestReconcileRemovesStalledOnRecovery(t *testing.T) {
 	repo := ociRepository()
 	stub := &stubRepoClient{err: &repoclient.TerminalError{
@@ -616,8 +558,6 @@ func TestReconcileRemovesStalledOnRecovery(t *testing.T) {
 		t.Fatalf("the fixture must reach Stalled first, conditions: %v", stalled.Status.Conditions)
 	}
 
-	// The source recovers. The force annotation makes the next pass attempt
-	// regardless of the schedule the stall left behind.
 	stub.err = nil
 	stub.charts = []repoclient.Chart{{
 		Name:     "podinfo",
@@ -654,10 +594,6 @@ func TestReconcileRemovesStalledOnRecovery(t *testing.T) {
 	}
 }
 
-// TestReconcileDeleteCleansUpWhenURLNoLongerParses covers a repository whose url
-// satisfies the CRD's validation regex but is rejected by url.Parse, so the
-// repository type cannot be determined. Its internal objects were created while
-// the url still parsed, so the deletion path must still remove them.
 func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
 	now := metav1.Now()
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
@@ -667,7 +603,6 @@ func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
 			Finalizers:        []string{helmv1alpha1.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		// Passes the CRD rule ^(https?|oci)://.+$ and fails url.Parse.
 		Spec: helmv1alpha1.RepositorySpec{URL: "https://exa mple.invalid/charts"},
 	}
 
@@ -690,8 +625,6 @@ func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
 
 	r, c := newReconciler(t, &stubRepoClient{}, repo, internalRepo, authSecret, tlsSecret)
 
-	// The first pass deletes the internal objects and waits for the internal
-	// repository to disappear; the second removes the finalizer.
 	reconcileUntilStable(t, r, repo.Name)
 
 	for _, obj := range []client.Object{internalRepo, authSecret, tlsSecret} {
@@ -702,11 +635,6 @@ func TestReconcileDeleteCleansUpWhenURLNoLongerParses(t *testing.T) {
 	}
 }
 
-// TestReconcileForcedOCIRepositoryForcesAddonSources covers a force request on an
-// oci:// repository. Unlike the helm:// path, where the internal HelmRepository
-// carries the request and the HelmCharts follow it, an OCI repository has no
-// internal source object of its own: the artifacts are pulled by the per-addon
-// OCIRepositories, so the request must be pushed onto those.
 func TestReconcileForcedOCIRepositoryForcesAddonSources(t *testing.T) {
 	repo := ociRepository()
 	addon := &helmv1alpha1.HelmClusterAddon{
@@ -758,11 +686,6 @@ func TestReconcileForcedOCIRepositoryForcesAddonSources(t *testing.T) {
 	}
 }
 
-// TestReconcileForcedHelmRepositoryForcesAddonSources: a helm repository can also
-// have per-addon OCIRepositories now — one for every version its index publishes in
-// a registry. A force request on the repository has to reach them, exactly as it does
-// for an oci:// repository; the internal HelmRepository carries the request only for
-// the versions served as archives.
 func TestReconcileForcedHelmRepositoryForcesAddonSources(t *testing.T) {
 	repo := helmRepository()
 	addon := &helmv1alpha1.HelmClusterAddon{
@@ -817,9 +740,6 @@ func TestReconcileForcedHelmRepositoryForcesAddonSources(t *testing.T) {
 	}
 }
 
-// TestReconcileUnforcedOCIRepositoryLeavesAddonSources is the complement: a
-// scheduled synchronization must not stamp the addon sources, or every pass would
-// make the source controller re-pull every artifact of the repository.
 func TestReconcileUnforcedOCIRepositoryLeavesAddonSources(t *testing.T) {
 	repo := ociRepository()
 	addon := &helmv1alpha1.HelmClusterAddon{
@@ -872,12 +792,6 @@ func forcedRepository(t *testing.T, r *Reconciler, c client.Client, repo *helmv1
 	}
 }
 
-// TestReconcileForcedRepositoryReportsProgressBeforeReading pins that the
-// Reconciling condition is published *before* the repository is read. A forced
-// synchronization is the one case where the user is watching: they annotated the
-// object a moment ago and want to see it was picked up, so a condition written
-// only after the read — when the work is already done — would report nothing
-// useful.
 func TestReconcileForcedRepositoryReportsProgressBeforeReading(t *testing.T) {
 	repo := ociRepository()
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
@@ -915,9 +829,6 @@ func TestReconcileForcedRepositoryReportsProgressBeforeReading(t *testing.T) {
 	}
 }
 
-// TestReconcileForcedRepositoryRecordsCompletion covers the other end of the same
-// pass: the progress condition is gone and the stamp records when the request was
-// processed.
 func TestReconcileForcedRepositoryRecordsCompletion(t *testing.T) {
 	repo := ociRepository()
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
@@ -928,8 +839,6 @@ func TestReconcileForcedRepositoryRecordsCompletion(t *testing.T) {
 	r, c := newReconciler(t, stub, repo)
 	forcedRepository(t, r, c, repo)
 
-	// metav1.Time serialises at second precision, so the stored stamp can land
-	// just before an untruncated wall-clock reading of the same second.
 	before := time.Now().UTC().Truncate(time.Second)
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: repo.Name},
@@ -957,9 +866,6 @@ func TestReconcileForcedRepositoryRecordsCompletion(t *testing.T) {
 	}
 }
 
-// TestReconcileUnforcedRepositoryRecordsNoForceReconcile is the complement: a
-// scheduled synchronization neither claims progress on behalf of a force request
-// nor stamps one.
 func TestReconcileUnforcedRepositoryRecordsNoForceReconcile(t *testing.T) {
 	repo := ociRepository()
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
@@ -995,12 +901,6 @@ func TestReconcileUnforcedRepositoryRecordsNoForceReconcile(t *testing.T) {
 	}
 }
 
-// TestReconcileScheduledSynchronizationReportsProgressBeforeReading pins that an
-// ordinary, unrequested synchronization also publishes Reconciling before the
-// repository is read — with its own reason, so the condition says whether the
-// pass is running on the schedule or on a force request. Without it a scheduled
-// pass writes nothing until the read is over, and a slow repository looks idle
-// for the whole read.
 func TestReconcileScheduledSynchronizationReportsProgressBeforeReading(t *testing.T) {
 	repo := ociRepository()
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
@@ -1045,9 +945,6 @@ func TestReconcileScheduledSynchronizationReportsProgressBeforeReading(t *testin
 	}
 }
 
-// TestReconcileSkippedSynchronizationReportsNoProgress is the complement: a pass
-// that is not due must not claim a synchronization is running. The progress
-// condition is tied to an actual attempt, not to every trip through Reconcile.
 func TestReconcileSkippedSynchronizationReportsNoProgress(t *testing.T) {
 	repo := ociRepository()
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
@@ -1058,7 +955,6 @@ func TestReconcileSkippedSynchronizationReportsNoProgress(t *testing.T) {
 	r, c := newReconciler(t, stub, repo)
 	reconcileUntilStable(t, r, repo.Name)
 
-	// The schedule is now set in the future, so this pass performs no attempt.
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: repo.Name},
 	}); err != nil {
@@ -1074,11 +970,6 @@ func TestReconcileSkippedSynchronizationReportsNoProgress(t *testing.T) {
 	}
 }
 
-// TestReconcileNamespacedRepositoryDerivesNamespacedInternalObjects proves the
-// composition the per-package tests cannot: a namespaced repository read through
-// its adapter yields internal objects in the operator namespace under derived,
-// namespace-aware names with both source labels, a catalog object next to the
-// repository, and a status patched on the namespaced object.
 func TestReconcileNamespacedRepositoryDerivesNamespacedInternalObjects(t *testing.T) {
 	repo := &helmv1alpha1.HelmApplicationRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "team-a", Generation: 1},
@@ -1151,7 +1042,6 @@ func TestReconcileNamespacedRepositoryDerivesNamespacedInternalObjects(t *testin
 	}
 }
 
-// forceAnnotationPresent reports whether the request is still on the stored object.
 func forceAnnotationPresent(t *testing.T, c client.Client, name string) bool {
 	t.Helper()
 
@@ -1164,21 +1054,8 @@ func forceAnnotationPresent(t *testing.T, c client.Client, name string) bool {
 	return found
 }
 
-// TestReconcileConsumesAForceRequestOnThePassItTriggered pins that the request is
-// taken off the object by the first pass that attempts a synchronization, including
-// one that ran out of its budget with versions still unexamined.
-//
-// A request that outlives its pass cannot carry the rest of the refresh anyway: under
-// a forced read every version is re-examined, so the pass that follows re-probes the
-// same prefix of the listing and never reaches the tail, and the only place that can
-// name the versions still owed a fresh verdict is the catalog itself. Keeping the
-// request also makes ShouldAttempt return true unconditionally on the very next pass,
-// bypassing the pause an incomplete read schedules, and re-stamps every consumer's
-// source on each of those passes.
 func TestReconcileConsumesAForceRequestOnThePassItTriggered(t *testing.T) {
 	repo := ociRepository()
-	// The repository is fully synchronized first, which is the state a user forces a
-	// refresh from: they repushed a tag the catalog already holds a verdict for.
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
 		Name:     "podinfo",
 		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
@@ -1187,7 +1064,6 @@ func TestReconcileConsumesAForceRequestOnThePassItTriggered(t *testing.T) {
 	r, c := newReconciler(t, stub, repo)
 	forcedRepository(t, r, c, repo)
 
-	// The forced pass runs out of its budget with versions still unexamined.
 	stub.charts[0].UnexaminedVersions = []string{"6.7.0", "6.6.0"}
 
 	before := len(stub.options)
@@ -1206,10 +1082,6 @@ func TestReconcileConsumesAForceRequestOnThePassItTriggered(t *testing.T) {
 	}
 }
 
-// TestReconcileConsumesAForceRequestWhoseReadFailed is the edge of the same rule: a
-// forced read that never reached the registry is a failure, reported by Synced and
-// retried on the backoff, not outstanding work. Holding the request across it would
-// turn an unreachable registry into a repository that forces on every pass forever.
 func TestReconcileConsumesAForceRequestWhoseReadFailed(t *testing.T) {
 	repo := ociRepository()
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
@@ -1233,13 +1105,6 @@ func TestReconcileConsumesAForceRequestWhoseReadFailed(t *testing.T) {
 	}
 }
 
-// TestReconcileKeepsAForceRequestItCouldNotRecord is the bound on the rule above. The
-// request is consumed on the attempt because the attempt has already written it into
-// the catalog, where the passes that follow pick it up; a pass that could not write it
-// has nothing to hand over, so consuming the annotation there would drop the refresh
-// entirely and the re-pushed tag it was asked for would never be examined again. Such a
-// pass must not reach the registry either: contacting it would make the attempt look
-// like the one that carried the request out.
 func TestReconcileKeepsAForceRequestItCouldNotRecord(t *testing.T) {
 	repo := ociRepository()
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
@@ -1247,8 +1112,6 @@ func TestReconcileKeepsAForceRequestItCouldNotRecord(t *testing.T) {
 		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1"), MediaType: "application/tar+gzip"}},
 	}}}
 
-	// Only the marking write fails: the catalog write of the pass that established the
-	// versions has to succeed first, or there is nothing to mark.
 	marking := false
 	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
 		SubResourcePatch: func(
@@ -1272,8 +1135,6 @@ func TestReconcileKeepsAForceRequestItCouldNotRecord(t *testing.T) {
 	marking = true
 	reads := len(stub.options)
 
-	// The failure travels to the work queue as an error; what it must not do is spend
-	// the request.
 	_, _ = r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: repo.Name},
 	})
@@ -1285,8 +1146,6 @@ func TestReconcileKeepsAForceRequestItCouldNotRecord(t *testing.T) {
 		t.Fatal("a request that could not be recorded must stay on the object: nothing else carries the refresh")
 	}
 
-	// The retry finds the catalog writable and carries the request out, which is what
-	// makes keeping it worth anything.
 	marking = false
 
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{

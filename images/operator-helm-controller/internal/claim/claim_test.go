@@ -33,9 +33,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// claimRepo is the repository every addon in this suite points at: the pair that
-// carries the claim is the repository and the chart together, and the chart is what
-// the cases vary.
 const claimRepo = "stable"
 
 func claimingAddon(name, chart string) *helmv1alpha1.HelmClusterAddon {
@@ -52,10 +49,6 @@ func claimingAddon(name, chart string) *helmv1alpha1.HelmClusterAddon {
 	}
 }
 
-// claimFor builds the Lease the package would find for the pair, held by holder.
-// It derives the name through the same helper the package uses, so this suite pins
-// what happens around the name rather than the derivation itself; the derivation is
-// frozen by TestAddonInternalNamesAreFrozen, where the live object names are kept.
 func claimFor(repo, chart, holder, labelSource string) *coordinationv1.Lease {
 	return &coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -90,9 +83,6 @@ func claimHolder(t *testing.T, c client.Client, repo, chart string) string {
 	return leaseHolder(lease)
 }
 
-// TestAcquireClaimsAFreePair pins what a first acquisition writes: the Lease is
-// named after the pair, lives in the operator namespace, records the addon as its
-// holder and carries the source labels DropStale later finds orphans by.
 func TestAcquireClaimsAFreePair(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 	rel := adapter.NewAddonRelease(addon)
@@ -121,9 +111,6 @@ func TestAcquireClaimsAFreePair(t *testing.T) {
 	}
 }
 
-// TestAcquireIsIdempotentForTheHolder pins that the addon that already owns the
-// pair keeps it: every pass calls Acquire, so a second call must not be read as a
-// conflict with the addon itself.
 func TestAcquireIsIdempotentForTheHolder(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 	claims, _ := newClaims(t, addon, claimFor("stable", "podinfo", "metrics", "metrics"))
@@ -137,9 +124,6 @@ func TestAcquireIsIdempotentForTheHolder(t *testing.T) {
 	}
 }
 
-// TestAcquireReportsTheHolderOfATakenPair pins the case the whole type exists for:
-// a second addon asking for a pair a live addon uses is refused and told who owns
-// it, so the reconciler can name the conflict in the status.
 func TestAcquireReportsTheHolderOfATakenPair(t *testing.T) {
 	owner := claimingAddon("metrics", "podinfo")
 	duplicate := claimingAddon("metrics-copy", "podinfo")
@@ -160,13 +144,6 @@ func TestAcquireReportsTheHolderOfATakenPair(t *testing.T) {
 	}
 }
 
-// TestAcquireTakesOverAClaimNoOneKeeps pins the one way a Lease outlives its
-// holder — the addon is gone — and that an empty holder identity is as stale as a
-// missing addon.
-//
-// An addon that merely moved to another chart is deliberately not among them: it is
-// still there, and giving up a claim is its own act, done by DropStale on its next
-// pass. See TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway.
 func TestAcquireTakesOverAClaimNoOneKeeps(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -201,9 +178,6 @@ func TestAcquireTakesOverAClaimNoOneKeeps(t *testing.T) {
 	}
 }
 
-// TestAcquireRereadsTheLeaseAfterLosingTheCreateRace pins the race the Lease exists
-// to settle: two addons see the pair as free, one create wins and the loser must
-// learn the winner's name from the API server rather than report an error.
 func TestAcquireRereadsTheLeaseAfterLosingTheCreateRace(t *testing.T) {
 	addon := claimingAddon("metrics-copy", "podinfo")
 	winner := claimingAddon("metrics", "podinfo")
@@ -219,8 +193,6 @@ func TestAcquireRereadsTheLeaseAfterLosingTheCreateRace(t *testing.T) {
 					return cl.Create(ctx, obj, opts...)
 				}
 
-				// The winner stores its claim first; this pass learns of it the way
-				// the API server would report it.
 				refused = true
 				if err := cl.Create(ctx, claimFor("stable", "podinfo", "metrics", "metrics"), opts...); err != nil {
 					return err
@@ -247,10 +219,6 @@ func TestAcquireRereadsTheLeaseAfterLosingTheCreateRace(t *testing.T) {
 	}
 }
 
-// TestAcquireReportsAConflictWhenTheTakeOverIsRejected pins the second race: two
-// addons both find the claim orphaned and both try to take it over. The one whose
-// update is rejected reports the pair as taken rather than failing the pass, and
-// the reported holder is the one it read.
 func TestAcquireReportsAConflictWhenTheTakeOverIsRejected(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 
@@ -279,9 +247,6 @@ func TestAcquireReportsAConflictWhenTheTakeOverIsRejected(t *testing.T) {
 	}
 }
 
-// TestOwnedByAnswersFromTheLeaseHolder pins the read the webhook path depends on:
-// ownership is the holder identity on the Lease, and a pair no one claimed is not
-// owned by anyone rather than an error.
 func TestOwnedByAnswersFromTheLeaseHolder(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -317,9 +282,6 @@ func TestOwnedByAnswersFromTheLeaseHolder(t *testing.T) {
 	}
 }
 
-// TestDropFreesOnlyTheCallerOwnClaim pins the guard that makes Drop safe to
-// call from any addon's deletion path: a duplicate that never acquired the pair
-// must not free the claim of the addon that did.
 func TestDropFreesOnlyTheCallerOwnClaim(t *testing.T) {
 	owner := claimingAddon("metrics", "podinfo")
 	duplicate := claimingAddon("metrics-copy", "podinfo")
@@ -343,9 +305,6 @@ func TestDropFreesOnlyTheCallerOwnClaim(t *testing.T) {
 	}
 }
 
-// TestDropToleratesAMissingClaim pins that a deletion path which runs twice, or
-// one whose claim was never created, reports no failure: the finalizer must not be
-// held by a claim that is already gone.
 func TestDropToleratesAMissingClaim(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 	claims, _ := newClaims(t, addon)
@@ -355,12 +314,6 @@ func TestDropToleratesAMissingClaim(t *testing.T) {
 	}
 }
 
-// TestDropLeavesAClaimTakenOverInBetween pins the precondition on the delete:
-// between the read and the delete another addon may take the pair over, and the
-// delete must name the revision that was read so the API server rejects it. The
-// fake client does not enforce preconditions, so the interceptor stands in for the
-// API server: it fails the test if the revision is missing, and answers the way the
-// server answers a revision that no longer matches.
 func TestDropLeavesAClaimTakenOverInBetween(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 	held := claimFor("stable", "podinfo", "metrics", "metrics")
@@ -402,13 +355,8 @@ func TestDropLeavesAClaimTakenOverInBetween(t *testing.T) {
 	}
 }
 
-// TestDropStaleDropsTheClaimsTheSpecMovedAwayFrom pins the cleanup a chart
-// change leaves behind: the claim for the pair the addon now uses stays, the claims
-// it moved away from go, and a pair another addon has since taken over is not
-// touched even though the label still names this addon.
 func TestDropStaleDropsTheClaimsTheSpecMovedAwayFrom(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
-	// The move is what makes the other pairs stale, and the status is what reports it.
 	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
 		HelmClusterAddonRepository: "stable",
 		HelmClusterAddonChartName:  "podinfo",
@@ -439,10 +387,6 @@ func TestDropStaleDropsTheClaimsTheSpecMovedAwayFrom(t *testing.T) {
 	}
 }
 
-// TestDropStaleDropsOrphansWhenOnlyTheVersionMoved pins that a version bump is a
-// settled move, not an unconfirmed one: the claim is per repository/chart pair and
-// carries no version, so a record naming an older version of the chart the spec
-// names is the same pair and releases what sits beside it.
 func TestDropStaleDropsOrphansWhenOnlyTheVersionMoved(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
@@ -467,9 +411,6 @@ func TestDropStaleDropsOrphansWhenOnlyTheVersionMoved(t *testing.T) {
 	}
 }
 
-// TestDropStaleIgnoresClaimsOfOtherAddons pins the label scope: the list is
-// filtered by the addon's own source labels, so a claim belonging to a different
-// addon is never a candidate for cleanup.
 func TestDropStaleIgnoresClaimsOfOtherAddons(t *testing.T) {
 	addon := claimingAddon("metrics", "podinfo")
 	claims, c := newClaims(t,
@@ -487,27 +428,11 @@ func TestDropStaleIgnoresClaimsOfOtherAddons(t *testing.T) {
 	}
 }
 
-// TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway pins the claim against being
-// handed out twice around an addon that moves off a chart and back.
-//
-// Reading the holder's spec to decide the Lease is an orphan cannot be made safe:
-// the holder does not write to the Lease when it finds itself already recorded in
-// it, so between that read and the takeover it can resume the pair without leaving
-// a trace the optimistic update would collide with, and both addons end up believing
-// they own one chart.
-//
-// The two passes below run one after the other rather than interleaved — the
-// property under test is that a live holder is never dispossessed, which is what
-// closes that window, and it holds whatever the order. The returning holder is
-// passed the spec it has moved back to while the stored object still names the one
-// it left, which is the state B would read in the window itself.
 func TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway(t *testing.T) {
 	moved := claimingAddon("first", "other-chart")
 	second := claimingAddon("second", "podinfo")
 	claims, c := newClaims(t, moved, second, claimFor("stable", "podinfo", "first", "first"))
 
-	// A is back on the pair before B writes: its own Acquire is a no-op on the
-	// Lease, which is exactly why B cannot detect it.
 	back := claimingAddon("first", "podinfo")
 	acquired, holder, err := claims.Acquire(context.Background(), adapter.NewAddonRelease(back))
 	if err != nil {
@@ -532,13 +457,6 @@ func TestAcquireLeavesTheClaimOfALiveAddonThatMovedAway(t *testing.T) {
 	}
 }
 
-// TestDropStaleKeepsThePairTheReleaseIsStillRunning pins what a release may not
-// give up while its spec points somewhere its status has not followed: anything.
-// The chart named by the status is installed under this release's name, and the
-// pairs around it cannot be told apart from it by a status that is written after
-// the fact — so until the move is confirmed, every pair is held. Handing one over
-// early would have two releases deploying a chart into one namespace, which is
-// what the claim exists to prevent.
 func TestDropStaleKeepsThePairTheReleaseIsStillRunning(t *testing.T) {
 	addon := claimingAddon("first", "nginx")
 	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{
@@ -563,10 +481,6 @@ func TestDropStaleKeepsThePairTheReleaseIsStillRunning(t *testing.T) {
 	}
 }
 
-// TestDropStaleKeepsEverythingUntilTheFirstChartIsRecorded pins the reading of an
-// empty status. It does not mean nothing is deployed: the record is written after
-// the chart is applied, so a release that has just installed something carries none
-// yet. Releasing on that reading would hand away a pair whose chart is running.
 func TestDropStaleKeepsEverythingUntilTheFirstChartIsRecorded(t *testing.T) {
 	addon := claimingAddon("first", "nginx")
 	held := claimFor(claimRepo, "podinfo", "first", "first")
@@ -581,10 +495,6 @@ func TestDropStaleKeepsEverythingUntilTheFirstChartIsRecorded(t *testing.T) {
 	}
 }
 
-// TestDropAllReleasesEverythingIncludingTheRunningPair is the teardown counterpart:
-// by then nothing of the release is deployed, so the pair DropStale protects has
-// nothing left to protect, and no later pass of anybody's would be allowed to free
-// what this release left behind.
 func TestDropAllReleasesEverythingIncludingTheRunningPair(t *testing.T) {
 	addon := claimingAddon("first", "nginx")
 	addon.Status.LastAppliedChart = &helmv1alpha1.HelmClusterAddonLastAppliedChartRef{

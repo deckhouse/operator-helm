@@ -25,12 +25,6 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 )
 
-// TestMergeChartVersionsCarriesOCIRef pins the three things that can happen to a
-// recorded reference. Fresh index data always wins, which is how a version
-// re-published as an archive loses its reference; a version the index no longer
-// offers keeps it, without which the addon still using it could not build its
-// internal OCIRepository and would be blocked from every change, including its own
-// removal.
 func TestMergeChartVersionsCarriesOCIRef(t *testing.T) {
 	fetched := []repoclient.ChartVersion{
 		{Version: semver.MustParse("3.0.0"), OCIRef: "oci://registry.example.com/charts/podinfo:3.0.0"},
@@ -70,14 +64,6 @@ func TestMergeChartVersionsCarriesOCIRef(t *testing.T) {
 	}
 }
 
-// TestMergeChartVersionsDoesNotCarryMediaTypeOntoOCIRef pins the invariant the API
-// documentation asserts: MediaType stays empty for a version carrying OCIRef. A
-// version that now resolves to an OCI artifact must probe its own layer media type
-// from scratch even though an addon still references it and a previous pass (back
-// when the version was an archive) recorded one: resolveMediaType checks
-// version.MediaType != "" before the force-reconcile cache bypass, so a stale
-// carried-forward value would use the wrong layer selector and no force reconcile
-// could ever correct it.
 func TestMergeChartVersionsDoesNotCarryMediaTypeOntoOCIRef(t *testing.T) {
 	fetched := []repoclient.ChartVersion{
 		{Version: semver.MustParse("6.7.1"), OCIRef: "oci://other-registry.example.com/x/podinfo:6.7.1"},

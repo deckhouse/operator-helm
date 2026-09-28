@@ -29,8 +29,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/reposync"
 )
 
-// computeStatus renders the decision as the repository object would look in the
-// cluster and asks the real kstatus library for its verdict.
 func computeStatus(t *testing.T, generation int64, decision Decision) status.Status {
 	t.Helper()
 
@@ -94,10 +92,6 @@ func TestKstatusVerdicts(t *testing.T) {
 			want: status.FailedStatus,
 		},
 		{
-			// The work-queue retry after a catalog write failure runs a pass with no
-			// attempt. Without the carry-forward in evaluateReconciling the object
-			// would carry no abnormal-true condition and kstatus would call a
-			// permanently broken catalog write Current.
 			name: "catalog write failure stays in progress between attempts",
 			in: Inputs{
 				Generation: 1, Now: testNow, Current: catalogFailedStatus(1),

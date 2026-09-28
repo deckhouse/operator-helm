@@ -29,9 +29,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 )
 
-// TestNamespacesEnsureTargetCreatesItOnceAndLeavesItAlone pins the addon rule moved
-// here from the reconciler: a missing target namespace is created, an existing one
-// — labels included — is not touched.
 func TestNamespacesEnsureTargetCreatesItOnceAndLeavesItAlone(t *testing.T) {
 	addon := testAddon()
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
@@ -64,11 +61,6 @@ func TestNamespacesEnsureTargetCreatesItOnceAndLeavesItAlone(t *testing.T) {
 	}
 }
 
-// TestTerminatingReportsANamespaceThatIsGoingOrAlreadyGone pins the answer the
-// teardown of a release depends on. A namespace that is not there at all counts as
-// terminating: everything it held is gone with it, which is the state the caller
-// acts on, and reporting it as live would leave a release waiting for an identity
-// that can no longer be repaired.
 func TestTerminatingReportsANamespaceThatIsGoingOrAlreadyGone(t *testing.T) {
 	deleted := metav1.Now()
 
@@ -88,9 +80,7 @@ func TestTerminatingReportsANamespaceThatIsGoingOrAlreadyGone(t *testing.T) {
 			name: "a namespace with a deletion timestamp is terminating",
 			namespace: &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "app",
-					// The fake client holds a deleted object only while a finalizer does;
-					// a namespace being emptied carries the kubernetes one.
+					Name:              "app",
 					Finalizers:        []string{"kubernetes"},
 					DeletionTimestamp: &deleted,
 				},

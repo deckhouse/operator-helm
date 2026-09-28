@@ -39,9 +39,6 @@ func addonRepo(name string) *helmv1alpha1.HelmClusterAddonRepository {
 	}
 }
 
-// TestAddonRepositoryKeepsTheReleasedNamesAndLabels pins the adapter to what the
-// addon controller writes today: the same three internal names and the same two
-// labels. Anything else here would re-create live objects.
 func TestAddonRepositoryKeepsTheReleasedNamesAndLabels(t *testing.T) {
 	obj := addonRepo("example")
 	repo := NewAddonRepository(obj)
@@ -117,10 +114,6 @@ func TestApplicationRepositoryCarriesNamespaceInLabelsAndNames(t *testing.T) {
 	}
 }
 
-// TestSameNamedRepositoriesNeverShareInternalNames is the property the whole
-// naming scheme exists for: every internal object of every repository lives in one
-// namespace, so two sources that share a name must still derive distinct names —
-// across namespaces and across kinds alike.
 func TestSameNamedRepositoriesNeverShareInternalNames(t *testing.T) {
 	spec := helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"}
 

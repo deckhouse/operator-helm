@@ -24,11 +24,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// TestReduceInternalConditionsCarriesGivingUp reproduces an internal release that
-// spent its remediation attempts on values the chart cannot render. The reduced
-// state has to say two things at once: what the fault was, which only the error
-// rules know, and that nothing more is coming, which only the Stalled condition
-// knows. Losing the second is what lets a release report a retry that never runs.
 func TestReduceInternalConditionsCarriesGivingUp(t *testing.T) {
 	const cause = "Helm upgrade failed for release default/podinfo-app-helm: " +
 		".spec.replicas: expected numeric (int or float), got string"
@@ -68,10 +63,6 @@ func TestReduceInternalConditionsCarriesGivingUp(t *testing.T) {
 	}
 }
 
-// TestReduceInternalConditionsIgnoresProgressOfAnObjectThatGaveUp pins the one
-// ordering that matters. A stalled object can still carry the Reconciling condition
-// of the attempt that gave up; read as work in flight it would hide the failure
-// behind Unknown and keep the release waiting for a verdict that never comes.
 func TestReduceInternalConditionsIgnoresProgressOfAnObjectThatGaveUp(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{
@@ -105,9 +96,6 @@ func TestReduceInternalConditionsIgnoresProgressOfAnObjectThatGaveUp(t *testing.
 	}
 }
 
-// TestReduceInternalConditionsFallsBackToTheStallReason covers a stalled object no
-// error rule matches and whose Ready is about an older spec: its own account of why
-// it stopped is then the only verdict there is.
 func TestReduceInternalConditionsFallsBackToTheStallReason(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{
@@ -133,13 +121,6 @@ func TestReduceInternalConditionsFallsBackToTheStallReason(t *testing.T) {
 	}
 }
 
-// TestReduceInternalConditionsIgnoresAStallFromAnOlderGeneration covers the moment
-// right after a broken spec is corrected: the generation has been bumped, and the
-// pass that will clear Stalled has not started yet. helm-controller drops that
-// condition at the head of its next pass, so until then the status still carries the
-// verdict of the attempt that gave up on the previous spec. Read as a verdict about
-// the current one it would suppress Reconciling and tell the user that nothing is
-// happening, right when the work is about to begin.
 func TestReduceInternalConditionsIgnoresAStallFromAnOlderGeneration(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{
@@ -173,10 +154,6 @@ func TestReduceInternalConditionsIgnoresAStallFromAnOlderGeneration(t *testing.T
 	}
 }
 
-// TestReduceInternalConditionsIgnoresAFailureFromAnOlderGeneration extends the same
-// rule to the error conditions. An object that has been given a new spec and has not
-// been picked up yet carries only the fault of the previous one; reporting that fault
-// as the verdict about the new spec would blame it for something it never caused.
 func TestReduceInternalConditionsIgnoresAFailureFromAnOlderGeneration(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{
@@ -200,11 +177,6 @@ func TestReduceInternalConditionsIgnoresAFailureFromAnOlderGeneration(t *testing
 	}
 }
 
-// TestReduceInternalConditionsTrustsAStallWithoutAnObservedGeneration pins how an
-// unstamped condition is read. Both controllers stamp every condition they write, so
-// a missing observedGeneration is not evidence of a stale verdict — and discarding
-// it would leave a terminal failure reported as work in flight forever, since
-// nothing on this side ever revisits it.
 func TestReduceInternalConditionsTrustsAStallWithoutAnObservedGeneration(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{
@@ -230,12 +202,6 @@ func TestReduceInternalConditionsTrustsAStallWithoutAnObservedGeneration(t *test
 	}
 }
 
-// TestReduceInternalConditionsIgnoresAVerdictFromANewerGeneration covers the other
-// end of the same test. A generation ahead of the object's is not known to occur —
-// the spec and the status of one object travel together in a single snapshot — but
-// a verdict about a generation this pass is not holding says nothing about the one
-// it is, whichever side it falls on, so nothing is reported as observed until the
-// two line up.
 func TestReduceInternalConditionsIgnoresAVerdictFromANewerGeneration(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{
@@ -269,11 +235,6 @@ func TestReduceInternalConditionsIgnoresAVerdictFromANewerGeneration(t *testing.
 	}
 }
 
-// TestReduceInternalConditionsPrefersACurrentFailureToAStaleReconciling is the
-// mirror of the stale-stall case: here it is Reconciling that belongs to the
-// previous generation while the failure is about the current one. Reconciling comes
-// first in the reduction, so were it read the release would report progress over a
-// fault the object has already settled on.
 func TestReduceInternalConditionsPrefersACurrentFailureToAStaleReconciling(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{
@@ -307,9 +268,6 @@ func TestReduceInternalConditionsPrefersACurrentFailureToAStaleReconciling(t *te
 	}
 }
 
-// TestReduceInternalConditionsLeavesAnOrdinaryFailureRetriable is the counterpart:
-// the same failure without a Stalled condition is one the object still means to
-// retry, and the release must go on reporting progress for it.
 func TestReduceInternalConditionsLeavesAnOrdinaryFailureRetriable(t *testing.T) {
 	state := reduceInternalConditions([]metav1.Condition{
 		{

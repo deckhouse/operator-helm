@@ -60,9 +60,6 @@ func readyInternal() internalobj.InternalObjectState {
 	}
 }
 
-// TestEvaluateTerminalFailureStalls pins what tells a terminal failure apart from
-// every other one: nothing this controller does resolves it, so it is reported as
-// Stalled and the pass is not handed back to the work queue.
 func TestEvaluateTerminalFailureStalls(t *testing.T) {
 	in := baseInputs()
 	failure := Failure{
@@ -92,9 +89,6 @@ func TestEvaluateTerminalFailureStalls(t *testing.T) {
 	}
 }
 
-// TestEvaluateTerminalFailureIsNeverRetried pins that Terminal overrides the retry
-// every other step failure gets. Burning the work queue's rate limiter on an attempt
-// whose outcome is already known is the worse reading.
 func TestEvaluateTerminalFailureIsNeverRetried(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = StepFailed{Failure{
@@ -112,11 +106,6 @@ func TestEvaluateTerminalFailureIsNeverRetried(t *testing.T) {
 	condition(t, decision, helmv1alpha1.ConditionTypeStalled)
 }
 
-// TestEvaluateTerminalFailureDropsTheForceRequest pins why a terminal failure takes
-// the force annotation away. It is matched on presence alone, so a request left
-// behind makes the next one change nothing about the object and fire no event —
-// which is exactly how whoever corrected the cause asks to be retried. The stamp is
-// not written: it means the request was acted on, and this one was dropped.
 func TestEvaluateTerminalFailureDropsTheForceRequest(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = StepFailed{Failure{
@@ -139,8 +128,6 @@ func TestEvaluateTerminalFailureDropsTheForceRequest(t *testing.T) {
 	}
 }
 
-// TestEvaluateRecoverableFailureKeepsTheForceRequest is the counterpart: a failure
-// that can still come good leaves the request for the pass that can honour it.
 func TestEvaluateRecoverableFailureKeepsTheForceRequest(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = StepFailed{Failure{
@@ -154,10 +141,6 @@ func TestEvaluateRecoverableFailureKeepsTheForceRequest(t *testing.T) {
 	}
 }
 
-// TestEvaluateTerminalProbeVerdictStalls pins the one terminal verdict that does not
-// arrive as a Failure: the registry rejected the pull, or what it serves is not a
-// chart. The probe already schedules nothing for it, and Stalled is what says so to
-// a reader — without it the release looks like one still on its way up.
 func TestEvaluateTerminalProbeVerdictStalls(t *testing.T) {
 	in := baseInputs()
 	probe := internalobj.OCIRepoOutcome{
@@ -184,9 +167,6 @@ func TestEvaluateTerminalProbeVerdictStalls(t *testing.T) {
 	}
 }
 
-// TestEvaluateRecoverableProbeFailureDoesNotStall is the counterpart: a probe that
-// failed for a reason that may pass on its own leaves Stalled off and rides the
-// timer the probe asked for.
 func TestEvaluateRecoverableProbeFailureDoesNotStall(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -208,11 +188,6 @@ func TestEvaluateRecoverableProbeFailureDoesNotStall(t *testing.T) {
 	}
 }
 
-// TestEvaluateStepFailureOwnsReadyAlone pins the reach of a step failure: the pass
-// never got as far as the chart, so of the projected conditions it may say the
-// release is not ready and nothing more. It is not stalled — a watch on what the
-// step needed, or the work queue, wakes the release — and saying so is what the
-// progress condition beside Ready is for.
 func TestEvaluateStepFailureOwnsReadyAlone(t *testing.T) {
 	in := baseInputs()
 	failure := Failure{
@@ -252,12 +227,6 @@ func TestEvaluateStepFailureOwnsReadyAlone(t *testing.T) {
 	}
 }
 
-// TestEvaluateStepFailureAwaitingAWatchPromisesNoRetry is the other half of the
-// rule above: the same step failure, but one nothing was scheduled for — the
-// release is parked until the watch on the repository kinds fires. This is the
-// shape the step that resolves the internal repository produces when the release
-// was applied before its repository, and reporting it as a retry would name an
-// attempt no pass is making.
 func TestEvaluateStepFailureAwaitingAWatchPromisesNoRetry(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = StepFailed{Failure{
@@ -279,13 +248,6 @@ func TestEvaluateStepFailureAwaitingAWatchPromisesNoRetry(t *testing.T) {
 	}
 }
 
-// TestEvaluateUnresolvedSourceAwaitingASyncPromisesNoRetry is the same rule on the
-// path the two waits actually take: resolving the chart version does not fail the
-// pass, it ends it at the chart with the source unresolved, so the verdict reaches
-// the progress condition instead of the step-failure branch. Both waits are on the
-// repository's first sync of its current spec, which no pass of this controller is
-// retrying — the timer the failure carries is the whole schedule, and losing it
-// parks the release until something else happens to write to it.
 func TestEvaluateUnresolvedSourceAwaitingASyncPromisesNoRetry(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -327,10 +289,6 @@ func TestEvaluateUnresolvedSourceAwaitingASyncPromisesNoRetry(t *testing.T) {
 	}
 }
 
-// TestEvaluateReportsWorkInFlight pins the progress condition on the ordinary path:
-// an internal object that has not yet reported on the spec it was given is work in
-// flight, and the release says so with that object's own words rather than a fixed
-// message of its own.
 func TestEvaluateReportsWorkInFlight(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -359,9 +317,6 @@ func TestEvaluateReportsWorkInFlight(t *testing.T) {
 	}
 }
 
-// TestEvaluateReportsARetryAfterAFailedRollout pins the other half: a failure that
-// is not terminal has something coming back to it, so the release keeps reporting
-// progress beside the failure itself.
 func TestEvaluateReportsARetryAfterAFailedRollout(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -386,12 +341,6 @@ func TestEvaluateReportsARetryAfterAFailedRollout(t *testing.T) {
 	}
 }
 
-// TestEvaluateGivenUpReleaseStallsInsteadOfReportingProgress is the case seen on a
-// test cluster: values the chart cannot render leave the internal release Stalled
-// after its remediation attempts are spent. It has stopped acting on that spec, so
-// the verdict cannot change until an edit to the release gives it a new one.
-// Reporting a retry there parks the addon at InProgress for good, because kstatus
-// reads Reconciling before Ready.
 func TestEvaluateGivenUpReleaseStallsInsteadOfReportingProgress(t *testing.T) {
 	const cause = "Helm upgrade failed for release default/podinfo: .spec.replicas: expected numeric, got string"
 
@@ -431,9 +380,6 @@ func TestEvaluateGivenUpReleaseStallsInsteadOfReportingProgress(t *testing.T) {
 	}
 }
 
-// TestEvaluateFailingReleaseStillReportsProgress is the counterpart that keeps the
-// rule above from swallowing the ordinary case: the same failure, with the internal
-// object still willing to retry, is progress.
 func TestEvaluateFailingReleaseStillReportsProgress(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -459,9 +405,6 @@ func TestEvaluateFailingReleaseStillReportsProgress(t *testing.T) {
 	}
 }
 
-// TestEvaluateSettledReleaseReportsNoProgress pins the removal: nothing is in
-// flight, so the abnormal-true condition has to go, or kstatus reads a healthy
-// release as one that never finishes.
 func TestEvaluateSettledReleaseReportsNoProgress(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -479,9 +422,6 @@ func TestEvaluateSettledReleaseReportsNoProgress(t *testing.T) {
 	}
 }
 
-// TestEvaluateStalledReleaseReportsNoProgress pins that Stalled outranks the
-// progress condition, as it does in the repository package: a release that cannot
-// proceed is not making progress, and reporting both would say two things at once.
 func TestEvaluateStalledReleaseReportsNoProgress(t *testing.T) {
 	in := baseInputs()
 	probe := internalobj.OCIRepoOutcome{
@@ -503,10 +443,6 @@ func TestEvaluateStalledReleaseReportsNoProgress(t *testing.T) {
 	}
 }
 
-// TestEvaluateStepFailureOnATimerIsNotHandedToTheWorkQueue is the one step failure
-// that does not ride the rate limiter: the claim conflict carries no error of its
-// own, because nothing failed — another release holds the pair — and the timer the
-// step asked for is what re-checks whether it still does.
 func TestEvaluateStepFailureOnATimerIsNotHandedToTheWorkQueue(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = StepFailed{Failure{
@@ -525,9 +461,6 @@ func TestEvaluateStepFailureOnATimerIsNotHandedToTheWorkQueue(t *testing.T) {
 	}
 }
 
-// TestEvaluateProjectsTheFirstFailingStep pins the rule a reader of the status
-// applies: the verdict is the first step that did not succeed, and it reaches every
-// condition type the release currently reports on.
 func TestEvaluateProjectsTheFirstFailingStep(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -556,9 +489,6 @@ func TestEvaluateProjectsTheFirstFailingStep(t *testing.T) {
 	}
 }
 
-// TestEvaluateHoldsAReleaseThatHasNotRolledOut pins why the HelmRelease's own Ready
-// is not enough: a chart-version change moves the artifact without touching its
-// spec, so it can go on reporting the previous revision ready.
 func TestEvaluateHoldsAReleaseThatHasNotRolledOut(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -609,9 +539,6 @@ func TestEvaluateRecordsWhatWasApplied(t *testing.T) {
 	}
 }
 
-// TestEvaluateNamesARemovedVersion pins that the cause is named only while it
-// explains something: the marker outlives the tag's absence, so a child that is
-// healthy again must not be relabelled with it.
 func TestEvaluateNamesARemovedVersion(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -665,9 +592,6 @@ func TestEvaluateForcedPassStampsAndConsumesTheRequest(t *testing.T) {
 	}
 }
 
-// TestEvaluateMaintenanceReportsItselfAlone pins that a pass which only moved the
-// release into maintenance says so on Managed and Ready and nothing else: it never
-// touched the chart, so it has nothing to report about installing it.
 func TestEvaluateMaintenanceReportsItselfAlone(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = MaintenanceChanged{Result: internalobj.MaintenanceOutcome{Activated: true}}
@@ -687,10 +611,6 @@ func TestEvaluateMaintenanceReportsItselfAlone(t *testing.T) {
 	}
 }
 
-// TestEvaluateMaintenanceHoldLeavesTheObservedGenerationBehind pins the one pass
-// that reports nothing about the spec it was given: a release already in maintenance
-// stays there whatever its spec now says, and claiming the change was observed is
-// what would make kstatus call it settled.
 func TestEvaluateMaintenanceHoldLeavesTheObservedGenerationBehind(t *testing.T) {
 	in := baseInputs()
 	in.ObservedGeneration = 1
@@ -723,12 +643,6 @@ func TestEvaluateAdvancesTheObservedGeneration(t *testing.T) {
 	}
 }
 
-// TestEvaluateCarriesTheObservedGeneration pins which passes may claim to have
-// finished with the spec they were given. Only a pass that reached a verdict the
-// release will keep may: one that settled on Ready, and one that gave up on the spec
-// for good. A pass still on its way to a verdict leaves the generation behind, so a
-// reader comparing it against metadata.generation sees work in flight rather than a
-// release that reports False about a spec it has not finished applying.
 func TestEvaluateCarriesTheObservedGeneration(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -825,10 +739,6 @@ func TestEvaluateCarriesTheObservedGeneration(t *testing.T) {
 	}
 }
 
-// TestEvaluateReportsTheCauseOfEveryVerdict pins that whichever kind of failure
-// produced the verdict, the pass carries the cause out to be logged. Most release
-// failures never reach the work queue, and several report a fixed message, so a
-// verdict whose cause is not carried out is a cause nobody can read.
 func TestEvaluateReportsTheCauseOfEveryVerdict(t *testing.T) {
 	cause := errors.New("boom")
 
@@ -942,11 +852,6 @@ func TestEvaluateReportsNothingWhenNothingFailed(t *testing.T) {
 	}
 }
 
-// TestEvaluateRefusesAPassWithNoOutcome pins the one ending the type system cannot
-// rule out. Go does not check a type switch for exhaustiveness and the interface can
-// be nil, so a pass that reached finish without an outcome has to be met with
-// something louder than an empty decision: an empty one writes no status at all,
-// which would leave the release reporting whatever it reported before, forever.
 func TestEvaluateRefusesAPassWithNoOutcome(t *testing.T) {
 	decision := Evaluate(baseInputs())
 
@@ -961,11 +866,6 @@ func TestEvaluateRefusesAPassWithNoOutcome(t *testing.T) {
 	}
 }
 
-// TestEvaluateTransientStepFailureIsHandedToTheWorkQueue pins what brings a release
-// back after a cluster step failed on its way to a write. Nothing was written, so no
-// watch fires and no timer is running: the rate limiter is the only thing left. The
-// two failures that opt out say why — one cannot be changed by retrying, the other
-// is woken by a watch on the object that was missing.
 func TestEvaluateTransientStepFailureIsHandedToTheWorkQueue(t *testing.T) {
 	cause := errors.New("etcdserver: request timed out")
 
@@ -1028,11 +928,6 @@ func TestEvaluateTransientStepFailureIsHandedToTheWorkQueue(t *testing.T) {
 	}
 }
 
-// TestEvaluateFailedMaintenanceSwitchLeavesManagedAlone pins the first half of the
-// maintenance contract: Managed reports whether the internal HelmRelease is
-// suspended, so only a switch that landed may move it. A Managed written from a
-// failed attempt is indistinguishable from a release resting in maintenance, which
-// is the one state the controller never comes back to on its own.
 func TestEvaluateFailedMaintenanceSwitchLeavesManagedAlone(t *testing.T) {
 	cause := errors.New("conflict")
 
@@ -1062,9 +957,6 @@ func TestEvaluateFailedMaintenanceSwitchLeavesManagedAlone(t *testing.T) {
 	}
 }
 
-// TestEvaluateMaintenanceHoldIsNotReady pins the rest of that contract on the pass
-// that finds the release already in maintenance: while Managed is False the release
-// is not ready, because the controller has stopped keeping its spec true.
 func TestEvaluateMaintenanceHoldIsNotReady(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = InMaintenance{}
@@ -1083,10 +975,6 @@ func TestEvaluateMaintenanceHoldIsNotReady(t *testing.T) {
 	}
 }
 
-// TestEvaluateLiftedMaintenanceReportsManagedAndKeepsGoing pins the other half:
-// lifting maintenance moves Managed and nothing else. Ready belongs to the work the
-// lift resumed, which in this pass has only just reached the internal source — a
-// release reported as ready here would be one whose chart is not deployed.
 func TestEvaluateLiftedMaintenanceReportsManagedAndKeepsGoing(t *testing.T) {
 	in := baseInputs()
 	in.MaintenanceLifted = true
@@ -1117,10 +1005,6 @@ func TestEvaluateLiftedMaintenanceReportsManagedAndKeepsGoing(t *testing.T) {
 	}
 }
 
-// TestEvaluateRefusesAPassThatEndedOnLiftedMaintenance guards the shape of the
-// outcome: lifting maintenance is not an ending, it is a pass that goes on. Writing
-// a status for it here would say the release is managed and nothing else, which
-// reads as a settled release whose chart was never deployed.
 func TestEvaluateRefusesAPassThatEndedOnLiftedMaintenance(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = MaintenanceChanged{Result: internalobj.MaintenanceOutcome{Activated: false}}
@@ -1135,12 +1019,6 @@ func TestEvaluateRefusesAPassThatEndedOnLiftedMaintenance(t *testing.T) {
 	}
 }
 
-// TestEvaluateTransientInternalObjectFailureIsHandedToTheWorkQueue pins what brings
-// a release back after a pass that reached the chart failed to write one of its
-// internal objects. The write did not land, so the object a watch would fire on is
-// exactly as it was and no event follows: the rate limiter is the only thing left,
-// and without it the release sits reporting a retry nobody scheduled. The cases that
-// opt out each name what is already coming back to them.
 func TestEvaluateTransientInternalObjectFailureIsHandedToTheWorkQueue(t *testing.T) {
 	cause := errors.New("etcdserver: request timed out")
 
@@ -1180,8 +1058,6 @@ func TestEvaluateTransientInternalObjectFailureIsHandedToTheWorkQueue(t *testing
 			retried: true,
 		},
 		{
-			// The watch on the internal object is what wakes this release, and the
-			// object reports its own state rather than an error of ours.
 			name: "an internal object that exists and is not ready yet",
 			outcome: ChartReached{Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{
 				Internal: internalobj.InternalObjectState{
@@ -1194,8 +1070,6 @@ func TestEvaluateTransientInternalObjectFailureIsHandedToTheWorkQueue(t *testing
 			retried: false,
 		},
 		{
-			// An error returned beside a requeue takes precedence over it, so handing
-			// this one to the queue would silently drop the probe's own timer.
 			name: "an artifact probe failure already on a timer",
 			outcome: ChartReached{Internal: ServedByOCIRepository{Result: internalobj.OCIRepoOutcome{
 				ProbeErr:          cause,
@@ -1238,9 +1112,6 @@ func TestEvaluateTransientInternalObjectFailureIsHandedToTheWorkQueue(t *testing
 				t.Fatalf("Err = %v, want retried = %v", decision.Err, tt.retried)
 			}
 
-			// The queue is given the cause itself, not a summary of it: the message the
-			// object carries is already the summary, and what the rate limiter logs on
-			// the way past has to be diagnosable.
 			if cause := failureCause(tt.outcome); tt.retried && !errors.Is(decision.Err, cause) {
 				t.Fatalf("Err = %v, want it to wrap %v", decision.Err, cause)
 			}
@@ -1248,15 +1119,11 @@ func TestEvaluateTransientInternalObjectFailureIsHandedToTheWorkQueue(t *testing
 	}
 }
 
-// failureCause digs out the error a test's outcome was built around, so the retried
-// cases can assert that exact error reached the queue.
 func failureCause(outcome Outcome) error {
 	switch o := outcome.(type) {
 	case StepFailed:
 		return o.Failure.Err
 	case ChartReached:
-		// The release step runs after the source is up, so its failure is the one that
-		// ends the pass when both could have failed.
 		if o.Release != nil && o.Release.Err != nil {
 			return o.Release.Err
 		}
@@ -1274,20 +1141,6 @@ func failureCause(outcome Outcome) error {
 	return nil
 }
 
-// TestEvaluateFailedReleaseWriteBehindAFailingSourceIsHandedToTheWorkQueue pins the
-// one pass that would otherwise be scheduled by nothing at all. The source kept the
-// artifact of the previous spec and reported a failure on the current one, so the
-// internal HelmRelease was still written from that artifact — and that write did not
-// land. The source's verdict is what the release reports, because it is the first
-// step that did not succeed, but it carries no error of its own: the watch on the
-// source is what wakes a release from it, and that watch stays silent while the
-// source keeps failing identically. Only the write that was attempted behind the
-// verdict can bring the pass back, so its error has to reach the work queue even
-// though the status never mentions it.
-//
-// The mirror — a source error lost behind a winning release verdict — is not
-// constructible: a source that failed to be written has no artifact, so the release
-// step never runs, and a source failure is never ready and therefore always wins.
 func TestEvaluateFailedReleaseWriteBehindAFailingSourceIsHandedToTheWorkQueue(t *testing.T) {
 	cause := errors.New("etcdserver: request timed out")
 
@@ -1314,8 +1167,6 @@ func TestEvaluateFailedReleaseWriteBehindAFailingSourceIsHandedToTheWorkQueue(t 
 		t.Fatalf("Err = %v, want it to wrap %v", decision.Err, cause)
 	}
 
-	// Scheduling is the only thing that changes here: which verdict the user is shown
-	// stays the first step that did not succeed.
 	for _, conditionType := range in.ConditionTypes {
 		cond := condition(t, decision, conditionType)
 		if cond.Status != metav1.ConditionFalse || cond.Reason != helmv1alpha1.ReasonChartFetchFailed {
@@ -1327,9 +1178,6 @@ func TestEvaluateFailedReleaseWriteBehindAFailingSourceIsHandedToTheWorkQueue(t 
 	}
 }
 
-// TestEvaluateFailedReleaseWriteIsQueuedWhateverSourceServesTheChart pins the same
-// rule on the other source kind: which internal object the version is served from is
-// a property of the repository, not of the write that failed behind it.
 func TestEvaluateFailedReleaseWriteIsQueuedWhateverSourceServesTheChart(t *testing.T) {
 	cause := errors.New("etcdserver: request timed out")
 
@@ -1354,10 +1202,6 @@ func TestEvaluateFailedReleaseWriteIsQueuedWhateverSourceServesTheChart(t *testi
 	}
 }
 
-// TestEvaluateStalledSourceKeepsAFailedReleaseWriteOutOfTheQueue pins the guard the
-// rule above must not break. A source that gave up waits for a new spec, and nothing
-// a retry does changes that; queueing the release write that was attempted behind it
-// would spin the object at the rate limiter for as long as the spec stands.
 func TestEvaluateStalledSourceKeepsAFailedReleaseWriteOutOfTheQueue(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -1382,12 +1226,6 @@ func TestEvaluateStalledSourceKeepsAFailedReleaseWriteOutOfTheQueue(t *testing.T
 	}
 }
 
-// TestEvaluateMissingChartVersionIsNotWorkInProgress pins how a release reports a
-// version that is not in the catalog: not ready, under its own reason, and without
-// the promise of a retry — nothing this controller does produces a version the
-// repository does not offer. Stalled stays off all the same: the version may be
-// published later, and the watch on the catalog brings the release back with no
-// edit to its spec.
 func TestEvaluateMissingChartVersionIsNotWorkInProgress(t *testing.T) {
 	const message = "Version 6.7.2 of chart podinfo is not in the catalog of repository example"
 
@@ -1421,12 +1259,6 @@ func TestEvaluateMissingChartVersionIsNotWorkInProgress(t *testing.T) {
 	}
 }
 
-// TestEvaluateDoesNotRecordAChartAppliedFromAKeptArtifact pins the rule on this
-// function's own inputs. The collaborator that builds them answers the same question
-// when it sets ChartDeployed, so the combination below - a release reported as running
-// the desired chart out of an artifact its source never reached - is one no pass
-// produces today. What it guards is that the two cannot drift apart into recording a
-// rollout that never happened, in a function whose whole contract is its inputs.
 func TestEvaluateDoesNotRecordAChartAppliedFromAKeptArtifact(t *testing.T) {
 	keptArtifact := internalobj.InternalObjectState{
 		Observed: true,
@@ -1449,14 +1281,6 @@ func TestEvaluateDoesNotRecordAChartAppliedFromAKeptArtifact(t *testing.T) {
 	}
 }
 
-// TestEvaluateRecordsValuesAppliedFromAKeptArtifact pins where the strictness about
-// the chart stops. The registry is down, so the source cannot fetch the version the
-// spec asks for and keeps the artifact it already has; helm-controller applies a
-// values edit from that artifact, because it needs an observed, non-stalled source
-// with an artifact and not a ready one. Those values are live, and the record has to
-// say so however long the registry stays away — while the chart, whose provenance
-// this pass cannot vouch for, is left unrecorded and the release goes on reporting
-// the fetch that failed.
 func TestEvaluateRecordsValuesAppliedFromAKeptArtifact(t *testing.T) {
 	keptArtifact := internalobj.InternalObjectState{
 		Observed: true,
@@ -1495,13 +1319,6 @@ func TestEvaluateRecordsValuesAppliedFromAKeptArtifact(t *testing.T) {
 	}
 }
 
-// TestEvaluateDoesNotRecordValuesOfTheReleaseBeingReplaced pins the guard on the
-// other side of the same rule. A new chart version is rolling out: the source reached
-// it, the internal HelmRelease still reports the revision it is replacing ready, and
-// that revision was installed with the values the spec has since moved off. Nothing
-// about the edit has happened yet, so neither record may advance — the digest of the
-// deployed revision is what says so, because a digest belongs to the revision
-// carrying it.
 func TestEvaluateDoesNotRecordValuesOfTheReleaseBeingReplaced(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -1525,10 +1342,6 @@ func TestEvaluateDoesNotRecordValuesOfTheReleaseBeingReplaced(t *testing.T) {
 	}
 }
 
-// TestEvaluateDoesNotRecordValuesAReleaseThatFailedWasGiven pins that reporting is
-// not the same as succeeding. The internal HelmRelease observed the edited spec and
-// failed on it; the newest deployed revision is the one before the edit, so the
-// digest does not match and nothing is recorded.
 func TestEvaluateDoesNotRecordValuesAReleaseThatFailedWasGiven(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -1551,11 +1364,6 @@ func TestEvaluateDoesNotRecordValuesAReleaseThatFailedWasGiven(t *testing.T) {
 	}
 }
 
-// TestEvaluateRecordsValuesOnlyOnAReleaseThatReportedSuccess pins the readiness half
-// of the rule with the digest deliberately matching, so that the digest cannot be
-// what carries the case. Every state here is one where the newest snapshot answers
-// to the requested values and the release still has nothing to say about the spec it
-// was given: it failed on it, it is mid-flight, or it has not looked at it yet.
 func TestEvaluateRecordsValuesOnlyOnAReleaseThatReportedSuccess(t *testing.T) {
 	const digest = "sha256:edited"
 
@@ -1572,8 +1380,6 @@ func TestEvaluateRecordsValuesOnlyOnAReleaseThatReportedSuccess(t *testing.T) {
 			Reason:   helmv1alpha1.ReasonReconciling,
 			Message:  "running upgrade",
 		},
-		// Ready, but for the generation before the edit: the snapshot carrying the
-		// requested digest is not evidence about a spec the object has not read.
 		"has not observed the spec it was given": {
 			Status:  metav1.ConditionTrue,
 			Reason:  "Succeeded",
@@ -1599,10 +1405,6 @@ func TestEvaluateRecordsValuesOnlyOnAReleaseThatReportedSuccess(t *testing.T) {
 	}
 }
 
-// TestEvaluateDoesNotRecordValuesBehindAPendingSnapshot pins that the newest snapshot
-// is the one that answers, whatever its status: helm-controller keeps history newest
-// first regardless of outcome, so a pending or failed attempt sitting ahead of a
-// deployed revision must not be looked past to the older entry that happens to match.
 func TestEvaluateDoesNotRecordValuesBehindAPendingSnapshot(t *testing.T) {
 	const digest = "sha256:edited"
 

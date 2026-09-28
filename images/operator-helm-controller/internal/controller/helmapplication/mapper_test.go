@@ -58,9 +58,6 @@ func application(namespace, name string) *helmv1alpha1.HelmApplication {
 	}
 }
 
-// TestMapRoleToApplications pins that the namespace Role reaches every application
-// of its namespace and nothing outside it, and that an unrelated Role carrying our
-// label — one left behind by another module, say — enqueues nothing.
 func TestMapRoleToApplications(t *testing.T) {
 	c := newMapperClient(t,
 		application("team-a", "first"),
@@ -86,9 +83,6 @@ func TestMapRoleToApplications(t *testing.T) {
 	}
 }
 
-// TestMapRoleBindingToApplications pins that a binding reaches the one application
-// whose derived service account name it carries — matched on the name rather than on
-// the labels, which is what lets a binding stripped of them still be repaired.
 func TestMapRoleBindingToApplications(t *testing.T) {
 	app := application("team-a", "first")
 	c := newMapperClient(t, app, application("team-a", "second"))
@@ -144,10 +138,6 @@ func requestSet(reqs []reconcile.Request) map[types.NamespacedName]bool {
 
 	return out
 }
-
-// TestMapRepositoryToApplications pins that a namespaced repository enqueues only the
-// applications of its own namespace referencing it, and a cluster repository the
-// applications of every namespace referencing it by its field.
 
 func TestMapRepositoryToApplications(t *testing.T) {
 	c := applicationMapperClient(t,

@@ -56,8 +56,6 @@ func newOCIRepositories(t *testing.T, objects ...client.Object) (*OCIRepositorie
 	return NewOCIRepositories(c, testNamespace, nil), c
 }
 
-// countingResolver records how many times the registry was asked, which is the whole
-// point of the cache: in the steady state the answer must be zero.
 type countingResolver struct {
 	mediaType string
 	err       error
@@ -101,8 +99,6 @@ func ociTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	}
 }
 
-// ociSource resolves the source the way the reconciler does, so the tests exercise
-// the real mapping instead of a hand-built one.
 func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.ChartVersion) chartsource.Source {
 	t.Helper()
 
@@ -114,8 +110,6 @@ func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, vers
 	return source
 }
 
-// hybridTestRepository is a helm repository: its own url is served over https, and
-// only the index entry of a version points at a registry.
 func hybridTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
@@ -173,18 +167,6 @@ func TestOCIRepositoriesEnsureReportsRemovedVersion(t *testing.T) {
 	}
 }
 
-// TestOCIRepositoriesEnsureDoesNotRelabelReadyChildOnRemovedVersion covers the
-// complement of TestOCIRepositoriesEnsureReportsRemovedVersion: a version can
-// still carry UnavailableReasonRemovedFromRepository after the tag reappears (the
-// marker is only dropped on the next synchronization), and by then the child
-// OCIRepository may already be healthy again. The override must not fire in that
-// case - a ready addon must not be relabeled with a failure reason.
-//
-// The internal object is seeded with the exact spec and labels applyOCIRepositorySpec
-// writes (same trick as TestHelmRepositoriesEnsureStalledPrecedesReady in
-// helmrepository_test.go): that makes CreateOrPatch a no-op, so the object's
-// generation stays at 1 and the seeded Ready condition (ObservedGeneration: 1) counts
-// as observed.
 func TestOCIRepositoriesEnsureDoesNotRelabelReadyChildOnRemovedVersion(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 
@@ -242,10 +224,6 @@ func TestOCIRepositoriesEnsureDoesNotRelabelReadyChildOnRemovedVersion(t *testin
 	}
 }
 
-// TestOCIRepositoriesEnsureForcesReconcileFromAddon covers the force
-// reconcile annotation applied to the HelmClusterAddon itself: it must reach the
-// internal OCIRepository, otherwise the source is never re-pulled and only the
-// HelmRelease is nudged.
 func TestOCIRepositoriesEnsureForcesReconcileFromAddon(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
@@ -272,9 +250,6 @@ func TestOCIRepositoriesEnsureForcesReconcileFromAddon(t *testing.T) {
 	}
 }
 
-// TestOCIRepositoriesEnsureDoesNotForceReconcileWithoutAnnotation is the
-// complement: an unannotated addon must not stamp a fresh timestamp on every
-// pass, which would make the source controller re-reconcile continuously.
 func TestOCIRepositoriesEnsureDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	service, c := newOCIRepositories(t, addon, repo)
@@ -297,9 +272,6 @@ func TestOCIRepositoriesEnsureDoesNotForceReconcileWithoutAnnotation(t *testing.
 	}
 }
 
-// TestOCIRepositoriesEnsureAddressesTheIndexReference pins that the artifact
-// address comes from the version, not from the repository: for a hybrid version the
-// registry is a different host entirely.
 func TestOCIRepositoriesEnsureAddressesTheIndexReference(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
@@ -327,8 +299,6 @@ func TestOCIRepositoriesEnsureAddressesTheIndexReference(t *testing.T) {
 		t.Fatalf("reference = %+v, want tag 6.7.1", ociRepo.Spec.Reference)
 	}
 
-	// Only public registries are supported, and the repository's transport settings
-	// describe its own host, not a third-party one.
 	if ociRepo.Spec.SecretRef != nil {
 		t.Errorf("credentials must not be sent to a registry the index merely names")
 	}
@@ -340,11 +310,6 @@ func TestOCIRepositoriesEnsureAddressesTheIndexReference(t *testing.T) {
 	}
 }
 
-// TestOCIRepositoriesEnsureCarriesTLSOnTheSameHost covers the one case where
-// the repository's transport settings do apply: an internal host serving both the
-// index and the registry. The auth secret still cannot be referenced — a helm
-// repository stores it as an Opaque username/password secret, and OCIRepository
-// accepts only dockerconfigjson.
 func TestOCIRepositoriesEnsureCarriesTLSOnTheSameHost(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
@@ -376,9 +341,6 @@ func TestOCIRepositoriesEnsureCarriesTLSOnTheSameHost(t *testing.T) {
 	}
 }
 
-// TestOCIRepositoriesEnsureKeepsOCIRepositoryCredentials is the regression
-// guard for the existing behaviour: for an oci:// repository the artifact host is the
-// repository host, so its auth and CA still apply.
 func TestOCIRepositoriesEnsureKeepsOCIRepositoryCredentials(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	repo.Spec.Auth = &helmv1alpha1.RepositoryAuth{Username: "u", Password: "p"}
@@ -443,9 +405,6 @@ func TestOCIRepositoriesEnsureProbesHybridVersion(t *testing.T) {
 	}
 }
 
-// TestOCIRepositoriesEnsureReusesTheInternalObjectAsCache is the steady state:
-// the internal object already addresses this artifact and carries the verdict, so the
-// registry must not be asked again on every pass.
 func TestOCIRepositoriesEnsureReusesTheInternalObjectAsCache(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
@@ -465,9 +424,6 @@ func TestOCIRepositoriesEnsureReusesTheInternalObjectAsCache(t *testing.T) {
 	}
 }
 
-// TestOCIRepositoriesEnsureReprobesChangedReference covers a repository that
-// re-published the same version somewhere else: the cached verdict describes a
-// different artifact and must not be reused.
 func TestOCIRepositoriesEnsureReprobesChangedReference(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
@@ -490,8 +446,6 @@ func TestOCIRepositoriesEnsureReprobesChangedReference(t *testing.T) {
 	}
 }
 
-// TestOCIRepositoriesEnsureForceBypassesCache: a force request means
-// "re-examine", the same thing it means for the repository catalog.
 func TestOCIRepositoriesEnsureForceBypassesCache(t *testing.T) {
 	addon, repo := testAddon(), hybridTestRepository()
 	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
@@ -513,8 +467,6 @@ func TestOCIRepositoriesEnsureForceBypassesCache(t *testing.T) {
 	}
 }
 
-// TestOCIRepositoriesEnsureNeverProbesRecordedMediaType: an oci:// repository's
-// version carries the verdict from the catalog, so the registry is not asked at all.
 func TestOCIRepositoriesEnsureNeverProbesRecordedMediaType(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 	resolver := &countingResolver{mediaType: "should-not-be-used"}
@@ -561,9 +513,6 @@ func TestOCIRepositoriesEnsureReportsTerminalProbeFailure(t *testing.T) {
 		t.Fatalf("requeue = %v, want none: the artifact will not become a chart on its own", result.ProbeRequeueAfter)
 	}
 
-	// Nothing must be created from a verdict that says the artifact is unusable: an
-	// OCIRepository with an empty layer selector would make the source controller
-	// guess the layer.
 	ociRepo := &sourcev1.OCIRepository{}
 	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
 	if err := c.Get(context.Background(), key, ociRepo); err == nil {
@@ -596,9 +545,6 @@ func TestOCIRepositoriesEnsureRequeuesRetriableProbeFailure(t *testing.T) {
 	}
 }
 
-// TestOCIRepositoriesEnsureKeepsForeignLabels pins the same label policy on the
-// internal OCIRepository: merge into what is there, but bring the labels this
-// controller owns to the desired set.
 func TestOCIRepositoriesEnsureKeepsForeignLabels(t *testing.T) {
 	addon, repo := testAddon(), ociTestRepository()
 

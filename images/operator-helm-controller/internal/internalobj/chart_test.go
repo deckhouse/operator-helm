@@ -45,8 +45,6 @@ func newCharts(t *testing.T, objects ...client.Object) (*Charts, client.Client) 
 	return NewCharts(c, testNamespace), c
 }
 
-// chartTestRepository is the repository the test addon references; the chart
-// service reads the internal HelmRepository name from it.
 func chartTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example"},
@@ -54,10 +52,6 @@ func chartTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	}
 }
 
-// TestChartsEnsureForcesReconcileFromAddon covers the force reconcile
-// annotation applied to the HelmClusterAddon: on the internal Helm repository
-// path it must reach the HelmChart, so that a forced addon re-pulls its source
-// instead of only nudging the HelmRelease.
 func TestChartsEnsureForcesReconcileFromAddon(t *testing.T) {
 	addon := testAddon()
 	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
@@ -79,9 +73,6 @@ func TestChartsEnsureForcesReconcileFromAddon(t *testing.T) {
 	}
 }
 
-// TestChartsEnsureDoesNotForceReconcileWithoutAnnotation is the complement:
-// an unannotated addon must not stamp a fresh timestamp on every pass, which
-// would make the source controller re-reconcile continuously.
 func TestChartsEnsureDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
 	addon := testAddon()
 	service, c := newCharts(t, addon)
@@ -99,10 +90,6 @@ func TestChartsEnsureDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
 	}
 }
 
-// TestChartsEnsureKeepsForeignLabels pins that our labels are merged into the
-// internal chart rather than replacing what is there. Something else in the
-// cluster may label the object — a policy engine, a cost allocator — and wiping
-// those labels on every pass would fight whoever set them.
 func TestChartsEnsureKeepsForeignLabels(t *testing.T) {
 	addon := testAddon()
 	existing := &sourcev1.HelmChart{
@@ -132,11 +119,6 @@ func TestChartsEnsureKeepsForeignLabels(t *testing.T) {
 	}
 }
 
-// TestChartsEnsureDropsTheCatalogLabelOfThePreviousRepositoryKind covers the other
-// half of the merge policy. An application moved from a namespaced repository to a
-// cluster-wide one keeps the same internal HelmChart, and the catalog label naming
-// the object it mirrors changes key with the kind; merging alone would leave the
-// previous key behind forever.
 func TestChartsEnsureDropsTheCatalogLabelOfThePreviousRepositoryKind(t *testing.T) {
 	app := testApplication()
 	app.Spec.Chart.Repository = ""
@@ -177,10 +159,6 @@ func TestChartsEnsureDropsTheCatalogLabelOfThePreviousRepositoryKind(t *testing.
 	}
 }
 
-// TestChartsEnsureGivesTheChartAPassOfItsOwn pins spec.interval. Upstream marks the
-// field required, and an unset one is serialized as "0s", which HelmChart.GetRequeueAfter
-// hands to controller-runtime as "do not requeue": a chart that had succeeded was then
-// left with nothing to re-check it until something happened to it.
 func TestChartsEnsureGivesTheChartAPassOfItsOwn(t *testing.T) {
 	addon := testAddon()
 	service, c := newCharts(t, addon)
@@ -201,9 +179,6 @@ func TestChartsEnsureGivesTheChartAPassOfItsOwn(t *testing.T) {
 	}
 }
 
-// TestChartsEnsureRepairsAChartLeftWithoutAnInterval is the migration: charts created
-// before the interval was set carry "0s" and are only ever touched again by a pass of
-// this operator, which is the one that has to correct them.
 func TestChartsEnsureRepairsAChartLeftWithoutAnInterval(t *testing.T) {
 	addon := testAddon()
 	existing := &sourcev1.HelmChart{
@@ -233,8 +208,6 @@ func TestChartsEnsureRepairsAChartLeftWithoutAnInterval(t *testing.T) {
 			chart.Spec.Interval.Duration, internalChartInterval)
 	}
 
-	// And the correction is a one-off: the pass that follows it writes nothing, so the
-	// charts of a cluster are not bumped into a fresh download on every pass.
 	before := chart.ResourceVersion
 	service.Ensure(ctx, rel, repo)
 

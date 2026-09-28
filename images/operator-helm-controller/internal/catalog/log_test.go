@@ -30,17 +30,9 @@ import (
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 )
 
-// TestCatalogLogsDoNotShadowTheReconciledObject holds the catalog reconcile to the
-// rule every log line here follows: the top-level name/namespace keys belong to
-// controller-runtime and identify the object being reconciled, so anything else a
-// line names goes under a key of its own. A second "name" is not an error for zap —
-// it emits both, and every JSON reader downstream keeps the last one, which silently
-// reattributes the line to the wrong resource.
 func TestCatalogLogsDoNotShadowTheReconciledObject(t *testing.T) {
 	var out bytes.Buffer
 
-	// What builder.Build installs for a reconcile of HelmApplicationRepository
-	// team-a/stable; see LogConstructor in controller-runtime's pkg/builder.
 	logger := zap.New(zap.UseDevMode(false), zap.WriteTo(&out)).WithValues(
 		"controller", "helmapplicationrepository-controller",
 		"controllerGroup", "helm.deckhouse.io",
@@ -71,8 +63,6 @@ func TestCatalogLogsDoNotShadowTheReconciledObject(t *testing.T) {
 			t.Fatalf("log line is not JSON: %v", err)
 		}
 
-		// encoding/json keeps the last of two identical keys, exactly as the log
-		// pipeline does, so this reads back the shadowing value if there is one.
 		if got := fields["name"]; got != "stable" {
 			t.Errorf("log line %q reports name %q, want the reconciled repository %q",
 				fields["msg"], got, "stable")

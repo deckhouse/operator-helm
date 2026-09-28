@@ -48,11 +48,6 @@ func DefineLifecycleTests(repoType, repoURL string) {
 		repoName := "e2e-app-repo-" + suffix
 		appName := "e2e-test-app-" + suffix
 
-		// The podinfo chart names its pods after the Helm release, not the chart:
-		// app.kubernetes.io/name is "<release>-podinfo", and the release name is
-		// util.ApplicationReleaseName(appName) (see
-		// images/operator-helm-controller/internal/adapter/application_release.go
-		// ApplicationRelease.ReleaseName).
 		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", util.ApplicationReleaseName(appName), chartName)
 
 		BeforeAll(func() {

@@ -46,9 +46,6 @@ func addonRelease(name string) *helmv1alpha1.HelmClusterAddon {
 	}
 }
 
-// TestAddonReleaseKeepsTheReleasedNamesAndLabels pins the adapter to what the addon
-// controller writes today. The three internal names come from the frozen naming
-// functions; the release name is the addon name itself for every name Helm accepts.
 func TestAddonReleaseKeepsTheReleasedNamesAndLabels(t *testing.T) {
 	obj := addonRelease("consumer")
 	rel := NewAddonRelease(obj)
@@ -184,8 +181,6 @@ func TestAddonRepositoryResolverLoadsTheRepositoryAndTheAddonCatalog(t *testing.
 	}
 }
 
-// TestListAddonReleasesUsesTheIndexes pins the two lookups a repository needs: every
-// consumer of the repository, and only the consumers of one chart.
 func TestListAddonReleasesUsesTheIndexes(t *testing.T) {
 	podinfo := addonRelease("podinfo-consumer")
 	nginx := addonRelease("nginx-consumer")

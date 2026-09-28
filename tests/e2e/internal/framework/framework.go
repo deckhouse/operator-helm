@@ -78,9 +78,6 @@ func (f *Framework) Before() {
 	By(fmt.Sprintf("Namespace %q has been created", ns.Name))
 	f.namespace = ns
 
-	// Registered last so the reversal in After deletes it after everything created
-	// inside it. Without this a run against a live cluster leaves the namespace and
-	// whatever the module seeded in it behind; in CI the kind cluster hides that.
 	f.objectsToDelete = append(f.objectsToDelete, ns)
 }
 
@@ -228,11 +225,6 @@ func (f *Framework) DeferDeleteFunc(fn func() error) {
 	f.deferredDeletes = append(f.deferredDeletes, fn)
 }
 
-// waitDeleted blocks until every object is gone, and says so when one is not. The
-// poll costs LongTimeout per object that never disappears, and the suite runs under
-// a budget of its own, so swallowing that spends the budget somewhere far from the
-// object responsible: the run dies on whichever spec happens to be in flight when
-// the suite timeout lands.
 func (f *Framework) waitDeleted(objs []client.Object) {
 	GinkgoHelper()
 

@@ -110,11 +110,6 @@ func TestResolveChartArtifactMissingTagIsTerminal(t *testing.T) {
 	}
 }
 
-// TestResolveChartArtifactRejectionIsRetriable is the deliberate difference from
-// FetchCharts: there a 401/403 is escalated to a terminal failure of the whole pass,
-// because credentials rejected for one tag are rejected for all of them. Here the
-// pass is a single tag on a registry the repository merely names, and a rejection is
-// as likely to be a rate limit as a permission problem.
 func TestResolveChartArtifactRejectionIsRetriable(t *testing.T) {
 	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
@@ -138,11 +133,6 @@ func TestResolveChartArtifactUnparsableReferenceIsTerminal(t *testing.T) {
 	}
 }
 
-// TestResolveChartArtifactAbandonsARegistryThatNeverAnswers pins that the probe is
-// bounded. It serves one release whose reconcile is already open, and neither the
-// reconcile context nor go-containerregistry's transport bounds the wait for a
-// response, so a registry that accepts the request and then says nothing would hold
-// that reconcile — and the worker running it — indefinitely.
 func TestResolveChartArtifactAbandonsARegistryThatNeverAnswers(t *testing.T) {
 	budgetBefore := chartArtifactProbeBudget
 	chartArtifactProbeBudget = 300 * time.Millisecond

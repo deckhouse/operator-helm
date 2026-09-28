@@ -124,8 +124,6 @@ func TestSecretsEnsureUsesDockerConfigForOCIRepositories(t *testing.T) {
 		t.Fatalf("auth secret was not created: %v", err)
 	}
 
-	// OCIRepository resolves credentials only from a dockerconfigjson secret;
-	// an Opaque username/password pair is silently ignored by the source controller.
 	if auth.Type != corev1.SecretTypeDockerConfigJson {
 		t.Fatalf("auth secret type is %q, want %q", auth.Type, corev1.SecretTypeDockerConfigJson)
 	}
@@ -168,13 +166,6 @@ func TestSecretsCleanupRemovesBothSecrets(t *testing.T) {
 	}
 }
 
-// TestSecretsEnsureIsSilentOnASecondPassWithTheSameInputs pins that a repository
-// whose credentials have not changed costs no write at all. The secrets are written
-// through CreateOrPatch, which compares the object it read against what the mutation
-// left: writing the credentials into StringData made that comparison always differ,
-// because the API server folds StringData into Data and never returns it, so every
-// reconcile of every repository with credentials sent a patch. The pass that stores
-// Data is the only one that can come back equal.
 func TestSecretsEnsureIsSilentOnASecondPassWithTheSameInputs(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -201,10 +192,6 @@ func TestSecretsEnsureIsSilentOnASecondPassWithTheSameInputs(t *testing.T) {
 				WithScheme(testScheme(t)).
 				WithObjects(repo).
 				WithInterceptorFuncs(interceptor.Funcs{
-					// The fake client stores what it is given; the API server folds
-					// StringData into Data and hands back Data alone. Without that
-					// fold the write below could never be seen as redundant, and the
-					// test would pass over the very bug it is about.
 					Create: func(
 						ctx context.Context, wc client.WithWatch, obj client.Object,
 						opts ...client.CreateOption,
@@ -239,8 +226,6 @@ func TestSecretsEnsureIsSilentOnASecondPassWithTheSameInputs(t *testing.T) {
 				t.Fatalf("the first Ensure returned %v", err)
 			}
 
-			// Only the second pass is under test: the first one creates the secrets,
-			// and a create is not counted here.
 			writes = nil
 
 			if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), tc.repoType); err != nil {
@@ -254,9 +239,6 @@ func TestSecretsEnsureIsSilentOnASecondPassWithTheSameInputs(t *testing.T) {
 	}
 }
 
-// foldStringDataIntoData reproduces what the API server does to a secret on write:
-// every StringData entry is stored in Data and StringData is dropped, so a later
-// read never sees it.
 func foldStringDataIntoData(secret *corev1.Secret) {
 	for key, value := range secret.StringData {
 		if secret.Data == nil {

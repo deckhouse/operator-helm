@@ -53,8 +53,6 @@ func TestHelmClusterApplicationChartGetConditionTypesForUpdate(t *testing.T) {
 	}
 }
 
-// TestChartCatalogStatusIsShared pins that every chart catalog kind is built on one
-// status type: a per-kind copy stops this assignment from compiling.
 func TestChartCatalogStatusIsShared(t *testing.T) {
 	namespaced := &HelmApplicationChart{}
 	cluster := &HelmClusterApplicationChart{}

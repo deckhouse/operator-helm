@@ -72,8 +72,6 @@ func applicationRepo(namespace, name string) contract.Repository { //nolint:unpa
 	})
 }
 
-// newAddonClient builds a client for the addon family's own tests, indexed the way
-// the addon consumer lookup (chartConsumers over ListAddonReleases) requires.
 func newAddonClient(t *testing.T, objects ...client.Object) client.WithWatch {
 	t.Helper()
 
@@ -124,10 +122,6 @@ func addonConsumer(name, repoName, chartName, version string) *helmv1alpha1.Helm
 	}
 }
 
-// legacyAddonChart builds a HelmClusterAddonChart under a name that predates the
-// current scheme, labelled the way every catalog object is labelled. The name is a
-// plain literal, not a recomputation of any past scheme: the migration finds this
-// object by its chart label alone.
 func legacyAddonChart(name, repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart { //nolint:unparam // the parameter names the value the assertions read; inlining it would hide what the fixture stands for
 	return &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
@@ -142,12 +136,6 @@ func legacyAddonChart(name, repoName, chartName string, versions ...helmv1alpha1
 	}
 }
 
-// syncCatalog runs the two steps the repository reconciler runs, in its order and
-// with its gate: the rename first, independent of any fetch, and the catalog write
-// only if the rename finished. The gate is what keeps an unfinished rename from
-// being written over; it lives in the reconciler, so the test that owns it is
-// TestUnfinishedRenameDoesNotOverwriteTheCatalog in internal/reconcile/repository,
-// not here.
 func syncCatalog(cat contract.Catalog, repo contract.Repository, charts ...repoclient.Chart) error {
 	if err := cat.MigrateNames(context.Background(), repo); err != nil {
 		return err
@@ -158,10 +146,6 @@ func syncCatalog(cat contract.Catalog, repo contract.Repository, charts ...repoc
 	return err
 }
 
-// reconcileOnce runs one whole pass that marks nothing: the single authoritative read
-// the production path takes at the start of a synchronization, and the write computed
-// from it. Nothing on that path reads the catalog twice, so no test may either — a test
-// that opened a fresh snapshot for the write would model a controller this is not.
 func reconcileOnce(cat contract.Catalog, repo contract.Repository, charts []repoclient.Chart) (contract.CatalogResult, error) {
 	snapshot, err := cat.Snapshot(context.Background(), repo)
 	if err != nil {
@@ -171,7 +155,6 @@ func reconcileOnce(cat contract.Catalog, repo contract.Repository, charts []repo
 	return snapshot.Reconcile(context.Background(), charts)
 }
 
-// knownCharts reads the verdicts a pass would skip tags by.
 func knownCharts(cat contract.Catalog, repo contract.Repository) (repoclient.KnownCharts, error) {
 	snapshot, err := cat.Snapshot(context.Background(), repo)
 	if err != nil {
@@ -181,9 +164,6 @@ func knownCharts(cat contract.Catalog, repo contract.Repository) (repoclient.Kno
 	return snapshot.Known(), nil
 }
 
-// forcedPass opens the pass a forced refresh runs: it records the request on every
-// recorded verdict and hands back the snapshot the rest of that pass — the fetch it
-// decides from and the write it publishes — is computed from.
 func forcedPass(t *testing.T, cat contract.Catalog, repo contract.Repository) contract.CatalogSnapshot {
 	t.Helper()
 
@@ -244,13 +224,6 @@ func TestReconcileWritesNamespacedCatalogNextToTheRepository(t *testing.T) {
 	}
 }
 
-// TestReconcileRepairsAnObjectStrippedOfItsLabels covers the catalog object a pass
-// cannot see. The catalog is listed by the repository label, so an object that lost its
-// labels is absent from every read this pass takes while still occupying the name the
-// chart is published under. This pass may not write its status — it was computed
-// without knowing the object existed — but the labels have to be repaired, or the
-// object is missing from every later snapshot too and the collision is permanent
-// instead of a lost race.
 func TestReconcileRepairsAnObjectStrippedOfItsLabels(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
@@ -280,8 +253,6 @@ func TestReconcileRepairsAnObjectStrippedOfItsLabels(t *testing.T) {
 		t.Fatalf("owner references = %v, want the repository owning it again", got.OwnerReferences)
 	}
 
-	// The retry the work queue runs: the object is labelled, so it is part of this
-	// read, and the chart is published onto it like onto any other recorded object.
 	if _, err := reconcileOnce(cat, repo, []repoclient.Chart{chart("podinfo", "6.7.1")}); err != nil {
 		t.Fatalf("the pass after the repair returned %v", err)
 	}
@@ -294,18 +265,6 @@ func TestReconcileRepairsAnObjectStrippedOfItsLabels(t *testing.T) {
 	}
 }
 
-// TestReconcileRejectsPublishingOntoAnObjectCreatedAfterTheRead covers the other way a
-// chart can be missing from a pass's read: it was genuinely not in the catalog when the
-// pass started, and another writer created it while this pass was probing the registry.
-// Between the two, the tag was pushed again, so the object records a media type this
-// pass's own probe — older than the other writer's — knows nothing about.
-//
-// Nothing catches this downstream. The create fails, and a merge into the object just
-// read would be patched against the current resource version, so the optimistic lock
-// accepts the write and the catalog publishes the superseded media type; every later
-// pass then skips the version, a recorded unmarked verdict being exactly what a pass
-// carries forward. The absence from the read is itself the evidence that the pass is
-// behind, so the only safe answer is to write no status and report the race.
 func TestReconcileRejectsPublishingOntoAnObjectCreatedAfterTheRead(t *testing.T) {
 	const (
 		probed   = "application/tar+gzip"
@@ -314,9 +273,6 @@ func TestReconcileRejectsPublishingOntoAnObjectCreatedAfterTheRead(t *testing.T)
 
 	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
 
-	// The competing writer lands between this pass's read and its create: it publishes
-	// the chart with the media type of the re-pushed artifact and asks, on an annotation
-	// already consumed, for that verdict to be looked at again.
 	overtaken := false
 	c := newClientWithInterceptor(t, interceptor.Funcs{
 		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
@@ -378,10 +334,6 @@ func TestReconcileRejectsPublishingOntoAnObjectCreatedAfterTheRead(t *testing.T)
 	}
 }
 
-// TestSameNamedRepositoriesKeepSeparateCatalogs is why the namespaced catalog
-// lists by namespace: two repositories named "stable" in different namespaces
-// produce same-named chart objects, and one repository's pruning must not see the
-// other's.
 func TestSameNamedRepositoriesKeepSeparateCatalogs(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
@@ -438,10 +390,6 @@ func TestClusterCatalogObjectsHaveNoNamespace(t *testing.T) {
 	}
 }
 
-// TestUnreferencedVersionsArePruned pins what happens to a version nothing uses.
-// The application catalogs do have consumers — the HelmApplication objects of the
-// repository — but this fixture creates none, so no version is protected and every
-// unlisted one goes away.
 func TestUnreferencedVersionsArePruned(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
@@ -497,9 +445,6 @@ func TestLookupReturnsTheCatalogObjectAndItsStatus(t *testing.T) {
 	}
 }
 
-// TestListErrorNamesAClusterScopedRepositoryWithoutALeadingSlash pins the message a
-// failed catalog read puts into the repository's Synced condition: an object key
-// renders a cluster-scoped name as "/name", which reaches the user verbatim.
 func TestListErrorNamesAClusterScopedRepositoryWithoutALeadingSlash(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := helmv1alpha1.AddToScheme(scheme); err != nil {
@@ -529,11 +474,6 @@ func TestListErrorNamesAClusterScopedRepositoryWithoutALeadingSlash(t *testing.T
 	}
 }
 
-// TestMigratesALegacyNamedObjectStillInUse pins the migration for a chart a
-// consumer still references: the legacy object is deleted regardless of that
-// reference, and the version it protected survives on the new object marked
-// RemovedFromRepository, media type included, exactly as an ordinary in-use prune
-// would have kept it had the name never changed.
 func TestMigratesALegacyNamedObjectStillInUse(t *testing.T) {
 	const legacyName = "example-chart-podinfo"
 
@@ -579,9 +519,6 @@ func TestMigratesALegacyNamedObjectStillInUse(t *testing.T) {
 	}
 }
 
-// TestMigratesALegacyNamedObjectNotInUse pins the same migration for a chart
-// nothing references: the legacy object is still replaced by a new-scheme one, not
-// merely left behind the way an ordinary rename would have left it.
 func TestMigratesALegacyNamedObjectNotInUse(t *testing.T) {
 	const legacyName = "example-chart-podinfo"
 
@@ -613,9 +550,6 @@ func TestMigratesALegacyNamedObjectNotInUse(t *testing.T) {
 	}
 }
 
-// TestMigrationIsANoOpOnASecondReconcile pins that the seed-and-delete migration
-// runs exactly once: the second reconcile finds no legacy object left to seed from
-// or delete, so the new object's own status stands and nothing is deleted.
 func TestMigrationIsANoOpOnASecondReconcile(t *testing.T) {
 	const legacyName = "example-chart-podinfo"
 
@@ -675,9 +609,6 @@ func interceptedClient(t *testing.T, c client.WithWatch, onDelete func()) client
 	})
 }
 
-// TestMigrationLeavesUnrelatedChartsToExistingPruning pins that the migration only
-// touches charts being reconciled: an unrelated chart's object is still governed by
-// the ordinary in-use rule, kept while referenced and pruned once it is not.
 func TestMigrationLeavesUnrelatedChartsToExistingPruning(t *testing.T) {
 	c := newAddonClient(t,
 		&helmv1alpha1.HelmClusterAddonChart{
@@ -697,9 +628,6 @@ func TestMigrationLeavesUnrelatedChartsToExistingPruning(t *testing.T) {
 	cat := adapter.NewAddonCatalog(c, c)
 	repo := addonRepo()
 
-	// podinfo is the only chart being reconciled; "kept" and "pruned" are not part
-	// of this call, exactly like an ordinary reconcile of a repository whose index
-	// dropped them.
 	if err := syncCatalog(cat, repo, chart("podinfo", "1.0.0")); err != nil {
 		t.Fatalf("Reconcile returned %v", err)
 	}
@@ -715,11 +643,6 @@ func TestMigrationLeavesUnrelatedChartsToExistingPruning(t *testing.T) {
 	}
 }
 
-// TestMigratesAChartTheRepositoryNoLongerOffers pins the case the pruning loop
-// cannot handle: the repository dropped the chart entirely and only a consumer keeps
-// it alive. Its object is not part of any fetch, so a migration driven by the fetched
-// charts would leave it under the legacy name, while the consumer already resolves
-// the new one and its release would never reconcile again.
 func TestMigratesAChartTheRepositoryNoLongerOffers(t *testing.T) {
 	const legacyName = "example-chart-gone"
 
@@ -752,9 +675,6 @@ func TestMigratesAChartTheRepositoryNoLongerOffers(t *testing.T) {
 	}
 }
 
-// TestMigrationSurvivesAFailedStatusWrite pins that the legacy object outlives a
-// failure: it is the only copy of a retained version, so deleting it before its
-// status has landed would lose that version for good.
 func TestMigrationSurvivesAFailedStatusWrite(t *testing.T) {
 	const legacyName = "example-chart-podinfo"
 
@@ -805,25 +725,6 @@ func TestMigrationSurvivesAFailedStatusWrite(t *testing.T) {
 	}
 }
 
-// TestMigrationLeavesADestinationAnotherPassWroteAlone pins the one thing the status
-// carry-over must never do. The copy replaces the destination's whole version array,
-// and the guard that allows it — the destination holds no versions — is a statement
-// about the read this pass took, not about the catalog: another pass can write that
-// object between the read and the copy. What it writes is worth the most where it is
-// easiest to lose, a re-examination mark being the extreme case, since the force
-// annotation that asked for it is consumed by the pass that recorded it.
-//
-// The copy therefore carries the resource version it was computed from. A destination
-// that moved on rejects it, the migration is left unfinished — legacy object included,
-// because deleting it after a rejected copy would throw away the only copy of a version
-// a consumer still pins — and the next pass reads both objects again.
-//
-// That retry is where both objects have to survive the other pass's write: the
-// destination keeps everything it was given, and the version only the legacy object
-// records — pinned by a consumer, and no longer offered by the repository, which is why
-// it was retained at all — comes over before the legacy object is deleted. Losing it
-// costs the release the media type it resolves through, with nothing left anywhere to
-// reconstruct it from.
 func TestMigrationLeavesADestinationAnotherPassWroteAlone(t *testing.T) {
 	const (
 		legacyName = "example-chart-podinfo"
@@ -832,8 +733,6 @@ func TestMigrationLeavesADestinationAnotherPassWroteAlone(t *testing.T) {
 
 	currentName := naming.HelmClusterAddonChartName("example", "podinfo")
 
-	// The competing writer runs once, just before the copy lands: it records on the
-	// destination a refresh whose annotation has already been consumed.
 	overtaken := false
 	c := newAddonClientWithInterceptor(t, interceptor.Funcs{
 		SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
@@ -883,8 +782,6 @@ func TestMigrationLeavesADestinationAnotherPassWroteAlone(t *testing.T) {
 		t.Fatal("a rejected copy must not clear a mark the other pass recorded: the force asking for it is already consumed")
 	}
 
-	// The next pass reads both objects again: the destination now holds versions, so
-	// nothing is copied over them, and the migration finishes.
 	if err := cat.MigrateNames(context.Background(), addonRepo()); err != nil {
 		t.Fatalf("the pass after the conflict returned %v", err)
 	}
@@ -911,12 +808,6 @@ func TestMigrationLeavesADestinationAnotherPassWroteAlone(t *testing.T) {
 	}
 }
 
-// TestMigrationKeepsTheDestinationOwnedByTheRepository pins the metadata a created
-// destination inherits. Catalog objects are garbage collected with the repository that
-// owns them, and the migration is the one path that creates one outside the
-// synchronization: a chart the repository no longer offers is migrated but never
-// reconciled again, so a destination created without the owner reference keeps it
-// forever and outlives the repository as an orphan nothing deletes.
 func TestMigrationKeepsTheDestinationOwnedByTheRepository(t *testing.T) {
 	const legacyName = "example-chart-gone"
 
@@ -932,8 +823,6 @@ func TestMigrationKeepsTheDestinationOwnedByTheRepository(t *testing.T) {
 	c := newAddonClient(t, legacy, addonConsumer("consumer", "example", "gone", "1.0.0"))
 	cat := adapter.NewAddonCatalog(c, c)
 
-	// The migration alone, without a synchronization behind it: the repository does not
-	// offer this chart, so nothing else ever stamps the destination's metadata.
 	if err := cat.MigrateNames(context.Background(), repo); err != nil {
 		t.Fatalf("MigrateNames returned %v", err)
 	}
@@ -953,10 +842,6 @@ func TestMigrationKeepsTheDestinationOwnedByTheRepository(t *testing.T) {
 	}
 }
 
-// rejectInvalidLabels makes the fake client behave like the API server on the one
-// rule this test turns on: a label value outside the label grammar is rejected. The
-// fake client accepts any string, so without this the failure under test cannot
-// happen at all.
 func rejectInvalidLabels() interceptor.Funcs {
 	check := func(obj client.Object) error {
 		for key, value := range obj.GetLabels() {
@@ -989,13 +874,6 @@ func rejectInvalidLabels() interceptor.Funcs {
 	}
 }
 
-// TestReconcileSkipsAChartWhoseNameCannotBeALabel pins that one chart the catalog
-// cannot record does not cost the whole repository its synchronization. The chart
-// name is copied verbatim into a label value, and an index may legally publish a
-// name no label value can hold; the write is rejected, and a pass that returned
-// there would leave every chart listed after it unwritten and never reach the
-// pruning loop at all — so a chart removed from the repository would stay in the
-// catalog forever and the repository would never report a successful sync.
 func TestReconcileSkipsAChartWhoseNameCannotBeALabel(t *testing.T) {
 	stale := legacyAddonChart(naming.HelmClusterAddonChartName("example", "gone"), "example", "gone",
 		helmv1alpha1.ChartVersion{Version: "1.0.0"})
@@ -1004,8 +882,6 @@ func TestReconcileSkipsAChartWhoseNameCannotBeALabel(t *testing.T) {
 	cat := adapter.NewAddonCatalog(c, c)
 	repo := addonRepo()
 
-	// The unwritable chart comes first, so a pass that stopped on it would also be
-	// missing the one after it.
 	result, err := reconcileOnce(cat, repo, []repoclient.Chart{
 		chart("my chart", "1.0.0"),
 		chart("podinfo", "6.7.1"),
@@ -1035,15 +911,7 @@ func TestReconcileSkipsAChartWhoseNameCannotBeALabel(t *testing.T) {
 	}
 }
 
-// TestReconcileReportsEveryChartItCannotPublish pins which chart names cost an
-// object and that each one is handed back to the caller. The repository status is
-// derived from this list: it counts the charts the cluster actually shows and names
-// the rest, so a chart dropped here without being reported would leave a user with a
-// count that does not match the objects and nothing to explain the difference.
 func TestReconcileReportsEveryChartItCannotPublish(t *testing.T) {
-	// A label value is limited to 63 characters. The object name is not: it is
-	// truncated and hashed, so length alone never decides. The pair below is what
-	// pins that the cut-off is the label rule and nothing else.
 	longEnough := strings.Repeat("a", 63)
 	tooLong := strings.Repeat("a", 64)
 
@@ -1069,10 +937,6 @@ func TestReconcileReportsEveryChartItCannotPublish(t *testing.T) {
 			wantSkip: []string{"my chart", "_internal", "chart/with/slashes"},
 		},
 		{
-			// The two groups are separated, not reordered: the skipped names come back
-			// in the order they were handed over. That order carries no meaning of its
-			// own — a Helm index is a map, so the caller sees a different one each read
-			// — which is why the status message sorts before naming anything.
 			name:     "publishable and unpublishable names are separated",
 			charts:   []string{"my chart", "podinfo", tooLong, "nginx"},
 			wantKept: []string{"podinfo", "nginx"},
@@ -1113,8 +977,6 @@ func TestReconcileReportsEveryChartItCannotPublish(t *testing.T) {
 			if err := c.List(context.Background(), published); err != nil {
 				t.Fatalf("listing published charts: %v", err)
 			}
-			// The count the repository status reports is len(charts) minus the skipped
-			// ones, so it is only checkable if that is exactly what the catalog holds.
 			if len(published.Items) != len(tt.charts)-len(tt.wantSkip) {
 				t.Fatalf("catalog holds %d objects, want %d", len(published.Items), len(tt.charts)-len(tt.wantSkip))
 			}
@@ -1122,16 +984,6 @@ func TestReconcileReportsEveryChartItCannotPublish(t *testing.T) {
 	}
 }
 
-// TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass closes the loop that
-// left a transiently unreachable version pending forever: the merge carries the
-// recorded media type onto the failed probe of a version still in use (without it the
-// running application's internal OCIRepository could not be built), and the next pass
-// reads that same catalog back as its known state. If a carried media type counted as
-// an examined tag, the tag would never be probed again, its stale ResolvePending would
-// be republished every pass, and the repository would never report a successful sync
-// again. The known state here is built by the catalog itself, the way the
-// synchronizer builds it, so the assertion is about production's own state and not
-// about a hand-written map.
 func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -1156,8 +1008,6 @@ func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 		t.Fatalf("the resolving pass returned %v", err)
 	}
 
-	// The next pass cannot reach the registry for that tag: no media type, no
-	// reference, only the transport failure.
 	pending := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{{
 		Version:            semver.MustParse("6.7.1"),
 		UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
@@ -1190,9 +1040,6 @@ func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 		t.Fatal("a version left pending by a failed probe must be examined again on the next pass")
 	}
 
-	// Being examined again is only half of it: the pass that reaches the registry has
-	// to leave nothing of the failure behind, or the repository would keep counting a
-	// pending version and never report a successful sync.
 	if _, err := reconcileOnce(cat, repo, []repoclient.Chart{resolved}); err != nil {
 		t.Fatalf("the recovering pass returned %v", err)
 	}
@@ -1210,12 +1057,6 @@ func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 	}
 }
 
-// TestAnIncompletePassKeepsTheVersionsItDidNotExamine pins what a fetch that ran out
-// of its own budget may and may not change. The versions it examined are written, and
-// the ones it never got to keep exactly the verdict a previous pass recorded: not
-// dropped, which would cost the next pass the work this one already paid for, and not
-// marked removed from the repository, which is a statement about the remote that this
-// pass made no observation to support.
 func TestAnIncompletePassKeepsTheVersionsItDidNotExamine(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -1231,8 +1072,6 @@ func TestAnIncompletePassKeepsTheVersionsItDidNotExamine(t *testing.T) {
 		t.Fatalf("the first pass returned %v", err)
 	}
 
-	// The next pass carries 6.7.0 from the known state, examines the new 6.8.0 and
-	// runs out of budget before reaching 6.7.1.
 	incomplete := repoclient.Chart{
 		Name: "podinfo",
 		Versions: []repoclient.ChartVersion{
@@ -1274,8 +1113,6 @@ func TestAnIncompletePassKeepsTheVersionsItDidNotExamine(t *testing.T) {
 		t.Fatalf("6.7.1 reason = %q: an unexamined version must not be given a verdict", deferred.UnavailableReason)
 	}
 
-	// The point of keeping it: the next pass skips it, which is what lets a repository
-	// larger than one budget converge over several passes.
 	known, err := knownCharts(cat, repo)
 	if err != nil {
 		t.Fatalf("Known returned %v", err)
@@ -1285,11 +1122,6 @@ func TestAnIncompletePassKeepsTheVersionsItDidNotExamine(t *testing.T) {
 	}
 }
 
-// TestAnIncompletePassPrunesNothing pins the most destructive thing a partially read
-// repository could do. Pruning reads "the remote did not list it" out of "it is not in
-// what we were handed", and a pass that stopped early is in no position to say that.
-// Deleting a chart that exists remotely costs every consumer of it its reconciliation,
-// so the pruning waits for a pass that saw the whole repository.
 func TestAnIncompletePassPrunesNothing(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
@@ -1314,8 +1146,6 @@ func TestAnIncompletePassPrunesNothing(t *testing.T) {
 		t.Fatalf("charts = %v, want both: an incomplete pass may delete nothing", charts.Items)
 	}
 
-	// The guard is the incompleteness, not a change of heart about pruning: the next
-	// complete pass still removes the chart the repository no longer offers.
 	if _, err := reconcileOnce(cat, repo, []repoclient.Chart{chart("podinfo", "1.0.0")}); err != nil {
 		t.Fatalf("the complete pass returned %v", err)
 	}
@@ -1327,23 +1157,6 @@ func TestAnIncompletePassPrunesNothing(t *testing.T) {
 	}
 }
 
-// TestAForcedPassKeepsTheMarkOnTheVersionsItDidNotReach pins where the work a forced
-// refresh did not finish waits. A forced read ignores every recorded verdict, which is
-// the only way a tag that was re-pushed with different content is ever looked at again;
-// an ordinary pass skips it, because its media type is recorded and that is what keeps a
-// steady-state synchronization cheap. So a forced read that ran out of its budget leaves
-// a question open for every version it did not reach, and the catalog entry of that
-// version is the only place the question can wait: the force annotation is consumed by
-// the pass it triggered, and the count in the repository status names no versions.
-//
-// The request is written onto every recorded version before the read
-// (MarkForReexamination), so the merge never sets the mark; what it decides is which
-// half of the request this pass has done — cleared on what it examined, kept on what it
-// deferred.
-//
-// The mark is not a verdict. The entry keeps its media type and stays usable while it
-// carries the mark, so a release already deploying that version resolves it exactly as
-// before while the refresh finishes over the next passes.
 func TestAForcedPassKeepsTheMarkOnTheVersionsItDidNotReach(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -1360,11 +1173,8 @@ func TestAForcedPassKeepsTheMarkOnTheVersionsItDidNotReach(t *testing.T) {
 		t.Fatalf("the steady-state pass returned %v", err)
 	}
 
-	// The refresh is forced: every recorded verdict is now owed a fresh one.
 	pass := forcedPass(t, cat, repo)
 
-	// The forced pass: it re-examined 6.7.0 and ran out of its budget before reaching
-	// 6.7.1 — the version someone re-pushed and forced the refresh for.
 	forced := repoclient.Chart{
 		Name:               "podinfo",
 		Versions:           []repoclient.ChartVersion{{Version: semver.MustParse("6.7.0"), MediaType: mediaType}},
@@ -1397,9 +1207,6 @@ func TestAForcedPassKeepsTheMarkOnTheVersionsItDidNotReach(t *testing.T) {
 		t.Fatal("the next pass must still skip the version the forced pass examined")
 	}
 
-	// The next pass is an ordinary one — the request was consumed by the forced pass —
-	// and it examines exactly what the mark asked for. Answering clears the mark, so
-	// the refresh ends here rather than repeating forever.
 	repushed := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
 		{Version: semver.MustParse("6.7.1"), MediaType: "application/tar+gzip"},
 		{Version: semver.MustParse("6.7.0"), MediaType: mediaType},
@@ -1417,12 +1224,6 @@ func TestAForcedPassKeepsTheMarkOnTheVersionsItDidNotReach(t *testing.T) {
 	}
 }
 
-// TestAnIncompletePassMarksNothingItself is the bound on the rule above. The merge only
-// ever clears the mark or keeps what is already recorded; it never puts one on. An
-// incomplete pass over a catalog nothing marked therefore leaves it unmarked, whatever
-// it failed to reach — a pass that reads no verdict it is entitled to skip owes nothing,
-// and marking what it ran out of budget for would turn every incomplete synchronization
-// of a large repository into a full re-examination of it.
 func TestAnIncompletePassMarksNothingItself(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -1448,11 +1249,6 @@ func TestAnIncompletePassMarksNothingItself(t *testing.T) {
 	}
 }
 
-// TestAMarkedVersionTheRepositoryNoLongerOffersIsReportedRemoved covers the one way a
-// marked version can stop being listed: the tag is deleted from the registry before a
-// pass gets to it. The mark asks for an examination that can now never happen, so the
-// pass that sees the version gone drops it — the entry a consumer keeps alive must not
-// carry a request no pass can clear, or the repository would re-examine it forever.
 func TestAMarkedVersionTheRepositoryNoLongerOffersIsReportedRemoved(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -1488,7 +1284,6 @@ func TestAMarkedVersionTheRepositoryNoLongerOffersIsReportedRemoved(t *testing.T
 		t.Fatal("the fixture must reach a marked version first")
 	}
 
-	// The tag is gone from the registry, and this pass saw the whole listing.
 	gone := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
 		{Version: semver.MustParse("6.8.0"), MediaType: mediaType},
 	}}
@@ -1508,17 +1303,6 @@ func TestAMarkedVersionTheRepositoryNoLongerOffersIsReportedRemoved(t *testing.T
 	}
 }
 
-// TestForcingARefreshMarksARetainedRemovedVersionAndALaterPassClearsIt pins that a
-// forced refresh exempts nothing it recorded. A version the repository stopped offering
-// is retained because a consumer still deploys it, and it keeps the media type of the
-// artifact that was deleted — so re-pushing that exact tag is precisely the change a
-// forced refresh exists to notice. Exempting it would let a forced pass that ran out of
-// its budget leave the entry unmarked and unexamined, and the ordinary pass after it
-// would republish the deleted artifact's media type without ever probing the tag.
-//
-// The mark is not a dead end: this repository still does not offer the version, and the
-// pass that says so clears it while reporting the version removed, so nothing claims
-// work forever in a status a user reads.
 func TestForcingARefreshMarksARetainedRemovedVersionAndALaterPassClearsIt(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -1545,8 +1329,6 @@ func TestForcingARefreshMarksARetainedRemovedVersionAndALaterPassClearsIt(t *tes
 		t.Fatalf("the steady-state pass returned %v", err)
 	}
 
-	// 6.7.0 is deleted from the registry and survives only because the application
-	// deploys it.
 	dropped := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
 		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
 	}}
@@ -1570,8 +1352,6 @@ func TestForcingARefreshMarksARetainedRemovedVersionAndALaterPassClearsIt(t *tes
 		t.Fatalf("marked version = %+v, want the recorded entry untouched: the consumer still deploys from it", got)
 	}
 
-	// The repository still does not offer 6.7.0, and the pass that sees the whole
-	// repository says so: the mark ends there rather than sitting in the status forever.
 	if _, err := pass.Reconcile(context.Background(), []repoclient.Chart{dropped}); err != nil {
 		t.Fatalf("the pass after the mark returned %v", err)
 	}
@@ -1585,22 +1365,6 @@ func TestForcingARefreshMarksARetainedRemovedVersionAndALaterPassClearsIt(t *tes
 	}
 }
 
-// TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved covers the
-// chart that disappears whole. A chart the repository stopped offering is kept as long
-// as a consumer pins a version of it, and it is then in no fetched list, so the merge
-// the main loop runs never reaches it: its versions keep the media type recorded when
-// the chart was last listed, with no unavailability reason next to it. That is the one
-// state a re-push survives — every tag deleted and published again with different
-// content behind it — because an ordinary pass reads a recorded media type as
-// authoritative and carries it forward (FetchOptions.NeedsExamination), so the catalog
-// would go on publishing the verdict of an artifact that no longer exists.
-//
-// The pass that saw the whole repository without the chart answers it instead, with the
-// merge a listed chart with an empty version list would get: the pinned version is
-// reported removed and keeps everything the consumer's OCIRepository is built from, an
-// unreferenced version is dropped as it would be anywhere else, and the re-examination
-// mark — a request no pass could answer while the chart is unlisted, since probe
-// candidates come from the listing — is cleared by having been answered.
 func TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -1635,8 +1399,6 @@ func TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved(t *te
 		t.Fatal("the fixture must reach a marked version of the pinned chart first")
 	}
 
-	// The repository no longer offers the chart at all, and this pass saw the whole
-	// repository.
 	if _, err := pass.Reconcile(context.Background(), []repoclient.Chart{offered}); err != nil {
 		t.Fatalf("the pass that no longer offers the chart returned %v", err)
 	}
@@ -1655,9 +1417,6 @@ func TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved(t *te
 		t.Fatal("a chart no fetch offers any more must not keep a mark: no pass can ever examine its versions")
 	}
 
-	// What the recorded reason buys: the tag is a probe candidate again the moment the
-	// chart is listed once more, without a forced refresh, because the listing offering
-	// it is the evidence that there is new content behind the verdict.
 	known, err := knownCharts(cat, repo)
 	if err != nil {
 		t.Fatalf("reading the recorded verdicts returned %v", err)
@@ -1667,25 +1426,12 @@ func TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved(t *te
 	}
 }
 
-// TestAFailedAbsenceWriteIsReportedAndRetried pins the failure half of the answer a
-// chart the repository stopped offering gets. Writing that answer is the only thing that
-// stops the retained versions from going on publishing the media type of an artifact the
-// repository no longer holds, and it is a status patch like any other: it can be rejected
-// by a conflict, a webhook or an unavailable API server. Swallowing that would leave the
-// pass reporting a successful synchronization over a catalog that still says the chart is
-// fine, with the next pass no more likely to notice — nothing else reconciles an unlisted
-// chart. So the error has to reach the caller, the status it could not write has to be
-// left exactly as it was rather than half-applied, and the pass that runs after the
-// failure has to finish the work.
 func TestAFailedAbsenceWriteIsReportedAndRetried(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
 	absentName := naming.ApplicationChartName("stable", "legacy")
 	failAbsenceWrite := false
 
-	// The fault is aimed at the retained chart's status alone: a fault that failed every
-	// status patch would be answered by the fetched charts' own writes, several steps
-	// before the absence is ever recorded.
 	c := newClientWithInterceptor(t, interceptor.Funcs{
 		SubResourcePatch: func(
 			ctx context.Context,
@@ -1757,14 +1503,6 @@ func TestAFailedAbsenceWriteIsReportedAndRetried(t *testing.T) {
 	}
 }
 
-// TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked pins the one entry the
-// request is not written onto, and it is left out because it already asks for
-// everything the mark would ask for: a version whose probe failed is re-examined by
-// every pass (FetchOptions.NeedsExamination), so marking it buys a status write and
-// nothing else. It also costs something: the probe order asks the stalling tags last,
-// after the never-seen ones and the ones a refresh owes, and a mark would move this tag
-// out of that last group and let a block of permanently stalling tags spend the budget
-// ahead of work that can finish.
 func TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
@@ -1795,8 +1533,6 @@ func TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked(t *testing.T) {
 		t.Fatal("the version with a verdict to distrust must carry the request")
 	}
 
-	// What the rest of the pass decides from says the same thing as the status: the
-	// snapshot the mark was written on is the snapshot the fetch and the write use.
 	known := pass.Known()
 	if known["podinfo"]["6.7.0"].ReexaminationRequired {
 		t.Fatal("a version left unmarked must not be offered to the fetch as owing a fresh verdict")
@@ -1806,16 +1542,6 @@ func TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked(t *testing.T) {
 	}
 }
 
-// TestForcingARefreshAgainRewritesNothing covers the cost of a request that cannot be
-// carried out. A forced pass that never reaches the registry is retried on the backoff,
-// and each retry marks again; rewriting the status of every chart object of the
-// repository on each of those retries would multiply a broken registry into a write
-// storm against the API server, for a status that already says what the mark says.
-//
-// Writing nothing is only safe because the snapshot the decision is taken from is read
-// through the API server: "already marked" is then a statement about the catalog, not
-// about one reader's copy of it. TestASecondForceIsRecordedWhenTheCachedCatalogStillShowsTheFirst
-// is the other half of that rule.
 func TestForcingARefreshAgainRewritesNothing(t *testing.T) {
 	patches := 0
 	c := newAddonClientWithInterceptor(t, interceptor.Funcs{
@@ -1847,7 +1573,6 @@ func TestForcingARefreshAgainRewritesNothing(t *testing.T) {
 	}
 }
 
-// versionsByName reads the recorded versions of one catalog object, keyed by version.
 func versionsByName(t *testing.T, c client.Client, key client.ObjectKey) map[string]helmv1alpha1.ChartVersion {
 	t.Helper()
 
@@ -1864,11 +1589,6 @@ func versionsByName(t *testing.T, c client.Client, key client.ObjectKey) map[str
 	return versions
 }
 
-// TestMigrationCarriesAMarkAndAnIconTheDestinationLacks pins the two pieces of a legacy
-// status that are not versions of their own: an outstanding refresh recorded against a
-// version the destination also holds, and the chart icon. The verdict of a shared version
-// stays the destination's - it is the newer writer - but a mark is a request nothing has
-// answered, so it survives the rename it happened to straddle.
 func TestMigrationCarriesAMarkAndAnIconTheDestinationLacks(t *testing.T) {
 	const (
 		legacyName = "example-chart-podinfo"
@@ -1882,10 +1602,6 @@ func TestMigrationCarriesAMarkAndAnIconTheDestinationLacks(t *testing.T) {
 		helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: mediaType, ReexaminationRequired: true},
 	)
 	legacy.Status.IconURL = iconURL
-
-	// The mark alone must reach the destination: the second case below holds the icon on
-	// both objects and every version on the destination, so nothing but the mark can
-	// make the write happen.
 
 	destination := &helmv1alpha1.HelmClusterAddonChart{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1923,9 +1639,6 @@ func TestMigrationCarriesAMarkAndAnIconTheDestinationLacks(t *testing.T) {
 	}
 }
 
-// TestMigrationCarriesAMarkWhenNothingElseIsMissing is the case that isolates the mark:
-// the destination already holds every version and the icon, so the write happens for the
-// outstanding refresh or not at all.
 func TestMigrationCarriesAMarkWhenNothingElseIsMissing(t *testing.T) {
 	const (
 		legacyName = "example-chart-podinfo"

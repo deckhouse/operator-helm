@@ -219,7 +219,6 @@ func TestHelmApplicationIsChartStatusInfoOutdated(t *testing.T) {
 		})
 	}
 
-	// This case isolates clusterRepository: it is the only field that differs.
 	t.Run("only the cluster repository changed, with the namespaced reference unset on both sides", func(t *testing.T) {
 		app := &HelmApplication{
 			Spec: HelmApplicationSpec{Chart: HelmApplicationChartRef{

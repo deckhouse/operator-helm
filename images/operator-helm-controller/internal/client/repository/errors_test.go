@@ -23,10 +23,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// TestTerminalFromStatusCode pins which rejections are verdicts and which are
-// "later". The distinction decides whether a repository is reported as Stalled and
-// whether a release that could not examine its artifact ever tries again, so the one
-// retriable code in the 4xx range is pinned alongside the terminal ones.
 func TestTerminalFromStatusCode(t *testing.T) {
 	tests := []struct {
 		code   int

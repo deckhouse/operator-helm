@@ -172,9 +172,6 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				g.Expect(charts.Items).NotTo(BeEmpty(), "the original's catalog must survive the twin's deletion")
 			}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
-			// Only a helm repository owns an internal HelmRepository; an oci:// one
-			// has none of its own, its artifacts come from the consumers' own
-			// OCIRepository objects.
 			if strings.EqualFold(repoType, "helm") {
 				By("The original's internal HelmRepository must survive the twin's deletion")
 				_, err = util.GetHelmApplicationRepositoryInternalHelmRepository(

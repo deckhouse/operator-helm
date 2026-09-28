@@ -29,18 +29,6 @@ import (
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/util"
 )
 
-// The name of the namespace Role is fixed and computable by anyone, so a namespace
-// owner can be holding it before any application is created. Widening such a Role to
-// full rights and binding every application of the namespace to it is not a decision
-// the controller gets to make on their behalf: it reports the collision and installs
-// nothing. The verdict is terminal because the informer behind the watch on the kind
-// selects on the label the object lacks — nothing observes it arriving or leaving.
-//
-// No AssertNoErrorsFor here on purpose: the scenario blocks the application
-// deliberately, so error-level log lines from the controller are expected. Dropping
-// the assertion is not enough on its own — the log watcher accumulates errors
-// suite-wide and never resets, so every other scenario's assertion would fail too.
-// The message is excluded in default_config.yaml; keep the two in step.
 var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func() {
 	f := framework.NewFramework("application-foreign-rbac")
 
@@ -69,10 +57,6 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 			ObjectMeta: metav1.ObjectMeta{Name: appRoleName, Namespace: f.NamespaceName()},
 			Rules:      foreignRules,
 		}
-		// Deliberately not registered for deletion. Once the module adopts this Role
-		// it recreates it for as long as an application lives in the namespace, and
-		// CleanupRBAC keeps it on purpose, so waiting for it to disappear would wait
-		// out the full timeout. It goes away with the namespace.
 		_, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
 			Create(context.Background(), role, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred())
@@ -150,8 +134,6 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 			Update(context.Background(), role, metav1.UpdateOptions{})
 		Expect(err).NotTo(HaveOccurred())
 
-		// Labelling the role makes it enter the label-scoped informer, which is what
-		// wakes the application: no force request is needed for this direction.
 		By("The application must recover on its own")
 		util.UntilConditionAbsent(apiv1alpha1.ConditionTypeStalled, framework.LongTimeout, createdApp)
 		util.UntilConditionTrue(apiv1alpha1.ConditionTypeReady, framework.LongTimeout, createdApp)

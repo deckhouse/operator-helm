@@ -149,14 +149,6 @@ func TestTerminalFetchSaturatesCounter(t *testing.T) {
 	}
 }
 
-// TestTerminalCACertificateFailureStaysScheduled pins the deliberate half of what
-// "terminal" means for an unparsable ca certificate: the pass makes no request to
-// the remote, but the repository is still re-examined on the longest backoff, and a
-// pass that then succeeds lifts the condition.
-//
-// Stopping outright would be wrong. The certificate can be reached through a
-// secret, and correcting a secret does not change the repository's generation, so
-// nothing but that periodic re-examination would ever notice the fix.
 func TestTerminalCACertificateFailureStaysScheduled(t *testing.T) {
 	stalled := Evaluate(Inputs{
 		Generation:         1,
@@ -182,8 +174,6 @@ func TestTerminalCACertificateFailureStaysScheduled(t *testing.T) {
 		t.Fatalf("Stalled is %+v, want it set with the certificate reason", cond)
 	}
 
-	// The secret was corrected. The next scheduled pass reads the repository and
-	// the repository is well again, without anything having touched its spec.
 	recovered := Evaluate(Inputs{
 		Generation:         1,
 		Now:                testNow.Add(MaxSyncBackoff),
@@ -284,8 +274,6 @@ func TestOverdueScheduleWithoutAttemptFloorsRequeue(t *testing.T) {
 			ObservedGeneration: 1,
 			NextSyncTime:       &overdue,
 		},
-		// SecretsErr blocks the attempt: the reconciler never gets to Fetch/Catalog,
-		// so Attempted stays false while the schedule is already due.
 		SecretsErr: errors.New("failed to reconcile secret"),
 	})
 

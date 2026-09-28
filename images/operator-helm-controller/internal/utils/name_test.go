@@ -23,11 +23,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// TestAddonInternalNamesAreFrozen pins the exact output of every addon naming
-// function. These names are the names of live internal objects: changing one is
-// a re-creation of a HelmRepository or a HelmRelease in every cluster running the
-// module, so the values below must never change. The long input is 61 characters,
-// past every truncation threshold the functions use.
 func TestAddonInternalNamesAreFrozen(t *testing.T) {
 	const long = "abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefg"
 
@@ -74,9 +69,6 @@ func TestDerivedName(t *testing.T) {
 		want      string
 	}{
 		{
-			// Twin of TestApplicationRepositoryInternalName in
-			// tests/e2e/internal/naming/naming_test.go: a change on either side
-			// that is not mirrored on the other breaks one of the two tests.
 			name:      "namespaced source carries namespace, name and a hash",
 			prefix:    "hapr",
 			kind:      "HelmApplicationRepository",
@@ -85,9 +77,6 @@ func TestDerivedName(t *testing.T) {
 			want:      "hapr-team-a-stable-42df68033b1e",
 		},
 		{
-			// Twin of TestApplicationServiceAccountName's first case in
-			// tests/e2e/internal/naming/naming_test.go: a change on either side
-			// that is not mirrored on the other breaks one of the two tests.
 			name:      "twin of the e2e ApplicationServiceAccountName fixture",
 			prefix:    "hap",
 			kind:      "HelmApplication",
@@ -128,13 +117,6 @@ func TestDerivedName(t *testing.T) {
 			want:      "hapr-abcdefghijklmnopq-stable-1846a7b21e01",
 		},
 		{
-			// Twin of "long parts are truncated to 18 characters each" in
-			// TestApplicationServiceAccountName
-			// (tests/e2e/internal/naming/naming_test.go). The shape is covered
-			// above for a repository, but the pair that must break together is
-			// this one: the e2e side derives the account name for a
-			// HelmApplication, and only a case with those arguments fails on
-			// both sides when one of them moves.
 			name:      "long application parts are truncated to 18 characters each",
 			prefix:    "hap",
 			kind:      "HelmApplication",
@@ -143,9 +125,6 @@ func TestDerivedName(t *testing.T) {
 			want:      "hap-very-long-namespac-very-long-applicat-35f137b7281e",
 		},
 		{
-			// Twin of "a truncation that ends in a dash drops it" in
-			// TestApplicationServiceAccountName
-			// (tests/e2e/internal/naming/naming_test.go).
 			name:      "an application truncation that ends in a dash drops it",
 			prefix:    "hap",
 			kind:      "HelmApplication",
@@ -154,13 +133,6 @@ func TestDerivedName(t *testing.T) {
 			want:      "hap-abcdefghijklmnopq-stable-2b3b33a25854",
 		},
 		{
-			// A resource name is a DNS subdomain, so it may carry dots. Keeping
-			// one at the cut would put the joining dash at the start of a label
-			// and the API server would reject every object named this way.
-			//
-			// Twin of the case of the same name in
-			// TestApplicationServiceAccountName
-			// (tests/e2e/internal/naming/naming_test.go).
 			name:      "a truncation that ends in a dot drops it",
 			prefix:    "hap",
 			kind:      "HelmApplication",
@@ -186,10 +158,6 @@ func TestDerivedName(t *testing.T) {
 	}
 }
 
-// TestDerivedNameStaysWithinTheLabelLimitForTheLongestPrefix guards the arithmetic
-// behind the 18-character part limit: the longest prefix any adapter uses is
-// "hcapr-auth" (10 characters), and prefix + namespace + name + hash + three
-// dashes must fit into 63.
 func TestDerivedNameStaysWithinTheLabelLimitForTheLongestPrefix(t *testing.T) {
 	got := DerivedName("hcapr-auth", "Kind", strings.Repeat("n", 40), strings.Repeat("m", 40))
 	if len(got) > 63 {
@@ -197,12 +165,6 @@ func TestDerivedNameStaysWithinTheLabelLimitForTheLongestPrefix(t *testing.T) {
 	}
 }
 
-// TestHashedReleaseNameSeparatesTwoValidNames pins the reason the application family
-// does not share HelmReleaseName. That function hashes only what exceeds the limit,
-// so a short name can be spelled exactly like the cut and hashed form of a long one;
-// two releases under one name in one namespace then share one storage and overwrite
-// each other's history. Carrying the hash unconditionally removes the second branch
-// the two names met in.
 func TestHashedReleaseNameSeparatesTwoValidNames(t *testing.T) {
 	const (
 		long  = "hap-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefg"
@@ -227,18 +189,11 @@ func TestHashedReleaseNameSeparatesTwoValidNames(t *testing.T) {
 		}
 	}
 
-	// Twin of TestApplicationReleaseName in tests/e2e/internal/naming: a change on
-	// either side that is not mirrored on the other breaks one of the two tests.
 	if got := HashedReleaseName("hap-e2e-test-app-helm"); got != "hap-e2e-test-app-helm-eaa08759b576" {
 		t.Fatalf("HashedReleaseName = %q", got)
 	}
 }
 
-// TestHashedReleaseNameCutsALongName pins what HashedReleaseName produces once the
-// name is past the limit — the branch every application release that needs cutting
-// goes through. TestHashedReleaseNameSeparatesTwoValidNames spells out only a short
-// name, so without these cases a change to the cut or to the characters trimmed off
-// it would pass both this package's tests and the e2e twin.
 func TestHashedReleaseNameCutsALongName(t *testing.T) {
 	cases := []struct {
 		name string
@@ -246,19 +201,11 @@ func TestHashedReleaseNameCutsALongName(t *testing.T) {
 		want string
 	}{
 		{
-			// Twin of the "a long name is cut to 40 characters and hashed" case
-			// in TestApplicationReleaseName
-			// (tests/e2e/internal/naming/naming_test.go), which reproduces this
-			// function for "hap-"+name: a change on either side that is not
-			// mirrored on the other breaks one of the two tests.
 			name: "a long name is cut to 40 characters and hashed",
 			in:   "hap-very-long-application-name-that-is-definitely-over-fifty-three-characters-long",
 			want: "hap-very-long-application-name-that-is-d-3080981cd4e1",
 		},
 		{
-			// An application name is a DNS subdomain, so it may carry dots, and a
-			// cut landing on one would leave the hash suffix starting a DNS
-			// label. Helm would reject the release name.
 			name: "a cut that lands on a dot drops it",
 			in:   "hap-very.long.application.name.over.the.helm.limit",
 			want: "hap-very.long.application.name.over.the-5f257e85dfb0",
@@ -281,10 +228,6 @@ func TestHashedReleaseNameCutsALongName(t *testing.T) {
 	}
 }
 
-// TestHelmReleaseName pins the release-name rule: Helm rejects names longer than 53
-// characters. A name within the limit passes through untouched — every addon that
-// exists today keeps its release — and a longer one is cut and suffixed with a hash
-// of the full name so two long names sharing a prefix stay distinct.
 func TestHelmReleaseName(t *testing.T) {
 	const long = "abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefg"
 
@@ -297,9 +240,6 @@ func TestHelmReleaseName(t *testing.T) {
 		{"a name of exactly 53 characters is used as is", strings.Repeat("a", 53), strings.Repeat("a", 53)},
 		{"a longer name is cut to 40 characters and hashed", long, "abcdefghijklmnopqrstuvwxyz-abcdefghijklm-ddc3f43e8c75"},
 		{
-			// The hash is over the whole name, so two names that survive the cut
-			// identically still get different releases. Without it the second
-			// application would take over the first one's release.
 			"a long name is distinguished by the hash, not by the cut",
 			strings.Repeat("c", 50) + "-one",
 			strings.Repeat("c", 40) + "-0511f1bf7dbf",
@@ -310,8 +250,6 @@ func TestHelmReleaseName(t *testing.T) {
 			strings.Repeat("c", 40) + "-bbd09a562ff3",
 		},
 		{
-			// A resource name may carry dots, and a cut landing on one would
-			// leave the hash suffix starting a DNS label.
 			"a cut that lands on a dot drops it",
 			strings.Repeat("a", 39) + "." + strings.Repeat("b", 20),
 			strings.Repeat("a", 39) + "-b46d196cb11f",

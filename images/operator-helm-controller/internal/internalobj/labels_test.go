@@ -26,10 +26,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// TestApplyOwnedLabelsReconcilesOnlyTheControllersOwnLabels pins the single policy
-// every internal object follows: a label nobody here owns survives untouched, while a
-// label qualified with our API group is brought to the desired set — added, updated
-// or, when it is no longer wanted, removed.
 func TestApplyOwnedLabelsReconcilesOnlyTheControllersOwnLabels(t *testing.T) {
 	tests := []struct {
 		name     string
