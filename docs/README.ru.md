@@ -1,32 +1,35 @@
 ---
 title: "Модуль operator-helm"
-description: "Deckhouse Platform — модуль operator-helm для декларативного управления Helm-чартами."
+description: "Модуль operator-helm для декларативного управления Helm-чартами в Deckhouse Platform."
 weight: 10
 ---
 
-Модуль `operator-helm` декларативно разворачивает Helm-чарты и рассчитан на две аудитории: администраторов платформы и администраторов неймспейсов. Чарты он делит на аддоны и приложения — по тому, какие объекты они создают.
+Модуль `operator-helm` позволяет декларативно управлять развёртыванием Helm-чартов в кластере Deckhouse Platform (DP).
 
-**Аддоны** ([`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon)) могут содержать CRD и другие кластерные объекты, поэтому их разворачивает администратор платформы. Такой Helm-чарт может влиять на состояние кластера, и управление им остаётся на уровне кластера.
+В зависимости от области видимости создаваемых ресурсов Helm-чарты разделяются на аддоны и приложения:
 
-**Приложения** ([`HelmApplication`](/modules/operator-helm/cr.html#helmapplication)) состоят только из объектов, относящихся к конкретному неймспейсу. Их разворачивает администратор неймспейса.
+- **Аддоны** ([HelmClusterAddon](cr.html#helmclusteraddon)) могут создавать кастомные и другие cluster-wide-ресурсы. Установкой аддонов и управлением ими занимается администратор DP.
+- **Приложения** ([HelmApplication](cr.html#helmapplication)) создают только namespaced-ресурсы. Администратор неймспейса может устанавливать приложения и управлять ими в пределах своего неймспейса.
+
+Чтобы включить модуль, воспользуйтесь одним из способов, описанных [в разделе «Настройки»](configuration.html).
 
 ## Основные возможности
 
 Модуль предоставляет следующие возможности:
 
 - декларативное управление развёртыванием Helm-чартов;
-- установка чартов из HTTP(S)- и OCI-репозиториев через один и тот же API;
+- установка чартов из HTTP(S)- и OCI-репозиториев через единый API;
 - автоматическая синхронизация репозитория для просмотра и поиска доступных Helm-чартов и их версий;
-- установка чартов администратором неймспейса без выдачи ему прав на кластер;
+- установка чартов администратором неймспейса без предоставления прав на cluster-wide-ресурсы;
 - поддержка общих репозиториев приложений, доступных во всех неймспейсах;
-- автоматическое устранение дрейфа конфигурации;
+- устранение отклонений от заданной конфигурации;
 - режим обслуживания, который приостанавливает реконсиляцию для ручного вмешательства в релиз;
 - поддержка приватных репозиториев с использованием корпоративного PKI;
-- управление через `d8 k` или веб-интерфейс Deckhouse Platform.
+- управление через [CLI-утилиту `d8`](/products/kubernetes-platform/documentation/v1/cli/d8/) или веб-интерфейс DP.
 
 ## Кастомные ресурсы
 
-Ресурсы модуля делятся на две группы по области видимости. Кластерными ресурсами управляет администратор платформы, а ресурсами в заданном неймспейсе — администратор неймспейса.
+Кастомные ресурсы модуля разделяются по области видимости на cluster-wide-ресурсы, которыми управляет администратор DP, и namespaced-ресурсы, которыми управляет администратор соответствующего неймспейса.
 
 ```mermaid
 flowchart TB
@@ -34,7 +37,7 @@ flowchart TB
   classDef cluster fill:#e0e7ff,stroke:#1a237e,color:#000000,stroke-width:2px;
   classDef ns fill:#f0fdfa,stroke:#004d40,color:#000000,stroke-width:2px;
 
-  ADM(["<font size=12px>fa:fa-user</font><br/><b>Администратор<br/>платформы</b>"]):::actor
+  ADM(["<font size=12px>fa:fa-user</font><br/><b>Администратор<br/>DP</b>"]):::actor
   USR(["<font size=12px>fa:fa-user</font><br/><b>Администратор<br/>неймспейса</b>"]):::actor
 
   HCA["<b>HelmClusterAddon</b>"]:::cluster
@@ -63,22 +66,22 @@ flowchart TB
   HCApR -->|Обслуживает| HCApC
 ```
 
-Синей заливкой отмечены кластерные ресурсы, бирюзовой — ресурсы внутри неймспейса. Каталоги чартов модуль обслуживает сам, вручную они не редактируются.
+Синей заливкой на схеме обозначены cluster-wide-ресурсы, бирюзовой — namespaced-ресурсы. Ресурсы HelmClusterAddonChart, HelmClusterApplicationChart и HelmApplicationChart модуль обслуживает сам. Они не предназначены для изменения вручную.
 
-Администратор платформы работает с кластерными ресурсами:
+Администратор DP управляет следующими cluster-wide-ресурсами:
 
-- [`HelmClusterAddonRepository`](/modules/operator-helm/cr.html#helmclusteraddonrepository) — репозиторий Helm или OCI с чартами для установки на уровне кластера;
-- [`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon) — описание релиза: целевая версия чарта, неймспейс развёртывания и расширенные параметры установки (при необходимости);
-- [`HelmClusterApplicationRepository`](/modules/operator-helm/cr.html#helmclusterapplicationrepository) — репозиторий, чарты которого доступны ресурсам [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) из любого неймспейса.
+- [HelmClusterAddonRepository](/modules/operator-helm/cr.html#helmclusteraddonrepository) — описывает репозиторий Helm или OCI с чартами для установки на уровне кластера;
+- [HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon) — описывает Helm-релиз, включая целевую версию чарта, неймспейс развёртывания и расширенные параметры установки (при необходимости);
+- [HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository) — описывает репозиторий приложений, чарты которого доступны ресурсам [HelmApplication](/modules/operator-helm/cr.html#helmapplication) из любого неймспейса.
 
-Администратор неймспейса работает с ресурсами своего неймспейса:
+Администратор неймспейса управляет следующими ресурсами в своём неймспейсе:
 
-- [`HelmApplicationRepository`](/modules/operator-helm/cr.html#helmapplicationrepository) — репозиторий, чарты которого доступны ресурсам [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) того же неймспейса;
-- [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) — описание релиза в собственном неймспейсе: целевая версия чарта, ссылка на [`HelmApplicationRepository`](/modules/operator-helm/cr.html#helmapplicationrepository) или [`HelmClusterApplicationRepository`](/modules/operator-helm/cr.html#helmclusterapplicationrepository) и расширенные параметры установки (при необходимости).
+- [HelmApplicationRepository](/modules/operator-helm/cr.html#helmapplicationrepository) — описывает репозиторий приложений, чарты которого доступны ресурсам [HelmApplication](/modules/operator-helm/cr.html#helmapplication) того же неймспейса;
+- [HelmApplication](/modules/operator-helm/cr.html#helmapplication) — описывает Helm-релиз приложения, включая целевую версию чарта, репозиторий и параметры установки. В качестве источника чарта можно использовать [HelmApplicationRepository](/modules/operator-helm/cr.html#helmapplicationrepository) из того же неймспейса или [HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository).
 
-Примеры настройки вышеописанных ресурсов приведены в [руководстве администратора](admin_guide.html) и [руководстве пользователя](user_guide.html).
+Примеры настройки вышеописанных ресурсов приведены в [«Руководстве администратора»](admin_guide.html) и [«Руководстве пользователя»](user_guide.html).
 
 ## Ограничения
 
-- Ресурс [`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon), ссылающийся на заданный [`HelmClusterAddonChart`](/modules/operator-helm/cr.html#helmclusteraddonchart), может быть создан только в единственном экземпляре. Helm-чарты, используемые в аддоне, могут содержать определения кастомных ресурсов (Custom Resource Definition, CRD), а их повторная установка на уровне кластера может привести к перебоям в работе сервисов;
-- Создание [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) требует наличия полномочий не ниже чем `Admin`, так как деплой приложений выполняется с использованием `ServiceAccount`, обладающего аналогичными привилегиями.
+- Для одного ресурса [HelmClusterAddonChart](/modules/operator-helm/cr.html#helmclusteraddonchart) может существовать только один ссылающийся на него ресурс [HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon). Helm-чарты, используемые в аддоне, могут содержать определения кастомных ресурсов (Custom Resource Definition, CRD) и другие cluster-wide-ресурсы, повторная установка которых может привести к перебоям в работе сервисов.
+- Для создания [HelmApplication](/modules/operator-helm/cr.html#helmapplication) требуются права уровня [роли `Admin`](/modules/user-authz/#текущая-ролевая-модель), поскольку приложение развёртывается с использованием ServiceAccount, обладающего аналогичными правами.
