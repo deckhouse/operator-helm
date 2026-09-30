@@ -1,32 +1,35 @@
 ---
 title: "Module operator-helm"
-description: "Deckhouse Platform — the operator-helm module for declarative Helm chart management."
+description: "Operator-helm module for declarative Helm chart management in Deckhouse Platform."
 weight: 10
 ---
 
-The `operator-helm` module deploys Helm charts declaratively and targets two audiences: platform administrators and namespace administrators. It divides charts into addons and applications according to the objects they create.
+The `operator-helm` module lets you control declaratively the Helm chart deployment in the Deckhouse Platform (DP) cluster.
 
-**Addons** ([`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon)) may contain CRDs and other cluster-scoped objects, so a platform administrator deploys them. Such a Helm chart can affect the state of the cluster, so managing it stays at the cluster level.
+Depending on the scope of created resources, Helm charts are divided in addons and applications:
 
-**Applications** ([`HelmApplication`](/modules/operator-helm/cr.html#helmapplication)) consist solely of objects that belong to a single namespace. A namespace administrator deploys them.
+- **Addons** ([HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon)) may create custom and other cluster-wide resources. A DP administrator deploys and controls them.
+- **Applications** ([HelmApplication](/modules/operator-helm/cr.html#helmapplication)) create only namespaced resources. A namespace administrator can deploy applications and control them within a designated namespace.
+
+To enable the module, use one of the methods described on the ["Configuration"](configuration.html) page.
 
 ## Key features
 
 The module provides the following capabilities:
 
-- declarative management of Helm chart deployment;
-- installing charts from HTTP(S) and OCI repositories through the same API;
-- automatic repository synchronization for browsing and searching the available Helm charts and their versions;
-- chart installation by a namespace administrator without granting them cluster-wide rights;
-- support for shared application repositories available in every namespace;
-- automatic correction of configuration drift;
-- maintenance mode that pauses reconciliation so that a release can be modified manually;
-- support for private repositories that use a corporate PKI;
-- management via `d8 k` or the Deckhouse Platform web interface.
+- Declarative management of Helm chart deployment.
+- Installing charts from HTTP(S) and OCI repositories through the same API.
+- Automatic repository synchronization for browsing and searching the available Helm charts and their versions.
+- Chart installation by a namespace administrator without granting them cluster-wide rights.
+- Support for shared application repositories available in every namespace.
+- Automatic correction of configuration drift.
+- Maintenance mode that pauses reconciliation so that a release can be modified manually.
+- Support for private repositories that use a corporate PKI.
+- Management via the [`d8`](/products/kubernetes-platform/documentation/v1/cli/d8/) CLI tool or the DP web interface.
 
 ## Custom resources
 
-The module's resources fall into two groups by scope. Cluster-scoped resources are managed by a platform administrator, and the resources of a given namespace by a namespace administrator.
+The module's resources fall into two groups by scope: cluster-wide resources that are managed by a DP administrator, and the namespaced resources managed by a namespace administrator.
 
 ```mermaid
 flowchart TB
@@ -34,7 +37,7 @@ flowchart TB
   classDef cluster fill:#e0e7ff,stroke:#1a237e,color:#000000,stroke-width:2px;
   classDef ns fill:#f0fdfa,stroke:#004d40,color:#000000,stroke-width:2px;
 
-  ADM(["<font size=12px>fa:fa-user</font><br/><b>Platform<br/>administrator</b>"]):::actor
+  ADM(["<font size=12px>fa:fa-user</font><br/><b>DP<br/>administrator</b>"]):::actor
   USR(["<font size=12px>fa:fa-user</font><br/><b>Namespace<br/>administrator</b>"]):::actor
 
   HCA["<b>HelmClusterAddon</b>"]:::cluster
@@ -63,22 +66,22 @@ flowchart TB
   HCApR -->|Maintains| HCApC
 ```
 
-Blue fill marks cluster-scoped resources; turquoise marks the resources inside a namespace. The module maintains the chart catalogs itself; they are not edited by hand.
+Blue fill marks cluster-wide resources; turquoise marks the namespaced resources. The module maintains the HelmClusterAddonChart, HelmClusterApplicationChart and HelmApplicationChart resources on its own. They should not be edited manually.
 
-A platform administrator works with the cluster-scoped resources:
+A DP administrator works with the following cluster-wide resources:
 
-- [`HelmClusterAddonRepository`](/modules/operator-helm/cr.html#helmclusteraddonrepository) — a Helm or OCI repository with charts to be installed at the cluster level;
-- [`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon) — a release description: the target chart version, the namespace to deploy into and, where required, extended installation parameters;
-- [`HelmClusterApplicationRepository`](/modules/operator-helm/cr.html#helmclusterapplicationrepository) — a repository whose charts are available to [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) resources from any namespace.
+- [HelmClusterAddonRepository](/modules/operator-helm/cr.html#helmclusteraddonrepository): Defines a Helm or OCI repository with charts to be installed at the cluster level.
+- [HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon): Defines a Helm release, including the target chart version, the namespace to deploy into and, where required, extended installation parameters.
+- [HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository): Defines an application repository whose charts are available to [HelmApplication](/modules/operator-helm/cr.html#helmapplication) resources from any namespace.
 
-A namespace administrator works with the resources of their own namespace:
+A namespace administrator manages the following resources in the designated namespace:
 
-- [`HelmApplicationRepository`](/modules/operator-helm/cr.html#helmapplicationrepository) — a repository whose charts are available to [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) resources of the same namespace;
-- [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) — a release description in the administrator's own namespace: the target chart version, a reference to a [`HelmApplicationRepository`](/modules/operator-helm/cr.html#helmapplicationrepository) or a [`HelmClusterApplicationRepository`](/modules/operator-helm/cr.html#helmclusterapplicationrepository) and, where required, extended installation parameters.
+- [HelmApplicationRepository](/modules/operator-helm/cr.html#helmapplicationrepository): Defines an application repository whose charts are available to [HelmApplication](/modules/operator-helm/cr.html#helmapplication) resources of the same namespace.
+- [HelmApplication](/modules/operator-helm/cr.html#helmapplication): Defines a Helm release, including the target chart version, a repository and installation parameters. You can use a [HelmApplicationRepository](/modules/operator-helm/cr.html#helmapplicationrepository) or [HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository) as the chart source.
 
-Configuration examples for the resources described above are given in the [administrator guide](admin_guide.html) and the [user guide](user_guide.html).
+For configuration examples for the resources described above, refer to the ["Administrator guide"](admin_guide.html) and ["User guide"](user_guide.html) pages.
 
 ## Limitations
 
-- A [`HelmClusterAddon`](/modules/operator-helm/cr.html#helmclusteraddon) resource referring to a given [`HelmClusterAddonChart`](/modules/operator-helm/cr.html#helmclusteraddonchart) can only be created as a single instance. Helm charts used in an addon may contain custom resource definitions (CRDs), and installing them again at the cluster level can disrupt running services;
-- Creating a [`HelmApplication`](/modules/operator-helm/cr.html#helmapplication) requires permissions no lower than `Admin`, because applications are deployed using a `ServiceAccount` that holds equivalent privileges.
+- For a single [HelmClusterAddonChart](/modules/operator-helm/cr.html#helmclusteraddonchart) resource, only one referring [HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon) resource can be created. Helm charts used in an addon may contain custom resource definitions (CRDs) and other cluster-wide resources, which, if installed repeatedly, may cause service failures.
+- Creating a [HelmApplication](/modules/operator-helm/cr.html#helmapplication) requires permissions of no lower than the [`Admin`](/modules/user-authz/#current-role-based-model) role, because applications are deployed using a ServiceAccount that holds equivalent privileges.
