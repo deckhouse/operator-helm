@@ -1,5 +1,5 @@
 ---
 title: "Configuration"
-description: "Deckhouse Platform — configuration parameters of the operator-helm module."
+description: "Configuration parameters of the operator-helm module."
 weight: 20
 ---
