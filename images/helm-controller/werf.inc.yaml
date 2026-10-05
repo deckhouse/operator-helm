@@ -2,29 +2,27 @@
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
-fromImage: builder/src
-secrets:
-- id: SOURCE_REPO
-  value: {{ .SOURCE_REPO }}
-shell:
-  install:
-    - git clone --branch {{ $helmControllerTag }} --single-branch $(cat /run/secrets/SOURCE_REPO)/werf/3p-helm-controller.git /src/3p-helm-controller
-    - rm -rf /src/3p-helm-controller/.git
+fromImage: builder/distroless
+git:
+  - url: {{ .SOURCE_REPO }}/werf/3p-helm-controller.git
+    tag: {{ $helmControllerTag }}
+    add: /
+    to: /src/3p-helm-controller
 ---
 
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
 final: false
 fromImage: builder/golang
-secrets:
-- id: SOURCE_REPO
-  value: {{ .SOURCE_REPO }}
-- id: GOPROXY
-  value: {{ .GOPROXY }}
 import:
 - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
   add: /src
   to: /src
   before: install
+packages:
+  - type: go-mod
+    workdir: /src/3p-helm-controller
+    env:
+      GOPROXY: "{{ .GOPROXY }}"
 shell:
   install:
     - cd /src/3p-helm-controller
@@ -32,8 +30,7 @@ shell:
       export GOOS=linux
       export GOARCH=amd64
       export CGO_ENABLED=0
-      export GOPROXY=$(cat /run/secrets/GOPROXY)
-      {{- include "image-build.build" (set $ "BuildCommand" `go build -trimpath -a -o helm-controller main.go`) | indent 6 }}
+      {{- include "image-build.build" (set $ "BuildCommand" `go build -mod=readonly -trimpath -a -o helm-controller main.go`) | indent 6 }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
 fromImage: base/distroless
