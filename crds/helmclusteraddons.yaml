@@ -33,6 +33,11 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: |-
+          HelmClusterAddon describes a Helm release managed at the cluster level.
+
+          The Helm chart may contain CRDs and other cluster-wide resources, so `ClusterAdmin` permissions are required to create a HelmClusterAddon.
+          Only one HelmClusterAddon resource can exist in the cluster for a given Helm chart from a specific repository.
         properties:
           apiVersion:
             description: |-
@@ -59,21 +64,20 @@ spec:
               chart:
                 properties:
                   helmClusterAddonChart:
-                    description: |-
-                      Specifies the name of the Helm chart to be installed
-                      from the defined repository (e.g., "ingress-nginx" or "redis").
+                    description: Name of the Helm chart in the specified repository
+                      (for example, `ingress-nginx` or `redis`).
                     minLength: 1
                     type: string
                   helmClusterAddonRepository:
                     description: |-
-                      Specifies the name of the HelmClusterAddonRepository custom resource that contains
-                      the connection details and credentials for the repository where
-                      the chart is located.
+                      Name of the HelmClusterAddonRepository resource.
+
+                      The specified repository is used as the Helm chart source.
                     maxLength: 63
                     minLength: 1
                     type: string
                   version:
-                    description: Versions holds the HelmClusterAddon chart version.
+                    description: Helm chart version to install.
                     type: string
                 required:
                 - helmClusterAddonChart
@@ -82,23 +86,22 @@ spec:
                 type: object
               maintenance:
                 description: |-
-                  Maintenance specifies the reconciliation strategy for the resource.
-                  When set to "NoResourceReconciliation", the controller will stop updating the
-                  underlying resources, allowing for manual intervention or maintenance
-                  without the operator overwriting changes.
-                  When empty (""), standard reconciliation is active.
+                  Resource reconciliation mode.
+
+                  When set to `NoResourceReconciliation`, the controller pauses reconciliation of managed resources, allowing them to be modified manually without the controller overwriting the changes.
+                  When set to an empty value (`""`), the standard reconciliation mode is used.
                 enum:
                 - ""
                 - NoResourceReconciliation
                 type: string
               namespace:
                 default: default
-                description: Namespace to deploy cluster addon release
+                description: Namespace to deploy a cluster addon release into.
                 maxLength: 63
                 minLength: 3
                 type: string
               values:
-                description: Values holds the values for this HelmClusterAddon release.
+                description: Custom Helm chart values.
                 x-kubernetes-preserve-unknown-fields: true
             required:
             - chart
@@ -106,8 +109,7 @@ spec:
           status:
             properties:
               conditions:
-                description: Conditions represent the latest available observations
-                  of the addon state.
+                description: Conditions reflecting the current state of the resource.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -154,38 +156,33 @@ spec:
                   type: object
                 type: array
               lastAppliedChart:
-                description: LastAppliedChart represents the latest chart that triggered
-                  addon install or update.
+                description: Helm chart used during the last addon installation or
+                  upgrade.
                 properties:
                   helmClusterAddonChart:
-                    description: |-
-                      Specifies the name of the Helm chart to be installed
-                      from the defined repository (e.g., "ingress-nginx" or "redis").
+                    description: Helm chart name.
                     type: string
                   helmClusterAddonRepository:
-                    description: |-
-                      Specifies the name of the HelmClusterAddonRepository custom resource that contains
-                      the connection details and credentials for the repository where
-                      the chart is located.
+                    description: Name of the HelmClusterAddonRepository resource.
                     type: string
                   version:
-                    description: Versions holds the HelmClusterAddon chart version.
+                    description: Helm chart version.
                     type: string
                 type: object
               lastAppliedValues:
-                description: LastAppliedValues represents the latest values that triggered
-                  addon install or update.
+                description: Custom Helm chart values used during the last addon installation
+                  or upgrade.
                 x-kubernetes-preserve-unknown-fields: true
               lastForceReconcileTime:
                 description: |-
-                  LastForceReconcileTime is the time the most recent force reconcile request was
-                  processed. It records that the request was acted on, not that it succeeded:
-                  the outcome is reported by Ready.
+                  Time when the last forced reconciliation request was processed.
+
+                  This value indicates that the request was processed but does not indicate that reconciliation completed successfully.
+                  Reconciliation results are reflected in the `Ready` condition.
                 format: date-time
                 type: string
               observedGeneration:
-                description: Generation represents resource generation that was last
-                  processed by the controller.
+                description: Latest resource generation processed by the controller.
                 format: int64
                 type: integer
             type: object
