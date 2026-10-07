@@ -28,7 +28,7 @@ const (
 	HelmClusterAddonRepositoryLabelSourceName = "helm.deckhouse.io/cluster-addon-repository"
 )
 
-// HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
+// HelmClusterAddonRepository describes a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
 //
 // +kubebuilder:object:root=true
 // +crd-enricher:raw:properties.apiVersion.x-doc-skip=true
