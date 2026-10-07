@@ -35,6 +35,9 @@ const (
 // HelmApplication represents an installation of a Helm chart inside a single namespace. The release is deployed into the namespace of the resource itself. The chart is applied with a ServiceAccount bound to a Role that grants every permission inside that namespace, so the right to create a HelmApplication is equivalent to administrator rights in its namespace; the Role and the binding belong to the module and are reconciled, so an edit to either does not outlast the application that needs it.
 //
 // +kubebuilder:object:root=true
+// +crd-enricher:raw:properties.apiVersion.x-doc-skip=true
+// +crd-enricher:raw:properties.kind.x-doc-skip=true
+// +crd-enricher:raw:properties.metadata.x-doc-skip=true
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:singular=helmapplication,scope=Namespaced
@@ -215,6 +218,12 @@ type HelmApplicationStatus struct {
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
 	// Conditions represent the latest available observations of the application state.
 	// +optional
+	// +crd-enricher:raw:items.properties.lastTransitionTime.description=Time when the condition status last changed.
+	// +crd-enricher:raw:items.properties.message.description=Message with additional information about the condition state.
+	// +crd-enricher:raw:items.properties.observedGeneration.description=Resource generation on which the condition state is based.
+	// +crd-enricher:raw:items.properties.reason.description=Reason for the last change in the condition state.
+	// +crd-enricher:raw:items.properties.status.description=Condition status.
+	// +crd-enricher:raw:items.properties.type.description=Condition type.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
 	// +optional

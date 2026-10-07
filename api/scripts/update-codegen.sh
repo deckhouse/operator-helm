@@ -72,6 +72,8 @@ function generate::crds {
 
   go tool controller-gen crd paths="${API_ROOT}/v1alpha1/...;" output:crd:dir="${OUTPUT_BASE}"
 
+  go run github.com/deckhouse/deckhouse/pkg/crd-enricher/cmd/crd-enricher@v0.0.2 paths="${API_ROOT}/v1alpha1/..." crds="${OUTPUT_BASE}"
+
   # shellcheck disable=SC2044
   for file in $(find "${OUTPUT_BASE}"/* -type f -iname "*.yaml"); do
     cp "$file" "${ROOT}/crds/$(echo $file | awk -Fio_ '{print $2}')"
