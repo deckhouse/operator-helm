@@ -32,8 +32,11 @@ const (
 	HelmClusterAddonLabelSourceName = "helm.deckhouse.io/cluster-addon"
 )
 
-// HelmClusterAddon represents a single cluster-wide installation of a Helm chart, which may include custom resource definitions (CRDs) and requires cluster-admin permissions to deploy. Only one instance of a specific chart can be installed at any given time.
-
+// HelmClusterAddon describes a Helm release managed at the cluster level.
+//
+// The Helm chart may contain CRDs and other cluster-wide resources, so `ClusterAdmin` permissions are required to create a HelmClusterAddon.
+// Only one HelmClusterAddon resource can exist in the cluster for a given Helm chart from a specific repository.
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
@@ -135,29 +138,27 @@ func (r *HelmClusterAddon) ForceReconcileRequired() bool {
 
 type HelmClusterAddonSpec struct {
 	Chart HelmClusterAddonChartRef `json:"chart"`
-	// Values holds the values for this HelmClusterAddon release.
+	// Custom Helm chart values.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	Values *apiextensionsv1.JSON `json:"values"`
-	// Namespace to deploy cluster addon release
+	// Namespace to deploy a cluster addon release into.
 	// +kubebuilder:default:="default"
 	// +optional
 	// +kubebuilder:validation:MinLength=3
 	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`
-	// Maintenance specifies the reconciliation strategy for the resource.
-	// When set to "NoResourceReconciliation", the controller will stop updating the
-	// underlying resources, allowing for manual intervention or maintenance
-	// without the operator overwriting changes.
-	// When empty (""), standard reconciliation is active.
+	// Resource reconciliation mode.
+	//
+	// When set to `NoResourceReconciliation`, the controller pauses reconciliation of managed resources, allowing them to be modified manually without the controller overwriting the changes.
+	// When set to an empty value (`""`), the standard reconciliation mode is used.
 	// +kubebuilder:validation:Enum="";NoResourceReconciliation
 	// +optional
 	Maintenance string `json:"maintenance,omitempty"`
 }
 
 type HelmClusterAddonChartRef struct {
-	// Specifies the name of the Helm chart to be installed
-	// from the defined repository (e.g., "ingress-nginx" or "redis").
+	// Name of the Helm chart in the specified repository (for example, `ingress-nginx` or `redis`).
 	// +kubebuilder:validation:MinLength=1
 	HelmClusterAddonChartName string `json:"helmClusterAddonChart"`
 	// The minimum below is 1, not 3: the referenced kind shipped without a minimum of
@@ -165,46 +166,44 @@ type HelmClusterAddonChartRef struct {
 	// This note is outside the doc comment on purpose — a doc comment becomes the
 	// field's description in the CRD.
 
-	// Specifies the name of the HelmClusterAddonRepository custom resource that contains
-	// the connection details and credentials for the repository where
-	// the chart is located.
+	// Name of the HelmClusterAddonRepository resource.
+	//
+	// The specified repository is used as the Helm chart source.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	HelmClusterAddonRepository string `json:"helmClusterAddonRepository"`
-	// Versions holds the HelmClusterAddon chart version.
+	// Helm chart version to install.
 	Version string `json:"version"`
 }
 
 type HelmClusterAddonStatus struct {
-	// LastAppliedChart represents the latest chart that triggered addon install or update.
+	// Helm chart used during the last addon installation or upgrade.
 	// +optional
 	LastAppliedChart *HelmClusterAddonLastAppliedChartRef `json:"lastAppliedChart,omitempty"`
-	// LastAppliedValues represents the latest values that triggered addon install or update.
+	// Custom Helm chart values used during the last addon installation or upgrade.
 	// +optional
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
-	// Conditions represent the latest available observations of the addon state.
+	// Conditions reflecting the current state of the resource.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generation represents resource generation that was last processed by the controller.
+	// Latest resource generation processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// LastForceReconcileTime is the time the most recent force reconcile request was
-	// processed. It records that the request was acted on, not that it succeeded:
-	// the outcome is reported by Ready.
+	// Time when the last forced reconciliation request was processed.
+	//
+	// This value indicates that the request was processed but does not indicate that reconciliation completed successfully.
+	// Reconciliation results are reflected in the `Ready` condition.
 	// +optional
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
 }
 
 type HelmClusterAddonLastAppliedChartRef struct {
-	// Specifies the name of the Helm chart to be installed
-	// from the defined repository (e.g., "ingress-nginx" or "redis").
+	// Helm chart name.
 	// +optional
 	HelmClusterAddonChartName string `json:"helmClusterAddonChart,omitempty"`
-	// Specifies the name of the HelmClusterAddonRepository custom resource that contains
-	// the connection details and credentials for the repository where
-	// the chart is located.
+	// Name of the HelmClusterAddonRepository resource.
 	// +optional
 	HelmClusterAddonRepository string `json:"helmClusterAddonRepository,omitempty"`
-	// Versions holds the HelmClusterAddon chart version.
+	// Helm chart version.
 	// +optional
 	Version string `json:"version,omitempty"`
 }

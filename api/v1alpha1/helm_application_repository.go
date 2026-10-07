@@ -28,7 +28,7 @@ const (
 	HelmApplicationRepositoryLabelSourceName = "helm.deckhouse.io/application-repository"
 )
 
-// HelmApplicationRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmApplication resources from the same namespace.
+// HelmApplicationRepository describes a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmApplication resources from the same namespace.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

@@ -27,7 +27,9 @@ const (
 	HelmClusterApplicationChartLabelSourceName = "helm.deckhouse.io/cluster-application-chart"
 )
 
-// HelmClusterApplicationChart represents a specific Helm chart discovered within a HelmClusterApplicationRepository. These resources are automatically managed during repository synchronization and are immutable to user modifications.
+// HelmClusterApplicationChart describes a Helm chart discovered in a HelmClusterApplicationRepository.
+//
+// HelmClusterApplicationChart resources are automatically created and updated by the controller during repository synchronization and are not intended for manual modification.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

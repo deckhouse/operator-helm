@@ -36,7 +36,7 @@ const (
 // name longer than a label value can hold already breaks the internal objects that
 // carry it.
 
-// HelmClusterAddonRepository represents a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
+// HelmClusterAddonRepository describes a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmClusterAddon resources.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

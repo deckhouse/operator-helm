@@ -25,27 +25,28 @@ import (
 // HelmClusterApplicationRepository differ only in scope and in who may reference
 // them. Declaring the shape once makes a divergence between the schemas impossible
 // by construction, and lets the controller reconcile all three through one code
-// path. The field descriptions are the ones the released HelmClusterAddonRepository
-// CRD already carries: sharing them changes no generated schema.
+// path.
 //
 // This note is outside every doc comment on purpose: a doc comment on a Spec or
 // Status type becomes the description of the spec or status field in the CRD.
 
 type RepositorySpec struct {
-	// URL of the Helm repository. Supports http(s):// and oci:// protocols.
+	// URL of the Helm or OCI repository.
+	//
+	// Supported schemes: `http(s)://` and `oci://`.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self.matches('^(https?|oci)://.+$')",message="URL must have a valid protocol (http, https, oci) and a non-empty path"
 	URL string `json:"url"`
 
-	// Auth contains authentication credentials for the repository.
+	// Credentials for repository authentication.
 	// +optional
 	Auth *RepositoryAuth `json:"auth,omitempty"`
 
-	// CACertificate is the PEM encoded CA certificate for TLS verification.
+	// CA certificate in PEM format for verifying the repository TLS certificate.
 	// +optional
 	CACertificate string `json:"caCertificate,omitempty"`
 
-	// InsecureSkipVerify disable TLS certificate verification.
+	// Disables verification of the repository TLS certificate.
 	// +optional
 	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }
@@ -60,30 +61,31 @@ type RepositoryAuth struct {
 }
 
 type RepositoryStatus struct {
-	// Conditions represent the latest available observations of the repository state.
+	// Conditions reflecting the current state of the repository.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generation represents resource generation that was last processed by the controller.
+	// Latest resource generation processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// LastSuccessfulSyncTime is the last time the chart catalog was fully brought up to date,
-	// including creating and pruning chart resources.
+	// Time of the last successful repository synchronization.
 	// +optional
 	LastSuccessfulSyncTime *metav1.Time `json:"lastSuccessfulSyncTime,omitempty"`
-	// NextSyncTime is the scheduled time of the next synchronization attempt.
+	// Scheduled time of the next repository synchronization attempt.
 	// +optional
 	NextSyncTime *metav1.Time `json:"nextSyncTime,omitempty"`
-	// LastForceReconcileTime is the time the most recent force reconcile request was
-	// processed. It records that the request was acted on, not that it succeeded:
-	// the outcome is reported by Ready and Synced.
+	// Time when the last forced reconciliation request was processed.
+	//
+	// This value indicates that the request was processed but does not indicate that reconciliation completed successfully.
+	// Reconciliation results are reflected in the `Ready` and `Synced` conditions.
 	// +optional
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
-	// ConsecutiveFetchFailures counts consecutive failures to read from the repository.
-	// It drives the retry backoff and resets on the first success.
+	// Number of consecutive failed attempts to access the repository.
+	//
+	// Used to determine the delay before the next attempt and reset after a successful attempt.
 	// +optional
 	ConsecutiveFetchFailures int32 `json:"consecutiveFetchFailures,omitempty"`
-	// ChartCount is the number of charts the repository offered when it was last read
-	// successfully. It is absent until the first successful read, so a repository that
-	// has never been read is distinguishable from one that offers no charts.
+	// Number of charts discovered during the last successful repository synchronization.
+	//
+	// The field is not populated until the first successful synchronization, which distinguishes a repository that has not yet been synchronized from a repository that contains no charts.
 	// +optional
 	ChartCount *int32 `json:"chartCount,omitempty"`
 }

@@ -27,7 +27,9 @@ const (
 	HelmClusterAddonChartLabelSourceName = "helm.deckhouse.io/cluster-addon-chart"
 )
 
-// HelmClusterAddonChart represents a specific Helm chart discovered within a HelmClusterAddonRepository. These resources are automatically managed during repository synchronization and are immutable to user modifications.
+// HelmClusterAddonChart describes a Helm chart discovered in a HelmClusterAddonRepository.
+//
+// HelmClusterAddonChart resources are automatically created and updated by the controller during repository synchronization and are not intended for manual modification.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

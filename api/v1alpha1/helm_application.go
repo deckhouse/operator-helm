@@ -32,7 +32,13 @@ const (
 	HelmApplicationLabelSourceName = "helm.deckhouse.io/application"
 )
 
-// HelmApplication represents an installation of a Helm chart inside a single namespace. The release is deployed into the namespace of the resource itself. The chart is applied with a ServiceAccount bound to a Role that grants every permission inside that namespace, so the right to create a HelmApplication is equivalent to administrator rights in its namespace; the Role and the binding belong to the module and are reconciled, so an edit to either does not outlast the application that needs it.
+// HelmApplication describes a Helm release within a single namespace.
+//
+// The release is deployed in the same namespace as the HelmApplication resource.
+//
+// The chart is deployed using a ServiceAccount with permissions to perform any operation on all resources in the namespace. Therefore, namespace administrator permissions are required to create a HelmApplication.
+//
+// The Role and RoleBinding associated with the ServiceAccount are managed by the module and automatically reconciled to their desired state. Any manual changes to these resources are overwritten.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
@@ -168,15 +174,14 @@ func (r *HelmApplication) ForceReconcileRequired() bool {
 
 type HelmApplicationSpec struct {
 	Chart HelmApplicationChartRef `json:"chart"`
-	// Values holds the values for this HelmApplication release.
+	// Custom Helm chart values.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	Values *apiextensionsv1.JSON `json:"values"`
-	// Maintenance specifies the reconciliation strategy for the resource.
-	// When set to "NoResourceReconciliation", the controller will stop updating the
-	// underlying resources, allowing for manual intervention or maintenance
-	// without the operator overwriting changes.
-	// When empty (""), standard reconciliation is active.
+	// Resource reconciliation mode.
+	//
+	// When set to `NoResourceReconciliation`, the controller pauses reconciliation of managed resources, allowing them to be modified manually without the controller overwriting the changes.
+	// When set to an empty value (`""`), the standard reconciliation mode is used.
 	// +kubebuilder:validation:Enum="";NoResourceReconciliation
 	// +optional
 	Maintenance string `json:"maintenance,omitempty"`
@@ -188,44 +193,44 @@ type HelmApplicationSpec struct {
 
 // +kubebuilder:validation:XValidation:rule="has(self.repository) != has(self.clusterRepository)",message="exactly one of spec.chart.repository or spec.chart.clusterRepository must be set"
 type HelmApplicationChartRef struct {
-	// Specifies the name of the Helm chart to be installed
-	// from the referenced repository (e.g., "nginx" or "redis").
+	// Name of the Helm chart in the specified repository (for example, `nginx` or `redis`).
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
-	// Specifies the name of the HelmApplicationRepository custom resource in the same
-	// namespace that contains the connection details and credentials for the
-	// repository where the chart is located.
+	// Name of the HelmApplicationRepository resource in the same namespace.
+	//
+	// The specified repository is used as the Helm chart source.
 	// +optional
 	// +kubebuilder:validation:MinLength=3
 	// +kubebuilder:validation:MaxLength=63
 	Repository string `json:"repository,omitempty"`
-	// Specifies the name of the cluster-wide HelmClusterApplicationRepository custom
-	// resource that contains the connection details and credentials for the
-	// repository where the chart is located.
+	// Name of the HelmClusterApplicationRepository resource.
+	//
+	// The specified repository is used as the Helm chart source.
 	// +optional
 	// +kubebuilder:validation:MinLength=3
 	// +kubebuilder:validation:MaxLength=63
 	ClusterRepository string `json:"clusterRepository,omitempty"`
-	// Version holds the HelmApplication chart version.
+	// Helm chart version to install.
 	// +kubebuilder:validation:MinLength=1
 	Version string `json:"version"`
 }
 
 type HelmApplicationStatus struct {
-	// LastAppliedChart represents the latest chart that triggered application install or update.
+	// Helm chart used during the last application installation or upgrade.
 	// +optional
 	LastAppliedChart *HelmApplicationLastAppliedChartRef `json:"lastAppliedChart,omitempty"`
-	// LastAppliedValues represents the latest values that triggered application install or update.
+	// Custom Helm chart values used during the last application installation or upgrade.
 	// +optional
 	LastAppliedValues *apiextensionsv1.JSON `json:"lastAppliedValues,omitempty"`
-	// Conditions represent the latest available observations of the application state.
+	// Conditions reflecting the current state of the resource.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generation represents resource generation that was last processed by the controller.
+	// Latest resource generation processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// LastForceReconcileTime is the time the most recent force reconcile request was
-	// processed. It records that the request was acted on, not that it succeeded:
-	// the outcome is reported by Ready.
+	// Time when the last forced reconciliation request was processed.
+	//
+	// This value indicates that the request was processed but does not indicate that reconciliation completed successfully.
+	// Reconciliation results are reflected in the `Ready` condition.
 	// +optional
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
 }
@@ -241,18 +246,16 @@ type HelmApplicationStatus struct {
 // description in the CRD.
 
 type HelmApplicationLastAppliedChartRef struct {
-	// Specifies the name of the Helm chart the release was last deployed from.
+	// Name of the Helm chart used during the last application installation or upgrade.
 	// +optional
 	Name string `json:"name,omitempty"`
-	// Specifies the name of the HelmApplicationRepository custom resource the chart
-	// was last taken from.
+	// Name of the HelmApplicationRepository resource used during the last application installation or upgrade.
 	// +optional
 	Repository string `json:"repository,omitempty"`
-	// Specifies the name of the HelmClusterApplicationRepository custom resource the
-	// chart was last taken from.
+	// Name of the HelmClusterApplicationRepository resource used during the last application installation or upgrade.
 	// +optional
 	ClusterRepository string `json:"clusterRepository,omitempty"`
-	// Version holds the chart version the release was last deployed from.
+	// Helm chart version used during the last application installation or upgrade.
 	// +optional
 	Version string `json:"version,omitempty"`
 }
