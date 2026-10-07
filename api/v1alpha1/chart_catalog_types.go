@@ -34,6 +34,12 @@ type ChartCatalogStatus struct {
 	IconURL string `json:"iconURL,omitempty"`
 	// Conditions represent the latest available observations of the chart state.
 	// +optional
+	// +crd-enricher:raw:items.properties.lastTransitionTime.description=Time when the condition status last changed.
+	// +crd-enricher:raw:items.properties.message.description=Message with additional information about the condition state.
+	// +crd-enricher:raw:items.properties.observedGeneration.description=Resource generation on which the condition state is based.
+	// +crd-enricher:raw:items.properties.reason.description=Reason for the last change in the condition state.
+	// +crd-enricher:raw:items.properties.status.description=Condition status.
+	// +crd-enricher:raw:items.properties.type.description=Condition type.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Generation represents resource generation that was last processed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
