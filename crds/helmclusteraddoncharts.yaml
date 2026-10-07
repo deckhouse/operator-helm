@@ -20,10 +20,9 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          HelmClusterAddonChart describes a Helm chart discovered in a HelmClusterAddonRepository.
-
-          HelmClusterAddonChart resources are automatically created and updated by the controller during repository synchronization and are not intended for manual modification.
+        description: HelmClusterAddonChart represents a specific Helm chart discovered
+          within a HelmClusterAddonRepository. These resources are automatically managed
+          during repository synchronization and are immutable to user modifications.
         properties:
           apiVersion:
             description: |-
@@ -48,30 +47,29 @@ spec:
           status:
             properties:
               conditions:
-                description: Conditions reflecting the current state of the Helm chart.
+                description: Conditions represent the latest available observations
+                  of the chart state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
                   properties:
                     lastTransitionTime:
-                      description: |-
-                        Time when the condition status last changed.
+                      description: Time when the condition status last changed.
                       format: date-time
                       type: string
                     message:
-                      description: |-
-                        Message with additional information about the condition state.
+                      description: Message with additional information about the condition
+                        state.
                       maxLength: 32768
                       type: string
                     observedGeneration:
-                      description: |-
-                        Resource generation on which the condition state is based.
+                      description: Resource generation on which the condition state
+                        is based.
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
-                      description: |-
-                        Reason for the last change in the condition state.
+                      description: Reason for the last change in the condition state.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
@@ -97,10 +95,8 @@ spec:
                   type: object
                 type: array
               iconURL:
-                description: |-
-                  URL of the Helm chart icon.
-
-                  Applicable only to charts from Helm repositories.
+                description: IconURL is the URL to the Helm chart icon (applicable
+                  to Helm Chart repository charts only).
                 type: string
               observedGeneration:
                 description: Generation represents resource generation that was last
@@ -109,34 +105,33 @@ spec:
                 type: integer
               versions:
                 description: |-
-                  List of discovered Helm chart versions.
-
-                  A version is available for installation if `unavailableReason` is not set.
-                  For versions from an OCI repository, a supported layer media type must also be specified.
+                  Versions lists every chart version the controller has examined. A version is
+                  usable when it has no unavailableReason; for an OCI repository a usable version
+                  also carries the media type of the layer that holds it.
                 items:
                   properties:
                     mediaType:
                       description: |-
-                        OCI media type of the layer containing the Helm chart version.
-
-                        Populated only for versions from an OCI repository (`oci://`) with a supported layer type.
-                        If the field is not set, the version is unavailable for installation.
+                        MediaType is the OCI media type of the layer that holds this chart version. It
+                        is set only for a version of an oci:// repository, and only when the layer is
+                        supported: an empty value there means the version cannot be deployed.
                       type: string
                     ociRef:
                       description: |-
-                        OCI reference to the published Helm chart version.
-
-                        Populated only for a version from a Helm repository if the corresponding repository index entry references an OCI repository instead of a chart archive.
-                        Such a version is installed using an internal OCIRepository.
+                        OCIRef is the OCI reference this version is published at, as recorded from
+                        the repository index. It is set only for a version of a helm repository whose
+                        index entry points at a registry instead of a chart archive; such a version is
+                        deployed through an internal OCIRepository even though its repository is a helm
+                        one.
                       type: string
                     unavailableMessage:
-                      description: Detailed description of the reason specified in `unavailableReason`.
+                      description: UnavailableMessage carries human readable detail
+                        for UnavailableReason.
                       type: string
                     unavailableReason:
                       description: |-
-                        Reason why the Helm chart version is unavailable for installation.
-
-                        If the field is not set, the version is available.
+                        UnavailableReason explains why this version cannot be deployed. Its absence means
+                        the version is usable.
                       enum:
                       - RemovedFromRepository
                       - UnsupportedMediaType
@@ -144,7 +139,7 @@ spec:
                       - InvalidChartReference
                       type: string
                     version:
-                      description: Helm chart version.
+                      description: Helm chart version
                       minLength: 1
                       type: string
                   required:

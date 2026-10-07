@@ -45,7 +45,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: HelmApplicationRepository describes a Helm or OCI-compliant repository containing Helm charts that can be referenced by HelmApplication resources from the same namespace.
+        description: HelmApplicationRepository represents a Helm or OCI-compliant
+          repository containing Helm charts that can be referenced by HelmApplication
+          resources from the same namespace.
         properties:
           apiVersion:
             description: |-
@@ -70,7 +72,7 @@ spec:
           spec:
             properties:
               auth:
-                description: Credentials for repository authentication.
+                description: Auth contains authentication credentials for the repository.
                 properties:
                   password:
                     description: Repository authentication password.
@@ -85,16 +87,15 @@ spec:
                 - username
                 type: object
               caCertificate:
-                description: CA certificate in PEM format for verifying the repository TLS certificate.
+                description: CACertificate is the PEM encoded CA certificate for TLS
+                  verification.
                 type: string
               insecureSkipVerify:
-                description: Disables verification of the repository TLS certificate.
+                description: InsecureSkipVerify disable TLS certificate verification.
                 type: boolean
               url:
-                description: |-
-                  URL of the Helm or OCI repository.
-
-                  Supported schemes: `http(s)://` and `oci://`.
+                description: URL of the Helm repository. Supports http(s):// and oci://
+                  protocols.
                 type: string
                 x-kubernetes-validations:
                 - message: URL must have a valid protocol (http, https, oci) and a
@@ -107,36 +108,35 @@ spec:
             properties:
               chartCount:
                 description: |-
-                  Number of charts discovered during the last successful repository synchronization.
-
-                  The field is not populated until the first successful synchronization, which distinguishes a repository that has not yet been synchronized from a repository that contains no charts.
+                  ChartCount is the number of charts the repository offered when it was last read
+                  successfully. It is absent until the first successful read, so a repository that
+                  has never been read is distinguishable from one that offers no charts.
                 format: int32
                 type: integer
               conditions:
-                description: Conditions reflecting the current state of the repository.
+                description: Conditions represent the latest available observations
+                  of the repository state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
                   properties:
                     lastTransitionTime:
-                      description: |-
-                        Time when the condition status last changed.
+                      description: Time when the condition status last changed.
                       format: date-time
                       type: string
                     message:
-                      description: |-
-                        Message with additional information about the condition state.
+                      description: Message with additional information about the condition
+                        state.
                       maxLength: 32768
                       type: string
                     observedGeneration:
-                      description: |-
-                        Resource generation on which the condition state is based.
+                      description: Resource generation on which the condition state
+                        is based.
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
-                      description: |-
-                        Reason for the last change in the condition state.
+                      description: Reason for the last change in the condition state.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
@@ -163,30 +163,31 @@ spec:
                 type: array
               consecutiveFetchFailures:
                 description: |-
-                  Number of consecutive failed attempts to access the repository.
-
-                  Used to determine the delay before the next attempt and reset after a successful attempt.
+                  ConsecutiveFetchFailures counts consecutive failures to read from the repository.
+                  It drives the retry backoff and resets on the first success.
                 format: int32
                 type: integer
               lastForceReconcileTime:
                 description: |-
-                  Time when the last forced reconciliation request was processed.
-
-                  This value indicates that the request was processed but does not indicate that reconciliation completed successfully.
-                  Reconciliation results are reflected in the `Ready` and `Synced` conditions.
+                  LastForceReconcileTime is the time the most recent force reconcile request was
+                  processed. It records that the request was acted on, not that it succeeded:
+                  the outcome is reported by Ready and Synced.
                 format: date-time
                 type: string
               lastSuccessfulSyncTime:
                 description: |-
-                  Time of the last successful repository synchronization.
+                  LastSuccessfulSyncTime is the last time the chart catalog was fully brought up to date,
+                  including creating and pruning chart resources.
                 format: date-time
                 type: string
               nextSyncTime:
-                description: Scheduled time of the next repository synchronization attempt.
+                description: NextSyncTime is the scheduled time of the next synchronization
+                  attempt.
                 format: date-time
                 type: string
               observedGeneration:
-                description: Latest resource generation processed by the controller.
+                description: Generation represents resource generation that was last
+                  processed by the controller.
                 format: int64
                 type: integer
             type: object
