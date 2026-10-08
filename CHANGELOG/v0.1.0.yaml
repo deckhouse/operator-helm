@@ -1,5 +1,5 @@
 features:
-  - "enforce restricted pss"
+  - "enforce restricted PSS"
 fixes:
   - "forbid to use system namespaces"
 security: []

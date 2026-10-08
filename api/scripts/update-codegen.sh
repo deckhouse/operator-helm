@@ -72,6 +72,8 @@ function generate::crds {
 
   go tool controller-gen crd paths="${API_ROOT}/v1alpha1/...;" output:crd:dir="${OUTPUT_BASE}"
 
+  (cd "${ROOT}/tools/crddoc" && go run . "${OUTPUT_BASE}"/*.yaml)
+
   # shellcheck disable=SC2044
   for file in $(find "${OUTPUT_BASE}"/* -type f -iname "*.yaml"); do
     cp "$file" "${ROOT}/crds/$(echo $file | awk -Fio_ '{print $2}')"

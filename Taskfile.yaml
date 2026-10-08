@@ -8,7 +8,7 @@ vars:
   VALIDATION_FILES: "tools/validation/{main,messages,diff,doc_changes}.go"
   golangciLintVersion: "v2.13.2"
 
-# Only the modules this repository authors are listed, including tools/internalcrds.
+# Only the modules this repository authors are listed, including the tools under tools/.
 # images/kube-api-rewriter is a separate upstream module vendored in for the build, and
 # images/helm-controller and images/source-controller carry nothing but their werf
 # files, so none of them is ours to lint, format or test here. The one exception is
@@ -33,6 +33,9 @@ includes:
   internalcrds:
     taskfile: ./tools/internalcrds/Taskfile.dist.yaml
     dir: ./tools/internalcrds
+  crddoc:
+    taskfile: ./tools/crddoc/Taskfile.dist.yaml
+    dir: ./tools/crddoc
 
   deps:
     taskfile: https://raw.githubusercontent.com/werf/common-ci/refs/heads/main/Taskfile.deps.yml
@@ -140,6 +143,7 @@ tasks:
       - task: chart-values-controller:test:unit
       - task: e2e:test:unit
       - task: internalcrds:test:unit
+      - task: crddoc:test:unit
       - task: test:rewrite-rules
 
   # The rule table and the generated definitions are two halves of one
@@ -217,6 +221,7 @@ tasks:
       - task: chart-values-controller:format
       - task: e2e:format
       - task: internalcrds:format
+      - task: crddoc:format
 
   lint:
     deps:
@@ -228,6 +233,7 @@ tasks:
       - task: chart-values-controller:lint
       - task: e2e:lint
       - task: internalcrds:lint
+      - task: crddoc:lint
       - task: lint:doc-ru
 
   lint:doc-ru:
