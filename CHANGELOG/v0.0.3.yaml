@@ -1,5 +1,5 @@
 features:
-  - the first public alpha release with HelmClusterAddon, HelmClusterAddonChart, and HelmClusterAddonRepository CRDs supoort
+  - the first public alpha release with HelmClusterAddon, HelmClusterAddonChart, and HelmClusterAddonRepository CRDs support
 fixes: []
 security: []
 chore: []
