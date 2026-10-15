@@ -261,11 +261,11 @@ func TestEvaluateUnresolvedSourceAwaitingASyncPromisesNoRetry(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			in := baseInputs()
 			in.Outcome = ChartReached{Internal: SourceUnresolved{Failure: Failure{
-				Reason:      helmv1alpha1.ReasonChartFetchFailed,
-				Message:     "Failed to resolve the desired chart version",
-				Err:         tt.cause,
-				AwaitsWatch: true,
-				RetryAfter:  awaitSyncInterval,
+				Reason:       helmv1alpha1.ReasonChartFetchFailed,
+				Message:      "Failed to resolve the desired chart version",
+				Err:          tt.cause,
+				AwaitsWatch:  true,
+				RequeueAfter: awaitSyncInterval,
 			}}}
 
 			decision := Evaluate(in)
@@ -444,20 +444,63 @@ func TestEvaluateStalledReleaseReportsNoProgress(t *testing.T) {
 }
 
 func TestEvaluateStepFailureOnATimerIsNotHandedToTheWorkQueue(t *testing.T) {
+	tests := []struct {
+		name    string
+		failure Failure
+	}{
+		{
+			name: "a lost chart claim",
+			failure: Failure{
+				Reason:       helmv1alpha1.ReasonChartClaimConflict,
+				Message:      "chart is already used",
+				RequeueAfter: chartClaimConflictRequeueInterval,
+			},
+		},
+		{
+			name: "a failure awaiting a watch still honours its own timer",
+			failure: Failure{
+				Reason:       helmv1alpha1.ReasonChartFetchFailed,
+				Message:      "Failed to resolve the desired chart version",
+				Err:          errCatalogAwaited,
+				AwaitsWatch:  true,
+				RequeueAfter: awaitSyncInterval,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := baseInputs()
+			in.Outcome = StepFailed{tt.failure}
+
+			decision := Evaluate(in)
+
+			if decision.Err != nil {
+				t.Fatalf("Err = %v, want none: the recovery rides on the timer", decision.Err)
+			}
+			if decision.RequeueAfter != tt.failure.RequeueAfter {
+				t.Fatalf("RequeueAfter = %v, want %v", decision.RequeueAfter, tt.failure.RequeueAfter)
+			}
+		})
+	}
+}
+
+func TestEvaluateUnresolvedSourceOnATimerIsNotHandedToTheWorkQueue(t *testing.T) {
 	in := baseInputs()
-	in.Outcome = StepFailed{Failure{
-		Reason:       helmv1alpha1.ReasonChartClaimConflict,
-		Message:      "chart is already used",
-		RequeueAfter: chartClaimConflictRequeueInterval,
-	}}
+	in.Outcome = ChartReached{Internal: SourceUnresolved{Failure: Failure{
+		Reason:       helmv1alpha1.ReasonFailed,
+		Message:      "Failed to resolve the chart source",
+		Err:          errors.New("transient failure"),
+		RequeueAfter: time.Minute,
+	}}}
 
 	decision := Evaluate(in)
 
 	if decision.Err != nil {
 		t.Fatalf("Err = %v, want none: the recovery rides on the timer", decision.Err)
 	}
-	if decision.RequeueAfter != chartClaimConflictRequeueInterval {
-		t.Fatalf("RequeueAfter = %v, want %v", decision.RequeueAfter, chartClaimConflictRequeueInterval)
+	if decision.RequeueAfter != time.Minute {
+		t.Fatalf("RequeueAfter = %v, want %v", decision.RequeueAfter, time.Minute)
 	}
 }
 

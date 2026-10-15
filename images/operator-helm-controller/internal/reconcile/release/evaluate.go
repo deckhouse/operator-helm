@@ -42,9 +42,6 @@ type Failure struct {
 	// AwaitsWatch marks a failure something else already brings the release back from, and
 	// keeps Err away from the work queue.
 	AwaitsWatch bool
-	// RetryAfter schedules the next pass itself, for a failure that neither a watch nor the
-	// work queue covers.
-	RetryAfter time.Duration
 	// BadInput marks a failure of the spec rather than of the work towards it. It is neither
 	// Terminal nor progress: it is reported without Reconciling and without a retry.
 	BadInput bool
@@ -321,7 +318,7 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 	decision.ApplyValues = releaseReported(outcome.Release) && valuesDeployed(outcome)
 	decision.RequeueAfter = probeRequeueAfter(outcome.Internal)
 	if decision.RequeueAfter == 0 {
-		decision.RequeueAfter = verdict.Failure.RetryAfter
+		decision.RequeueAfter = verdict.Failure.RequeueAfter
 	}
 
 	if !stalled && decision.RequeueAfter == 0 {

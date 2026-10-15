@@ -278,35 +278,35 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 	addon := testAddon()
 
 	tests := []struct {
-		name           string
-		versions       []helmv1alpha1.ChartVersion
-		noCatalog      bool
-		synced         bool
-		staleSync      bool
-		failedResync   bool
-		incomplete     bool
-		wantReason     string
-		wantBadInput   bool
-		wantRetried    bool
-		wantRetryAfter time.Duration
+		name             string
+		versions         []helmv1alpha1.ChartVersion
+		noCatalog        bool
+		synced           bool
+		staleSync        bool
+		failedResync     bool
+		incomplete       bool
+		wantReason       string
+		wantBadInput     bool
+		wantRetried      bool
+		wantRequeueAfter time.Duration
 	}{
 		{
-			name:           "before the first sync an absent catalog object is still progressing",
-			noCatalog:      true,
-			synced:         false,
-			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput:   false,
-			wantRetried:    false,
-			wantRetryAfter: awaitSyncInterval,
+			name:             "before the first sync an absent catalog object is still progressing",
+			noCatalog:        true,
+			synced:           false,
+			wantReason:       helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:     false,
+			wantRetried:      false,
+			wantRequeueAfter: awaitSyncInterval,
 		},
 		{
-			name:           "before the first sync an empty catalog is still progressing",
-			versions:       nil,
-			synced:         false,
-			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput:   false,
-			wantRetried:    false,
-			wantRetryAfter: awaitSyncInterval,
+			name:             "before the first sync an empty catalog is still progressing",
+			versions:         nil,
+			synced:           false,
+			wantReason:       helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:     false,
+			wantRetried:      false,
+			wantRequeueAfter: awaitSyncInterval,
 		},
 		{
 			name:         "after a sync an absent catalog object is a fault of the spec",
@@ -333,33 +333,33 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetried:  false,
 		},
 		{
-			name:           "a catalog from before a spec change is not the repository's answer",
-			noCatalog:      true,
-			staleSync:      true,
-			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput:   false,
-			wantRetried:    false,
-			wantRetryAfter: awaitSyncInterval,
+			name:             "a catalog from before a spec change is not the repository's answer",
+			noCatalog:        true,
+			staleSync:        true,
+			wantReason:       helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:     false,
+			wantRetried:      false,
+			wantRequeueAfter: awaitSyncInterval,
 		},
 		{
-			name:           "a version absent from an incomplete catalog is not the repository's answer",
-			versions:       []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
-			synced:         true,
-			incomplete:     true,
-			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput:   false,
-			wantRetried:    false,
-			wantRetryAfter: awaitSyncInterval,
+			name:             "a version absent from an incomplete catalog is not the repository's answer",
+			versions:         []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
+			synced:           true,
+			incomplete:       true,
+			wantReason:       helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:     false,
+			wantRetried:      false,
+			wantRequeueAfter: awaitSyncInterval,
 		},
 		{
-			name:           "an empty catalog of an incomplete read is not durable",
-			versions:       nil,
-			synced:         true,
-			incomplete:     true,
-			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput:   false,
-			wantRetried:    false,
-			wantRetryAfter: awaitSyncInterval,
+			name:             "an empty catalog of an incomplete read is not durable",
+			versions:         nil,
+			synced:           true,
+			incomplete:       true,
+			wantReason:       helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:     false,
+			wantRetried:      false,
+			wantRequeueAfter: awaitSyncInterval,
 		},
 		{
 			name:         "a failed pass does not unpublish the catalog it did not touch",
@@ -370,13 +370,13 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			wantRetried:  false,
 		},
 		{
-			name:           "a populated catalog from before a spec change is not the answer either",
-			versions:       []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
-			staleSync:      true,
-			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput:   false,
-			wantRetried:    false,
-			wantRetryAfter: awaitSyncInterval,
+			name:             "a populated catalog from before a spec change is not the answer either",
+			versions:         []helmv1alpha1.ChartVersion{{Version: "9.9.9"}},
+			staleSync:        true,
+			wantReason:       helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:     false,
+			wantRetried:      false,
+			wantRequeueAfter: awaitSyncInterval,
 		},
 		{
 			name: "a version still being resolved is progress, not bad input",
@@ -385,11 +385,11 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 				UnavailableReason:  helmv1alpha1.UnavailableReasonResolvePending,
 				UnavailableMessage: "the manifest request failed",
 			}},
-			synced:         true,
-			wantReason:     helmv1alpha1.ReasonChartFetchFailed,
-			wantBadInput:   false,
-			wantRetried:    false,
-			wantRetryAfter: awaitSyncInterval,
+			synced:           true,
+			wantReason:       helmv1alpha1.ReasonChartFetchFailed,
+			wantBadInput:     false,
+			wantRetried:      false,
+			wantRequeueAfter: awaitSyncInterval,
 		},
 		{
 			name: "a version the repository published unusably is not retried either",
@@ -451,8 +451,8 @@ func TestResolveSourceTellsAMissingVersionApartFromAnUnsyncedCatalog(t *testing.
 			if failure == nil {
 				t.Fatal("expected the version resolution to fail")
 			}
-			if failure.RetryAfter != tt.wantRetryAfter {
-				t.Fatalf("retryAfter = %v, want %v", failure.RetryAfter, tt.wantRetryAfter)
+			if failure.RequeueAfter != tt.wantRequeueAfter {
+				t.Fatalf("RequeueAfter = %v, want %v", failure.RequeueAfter, tt.wantRequeueAfter)
 			}
 			if failure.Reason != tt.wantReason {
 				t.Fatalf("reason = %q, want %q", failure.Reason, tt.wantReason)
@@ -1974,11 +1974,11 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 		{
 			name: "a wait for the repository's first sync is reported at info",
 			failure: Failure{
-				Reason:      helmv1alpha1.ReasonChartFetchFailed,
-				Message:     "Failed to resolve the desired chart version",
-				Err:         errCatalogAwaited,
-				AwaitsWatch: true,
-				RetryAfter:  awaitSyncInterval,
+				Reason:       helmv1alpha1.ReasonChartFetchFailed,
+				Message:      "Failed to resolve the desired chart version",
+				Err:          errCatalogAwaited,
+				AwaitsWatch:  true,
+				RequeueAfter: awaitSyncInterval,
 			},
 			wantAtError: false,
 		},
@@ -1989,6 +1989,15 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 				Message:     "Failed to get internal repository",
 				Err:         errors.New("getting internal repository: not found"),
 				AwaitsWatch: true,
+			},
+			wantAtError: false,
+		},
+		{
+			name: "a chart claimed by another release is reported at info",
+			failure: Failure{
+				Reason:       helmv1alpha1.ReasonChartClaimConflict,
+				Message:      "chart podinfo is already used by helmclusteraddon/other",
+				RequeueAfter: chartClaimConflictRequeueInterval,
 			},
 			wantAtError: false,
 		},
@@ -2039,8 +2048,11 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 			if !strings.Contains(line, tt.failure.Message) {
 				t.Fatalf("logged line %q does not carry the message %q", line, tt.failure.Message)
 			}
-			if !strings.Contains(line, tt.failure.Err.Error()) {
+			if tt.failure.Err != nil && !strings.Contains(line, tt.failure.Err.Error()) {
 				t.Fatalf("logged line %q does not carry the cause %q", line, tt.failure.Err)
+			}
+			if tt.failure.Err == nil && strings.Contains(line, `"cause"=`) {
+				t.Fatalf("logged line %q carries a cause the failure does not have", line)
 			}
 		})
 	}

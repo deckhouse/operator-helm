@@ -314,23 +314,15 @@ func (r *Reconciler) resolveSource(
 			Err:      err,
 			BadInput: true,
 		}
-	case errors.Is(err, errVersionResolvePending):
-		// A registry that keeps failing the same way rewrites nothing, so no watch event follows.
+	case errors.Is(err, errVersionResolvePending), errors.Is(err, errCatalogAwaited):
+		// A registry that keeps failing the same way rewrites nothing, so no watch event follows,
+		// and the sync time that settles a catalog is a status write the repository watch filters out.
 		return src, chartVersion, &Failure{
-			Reason:      helmv1alpha1.ReasonChartFetchFailed,
-			Message:     "Failed to resolve the desired chart version",
-			Err:         err,
-			AwaitsWatch: true,
-			RetryAfter:  awaitSyncInterval,
-		}
-	case errors.Is(err, errCatalogAwaited):
-		// The sync time that settles this is a status write, which the repository watch filters out.
-		return src, chartVersion, &Failure{
-			Reason:      helmv1alpha1.ReasonChartFetchFailed,
-			Message:     "Failed to resolve the desired chart version",
-			Err:         err,
-			AwaitsWatch: true,
-			RetryAfter:  awaitSyncInterval,
+			Reason:       helmv1alpha1.ReasonChartFetchFailed,
+			Message:      "Failed to resolve the desired chart version",
+			Err:          err,
+			AwaitsWatch:  true,
+			RequeueAfter: awaitSyncInterval,
 		}
 	case err != nil:
 		return src, chartVersion, &Failure{
