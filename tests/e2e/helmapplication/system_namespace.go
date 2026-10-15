@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 )
 
@@ -46,6 +47,11 @@ var _ = Describe("HelmApplication system namespace restriction", Ordered, func()
 	BeforeAll(func() {
 		DeferCleanup(f.After)
 		f.Before()
+	})
+
+	AfterEach(func() {
+		By("Verifying no errors in operator-helm-controller logs")
+		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	DescribeTable(

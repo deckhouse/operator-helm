@@ -27,6 +27,7 @@ import (
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/util"
 )
@@ -51,6 +52,11 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 	BeforeAll(func() {
 		DeferCleanup(f.After)
 		f.Before()
+	})
+
+	AfterEach(func() {
+		By("Verifying no errors in operator-helm-controller logs")
+		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
 	It("should refuse to seize a role it does not own", func() {
@@ -127,17 +133,19 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 
 	It("should take the role over once it is labelled as the module's", func() {
 		By("Handing the role to the module")
-		role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-			Get(context.Background(), appRoleName, metav1.GetOptions{})
-		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) {
+			role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
+				Get(context.Background(), appRoleName, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
 
-		if role.Labels == nil {
-			role.Labels = map[string]string{}
-		}
-		role.Labels[apiv1alpha1.LabelManagedBy] = apiv1alpha1.LabelManagedByValue
-		_, err = f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-			Update(context.Background(), role, metav1.UpdateOptions{})
-		Expect(err).NotTo(HaveOccurred())
+			if role.Labels == nil {
+				role.Labels = map[string]string{}
+			}
+			role.Labels[apiv1alpha1.LabelManagedBy] = apiv1alpha1.LabelManagedByValue
+			_, err = f.KubeClient().RbacV1().Roles(f.NamespaceName()).
+				Update(context.Background(), role, metav1.UpdateOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
 		By("The application must recover on its own")
 		util.UntilConditionAbsent(apiv1alpha1.ConditionTypeStalled, framework.LongTimeout, createdApp)
