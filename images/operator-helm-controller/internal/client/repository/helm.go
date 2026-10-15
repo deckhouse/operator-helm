@@ -78,6 +78,7 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 		if err != nil {
 			return nil, err
 		}
+		defer tlsTransport.CloseIdleConnections()
 
 		httpClient = &http.Client{Transport: tlsTransport}
 	}

@@ -105,6 +105,7 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 		if err != nil {
 			return nil, err
 		}
+		defer tlsTransport.CloseIdleConnections()
 
 		options = append(options, remote.WithTransport(tlsTransport))
 	}

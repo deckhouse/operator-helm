@@ -71,6 +71,7 @@ func (r *ociChartResolver) ResolveChartArtifact(ctx context.Context, ref string,
 		if err != nil {
 			return "", err
 		}
+		defer tlsTransport.CloseIdleConnections()
 
 		options = append(options, remote.WithTransport(tlsTransport))
 	}
