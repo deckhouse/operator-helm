@@ -48,10 +48,6 @@ var ErrTagNotFound = errors.New("registry has no such tag")
 // ProbeTimeout bounds one probe end to end, including when the caller's context carries no deadline.
 const ProbeTimeout = 20 * time.Second
 
-func probeContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, ProbeTimeout)
-}
-
 // Prober finds the chart layer of one OCI artifact.
 type Prober interface {
 	ChartLayerMediaType(ctx context.Context, ref string, transport http.RoundTripper) (string, error)
@@ -65,7 +61,7 @@ type registryProber struct{}
 // ChartLayerMediaType reads the manifest behind ref and returns the media type of the layer
 // holding the chart. No credentials are sent; rt carries transport settings only and may be nil.
 func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt http.RoundTripper) (string, error) {
-	ctx, cancel := probeContext(ctx)
+	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
 	defer cancel()
 
 	// A transport built by Transport is single-use, so its pool is drained here.

@@ -202,13 +202,13 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	access, displayKind, namespaced, ok := accessFor(req.RepositoryKind, req.Namespace)
+	access, displayKind, needsNamespace, ok := accessFor(req.RepositoryKind, req.Namespace)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "UNSUPPORTED_REPOSITORY_KIND",
 			fmt.Sprintf("unsupported repository kind %q", req.RepositoryKind))
 		return
 	}
-	if namespaced {
+	if needsNamespace {
 		if errs := validation.IsDNS1123Label(req.Namespace); len(errs) > 0 {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
 				"namespace is required for this repository kind and must be a valid namespace name")
@@ -275,7 +275,7 @@ func (s *Server) handleChartValues(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func accessFor(kind, namespace string) (access auth.Access, displayKind string, namespaced, ok bool) {
+func accessFor(kind, namespace string) (access auth.Access, displayKind string, needsNamespace, ok bool) {
 	switch strings.ToLower(kind) {
 	case string(resolver.RepositoryKindHelmClusterAddon):
 		return auth.Access{

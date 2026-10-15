@@ -142,30 +142,43 @@ func TestTransportRejectsACACertificateWithoutAnyCertificate(t *testing.T) {
 	}
 }
 
-func TestProbeContextBoundsAnUnboundedCaller(t *testing.T) {
-	ctx, cancel := probeContext(context.Background())
-	defer cancel()
+type deadlineTransport struct {
+	deadline time.Time
+	bounded  bool
+}
 
-	deadline, ok := ctx.Deadline()
-	if !ok {
+func (d *deadlineTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	d.deadline, d.bounded = req.Context().Deadline()
+
+	return nil, errors.New("the registry is not reached in this test")
+}
+
+func TestChartLayerMediaTypeBoundsAnUnboundedCaller(t *testing.T) {
+	rt := &deadlineTransport{}
+	if _, err := Default.ChartLayerMediaType(context.Background(), "oci://registry.example/podinfo:1.0.0", rt); err == nil {
+		t.Fatal("expected the probe to fail on a transport that never reaches the registry")
+	}
+
+	if !rt.bounded {
 		t.Fatal("a probe given no deadline must still be bounded by ProbeTimeout")
 	}
-	if remaining := time.Until(deadline); remaining <= 0 || remaining > ProbeTimeout {
+	if remaining := time.Until(rt.deadline); remaining <= 0 || remaining > ProbeTimeout {
 		t.Fatalf("deadline is %s from now, want within (0, %s]", remaining, ProbeTimeout)
 	}
 }
 
-func TestProbeContextKeepsAnEarlierCallerDeadline(t *testing.T) {
-	parent, cancelParent := context.WithTimeout(context.Background(), 50*time.Millisecond)
+func TestChartLayerMediaTypeKeepsAnEarlierCallerDeadline(t *testing.T) {
+	parent, cancelParent := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelParent()
 
-	ctx, cancel := probeContext(parent)
-	defer cancel()
+	rt := &deadlineTransport{}
+	if _, err := Default.ChartLayerMediaType(parent, "oci://registry.example/podinfo:1.0.0", rt); err == nil {
+		t.Fatal("expected the probe to fail on a transport that never reaches the registry")
+	}
 
 	parentDeadline, _ := parent.Deadline()
-	deadline, _ := ctx.Deadline()
-	if !deadline.Equal(parentDeadline) {
-		t.Fatalf("deadline = %s, want the caller's own earlier deadline %s", deadline, parentDeadline)
+	if !rt.deadline.Equal(parentDeadline) {
+		t.Fatalf("deadline = %s, want the caller's own earlier deadline %s", rt.deadline, parentDeadline)
 	}
 }
 
