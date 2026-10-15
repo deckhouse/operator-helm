@@ -699,18 +699,20 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 			}
 
 			var joined sync.WaitGroup
-			joined.Add(callers - int(tt.wantFetches))
-			r.downloads.onJoin = joined.Done
+			joined.Add(callers)
 
 			results := make([]Result, callers)
 
 			var wg sync.WaitGroup
 			for i := range callers {
+				var once sync.Once
+				ctx := joinSignal{Context: context.Background(), joined: func() { once.Do(joined.Done) }}
+
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
 
-					got, err := r.readValues(context.Background(), tt.key(i), art, stillAt(art.Digest))
+					got, err := r.readValues(ctx, tt.key(i), art, stillAt(art.Digest))
 					if err != nil {
 						t.Errorf("caller %d: readValues returned %v", i, err)
 						return
@@ -736,6 +738,75 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAWaiterGetsTheValuesWhenTheLeaderGivesUp(t *testing.T) {
+	archive := buildValuesArchive(t, "replicaCount: 1\n")
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+	var releaseOnce sync.Once
+	releaseServer := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseServer)
+
+	art := &meta.Artifact{URL: srv.URL, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archive))}
+	r := &Resolver{
+		cache:            cache.New(t.TempDir(), testCacheBudget),
+		httpClient:       srv.Client(),
+		maxArtifactBytes: 1 << 20,
+	}
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	t.Cleanup(cancelLeader)
+
+	leader := make(chan Result, 1)
+	go func() {
+		got, err := r.readValues(leaderCtx, "entry", art, stillAt(art.Digest))
+		if err != nil {
+			t.Errorf("the leader: readValues returned %v", err)
+		}
+		leader <- got
+	}()
+	<-started
+
+	joined := make(chan struct{})
+	var joinOnce sync.Once
+	waiterCtx := joinSignal{Context: context.Background(), joined: func() { joinOnce.Do(func() { close(joined) }) }}
+
+	waiter := make(chan Result, 1)
+	go func() {
+		got, err := r.readValues(waiterCtx, "entry", art, stillAt(art.Digest))
+		if err != nil {
+			t.Errorf("the waiter: readValues returned %v", err)
+		}
+		waiter <- got
+	}()
+	<-joined
+
+	cancelLeader()
+	select {
+	case got := <-leader:
+		if got.Outcome != OutcomePending {
+			t.Fatalf("the leader got %+v after its context was cancelled, want %q", got, OutcomePending)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the leader did not return after its context was cancelled: it must not outlast its own budget waiting on the shared download")
+	}
+	releaseServer()
+
+	if got := <-waiter; got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
+		t.Fatalf("the waiter got %+v, want the chart's values: the leader's cancellation must not fail the shared download", got)
+	}
+
+	if entry, ok := r.cache.GetEntry("entry"); !ok || entry.Digest != art.Digest {
+		t.Fatalf("entry = %+v (present %v), want the downloaded revision cached despite the leader giving up", entry, ok)
 	}
 }
 

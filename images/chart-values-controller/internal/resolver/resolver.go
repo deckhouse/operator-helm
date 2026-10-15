@@ -307,15 +307,23 @@ func artifactDigest(art *meta.Artifact) string {
 	return art.Digest
 }
 
+// sharedDownloadTimeout bounds the shared call as a whole, the read-back of the source object
+// included, since the call is detached from the request that started it: other requests may be
+// waiting on its result. The HTTP client's own timeout already bounds the download itself.
+const sharedDownloadTimeout = 90 * time.Second
+
 func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact, current currentDigestFunc) (Result, error) {
-	values, _, err := r.downloads.do(ctx, name, func() ([]byte, error) {
-		values, err := artifact.FetchValues(ctx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
+	values, err := r.downloads.do(ctx, name, func() ([]byte, error) {
+		downloadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sharedDownloadTimeout)
+		defer cancel()
+
+		values, err := artifact.FetchValues(downloadCtx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
 		if err != nil {
 			return nil, err
 		}
 
 		if err := r.cache.PutUnless(name, art.Digest, values, func() bool {
-			return r.stillCurrent(ctx, name, current, art.Digest)
+			return r.stillCurrent(downloadCtx, name, current, art.Digest)
 		}); err != nil {
 			switch {
 			case errors.Is(err, cache.ErrBudgetExhausted):

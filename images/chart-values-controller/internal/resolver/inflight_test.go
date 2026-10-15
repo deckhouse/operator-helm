@@ -28,6 +28,18 @@ import (
 
 const waiterBudget = 50 * time.Millisecond
 
+// joinSignal reports that a caller of do is waiting on its call: do uses the context for nothing else.
+type joinSignal struct {
+	context.Context
+	joined func()
+}
+
+func (c joinSignal) Done() <-chan struct{} {
+	c.joined()
+
+	return c.Context.Done()
+}
+
 func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 	const callers = 8
 
@@ -36,30 +48,39 @@ func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 
 	release := make(chan struct{})
 
-	var joined sync.WaitGroup
-	joined.Add(callers - 1)
-	g.onJoin = joined.Done
+	entered := make(chan struct{})
 
 	type outcome struct {
 		values []byte
-		shared bool
 		err    error
 	}
 	outcomes := make([]outcome, callers)
 
+	var joined sync.WaitGroup
+	joined.Add(callers - 1)
+
 	var wg sync.WaitGroup
 	for i := range callers {
+		ctx := context.Background()
+		if i > 0 {
+			<-entered
+
+			var once sync.Once
+			ctx = joinSignal{Context: ctx, joined: func() { once.Do(joined.Done) }}
+		}
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
-			values, shared, err := g.do(context.Background(), "chart-key", func() ([]byte, error) {
+			values, err := g.do(ctx, "chart-key", func() ([]byte, error) {
 				calls.Add(1)
+				close(entered)
 				<-release
 
 				return []byte("replicaCount: 1\n"), nil
 			})
-			outcomes[i] = outcome{values: values, shared: shared, err: err}
+			outcomes[i] = outcome{values: values, err: err}
 		}()
 	}
 
@@ -71,7 +92,6 @@ func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 		t.Fatalf("the shared work ran %d times, want exactly 1: concurrent misses on one key must not each download the artifact", got)
 	}
 
-	leaders := 0
 	for i, got := range outcomes {
 		if got.err != nil {
 			t.Fatalf("caller %d failed: %v", i, got.err)
@@ -79,12 +99,6 @@ func TestInflightCollapsesConcurrentCallersOnOneKeyIntoOneCall(t *testing.T) {
 		if !bytes.Equal(got.values, []byte("replicaCount: 1\n")) {
 			t.Fatalf("caller %d got %q, want the values of the single call", i, got.values)
 		}
-		if !got.shared {
-			leaders++
-		}
-	}
-	if leaders != 1 {
-		t.Fatalf("%d callers reported running the call themselves, want 1", leaders)
 	}
 }
 
@@ -104,7 +118,7 @@ func TestInflightRunsCallsOnDifferentKeysConcurrently(t *testing.T) {
 				other = "second-key"
 			}
 
-			_, _, err := g.do(context.Background(), key, func() ([]byte, error) {
+			_, err := g.do(context.Background(), key, func() ([]byte, error) {
 				close(start)
 				select {
 				case <-started[other]:
@@ -161,7 +175,8 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 			waiterErr := make(chan error, 1)
 
 			joined := make(chan struct{})
-			g.onJoin = func() { close(joined) }
+			var joinOnce sync.Once
+			waiterCtx := joinSignal{Context: context.Background(), joined: func() { joinOnce.Do(func() { close(joined) }) }}
 
 			var wg sync.WaitGroup
 			wg.Add(1)
@@ -169,7 +184,7 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 				defer wg.Done()
 				defer func() { _ = recover() }()
 
-				_, _, _ = g.do(context.Background(), "chart-key", func() ([]byte, error) {
+				_, _ = g.do(context.Background(), "chart-key", func() ([]byte, error) {
 					calls.Add(1)
 					close(entered)
 					<-release
@@ -185,7 +200,7 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 			go func() {
 				defer wg.Done()
 
-				_, _, err := g.do(context.Background(), "chart-key", func() ([]byte, error) {
+				_, err := g.do(waiterCtx, "chart-key", func() ([]byte, error) {
 					return nil, errors.New("the waiter must not run its own call")
 				})
 				waiterErr <- err
@@ -203,13 +218,15 @@ func TestInflightForgetsACallThatProducedNothing(t *testing.T) {
 				t.Fatalf("the shared work ran %d times while one call was in flight, want 1", got)
 			}
 
-			values, shared, err := g.do(context.Background(), "chart-key", func() ([]byte, error) {
+			values, err := g.do(context.Background(), "chart-key", func() ([]byte, error) {
+				calls.Add(1)
+
 				return []byte("replicaCount: 1\n"), nil
 			})
 			if err != nil {
 				t.Fatalf("the call after the failure returned %v", err)
 			}
-			if shared {
+			if got := calls.Load(); got != 2 {
 				t.Fatal("the call after the failure joined the dead one instead of running")
 			}
 			if !bytes.Equal(values, []byte("replicaCount: 1\n")) {
@@ -260,8 +277,13 @@ func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var g inflight
 
-			ctx, onJoin := test.ctx(t)
-			g.onJoin = onJoin
+			parent, onJoin := test.ctx(t)
+			var joinOnce sync.Once
+			ctx := joinSignal{Context: parent, joined: func() {
+				if onJoin != nil {
+					joinOnce.Do(onJoin)
+				}
+			}}
 
 			release := make(chan struct{})
 			t.Cleanup(func() { close(release) })
@@ -271,7 +293,7 @@ func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 			go func() {
 				defer close(leaderDone)
 
-				_, _, _ = g.do(context.Background(), "chart-key", func() ([]byte, error) {
+				_, _ = g.do(context.Background(), "chart-key", func() ([]byte, error) {
 					close(entered)
 					<-release
 
@@ -281,14 +303,11 @@ func TestInflightWaiterEndsOnItsOwnDeadline(t *testing.T) {
 
 			<-entered
 
-			values, shared, err := g.do(ctx, "chart-key", func() ([]byte, error) {
+			values, err := g.do(ctx, "chart-key", func() ([]byte, error) {
 				return nil, errors.New("the waiter must not run its own call")
 			})
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("the waiter returned %v, want %v", err, test.wantErr)
-			}
-			if !shared {
-				t.Fatal("the waiter must report that it joined somebody else's call")
 			}
 			if values != nil {
 				t.Fatalf("the waiter returned values %q from a call it never saw finish", values)
