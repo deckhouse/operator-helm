@@ -73,7 +73,8 @@ func (s *Synchronizer) Sync(
 
 	snapshot, err := s.catalog.Snapshot(ctx, repo)
 	if err != nil {
-		// The registry was never contacted, and a request not written down still needs its annotation.
+		// The registry was never contacted. An oci request not yet marked still needs its annotation;
+		// a helm one is carried by the internal HelmRepository and the consumers, so its annotation can go.
 		return SyncOutcome{ForceRequestRecorded: !marking, Catalog: CatalogOutcome{Err: err}}
 	}
 

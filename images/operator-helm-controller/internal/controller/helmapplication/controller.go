@@ -53,10 +53,9 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Releases:        internalobj.NewReleases(client, helmv1alpha1.TargetNamespace),
 		Maintenance:     internalobj.NewMaintenance(client, helmv1alpha1.TargetNamespace),
 		Claims:          reconcile.NoClaims{},
-		// The reader bypasses the cache because nothing watches Namespaces.
-		Namespaces: namespace.NewExistingTarget(mgr.GetAPIReader()),
-		Identity:   rbac.NewIdentity(client, helmv1alpha1.TargetNamespace),
-		Status:     status.NewManager(client),
+		Namespaces:      namespace.NewExistingTarget(mgr.GetAPIReader()),
+		Identity:        rbac.NewIdentity(client, helmv1alpha1.TargetNamespace),
+		Status:          status.NewManager(client),
 	})
 
 	mapInternal := utils.MapNamespacedInternalResources(

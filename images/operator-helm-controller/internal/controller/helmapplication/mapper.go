@@ -138,8 +138,8 @@ func mapChartToApplications(c client.Client, repositoryKind string) handler.MapF
 
 func applicationRequests(apps helmv1alpha1.HelmApplicationList) []reconcile.Request {
 	requests := make([]reconcile.Request, 0, len(apps.Items))
-	for _, app := range apps.Items {
-		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: app.Namespace, Name: app.Name}})
+	for i := range apps.Items {
+		requests = append(requests, requestFor(&apps.Items[i]))
 	}
 
 	return requests

@@ -511,7 +511,7 @@ func (t *typed[C, CL]) Lookup(ctx context.Context, repo contract.Repository, cha
 	key := client.ObjectKey{Namespace: repo.Namespace(), Name: t.cfg.ObjectName(repo.Name(), chartName)}
 
 	if err := t.client.Get(ctx, key, obj); err != nil {
-		return nil, nil, fmt.Errorf("getting %s %s: %w", t.cfg.Kind, key, err)
+		return nil, nil, fmt.Errorf("getting %s %s: %w", t.cfg.Kind, describeKey(key), err)
 	}
 
 	return obj, t.cfg.Status(obj), nil

@@ -128,12 +128,7 @@ func (s *HelmRepositories) Cleanup(ctx context.Context, names contract.InternalN
 
 func applyHelmRepositorySpec(repo contract.Repository, existing *sourcev1.HelmRepository) {
 	if repo.ForceReconcileRequired() {
-		if existing.Annotations == nil {
-			existing.Annotations = map[string]string{}
-		}
-		ts := time.Now().UTC().Format(time.RFC3339)
-		existing.Annotations[meta.ForceRequestAnnotation] = ts
-		existing.Annotations[meta.ReconcileRequestAnnotation] = ts
+		setReconcileRequestAnnotations(existing)
 	}
 
 	names := repo.InternalNames()
