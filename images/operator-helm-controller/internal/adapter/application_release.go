@@ -160,7 +160,7 @@ func (r *ApplicationRelease) SetLastForceReconcileTime(t metav1.Time) {
 	r.obj.Status.LastForceReconcileTime = &t
 }
 
-type applicationRepositoryResolver struct {
+type ApplicationRepositoryResolver struct {
 	client         client.Client
 	namespaced     contract.Catalog
 	clusterCatalog contract.Catalog
@@ -168,15 +168,15 @@ type applicationRepositoryResolver struct {
 
 // NewApplicationRepositoryResolver builds the resolver the release reconciler looks charts up
 // through. Its catalogs are only ever looked up in, so they read through the cache.
-func NewApplicationRepositoryResolver(c client.Client) *applicationRepositoryResolver {
-	return &applicationRepositoryResolver{
+func NewApplicationRepositoryResolver(c client.Client) *ApplicationRepositoryResolver {
+	return &ApplicationRepositoryResolver{
 		client:         c,
 		namespaced:     NewApplicationCatalog(c, c),
 		clusterCatalog: NewClusterApplicationCatalog(c, c),
 	}
 }
 
-func (r *applicationRepositoryResolver) Resolve(ctx context.Context, ref contract.RepositoryRef) (contract.Repository, contract.Catalog, error) {
+func (r *ApplicationRepositoryResolver) Resolve(ctx context.Context, ref contract.RepositoryRef) (contract.Repository, contract.Catalog, error) {
 	switch ref.Kind {
 	case helmv1alpha1.HelmApplicationRepositoryKind:
 		repo := &helmv1alpha1.HelmApplicationRepository{}

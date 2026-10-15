@@ -131,18 +131,18 @@ func (r *AddonRelease) SetLastForceReconcileTime(t metav1.Time) {
 	r.obj.Status.LastForceReconcileTime = &t
 }
 
-type addonRepositoryResolver struct {
+type AddonRepositoryResolver struct {
 	client  client.Client
 	catalog contract.Catalog
 }
 
 // NewAddonRepositoryResolver builds the resolver the release reconciler looks charts up
 // through. Its catalog is only ever looked up in, so it reads through the cache.
-func NewAddonRepositoryResolver(c client.Client) *addonRepositoryResolver {
-	return &addonRepositoryResolver{client: c, catalog: NewAddonCatalog(c, c)}
+func NewAddonRepositoryResolver(c client.Client) *AddonRepositoryResolver {
+	return &AddonRepositoryResolver{client: c, catalog: NewAddonCatalog(c, c)}
 }
 
-func (r *addonRepositoryResolver) Resolve(ctx context.Context, ref contract.RepositoryRef) (contract.Repository, contract.Catalog, error) {
+func (r *AddonRepositoryResolver) Resolve(ctx context.Context, ref contract.RepositoryRef) (contract.Repository, contract.Catalog, error) {
 	repo := &helmv1alpha1.HelmClusterAddonRepository{}
 	if err := r.client.Get(ctx, client.ObjectKey{Name: ref.Name}, repo); err != nil {
 		return nil, nil, fmt.Errorf("getting %s %q: %w", helmv1alpha1.HelmClusterAddonRepositoryKind, ref.Name, err)
