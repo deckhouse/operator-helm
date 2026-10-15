@@ -140,11 +140,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		in.Catalog = &outcome.Catalog
 	}
 
-	return r.finish(ctx, repo, in, forceRecorded)
+	return r.finish(ctx, repo, in, in.Forced && forceRecorded)
 }
 
-// finish applies the decision and consumes the force annotation once an attempt has recorded
-// the request in the catalog. The annotation is removed after the status patch.
+// finish applies the decision and consumes the force annotation once a forced attempt has
+// recorded the request in the catalog. The annotation is removed after the status patch.
 func (r *Reconciler) finish(
 	ctx context.Context,
 	repo contract.Repository,
@@ -168,7 +168,7 @@ func (r *Reconciler) finish(
 		// Run before the annotation is consumed, so a failure leaves the request to be retried.
 		if repo.ForceReconcileRequired() {
 			if err := r.deps.Consumers.ForceReconcileConsumers(ctx, repo); err != nil {
-				return reconcile.Result{}, fmt.Errorf("failed to force reconcile internal oci repositories: %w", err)
+				return reconcile.Result{}, fmt.Errorf("forcing consumers to reconcile: %w", err)
 			}
 		}
 

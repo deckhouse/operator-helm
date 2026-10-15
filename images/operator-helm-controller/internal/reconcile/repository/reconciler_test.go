@@ -1161,3 +1161,38 @@ func TestReconcileKeepsAForceRequestItCouldNotRecord(t *testing.T) {
 		t.Fatal("the pass that recorded the request must consume it")
 	}
 }
+
+func TestReconcileKeepsAForceRequestSetDuringAnUnforcedPass(t *testing.T) {
+	repo := ociRepository()
+	stub := &stubRepoClient{charts: []repoclient.Chart{{
+		Name:     "podinfo",
+		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
+	}}}
+
+	r, c := newReconciler(t, stub, repo)
+
+	stub.onFetch = func() {
+		stored := &helmv1alpha1.HelmClusterAddonRepository{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), stored); err != nil {
+			t.Fatalf("getting repository: %v", err)
+		}
+
+		stored.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+		if err := c.Update(context.Background(), stored); err != nil {
+			t.Fatalf("annotating repository: %v", err)
+		}
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: repo.Name},
+	}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	if len(stub.options) != 1 || stub.options[0].Full {
+		t.Fatalf("fetch options = %+v, want one unforced read", stub.options)
+	}
+	if !forceAnnotationPresent(t, c, repo.Name) {
+		t.Fatal("a force request set during an unforced pass must survive it: that pass never served it")
+	}
+}
