@@ -65,7 +65,7 @@ func (r *HelmClusterAddonRepository) GetObservedGeneration() int64 {
 }
 
 func (r *HelmClusterAddonRepository) GetConditionTypesForUpdate() []string {
-	return []string{"Ready"}
+	return []string{ConditionTypeReady}
 }
 
 func (r *HelmClusterAddonRepository) ForceReconcileRequired() bool {

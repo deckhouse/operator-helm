@@ -56,7 +56,7 @@ func (r *HelmClusterAddonChart) GetObservedGeneration() int64 {
 }
 
 func (r *HelmClusterAddonChart) GetConditionTypesForUpdate() []string {
-	return []string{"Ready"}
+	return []string{ConditionTypeReady}
 }
 
 // HelmClusterAddonChartList contains a list of HelmClusterAddonCharts.

@@ -21,8 +21,7 @@ import (
 )
 
 const (
-	HelmClusterApplicationRepositoryKind     = "HelmClusterApplicationRepository"
-	HelmClusterApplicationRepositoryResource = "helmclusterapplicationrepositories"
+	HelmClusterApplicationRepositoryKind = "HelmClusterApplicationRepository"
 
 	// HelmClusterApplicationRepositoryLabelSourceName stores the name of the source facade resource.
 	HelmClusterApplicationRepositoryLabelSourceName = "helm.deckhouse.io/cluster-application-repository"

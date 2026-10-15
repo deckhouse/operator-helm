@@ -105,7 +105,7 @@ const (
 	// update the controller has scheduled another attempt for.
 	ReasonProgressingWithRetry = "ProgressingWithRetry"
 	// ReasonRetriesExceeded marks a repository whose reads have failed enough times
-	// in a row (MaxFetchFailures) that the failure is more than a passing one.
+	// in a row that the failure is more than a passing one.
 	ReasonRetriesExceeded = "RetriesExceeded"
 	// ReasonAuthenticationFailed marks a repository that rejected the credentials it
 	// was read with (HTTP 401 or 403).

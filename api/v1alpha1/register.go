@@ -35,9 +35,6 @@ var (
 	HelmClusterAddonChartGVK            = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterAddonChartKind}
 	HelmApplicationRepositoryGVK        = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmApplicationRepositoryKind}
 	HelmClusterApplicationRepositoryGVK = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterApplicationRepositoryKind}
-	HelmApplicationChartGVK             = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmApplicationChartKind}
-	HelmClusterApplicationChartGVK      = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmClusterApplicationChartKind}
-	HelmApplicationGVK                  = schema.GroupVersionKind{Group: SchemeGroupVersion.Group, Version: SchemeGroupVersion.Version, Kind: HelmApplicationKind}
 )
 
 func Kind(kind string) schema.GroupKind {

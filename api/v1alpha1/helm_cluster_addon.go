@@ -32,8 +32,6 @@ const (
 	HelmClusterAddonLabelSourceName = "helm.deckhouse.io/cluster-addon"
 )
 
-// This note is outside the doc comment on purpose: a doc comment on the type becomes the description of the kind in the CRD.
-
 // HelmClusterAddon represents a single cluster-wide installation of a Helm chart, which may include custom resource definitions (CRDs) and requires cluster-admin permissions to deploy. Only one instance of a specific chart can be installed at any given time.
 //
 // +kubebuilder:object:root=true
@@ -162,8 +160,6 @@ type HelmClusterAddonChartRef struct {
 	// from the defined repository (e.g., "ingress-nginx" or "redis").
 	// +kubebuilder:validation:MinLength=1
 	HelmClusterAddonChartName string `json:"helmClusterAddonChart"`
-	// This note is outside the doc comment on purpose: a doc comment becomes the field's description in the CRD.
-
 	// Specifies the name of the HelmClusterAddonRepository custom resource that contains
 	// the connection details and credentials for the repository where the chart is located.
 	// +kubebuilder:validation:MinLength=1

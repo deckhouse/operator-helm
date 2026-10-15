@@ -218,8 +218,7 @@ type HelmApplicationStatus struct {
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
 }
 
-// This note is outside the doc comment on purpose: a doc comment on a type used as a status field becomes that field's description in the CRD.
-
+// HelmApplicationLastAppliedChartRef identifies the chart a HelmApplication release was last deployed from.
 type HelmApplicationLastAppliedChartRef struct {
 	// Specifies the name of the Helm chart the release was last deployed from.
 	// +optional

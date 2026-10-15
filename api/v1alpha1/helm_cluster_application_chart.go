@@ -21,8 +21,7 @@ import (
 )
 
 const (
-	HelmClusterApplicationChartKind     = "HelmClusterApplicationChart"
-	HelmClusterApplicationChartResource = "helmclusterapplicationcharts"
+	HelmClusterApplicationChartKind = "HelmClusterApplicationChart"
 
 	HelmClusterApplicationChartLabelSourceName = "helm.deckhouse.io/cluster-application-chart"
 )
