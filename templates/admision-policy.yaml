@@ -94,12 +94,16 @@ spec:
           - "namespaces/status"
           - "namespaces/finalize"
           - "resourcequotas/status"
+      - apiGroups: ["deckhouse.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["projectnamespaces", "projectnamespaces/status"]
   matchConditions:
     - name: application-identity
       expression: 'request.userInfo.username.startsWith("{{ $applicationSubject }}")'
   validations:
     - expression: "false"
-      message: "An application may not modify its namespace, resource quotas or limit ranges."
+      message: "An application may not modify its namespace, resource quotas, limit ranges or project namespaces."
       reason: Forbidden
 ---
 apiVersion: {{ $apiVersion }}
@@ -123,9 +127,11 @@ spec:
         !has(object.rules) || !object.rules.exists(r,
           has(r.apiGroups) && has(r.resources) &&
           r.verbs.exists(v, v in {{ $mutating | toJson }}) &&
-          r.apiGroups.exists(g, g == "*" || g == "") &&
-          r.resources.exists(res, res == "*" || res.startsWith("*/") || res.split("/")[0] in {{ $protected | toJson }}))
-      message: "A Role written by an application may not grant write access to namespaces, resource quotas or limit ranges."
+          ((r.apiGroups.exists(g, g == "*" || g == "") &&
+            r.resources.exists(res, res == "*" || res.startsWith("*/") || res.split("/")[0] in {{ $protected | toJson }})) ||
+           (r.apiGroups.exists(g, g == "*" || g == "deckhouse.io") &&
+            r.resources.exists(res, res == "*" || res.startsWith("*/") || res.split("/")[0] == "projectnamespaces"))))
+      message: "A Role written by an application may not grant write access to namespaces, resource quotas, limit ranges or project namespaces."
       reason: Forbidden
 ---
 apiVersion: {{ $apiVersion }}
