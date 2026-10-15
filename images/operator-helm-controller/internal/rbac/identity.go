@@ -38,12 +38,12 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// ApplicationRoleName is the Role every application release of a namespace is bound to.
-// There is one per namespace, and it outlives the applications bound to it.
-const ApplicationRoleName = "operator-helm-application"
+// ApplicationClusterRoleName is the ClusterRole, shipped by the module chart, that every
+// application release is bound to inside its own namespace.
+const ApplicationClusterRoleName = "d8:operator-helm:application"
 
 // Identity provides the identity a release is applied with: a ServiceAccount in the operator
-// namespace, a Role in the target namespace and a RoleBinding tying the two together.
+// namespace and a RoleBinding in the target namespace to the application ClusterRole.
 type Identity struct {
 	// Reads bypass the manager's cache, which holds no accounts and only labelled bindings,
 	// so an unlabelled foreign object is seen rather than read as absent.
@@ -55,8 +55,8 @@ func NewIdentity(c client.Client, targetNamespace string) *Identity {
 	return &Identity{client: c, targetNamespace: targetNamespace}
 }
 
-// Ensure reconciles the account, the Role and the binding. A release without a service
-// account name belongs to a family that does not impersonate.
+// Ensure reconciles the account and the binding. A release without a service account name
+// belongs to a family that does not impersonate.
 func (s *Identity) Ensure(ctx context.Context, rel contract.Release) IdentityOutcome {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
@@ -67,10 +67,6 @@ func (s *Identity) Ensure(ctx context.Context, rel contract.Release) IdentityOut
 
 	if err := s.ensureServiceAccount(ctx, rel, name); err != nil {
 		return rbacFailure(fmt.Errorf("ensuring service account: %w", err))
-	}
-
-	if err := s.ensureRole(ctx, namespace); err != nil {
-		return rbacFailure(fmt.Errorf("ensuring role: %w", err))
 	}
 
 	if err := s.ensureRoleBinding(ctx, rel, namespace, name); err != nil {
@@ -141,7 +137,7 @@ func createOrPatchOwned(ctx context.Context, c client.Client, obj client.Object,
 }
 
 // Cleanup removes the account and the binding and returns whichever is still present, for
-// the caller to wait on. The shared namespace Role stays and is never waited on.
+// the caller to wait on.
 func (s *Identity) Cleanup(ctx context.Context, rel contract.Release) (status.DeletingResource, error) {
 	name := rel.InternalNames().ServiceAccount
 	if name == "" {
@@ -220,48 +216,7 @@ func (s *Identity) ensureServiceAccount(ctx context.Context, rel contract.Releas
 	return err
 }
 
-// ensureRole keeps the namespace Role in its desired shape: full rights inside the namespace,
-// and nothing outside it. A Role found under the name that is not ours is refused.
-func (s *Identity) ensureRole(ctx context.Context, namespace string) error {
-	// The Role is shared, so two applications can both create it; the loser retries as a patch.
-	err := s.applyRole(ctx, namespace)
-	if apierrors.IsAlreadyExists(err) {
-		err = s.applyRole(ctx, namespace)
-	}
-
-	return err
-}
-
-func (s *Identity) applyRole(ctx context.Context, namespace string) error {
-	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: namespace},
-	}
-
-	return createOrPatchOwned(ctx, s.client, role, func(exists bool) error {
-		if exists && !managedByOperator(role.Labels) {
-			return &foreignObjectError{message: fmt.Sprintf(
-				"role %s/%s already exists and is not managed by the operator",
-				namespace, ApplicationRoleName,
-			)}
-		}
-
-		// Merged rather than replaced, so labels set by someone else survive.
-		if role.Labels == nil {
-			role.Labels = map[string]string{}
-		}
-		maps.Copy(role.Labels, applicationRBACLabels())
-
-		role.Rules = []rbacv1.PolicyRule{{
-			APIGroups: []string{"*"},
-			Resources: []string{"*"},
-			Verbs:     []string{"*"},
-		}}
-
-		return nil
-	})
-}
-
-// applicationRBACLabels mark the namespace Role and every role binding we own.
+// applicationRBACLabels mark every role binding we own.
 func applicationRBACLabels() map[string]string {
 	return map[string]string{
 		helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue,
@@ -271,13 +226,13 @@ func applicationRBACLabels() map[string]string {
 func applicationRoleRef() rbacv1.RoleRef {
 	return rbacv1.RoleRef{
 		APIGroup: rbacv1.GroupName,
-		Kind:     "Role",
-		Name:     ApplicationRoleName,
+		Kind:     "ClusterRole",
+		Name:     ApplicationClusterRoleName,
 	}
 }
 
-// ensureRoleBinding binds the account to the namespace Role, reconciling a binding of ours
-// on every pass and leaving one that is not ours exactly as it is.
+// ensureRoleBinding binds the account to the application ClusterRole, reconciling a binding
+// of ours on every pass and leaving one that is not ours exactly as it is.
 func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, namespace, name string) error {
 	desiredRef := applicationRoleRef()
 

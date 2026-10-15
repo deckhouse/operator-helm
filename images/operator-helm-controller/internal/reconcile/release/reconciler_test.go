@@ -877,8 +877,8 @@ func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *test
 	if err := c.List(context.Background(), &roles, inNamespace); err != nil {
 		t.Fatalf("listing roles: %v", err)
 	}
-	if len(roles.Items) != 1 || roles.Items[0].Name != rbac.ApplicationRoleName {
-		t.Fatalf("roles = %+v, want only %s", roles.Items, rbac.ApplicationRoleName)
+	if len(roles.Items) != 0 {
+		t.Fatalf("roles = %+v, want none: the rights come from the module's ClusterRole", roles.Items)
 	}
 
 	var bindings rbacv1.RoleBindingList
@@ -1036,12 +1036,13 @@ func TestReconcileStallsOnAnUnreadableRepositoryURL(t *testing.T) {
 	}
 }
 
-func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
+func TestReconcileApplicationStallsOnAForeignRoleBinding(t *testing.T) {
 	app := testApplication()
-	rules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}}
-	foreign := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: rbac.ApplicationRoleName, Namespace: app.Namespace},
-		Rules:      rules,
+	names := adapter.NewApplicationRelease(app).InternalNames()
+	foreign := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: names.ServiceAccount, Namespace: app.Namespace},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "someone-elses-role"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "someone-else"}},
 	}
 
 	r, c := newApplicationFullReconciler(t, nil, append(applicationFixtures(), app, foreign)...)
@@ -1073,15 +1074,14 @@ func TestReconcileApplicationStallsOnAForeignRole(t *testing.T) {
 		t.Fatalf("Ready = %+v, want False/%s", ready, helmv1alpha1.ReasonForeignRBACObject)
 	}
 
-	stored := &rbacv1.Role{}
+	stored := &rbacv1.RoleBinding{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), stored); err != nil {
-		t.Fatalf("the foreign role must survive: %v", err)
+		t.Fatalf("the foreign role binding must survive: %v", err)
 	}
-	if !reflect.DeepEqual(stored.Rules, rules) {
-		t.Fatalf("rules = %+v, want them untouched", stored.Rules)
+	if stored.RoleRef != foreign.RoleRef || !reflect.DeepEqual(stored.Subjects, foreign.Subjects) {
+		t.Fatalf("binding = %+v, want it untouched", stored)
 	}
 
-	names := adapter.NewApplicationRelease(app).InternalNames()
 	releaseKey := client.ObjectKey{Name: names.HelmRelease, Namespace: helmv1alpha1.TargetNamespace}
 	if err := c.Get(context.Background(), releaseKey, &helmv2.HelmRelease{}); err == nil {
 		t.Fatal("no release must be created for an application whose identity could not be built")
@@ -2198,18 +2198,13 @@ func TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone(t *testing.T) {
 			Labels:     map[string]string{helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue},
 			Finalizers: []string{"policy.example.com/protect"},
 		},
-		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: rbac.ApplicationRoleName},
+		RoleRef: applicationClusterRoleRef(),
 	}
 	account := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
 		Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace,
 	}}
-	sharedRole := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
-		Name:      rbac.ApplicationRoleName,
-		Namespace: app.Namespace,
-		Labels:    map[string]string{helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue},
-	}}
 
-	r, c := newApplicationFullReconciler(t, nil, app, binding, account, sharedRole)
+	r, c := newApplicationFullReconciler(t, nil, app, binding, account)
 
 	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
 	ctx := context.Background()
@@ -2231,10 +2226,6 @@ func TestReconcileDeleteHoldsTheFinalizerUntilTheIdentityIsGone(t *testing.T) {
 		if !controllerutil.ContainsFinalizer(settled, helmv1alpha1.FinalizerName) {
 			t.Fatalf("attempt %d: the finalizer must stay while the role binding is terminating", attempt)
 		}
-	}
-
-	if err := c.Get(ctx, client.ObjectKeyFromObject(sharedRole), &rbacv1.Role{}); err != nil {
-		t.Fatalf("the shared role must survive the application: %v", err)
 	}
 
 	held := &rbacv1.RoleBinding{}
@@ -2297,14 +2288,13 @@ func deletingApplicationFixtures(namespaceTerminating bool) (*helmv1alpha1.HelmA
 				Namespace: app.Namespace,
 				Labels:    map[string]string{helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue},
 			},
-			RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: rbac.ApplicationRoleName},
+			RoleRef: applicationClusterRoleRef(),
 		},
-		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
-			Name:      rbac.ApplicationRoleName,
-			Namespace: app.Namespace,
-			Labels:    map[string]string{helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue},
-		}},
 	}
+}
+
+func applicationClusterRoleRef() rbacv1.RoleRef {
+	return rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: rbac.ApplicationClusterRoleName}
 }
 
 func objectExists(t *testing.T, c client.Client, key client.ObjectKey, obj client.Object) bool {
@@ -2473,8 +2463,8 @@ func TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight(t 
 	if !objectExists(t, c, bindingKey, repaired) {
 		t.Fatal("the role binding must be back: without it the uninstall is refused and the teardown never ends")
 	}
-	if repaired.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: rbac.ApplicationRoleName}) {
-		t.Fatalf("roleRef = %+v, want the shared application role", repaired.RoleRef)
+	if repaired.RoleRef != applicationClusterRoleRef() {
+		t.Fatalf("roleRef = %+v, want the application ClusterRole", repaired.RoleRef)
 	}
 	wantSubjects := []rbacv1.Subject{{
 		Kind: rbacv1.ServiceAccountKind, Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace,

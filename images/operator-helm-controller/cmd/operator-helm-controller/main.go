@@ -86,7 +86,8 @@ func main() {
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "operator-helm-controller.helm.deckhouse.io",
 		Client: client.Options{
-			// Reads go to the API server: the Role informer is label-scoped and nothing watches ServiceAccounts.
+			// Reads go to the API server: the RoleBinding informer is label-scoped and nothing watches
+			// ServiceAccounts or Roles.
 			Cache: &client.CacheOptions{
 				DisableFor: []client.Object{&corev1.ServiceAccount{}, &rbacv1.Role{}, &rbacv1.RoleBinding{}},
 			},
@@ -99,8 +100,7 @@ func main() {
 						helmv1alpha1.TargetNamespace: {},
 					},
 				},
-				// A release identity lives in whichever namespace the application does, so only the label scopes these.
-				&rbacv1.Role{}:        {Label: managedByOperatorHelm},
+				// A release identity lives in whichever namespace the application does, so only the label scopes this.
 				&rbacv1.RoleBinding{}: {Label: managedByOperatorHelm},
 			},
 		},

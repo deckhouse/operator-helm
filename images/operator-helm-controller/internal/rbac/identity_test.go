@@ -72,23 +72,19 @@ func TestIdentityEnsureCreatesTheIdentity(t *testing.T) {
 		t.Fatalf("service account labels = %v, want %v", sa.Labels, rel.SourceLabels())
 	}
 
-	role := &rbacv1.Role{}
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: ApplicationRoleName}, role); err != nil {
-		t.Fatalf("role was not created in the application namespace: %v", err)
+	var roles rbacv1.RoleList
+	if err := c.List(context.Background(), &roles, client.InNamespace("team-a")); err != nil {
+		t.Fatalf("listing roles: %v", err)
 	}
-	wantRules := []rbacv1.PolicyRule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}}}
-	if !reflect.DeepEqual(role.Rules, wantRules) {
-		t.Fatalf("role rules = %+v, want full rights inside the namespace", role.Rules)
-	}
-	if !reflect.DeepEqual(role.Labels, applicationRBACLabels()) {
-		t.Fatalf("role labels = %v, want %v", role.Labels, applicationRBACLabels())
+	if len(roles.Items) != 0 {
+		t.Fatalf("roles = %+v, want none: the rights come from the module's ClusterRole", roles.Items)
 	}
 
 	binding := &rbacv1.RoleBinding{}
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: names.ServiceAccount}, binding); err != nil {
 		t.Fatalf("role binding was not created in the application namespace: %v", err)
 	}
-	if binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: ApplicationRoleName}) {
+	if binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: ApplicationClusterRoleName}) {
 		t.Fatalf("roleRef = %+v", binding.RoleRef)
 	}
 	wantSubjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: names.ServiceAccount, Namespace: testNamespace}}
@@ -104,78 +100,6 @@ func TestIdentityEnsureCreatesTheIdentity(t *testing.T) {
 		if binding.Labels[key] != want {
 			t.Fatalf("role binding label %q = %q, want %q", key, binding.Labels[key], want)
 		}
-	}
-}
-
-func TestIdentityEnsureRewritesAnEditedRole(t *testing.T) {
-	rel := adapter.NewApplicationRelease(testApplication())
-	edited := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ApplicationRoleName,
-			Namespace: "team-a",
-			Labels: map[string]string{
-				helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue,
-				"cost-center":               "platform",
-			},
-		},
-		Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}},
-	}
-	service, c := newIdentity(t, edited)
-
-	if out := service.Ensure(context.Background(), rel); out.Err != nil {
-		t.Fatalf("Ensure returned %v", out.Err)
-	}
-
-	role := &rbacv1.Role{}
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: ApplicationRoleName}, role); err != nil {
-		t.Fatalf("getting role: %v", err)
-	}
-	wantRules := []rbacv1.PolicyRule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}}}
-	if !reflect.DeepEqual(role.Rules, wantRules) {
-		t.Fatalf("a narrowed role must be written back, rules = %+v", role.Rules)
-	}
-	for key, want := range applicationRBACLabels() {
-		if role.Labels[key] != want {
-			t.Fatalf("role label %q = %q, want %q", key, role.Labels[key], want)
-		}
-	}
-	if role.Labels["cost-center"] != "platform" {
-		t.Fatalf("role labels = %v, want the foreign label kept", role.Labels)
-	}
-}
-
-func TestIdentityEnsureRefusesARoleThatIsNotOurs(t *testing.T) {
-	rel := adapter.NewApplicationRelease(testApplication())
-	rules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}}
-	foreign := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: "team-a"},
-		Rules:      rules,
-	}
-	service, c := newIdentity(t, foreign)
-
-	out := service.Ensure(context.Background(), rel)
-	if out.Err == nil {
-		t.Fatal("a role that is not ours must be reported, not seized")
-	}
-	if !out.Terminal {
-		t.Fatalf("outcome = %+v, want it terminal", out)
-	}
-	if out.Reason != helmv1alpha1.ReasonForeignRBACObject {
-		t.Fatalf("reason = %q, want %q", out.Reason, helmv1alpha1.ReasonForeignRBACObject)
-	}
-	if !strings.Contains(out.Message, "team-a/"+ApplicationRoleName) {
-		t.Fatalf("message %q must name the role", out.Message)
-	}
-
-	stored := &rbacv1.Role{}
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(foreign), stored); err != nil {
-		t.Fatalf("the foreign role must survive: %v", err)
-	}
-	if !reflect.DeepEqual(stored.Rules, rules) {
-		t.Fatalf("rules = %+v, want them untouched", stored.Rules)
-	}
-	if len(stored.Labels) != 0 {
-		t.Fatalf("labels = %v, want the foreign role left unlabelled", stored.Labels)
 	}
 }
 
@@ -255,46 +179,6 @@ func TestIdentityEnsureReplacesOurBindingThatNamesAnotherRole(t *testing.T) {
 	}
 }
 
-func TestIdentityEnsureSurvivesLosingTheRoleCreateRace(t *testing.T) {
-	rel := adapter.NewApplicationRelease(testApplication())
-
-	var refused bool
-	c := fake.NewClientBuilder().
-		WithScheme(testScheme(t)).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-				role, ok := obj.(*rbacv1.Role)
-				if !ok || refused {
-					return cl.Create(ctx, obj, opts...)
-				}
-
-				refused = true
-				if err := cl.Create(ctx, role.DeepCopy(), opts...); err != nil {
-					return err
-				}
-
-				return apierrors.NewAlreadyExists(rbacv1.Resource("roles"), role.Name)
-			},
-		}).
-		Build()
-	service := NewIdentity(c, testNamespace)
-
-	if out := service.Ensure(context.Background(), rel); out.Err != nil {
-		t.Fatalf("Ensure returned %v", out.Err)
-	}
-	if !refused {
-		t.Fatal("the test did not exercise the refused create")
-	}
-
-	role := &rbacv1.Role{}
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: ApplicationRoleName}, role); err != nil {
-		t.Fatalf("getting role: %v", err)
-	}
-	if !reflect.DeepEqual(role.Labels, applicationRBACLabels()) {
-		t.Fatalf("role labels = %v, want %v", role.Labels, applicationRBACLabels())
-	}
-}
-
 func swapOnce(t *testing.T, replacement client.Object) (func(ctx context.Context, cl client.WithWatch), *bool) {
 	t.Helper()
 
@@ -317,62 +201,6 @@ func swapOnce(t *testing.T, replacement client.Object) (func(ctx context.Context
 			t.Fatalf("swapping the object in: %v", err)
 		}
 	}, &swapped
-}
-
-func TestIdentityEnsureRefusesToPatchARoleSwappedAfterTheOwnershipTest(t *testing.T) {
-	rel := adapter.NewApplicationRelease(testApplication())
-	ours := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ApplicationRoleName, Namespace: "team-a", UID: "ours",
-			Labels: applicationRBACLabels(),
-		},
-		Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}},
-	}
-	theirRules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"get"}}}
-	theirs := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: "team-a", UID: "theirs"},
-		Rules:      theirRules,
-	}
-
-	swap, swapped := swapOnce(t, theirs)
-	c := fake.NewClientBuilder().
-		WithScheme(testScheme(t)).
-		WithObjects(ours).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-				if _, ok := obj.(*rbacv1.Role); ok {
-					swap(ctx, cl)
-				}
-
-				return cl.Patch(ctx, obj, patch, opts...)
-			},
-		}).
-		Build()
-
-	out := NewIdentity(c, testNamespace).Ensure(context.Background(), rel)
-	if !*swapped {
-		t.Fatal("the test did not exercise a patch of the role")
-	}
-	if !apierrors.IsConflict(out.Err) {
-		t.Fatalf("Ensure returned %v, want the patch rejected as a conflict", out.Err)
-	}
-	if out.Terminal {
-		t.Fatalf("outcome = %+v, want a conflict retried rather than stalled", out)
-	}
-	if out.Reason != helmv1alpha1.ReasonRBACSetupFailed {
-		t.Fatalf("reason = %q, want %q", out.Reason, helmv1alpha1.ReasonRBACSetupFailed)
-	}
-
-	stored := &rbacv1.Role{}
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(theirs), stored); err != nil {
-		t.Fatalf("getting the role that took the name: %v", err)
-	}
-	if !reflect.DeepEqual(stored.Rules, theirRules) {
-		t.Fatalf("rules = %+v, want the swapped-in role untouched", stored.Rules)
-	}
-	if len(stored.Labels) != 0 {
-		t.Fatalf("labels = %v, want the swapped-in role left unlabelled", stored.Labels)
-	}
 }
 
 func TestIdentityEnsureRefusesToPatchARoleBindingSwappedAfterTheOwnershipTest(t *testing.T) {
@@ -473,25 +301,6 @@ func TestIdentityCleanupRefusesToDeleteARoleBindingSwappedAfterTheOwnershipTest(
 	}
 }
 
-func TestIdentityEnsureRecreatesADeletedRole(t *testing.T) {
-	rel := adapter.NewApplicationRelease(testApplication())
-	service, c := newIdentity(t)
-
-	if out := service.Ensure(context.Background(), rel); out.Err != nil {
-		t.Fatalf("first Ensure returned %v", out.Err)
-	}
-	if err := c.Delete(context.Background(), &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: ApplicationRoleName, Namespace: "team-a"}}); err != nil {
-		t.Fatalf("deleting role: %v", err)
-	}
-	if out := service.Ensure(context.Background(), rel); out.Err != nil {
-		t.Fatalf("second Ensure returned %v", out.Err)
-	}
-
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: ApplicationRoleName}, &rbacv1.Role{}); err != nil {
-		t.Fatalf("a deleted role must be recreated: %v", err)
-	}
-}
-
 func TestIdentityEnsureKeepsForeignLabelsOnTheServiceAccountAndBinding(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	names := rel.InternalNames()
@@ -554,7 +363,7 @@ func TestIdentityEnsureIsANoopForAFamilyWithoutAServiceAccount(t *testing.T) {
 	}
 }
 
-func TestIdentityCleanupRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T) {
+func TestIdentityCleanupRemovesTheAccountAndBinding(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	service, c := newIdentity(t)
 
@@ -571,9 +380,6 @@ func TestIdentityCleanupRemovesTheAccountAndBindingButKeepsTheRole(t *testing.T)
 	}
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: names.ServiceAccount}, &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("role binding must be gone, got %v", err)
-	}
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: ApplicationRoleName}, &rbacv1.Role{}); err != nil {
-		t.Fatalf("the role must survive the application: %v", err)
 	}
 
 	pending, err := service.Cleanup(context.Background(), rel)
@@ -631,10 +437,6 @@ func TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer(t *testing.T) {
 			RoleRef: applicationRoleRef(),
 		}
 	}
-	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
-		Name: ApplicationRoleName, Namespace: "team-a", Labels: applicationRBACLabels(),
-	}}
-
 	tests := []struct {
 		name string
 		held client.Object
@@ -647,7 +449,7 @@ func TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			heldKey := client.ObjectKeyFromObject(tt.held)
-			service, c := newIdentity(t, tt.held, tt.free, role)
+			service, c := newIdentity(t, tt.held, tt.free)
 
 			for pass := 1; pass <= 3; pass++ {
 				pending, err := service.Cleanup(context.Background(), rel)
@@ -666,10 +468,6 @@ func TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer(t *testing.T) {
 				if pending.GetDeletionTimestamp().IsZero() {
 					t.Fatalf("pass %d: the object waited on was never asked to go away", pass)
 				}
-			}
-
-			if err := c.Get(context.Background(), client.ObjectKeyFromObject(role), &rbacv1.Role{}); err != nil {
-				t.Fatalf("the shared role must be neither deleted nor waited on: %v", err)
 			}
 
 			if err := c.Get(context.Background(), heldKey, tt.held); err != nil {

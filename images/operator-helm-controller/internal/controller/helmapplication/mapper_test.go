@@ -33,7 +33,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/rbac"
 )
 
 func newMapperClient(t *testing.T, objects ...client.Object) client.Client {
@@ -55,31 +54,6 @@ func newMapperClient(t *testing.T, objects ...client.Object) client.Client {
 func application(namespace, name string) *helmv1alpha1.HelmApplication {
 	return &helmv1alpha1.HelmApplication{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-	}
-}
-
-func TestMapRoleToApplications(t *testing.T) {
-	c := newMapperClient(t,
-		application("team-a", "first"),
-		application("team-a", "second"),
-		application("team-b", "elsewhere"),
-	)
-	mapper := mapRoleToApplications(c)
-
-	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: rbac.ApplicationRoleName, Namespace: "team-a"}}
-	got := mapper(context.Background(), role)
-
-	want := []reconcile.Request{
-		{NamespacedName: types.NamespacedName{Namespace: "team-a", Name: "first"}},
-		{NamespacedName: types.NamespacedName{Namespace: "team-a", Name: "second"}},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("requests = %v, want %v", got, want)
-	}
-
-	other := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "someone-elses-role", Namespace: "team-a"}}
-	if got := mapper(context.Background(), other); got != nil {
-		t.Fatalf("a role under another name must map to nothing, got %v", got)
 	}
 }
 

@@ -28,31 +28,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/rbac"
 )
-
-// mapRoleToApplications enqueues every application of the namespace a change to the shared
-// Role reaches.
-func mapRoleToApplications(c client.Client) handler.MapFunc {
-	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		// Matched by name: a Role stripped of the managed-by label arrives here as a deletion.
-		if obj.GetName() != rbac.ApplicationRoleName {
-			return nil
-		}
-
-		apps, err := applicationsInNamespace(ctx, c, obj)
-		if err != nil {
-			return nil
-		}
-
-		requests := make([]reconcile.Request, 0, len(apps))
-		for i := range apps {
-			requests = append(requests, requestFor(&apps[i]))
-		}
-
-		return requests
-	}
-}
 
 // mapRoleBindingToApplications enqueues the one application whose derived service account
 // name the role binding is named after.

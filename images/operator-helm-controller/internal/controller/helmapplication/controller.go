@@ -92,12 +92,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(mapInternal),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
-		// Nothing but these two watches reports an out-of-band edit to the identity objects.
-		Watches(
-			&rbacv1.Role{},
-			handler.EnqueueRequestsFromMapFunc(mapRoleToApplications(client)),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
-		).
+		// Nothing but this watch reports an out-of-band edit to the identity binding.
 		Watches(
 			&rbacv1.RoleBinding{},
 			handler.EnqueueRequestsFromMapFunc(mapRoleBindingToApplications(client)),

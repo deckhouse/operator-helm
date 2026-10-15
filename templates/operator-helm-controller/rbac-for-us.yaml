@@ -102,27 +102,14 @@ rules:
   - patch
   - update
   - watch
-# Grants the unnamed verbs on every role and the named ones only on the single role
-# this module writes.
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
-  - roles
-  verbs:
-  - create
-  - escalate
-  - list
-  - watch
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - roles
+  - clusterroles
   resourceNames:
-  - operator-helm-application
+  - d8:{{ .Chart.Name }}:application
   verbs:
   - bind
-  - get
-  - patch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
