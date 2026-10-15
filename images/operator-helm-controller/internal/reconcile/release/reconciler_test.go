@@ -242,7 +242,7 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				repo.Status.ObservedGeneration = repo.Generation
 			}
 
-			gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c, c), adapter.NewAddonRepository(repo), adapter.NewAddonRelease(addon), tt.repoType)
+			gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c, c), adapter.NewAddonRepository(repo), adapter.NewAddonRelease(addon), tt.repoType)
 
 			if tt.wantErr {
 				if err == nil {
@@ -251,8 +251,8 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.wantErrContain) {
 					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrContain)
 				}
-				if gotChart != nil || gotVersion != nil {
-					t.Fatalf("expected nil chart and version on error, got chart=%v version=%v", gotChart, gotVersion)
+				if gotVersion != nil {
+					t.Fatalf("expected nil version on error, got %v", gotVersion)
 				}
 
 				return
@@ -260,9 +260,6 @@ func TestGetHelmClusterAddonChart(t *testing.T) {
 
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
-			}
-			if gotChart == nil {
-				t.Fatal("expected the chart to be returned")
 			}
 			if gotVersion == nil {
 				t.Fatal("expected the matched version to be returned")
@@ -477,12 +474,12 @@ func TestGetHelmClusterAddonChartMissingChart(t *testing.T) {
 	addon := testAddon()
 	r, c := newTestReconciler(t)
 
-	gotChart, gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c, c), adapter.NewAddonRepository(helmRepositoryFixture()), adapter.NewAddonRelease(addon), chartsource.OCI)
+	gotVersion, err := r.getChartVersion(context.Background(), adapter.NewAddonCatalog(c, c), adapter.NewAddonRepository(helmRepositoryFixture()), adapter.NewAddonRelease(addon), chartsource.OCI)
 	if err == nil {
 		t.Fatalf("expected an error when the addon chart does not exist, got version %+v", gotVersion)
 	}
-	if gotChart != nil || gotVersion != nil {
-		t.Fatalf("expected nil chart and version on error, got chart=%v version=%v", gotChart, gotVersion)
+	if gotVersion != nil {
+		t.Fatalf("expected nil version on error, got %v", gotVersion)
 	}
 }
 

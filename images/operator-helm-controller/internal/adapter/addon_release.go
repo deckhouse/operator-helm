@@ -74,9 +74,6 @@ func (r *AddonRelease) MaintenanceEnabled() bool        { return r.obj.Maintenan
 func (r *AddonRelease) ForceReconcileRequired() bool    { return r.obj.ForceReconcileRequired() }
 func (r *AddonRelease) ReleaseName() string             { return naming.HelmReleaseName(r.obj.Name) }
 func (r *AddonRelease) IsChartStatusInfoOutdated() bool { return r.obj.IsChartStatusInfoOutdated() }
-func (r *AddonRelease) LastAppliedValues() *apiextensionsv1.JSON {
-	return r.obj.Status.LastAppliedValues
-}
 
 func (r *AddonRelease) SourceLabels() map[string]string {
 	return map[string]string{

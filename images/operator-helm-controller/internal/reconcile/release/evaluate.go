@@ -19,6 +19,7 @@ package release
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -577,7 +578,7 @@ func (d *Decision) set(in Inputs, conditionType string, state conditionState) {
 // setAbnormal raises an abnormal-true condition and drops it from RemoveConditions, so the
 // two do not contradict each other.
 func (d *Decision) setAbnormal(in Inputs, conditionType string, failure Failure) {
-	d.RemoveConditions = slicesDelete(d.RemoveConditions, conditionType)
+	d.RemoveConditions = slices.DeleteFunc(d.RemoveConditions, func(v string) bool { return v == conditionType })
 
 	apimeta.SetStatusCondition(&d.Conditions, metav1.Condition{
 		Type:               conditionType,
@@ -587,15 +588,4 @@ func (d *Decision) setAbnormal(in Inputs, conditionType string, failure Failure)
 		ObservedGeneration: in.Generation,
 		LastTransitionTime: metav1.NewTime(in.Now),
 	})
-}
-
-func slicesDelete(values []string, value string) []string {
-	kept := values[:0]
-	for _, v := range values {
-		if v != value {
-			kept = append(kept, v)
-		}
-	}
-
-	return kept
 }

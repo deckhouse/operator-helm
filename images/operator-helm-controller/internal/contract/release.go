@@ -67,7 +67,6 @@ type Release interface {
 	MaintenanceActivated() bool
 	MaintenanceEnabled() bool
 	ForceReconcileRequired() bool
-	// ReleaseName is the Helm release name, at most 53 characters.
 	ReleaseName() string
 
 	// SourceLabels are carried by every internal object derived from this release,
@@ -82,7 +81,6 @@ type Release interface {
 	LastAppliedChart() *ChartRef
 	// SetLastAppliedChart replaces the record wholesale rather than merging into it.
 	SetLastAppliedChart(ChartRef)
-	LastAppliedValues() *apiextensionsv1.JSON
 	SetLastAppliedValues(*apiextensionsv1.JSON)
 	SetLastForceReconcileTime(metav1.Time)
 	// IsChartStatusInfoOutdated reports whether the desired chart differs from the

@@ -33,6 +33,8 @@ import (
 
 // Claims enforces that at most one HelmClusterAddon uses a given repository/chart pair.
 // Whoever creates the pair's Lease first owns it; every other addon reconciles into a conflict.
+// It is valid for the cluster-addon kind alone: the holder is looked up as a HelmClusterAddon by
+// name, and the Lease is keyed without the release's namespace.
 type Claims struct {
 	// Reads bypass the controller cache: an acquisition decision must not be made on stale data.
 	reader    client.Reader
@@ -157,14 +159,14 @@ func (s *Claims) DropStale(ctx context.Context, rel contract.Release) error {
 // DropAll releases every claim this release holds, the pair it names included. It is the
 // teardown counterpart of DropStale.
 func (s *Claims) DropAll(ctx context.Context, rel contract.Release) error {
-	return s.dropOwned(ctx, rel, "", "")
+	return s.dropOwned(ctx, rel)
 }
 
 // dropOwned deletes the claim Leases this release holds, except those named by keep.
 func (s *Claims) dropOwned(ctx context.Context, rel contract.Release, keep ...string) error {
 	kept := func(name string) bool {
 		for _, k := range keep {
-			if k != "" && k == name {
+			if k == name {
 				return true
 			}
 		}

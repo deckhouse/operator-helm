@@ -82,10 +82,6 @@ func (r *ApplicationRelease) IsChartStatusInfoOutdated() bool {
 	return r.obj.IsChartStatusInfoOutdated()
 }
 
-func (r *ApplicationRelease) LastAppliedValues() *apiextensionsv1.JSON {
-	return r.obj.Status.LastAppliedValues
-}
-
 // ReleaseName is the application name prefixed and unconditionally hashed, so it cannot
 // collide with a hand-installed release or with another application's.
 func (r *ApplicationRelease) ReleaseName() string {

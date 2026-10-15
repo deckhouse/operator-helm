@@ -134,7 +134,7 @@ func TestAddonReleaseStatusAccessorsWriteThroughToTheObject(t *testing.T) {
 	}
 
 	rel.SetLastAppliedValues(obj.Spec.Values)
-	if obj.Status.LastAppliedValues != obj.Spec.Values || rel.LastAppliedValues() != obj.Spec.Values {
+	if obj.Status.LastAppliedValues != obj.Spec.Values {
 		t.Fatal("LastAppliedValues must write through to the object")
 	}
 

@@ -43,9 +43,37 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// chartClaimConflictRequeueInterval bounds how often a release that lost the claim on its
-// repository/chart pair re-checks whether the owner has released it. Nothing watches the Lease.
-const chartClaimConflictRequeueInterval = 30 * time.Second
+const (
+	// chartClaimConflictRequeueInterval bounds how often a release that lost the claim on its
+	// repository/chart pair re-checks whether the owner has released it. Nothing watches the Lease.
+	chartClaimConflictRequeueInterval = 30 * time.Second
+
+	// awaitSyncInterval is how often a release re-reads a repository it is waiting on the first
+	// sync of. It is a poll, so it is deliberately coarse.
+	awaitSyncInterval = 30 * time.Second
+)
+
+var (
+	// errChartVersionNotFound marks the one way of failing to resolve a version that is a fault
+	// of the release's own spec: the version asked for is not among what the catalog lists.
+	errChartVersionNotFound = errors.New("chart version not found")
+
+	// errCatalogAwaited marks a resolution failure that the catalog watches undo by themselves:
+	// the catalog object of this chart is not there yet, or is there and still empty.
+	errCatalogAwaited = errors.New("chart catalog not written yet")
+
+	// errChartNotFound is the chart-level counterpart of errChartVersionNotFound: the
+	// repository has answered in full and offers no chart under that name at all.
+	errChartNotFound = errors.New("chart not found")
+
+	// errVersionResolvePending marks a version the catalog lists without a verdict on how it is
+	// published. A repeated identical failure writes nothing, so the wait carries a timer.
+	errVersionResolvePending = errors.New("chart version not resolved yet")
+
+	// errVersionUnusable marks a version the catalog lists but cannot be deployed from, because
+	// of what the repository published rather than what the spec asked for.
+	errVersionUnusable = errors.New("chart version cannot be deployed")
+)
 
 // Deps are the collaborators of one release kind. Their implementations are shared by every
 // kind, and what they do is what tells the families apart.
@@ -251,7 +279,7 @@ func (r *Reconciler) resolveSource(
 	catalog contract.Catalog,
 	repoType chartsource.Kind,
 ) (chartsource.Source, *helmv1alpha1.ChartVersion, *Failure) {
-	_, chartVersion, err := r.getChartVersion(ctx, catalog, repo, rel, repoType)
+	chartVersion, err := r.getChartVersion(ctx, catalog, repo, rel, repoType)
 
 	var src chartsource.Source
 	if err == nil {
@@ -621,33 +649,33 @@ func (r *Reconciler) getChartVersion(
 	repo contract.Repository,
 	rel contract.Release,
 	repoType chartsource.Kind,
-) (client.Object, *helmv1alpha1.ChartVersion, error) {
+) (*helmv1alpha1.ChartVersion, error) {
 	ref := rel.ChartRef()
 
 	// Only a catalog synced for the current spec answers about the repository pointed at now.
 	synced := catalogIsCurrent(repo)
 	complete := catalogIsComplete(repo)
 
-	obj, catalogStatus, err := catalog.Lookup(ctx, repo, ref.Chart)
+	_, catalogStatus, err := catalog.Lookup(ctx, repo, ref.Chart)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			if !synced {
 				// The release watches for the catalog object; until it lands there is nothing to retry.
-				return nil, nil, fmt.Errorf("getting chart catalog entry: %w: %w", err, errCatalogAwaited)
+				return nil, fmt.Errorf("getting chart catalog entry: %w: %w", err, errCatalogAwaited)
 			}
 
-			return nil, nil, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"chart %q is not in repository %q: %w", ref.Chart, repo.Name(), errChartNotFound,
 			)
 		}
 
-		return nil, nil, fmt.Errorf("getting chart catalog entry: %w", err)
+		return nil, fmt.Errorf("getting chart catalog entry: %w", err)
 	}
 
 	if !synced {
 		// Even a populated catalog is the previous spec's answer until the current sync lands.
 		if !hasVersion(catalogStatus, ref.Version) {
-			return nil, nil, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"chart catalog is not current: %w", errCatalogAwaited,
 			)
 		}
@@ -662,7 +690,7 @@ func (r *Reconciler) getChartVersion(
 		if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending &&
 			version.OCIRef == "" && version.MediaType == "" {
 			// Only a version with nothing recorded: one that kept a resolved media type stays usable.
-			return nil, nil, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"chart version %q is not resolved yet: %s: %w",
 				version.Version, versionUnavailableDetail(*version), errVersionResolvePending,
 			)
@@ -670,7 +698,7 @@ func (r *Reconciler) getChartVersion(
 
 		if version.UnavailableReason == helmv1alpha1.UnavailableReasonInvalidChartReference {
 			// Without this the version falls back to the helm path and fails on the same url.
-			return nil, nil, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"chart version %q cannot be deployed: %s: %w",
 				version.Version, versionUnavailableDetail(*version), errVersionUnusable,
 			)
@@ -678,29 +706,29 @@ func (r *Reconciler) getChartVersion(
 
 		if repoType == chartsource.OCI && version.OCIRef == "" && version.MediaType == "" {
 			// The catalog lists the version but knows nothing a source can be built from.
-			return nil, nil, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"chart version %q cannot be deployed: %s: %w",
 				version.Version, versionUnavailableDetail(*version), errVersionUnusable,
 			)
 		}
 
-		return obj, version, nil
+		return version, nil
 	}
 
 	if len(catalogStatus.Versions) == 0 {
 		if !synced {
 			// The catalog object is created before the versions are written onto it.
-			return nil, nil, fmt.Errorf("chart catalog has no versions yet: %w", errCatalogAwaited)
+			return nil, fmt.Errorf("chart catalog has no versions yet: %w", errCatalogAwaited)
 		}
 
 		if !complete {
-			return nil, nil, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"chart catalog is incomplete and lists no version yet: %w", errCatalogAwaited,
 			)
 		}
 
 		// After a sync an empty catalog is durable, not transient.
-		return nil, nil, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"chart %q in repository %q has no usable versions: %w",
 			ref.Chart, repo.Name(), errChartVersionNotFound,
 		)
@@ -708,26 +736,14 @@ func (r *Reconciler) getChartVersion(
 
 	if !complete {
 		// Reporting a fault of the spec would be a guess about a version nobody has examined.
-		return nil, nil, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"chart catalog does not have version %q and is incomplete: %w",
 			ref.Version, errCatalogAwaited,
 		)
 	}
 
-	return nil, nil, fmt.Errorf("chart catalog does not have version %q: %w", ref.Version, errChartVersionNotFound)
+	return nil, fmt.Errorf("chart catalog does not have version %q: %w", ref.Version, errChartVersionNotFound)
 }
-
-// errChartVersionNotFound marks the one way of failing to resolve a version that is a fault
-// of the release's own spec: the version asked for is not among what the catalog lists.
-var errChartVersionNotFound = errors.New("chart version not found")
-
-// errCatalogAwaited marks a resolution failure that the catalog watches undo by themselves:
-// the catalog object of this chart is not there yet, or is there and still empty.
-var errCatalogAwaited = errors.New("chart catalog not written yet")
-
-// errChartNotFound is the chart-level counterpart of errChartVersionNotFound: the
-// repository has answered in full and offers no chart under that name at all.
-var errChartNotFound = errors.New("chart not found")
 
 // catalogIsCurrent reports whether the repository's catalog describes the spec the repository
 // carries now. Only lastSyncedGeneration answers that; observedGeneration and Synced do not.
@@ -741,7 +757,6 @@ func catalogIsComplete(repo contract.Repository) bool {
 	return repo.Status().UnexaminedVersions == 0
 }
 
-// hasVersion reports whether the catalog lists a version under that exact name.
 func hasVersion(catalogStatus *helmv1alpha1.ChartCatalogStatus, version string) bool {
 	for i := range catalogStatus.Versions {
 		if catalogStatus.Versions[i].Version == version {
@@ -751,18 +766,6 @@ func hasVersion(catalogStatus *helmv1alpha1.ChartCatalogStatus, version string) 
 
 	return false
 }
-
-// errVersionResolvePending marks a version the catalog lists without a verdict on how it is
-// published. A repeated identical failure writes nothing, so the wait carries a timer.
-var errVersionResolvePending = errors.New("chart version not resolved yet")
-
-// awaitSyncInterval is how often a release re-reads a repository it is waiting on the first
-// sync of. It is a poll, so it is deliberately coarse.
-const awaitSyncInterval = 30 * time.Second
-
-// errVersionUnusable marks a version the catalog lists but cannot be deployed from, because
-// of what the repository published rather than what the spec asked for.
-var errVersionUnusable = errors.New("chart version cannot be deployed")
 
 // rejectedByAPIServer reports whether an API error is the server refusing the object it was
 // handed. Forbidden is left out: it is routinely repaired out of band.

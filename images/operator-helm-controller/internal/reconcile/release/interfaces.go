@@ -30,8 +30,6 @@ import (
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
-// The interfaces one reconcile pass depends on, declared where they are used.
-
 // Repositories loads the repository a release references and the catalog of that repository's
 // kind. The application family picks between two repository kinds; the addon family has one.
 type Repositories interface {
@@ -46,8 +44,6 @@ type Claims interface {
 	Acquire(ctx context.Context, rel contract.Release) (acquired bool, holder string, err error)
 	// DropStale frees claims this release still holds on pairs it no longer references and runs.
 	DropStale(ctx context.Context, rel contract.Release) error
-	// Drop frees the claim on the release's current pair.
-	Drop(ctx context.Context, rel contract.Release) error
 	// DropAll frees every claim this release holds. It is for teardown.
 	DropAll(ctx context.Context, rel contract.Release) error
 }
@@ -121,8 +117,6 @@ func (NoClaims) Acquire(_ context.Context, rel contract.Release) (bool, string, 
 }
 
 func (NoClaims) DropStale(context.Context, contract.Release) error { return nil }
-
-func (NoClaims) Drop(context.Context, contract.Release) error { return nil }
 
 func (NoClaims) DropAll(context.Context, contract.Release) error { return nil }
 
