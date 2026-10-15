@@ -84,6 +84,7 @@ func newTestReconciler(t *testing.T, c client.Client) *reconciler {
 
 	return &reconciler{
 		client:       c,
+		namespace:    testNamespace,
 		cache:        cache.New(t.TempDir(), testCacheBudget),
 		newObject:    func() client.Object { return &sourcev1.HelmChart{} },
 		artifactOf:   func(o client.Object) *meta.Artifact { return o.(*sourcev1.HelmChart).Status.Artifact },
@@ -500,6 +501,69 @@ func newArtifactFixture(t *testing.T, handler http.HandlerFunc, digest string, m
 	r.maxArtifactBytes = maxArtifactBytes
 
 	return r
+}
+
+func TestReconcileLeavesTheEntryAloneForAnObjectInAnotherNamespace(t *testing.T) {
+	const otherNamespace = "tenant-namespace"
+
+	earlier := []byte("replicaCount: 1\n")
+	current := []byte("replicaCount: 2\n")
+
+	tests := []struct {
+		name    string
+		objects func(t *testing.T) (client.Client, *http.Client)
+	}{
+		{
+			name: "a ready object with a new revision",
+			objects: func(t *testing.T) (client.Client, *http.Client) {
+				t.Helper()
+
+				archive := buildValuesArchive(t, current)
+				srv := httptest.NewServer(serveBytes(archive))
+				t.Cleanup(srv.Close)
+
+				chart := readyChartWithArtifact(srv.URL, fmt.Sprintf("sha256:%x", sha256.Sum256(archive)))
+				chart.Namespace = otherNamespace
+
+				return fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(chart).Build(), srv.Client()
+			},
+		},
+		{
+			name: "an object that is gone",
+			objects: func(t *testing.T) (client.Client, *http.Client) {
+				t.Helper()
+
+				return fake.NewClientBuilder().WithScheme(testScheme(t)).Build(), nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, httpClient := tt.objects(t)
+
+			r := newTestReconciler(t, c)
+			r.httpClient = httpClient
+			r.maxArtifactBytes = 1 << 20
+			if err := r.cache.Put(testName, "sha256:earlier", earlier); err != nil {
+				t.Fatalf("seeding cache: %v", err)
+			}
+
+			if _, err := r.Reconcile(context.Background(), reconcile.Request{
+				NamespacedName: types.NamespacedName{Namespace: otherNamespace, Name: testName},
+			}); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+
+			entry, ok := r.cache.GetEntry(testName)
+			if !ok {
+				t.Fatal("the entry was deleted for an object outside the served namespace")
+			}
+			if !bytes.Equal(entry.Values, earlier) || entry.Digest != "sha256:earlier" {
+				t.Fatalf("entry = %q at %q, want the seeded one: an object outside the served namespace must not write it", entry.Values, entry.Digest)
+			}
+		})
+	}
 }
 
 func serveBytes(body []byte) http.HandlerFunc {

@@ -163,7 +163,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := controller.SetupWithManager(mgr, valuesCache, httpClient, maxArtifactBytes); err != nil {
+	if err := controller.SetupWithManager(mgr, valuesCache, httpClient, helmv1alpha1.TargetNamespace, maxArtifactBytes); err != nil {
 		logger.Error(err, "unable to setup auxiliary-resource controllers")
 		os.Exit(1)
 	}

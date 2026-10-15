@@ -53,6 +53,7 @@ const conflictRetryDelay = 10 * time.Second
 // reconciler re-caches values.yaml on a new artifact revision and deletes a resource once expired.
 type reconciler struct {
 	client           client.Client
+	namespace        string
 	cache            *cache.Cache
 	httpClient       *http.Client
 	maxArtifactBytes int64
@@ -62,6 +63,11 @@ type reconciler struct {
 }
 
 func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	// The cache is keyed by name alone, so only the served namespace may touch it.
+	if req.Namespace != r.namespace {
+		return reconcile.Result{}, nil
+	}
+
 	logger := log.FromContext(ctx)
 
 	obj := r.newObject()
@@ -187,9 +193,10 @@ func isReady(conditions []metav1.Condition) bool {
 
 // SetupWithManager registers cache-sync and cleanup reconcilers for both auxiliary
 // resource kinds, filtered to the resources this controller manages.
-func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient *http.Client, maxArtifactBytes int64) error {
+func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient *http.Client, namespace string, maxArtifactBytes int64) error {
 	helmChart := &reconciler{
 		client:           mgr.GetClient(),
+		namespace:        namespace,
 		cache:            valuesCache,
 		httpClient:       httpClient,
 		maxArtifactBytes: maxArtifactBytes,
@@ -207,6 +214,7 @@ func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient 
 
 	ociRepo := &reconciler{
 		client:           mgr.GetClient(),
+		namespace:        namespace,
 		cache:            valuesCache,
 		httpClient:       httpClient,
 		maxArtifactBytes: maxArtifactBytes,
