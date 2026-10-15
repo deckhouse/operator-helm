@@ -89,6 +89,11 @@ func Evaluate(in Inputs) Decision {
 	in.Current.DeepCopyInto(&status)
 	// Confirmed on every pass, not held back: lastSyncedGeneration carries the verdict instead.
 	status.ObservedGeneration = in.Generation
+	if !in.Attempted && in.Generation != in.Current.ObservedGeneration {
+		// observedGeneration moved on without an attempt, so ShouldAttempt no longer sees the spec
+		// change; clearing the schedule keeps the next pass from waiting out the old one.
+		status.NextSyncTime = nil
+	}
 
 	internal := in.InternalRepository
 	if in.InternalRepositoryErr != nil {
@@ -138,7 +143,8 @@ func Evaluate(in Inputs) Decision {
 		}
 
 		if fetchSucceeded {
-			// Skipped charts are subtracted, so the count matches the chart objects in the cluster.
+			// Skipped charts are subtracted: the count describes the read, less the names no catalog
+			// object can carry.
 			status.ChartCount = ptr.To(int32(in.Fetch.Charts - len(skippedCharts(in))))
 		}
 

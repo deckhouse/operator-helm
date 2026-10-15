@@ -325,6 +325,12 @@ func TestShouldAttempt(t *testing.T) {
 			generation: 1,
 			want:       true,
 		},
+		{
+			name:       "spec change observed by a pass that made no attempt",
+			current:    helmv1alpha1.RepositoryStatus{ObservedGeneration: 2, LastSyncedGeneration: 1, NextSyncTime: nil},
+			generation: 2,
+			want:       true,
+		},
 	}
 
 	for _, tc := range cases {

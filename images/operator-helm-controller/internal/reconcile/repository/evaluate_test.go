@@ -1382,3 +1382,40 @@ func TestEvaluateReportsACatalogWriteRejectedByItsLockAsALostRace(t *testing.T) 
 		})
 	}
 }
+
+func TestEvaluateRetriesASpecChangeThatMadeNoAttempt(t *testing.T) {
+	failure := errors.New("etcdserver: request timed out")
+
+	cases := []struct {
+		name string
+		in   Inputs
+	}{
+		{name: "auxiliary secrets", in: Inputs{SecretsErr: failure}},
+		{name: "internal repository", in: Inputs{InternalRepositoryErr: failure}},
+		{name: "catalog rename", in: Inputs{MigrateErr: failure}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := tc.in
+			in.Generation = 2
+			in.Now = testNow
+			in.Current = readyStatus(1)
+			in.Current.NextSyncTime = &metav1.Time{Time: testNow.Add(time.Hour)}
+
+			decision := Evaluate(in)
+
+			if decision.Status.NextSyncTime != nil {
+				t.Fatalf("nextSyncTime = %v, want none: the new generation was never attempted",
+					decision.Status.NextSyncTime)
+			}
+			if !ShouldAttempt(decision.Status, in.Generation, testNow, false) {
+				t.Fatal("the next pass must attempt the generation this one could not")
+			}
+			if !errors.Is(decision.Err, failure) {
+				t.Fatalf("Decision.Err is %v, want %v to hand the retry to the work queue backoff",
+					decision.Err, failure)
+			}
+		})
+	}
+}
