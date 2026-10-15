@@ -70,13 +70,16 @@ spec:
   matchResources:
     namespaceSelector: {}
     objectSelector: {}
----
+{{- if semverCompare ">=1.28.0" $kubeVersion }}
 {{- $applicationSubject := printf "system:serviceaccount:d8-%s:hap-" .Chart.Name }}
+{{- $protected := list "namespaces" "resourcequotas" "limitranges" }}
+{{- $mutating := list "*" "create" "update" "patch" "delete" "deletecollection" }}
+---
 apiVersion: {{ $apiVersion }}
 kind: ValidatingAdmissionPolicy
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
-  name: operator-helm-application-namespace-policy
+  name: operator-helm-application-protected-kinds-policy
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -85,22 +88,76 @@ spec:
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE", "DELETE"]
         resources:
-          - "namespaces"
+          {{- range $protected }}
+          - {{ . | quote }}
+          {{- end }}
           - "namespaces/status"
           - "namespaces/finalize"
+          - "resourcequotas/status"
+  matchConditions:
+    - name: application-identity
+      expression: 'request.userInfo.username.startsWith("{{ $applicationSubject }}")'
   validations:
-    - expression: '!request.userInfo.username.startsWith("{{ $applicationSubject }}")'
-      message: "An application may not modify or delete the namespace it is deployed into."
+    - expression: "false"
+      message: "An application may not modify its namespace, resource quotas or limit ranges."
+---
+apiVersion: {{ $apiVersion }}
+kind: ValidatingAdmissionPolicy
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: operator-helm-application-role-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["roles"]
+  matchConditions:
+    - name: application-identity
+      expression: 'request.userInfo.username.startsWith("{{ $applicationSubject }}")'
+  validations:
+    - expression: >-
+        !has(object.rules) || !object.rules.exists(r,
+          has(r.apiGroups) && has(r.resources) &&
+          r.verbs.exists(v, v in {{ $mutating | toJson }}) &&
+          r.apiGroups.exists(g, g == "*" || g == "") &&
+          r.resources.exists(res, res == "*" || res.startsWith("*/") || res.split("/")[0] in {{ $protected | toJson }}))
+      message: "A Role written by an application may not grant write access to namespaces, resource quotas or limit ranges."
+---
+apiVersion: {{ $apiVersion }}
+kind: ValidatingAdmissionPolicy
+metadata:
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+  name: operator-helm-application-rolebinding-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings"]
+  matchConditions:
+    - name: application-identity
+      expression: 'request.userInfo.username.startsWith("{{ $applicationSubject }}")'
+  validations:
+    - expression: 'object.roleRef.kind == "Role"'
+      message: "A RoleBinding written by an application may reference only a Role of its namespace, not a ClusterRole."
+{{- range list "protected-kinds" "role" "rolebinding" }}
 ---
 apiVersion: {{ $apiVersion }}
 kind: ValidatingAdmissionPolicyBinding
 metadata:
-  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
-  name: operator-helm-application-namespace-policy-binding
+  {{- include "helm_lib_module_labels" (list $) | nindent 2 }}
+  name: operator-helm-application-{{ . }}-policy-binding
 spec:
-  policyName: operator-helm-application-namespace-policy
+  policyName: operator-helm-application-{{ . }}-policy
   validationActions: ["Deny"]
   matchResources:
     namespaceSelector: {}
     objectSelector: {}
+{{- end }}
+{{- end }}
 {{- end }}
