@@ -54,7 +54,7 @@ func NewApplicationCatalog(c client.Client, reader client.Reader) contract.Catal
 			return pointers(l.Items)
 		},
 		Status:     func(o *helmv1alpha1.HelmApplicationChart) *helmv1alpha1.ChartCatalogStatus { return &o.Status },
-		ObjectName: naming.ApplicationChartName,
+		ObjectName: naming.HelmApplicationChartName,
 		Consumers:  chartConsumers(ListApplicationReleases(c)),
 	})
 }
@@ -72,7 +72,7 @@ func NewClusterApplicationCatalog(c client.Client, reader client.Reader) contrac
 			return pointers(l.Items)
 		},
 		Status:     func(o *helmv1alpha1.HelmClusterApplicationChart) *helmv1alpha1.ChartCatalogStatus { return &o.Status },
-		ObjectName: naming.ClusterApplicationChartName,
+		ObjectName: naming.HelmClusterApplicationChartName,
 		Consumers:  chartConsumers(ListApplicationReleases(c)),
 	})
 }

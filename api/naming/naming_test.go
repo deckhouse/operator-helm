@@ -137,7 +137,7 @@ func assertNameIsValid(t *testing.T, name string) {
 	}
 }
 
-func TestApplicationChartName(t *testing.T) {
+func TestHelmApplicationChartName(t *testing.T) {
 	cases := []struct {
 		name  string
 		repo  string
@@ -196,16 +196,16 @@ func TestApplicationChartName(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ApplicationChartName(tc.repo, tc.chart)
+			got := HelmApplicationChartName(tc.repo, tc.chart)
 			if got != tc.want {
-				t.Fatalf("ApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
+				t.Fatalf("HelmApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
 			}
 			assertNameIsValid(t, got)
 		})
 	}
 }
 
-func TestClusterApplicationChartName(t *testing.T) {
+func TestHelmClusterApplicationChartName(t *testing.T) {
 	cases := []struct {
 		name  string
 		repo  string
@@ -246,9 +246,9 @@ func TestClusterApplicationChartName(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ClusterApplicationChartName(tc.repo, tc.chart)
+			got := HelmClusterApplicationChartName(tc.repo, tc.chart)
 			if got != tc.want {
-				t.Fatalf("ClusterApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
+				t.Fatalf("HelmClusterApplicationChartName(%q, %q) = %q, want %q", tc.repo, tc.chart, got, tc.want)
 			}
 			assertNameIsValid(t, got)
 		})
@@ -263,12 +263,12 @@ func TestChartNameSchemeIsShared(t *testing.T) {
 
 	addon := HelmClusterAddonChartName(repo, chart)
 
-	if got := ApplicationChartName(repo, chart); got != addon {
-		t.Fatalf("ApplicationChartName = %q, want the shared scheme result %q", got, addon)
+	if got := HelmApplicationChartName(repo, chart); got != addon {
+		t.Fatalf("HelmApplicationChartName = %q, want the shared scheme result %q", got, addon)
 	}
 
-	if got := ClusterApplicationChartName(repo, chart); got != addon {
-		t.Fatalf("ClusterApplicationChartName = %q, want the shared scheme result %q", got, addon)
+	if got := HelmClusterApplicationChartName(repo, chart); got != addon {
+		t.Fatalf("HelmClusterApplicationChartName = %q, want the shared scheme result %q", got, addon)
 	}
 }
 
@@ -330,6 +330,244 @@ func TestCollapseDashes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := collapseDashes(tc.in); got != tc.want {
 				t.Fatalf("collapseDashes(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDerivedName(t *testing.T) {
+	cases := []struct {
+		name      string
+		prefix    string
+		kind      string
+		namespace string
+		object    string
+		want      string
+	}{
+		{
+			name:      "namespaced source carries namespace, name and a hash",
+			prefix:    "hapr",
+			kind:      "HelmApplicationRepository",
+			namespace: "team-a",
+			object:    "stable",
+			want:      "hapr-team-a-stable-42df68033b1e",
+		},
+		{
+			name:      "an application in the namespace the e2e suite uses",
+			prefix:    "hap",
+			kind:      "HelmApplication",
+			namespace: "e2e-app-ns",
+			object:    "e2e-test-app",
+			want:      "hap-e2e-app-ns-e2e-test-app-26155b312741",
+		},
+		{
+			name:      "same name in another namespace is a different object",
+			prefix:    "hapr",
+			kind:      "HelmApplicationRepository",
+			namespace: "team-b",
+			object:    "stable",
+			want:      "hapr-team-b-stable-20b1eaa1620a",
+		},
+		{
+			name:      "cluster source has no namespace part",
+			prefix:    "hcapr",
+			kind:      "HelmClusterApplicationRepository",
+			namespace: "",
+			object:    "stable",
+			want:      "hcapr-stable-63c0be2c8873",
+		},
+		{
+			name:      "long parts are truncated to 18 characters each",
+			prefix:    "hapr",
+			kind:      "HelmApplicationRepository",
+			namespace: "very-long-namespace-name-exceeding",
+			object:    "very-long-repository-name-exceeding",
+			want:      "hapr-very-long-namespac-very-long-reposito-355aadb4a138",
+		},
+		{
+			name:      "a truncation that ends in a dash drops it",
+			prefix:    "hapr",
+			kind:      "HelmApplicationRepository",
+			namespace: "abcdefghijklmnopq-x",
+			object:    "stable",
+			want:      "hapr-abcdefghijklmnopq-stable-1846a7b21e01",
+		},
+		{
+			name:      "long application parts are truncated to 18 characters each",
+			prefix:    "hap",
+			kind:      "HelmApplication",
+			namespace: "very-long-namespace-name-exceeding",
+			object:    "very-long-application-name-exceeding",
+			want:      "hap-very-long-namespac-very-long-applicat-35f137b7281e",
+		},
+		{
+			name:      "an application truncation that ends in a dash drops it",
+			prefix:    "hap",
+			kind:      "HelmApplication",
+			namespace: "abcdefghijklmnopq-x",
+			object:    "stable",
+			want:      "hap-abcdefghijklmnopq-stable-2b3b33a25854",
+		},
+		{
+			name:      "a truncation that ends in a dot drops it",
+			prefix:    "hap",
+			kind:      "HelmApplication",
+			namespace: "team-a",
+			object:    "abcdefghijklmnopq.x",
+			want:      "hap-team-a-abcdefghijklmnopq-da2ee07a8439",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DerivedName(tc.prefix, tc.kind, tc.namespace, tc.object)
+			if got != tc.want {
+				t.Fatalf("DerivedName(%q, %q, %q, %q) = %q, want %q", tc.prefix, tc.kind, tc.namespace, tc.object, got, tc.want)
+			}
+			if len(got) > 63 {
+				t.Fatalf("%q is %d characters, the limit is 63", got, len(got))
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid object name: %v", got, errs)
+			}
+		})
+	}
+}
+
+func TestDerivedNameStaysWithinTheLabelLimitForTheLongestPrefix(t *testing.T) {
+	got := DerivedName("hcapr-auth", "Kind", strings.Repeat("n", 40), strings.Repeat("m", 40))
+	if len(got) > 63 {
+		t.Fatalf("%q is %d characters, the limit is 63", got, len(got))
+	}
+}
+
+func TestHashedReleaseNameSeparatesTwoValidNames(t *testing.T) {
+	const (
+		long  = "hap-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefg"
+		short = "hap-abcdefghijklmnopqrstuvwxyz-abcdefghi-dbe791f54fec"
+	)
+
+	if HelmReleaseName(long) != HelmReleaseName(short) {
+		t.Fatal("the fixture no longer demonstrates the collision it was chosen for")
+	}
+
+	if got, other := HashedReleaseName(long), HashedReleaseName(short); got == other {
+		t.Fatalf("both names produce %q", got)
+	}
+
+	for _, name := range []string{long, short, "hap-a"} {
+		got := HashedReleaseName(name)
+		if len(got) > helmReleaseNameLimit {
+			t.Fatalf("%q is %d characters, Helm accepts at most %d", got, len(got), helmReleaseNameLimit)
+		}
+		if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+			t.Fatalf("%q is not a valid release name: %v", got, errs)
+		}
+	}
+
+	if got := HashedReleaseName("hap-e2e-test-app-helm"); got != "hap-e2e-test-app-helm-eaa08759b576" {
+		t.Fatalf("HashedReleaseName = %q", got)
+	}
+}
+
+func TestHashedReleaseNameCutsALongName(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "a long name is cut to 40 characters and hashed",
+			in:   "hap-very-long-application-name-that-is-definitely-over-fifty-three-characters-long",
+			want: "hap-very-long-application-name-that-is-d-3080981cd4e1",
+		},
+		{
+			name: "a cut that lands on a dot drops it",
+			in:   "hap-very.long.application.name.over.the.helm.limit",
+			want: "hap-very.long.application.name.over.the-5f257e85dfb0",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := HashedReleaseName(tc.in)
+			if got != tc.want {
+				t.Fatalf("HashedReleaseName(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if len(got) > helmReleaseNameLimit {
+				t.Fatalf("%q is %d characters, Helm accepts at most %d", got, len(got), helmReleaseNameLimit)
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid release name: %v", got, errs)
+			}
+		})
+	}
+}
+
+func TestHelmReleaseName(t *testing.T) {
+	const long = "abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefg"
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"short name is used as is", "podinfo", "podinfo"},
+		{"a name of exactly 53 characters is used as is", strings.Repeat("a", 53), strings.Repeat("a", 53)},
+		{"a longer name is cut to 40 characters and hashed", long, "abcdefghijklmnopqrstuvwxyz-abcdefghijklm-ddc3f43e8c75"},
+		{
+			"a long name is distinguished by the hash, not by the cut",
+			strings.Repeat("c", 50) + "-one",
+			strings.Repeat("c", 40) + "-0511f1bf7dbf",
+		},
+		{
+			"a name sharing the first 40 characters gets a different release",
+			strings.Repeat("c", 50) + "-two",
+			strings.Repeat("c", 40) + "-bbd09a562ff3",
+		},
+		{
+			"a cut that lands on a dot drops it",
+			strings.Repeat("a", 39) + "." + strings.Repeat("b", 20),
+			strings.Repeat("a", 39) + "-b46d196cb11f",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := HelmReleaseName(tc.in)
+			if got != tc.want {
+				t.Fatalf("HelmReleaseName(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if len(got) > 53 {
+				t.Fatalf("%q is %d characters, Helm accepts at most 53", got, len(got))
+			}
+			if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+				t.Fatalf("%q is not a valid release name: %v", got, errs)
+			}
+		})
+	}
+}
+
+func TestApplicationFamilyNamesMatchTheE2EGoldenValues(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"application service account", DerivedName(ApplicationPrefix, "HelmApplication", "e2e-app-ns", "e2e-test-app"), "hap-e2e-app-ns-e2e-test-app-26155b312741"},
+		{"application with long parts", DerivedName(ApplicationPrefix, "HelmApplication", "very-long-namespace-name-exceeding", "very-long-application-name-exceeding"), "hap-very-long-namespac-very-long-applicat-35f137b7281e"},
+		{"application truncated on a dash", DerivedName(ApplicationPrefix, "HelmApplication", "abcdefghijklmnopq-x", "stable"), "hap-abcdefghijklmnopq-stable-2b3b33a25854"},
+		{"application truncated on a dot", DerivedName(ApplicationPrefix, "HelmApplication", "team-a", "abcdefghijklmnopq.x"), "hap-team-a-abcdefghijklmnopq-da2ee07a8439"},
+		{"application release", HashedReleaseName(ApplicationPrefix + "-" + "e2e-test-app-helm"), "hap-e2e-test-app-helm-eaa08759b576"},
+		{"long application release", HashedReleaseName(ApplicationPrefix + "-" + "very-long-application-name-that-is-definitely-over-fifty-three-characters-long"), "hap-very-long-application-name-that-is-d-3080981cd4e1"},
+		{"application repository", DerivedName(ApplicationRepositoryPrefix, "HelmApplicationRepository", "team-a", "stable"), "hapr-team-a-stable-42df68033b1e"},
+		{"application repository with long parts", DerivedName(ApplicationRepositoryPrefix, "HelmApplicationRepository", "very-long-namespace-name-exceeding", "very-long-repository-name-exceeding"), "hapr-very-long-namespac-very-long-reposito-355aadb4a138"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.got != tc.want {
+				t.Fatalf("got %q, want %q", tc.got, tc.want)
 			}
 		})
 	}

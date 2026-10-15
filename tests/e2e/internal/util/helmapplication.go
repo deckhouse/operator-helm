@@ -27,21 +27,18 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/deckhouse/operator-helm/api/naming"
+	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
-	"github.com/deckhouse/operator-helm/tests/e2e/internal/naming"
 )
 
-func ApplicationServiceAccountName(namespace, name string) string {
-	return naming.ApplicationServiceAccountName(namespace, name)
+func helmApplicationInternalReleaseName(namespace, name string) string {
+	return naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, namespace, name)
 }
 
-func ApplicationReleaseName(name string) string {
-	return naming.ApplicationReleaseName(name)
-}
-
-func HelmApplicationInternalReleaseSpec(internalName string) (serviceAccountName, storageNamespace string, err error) {
+func HelmApplicationInternalReleaseSpec(namespace, name string) (serviceAccountName, storageNamespace string, err error) {
 	release, err := framework.GetClients().DynamicClient().Resource(operatorHelmInternalHelmReleaseGVR).
-		Namespace(moduleNamespace).Get(context.Background(), internalName, metav1.GetOptions{})
+		Namespace(moduleNamespace).Get(context.Background(), helmApplicationInternalReleaseName(namespace, name), metav1.GetOptions{})
 	if err != nil {
 		return "", "", err
 	}
@@ -72,7 +69,7 @@ func DeleteHelmApplication(f *framework.Framework, namespace, name string, timeo
 func UntilHelmApplicationDeleted(namespace, name string, timeout time.Duration) {
 	GinkgoHelper()
 
-	internalName := ApplicationServiceAccountName(namespace, name)
+	internalName := helmApplicationInternalReleaseName(namespace, name)
 
 	Eventually(func(g Gomega) {
 		_, err := framework.GetClients().OperatorClient().HelmV1alpha1().HelmApplications(namespace).
@@ -93,15 +90,22 @@ func DeleteHelmApplicationRepository(f *framework.Framework, namespace, name str
 		Delete(context.Background(), name, metav1.DeleteOptions{})
 	Expect(client.IgnoreNotFound(err)).NotTo(HaveOccurred(), "failed to remove HelmApplicationRepository")
 
+	UntilHelmApplicationRepositoryDeleted(namespace, name, timeout)
+}
+
+func UntilHelmApplicationRepositoryDeleted(namespace, name string, timeout time.Duration) {
+	GinkgoHelper()
+
+	internalName := naming.DerivedName(naming.ApplicationRepositoryPrefix, apiv1alpha1.HelmApplicationRepositoryKind, namespace, name)
+
 	Eventually(func(g Gomega) {
 		_, err := framework.GetClients().OperatorClient().HelmV1alpha1().HelmApplicationRepositories(namespace).
 			Get(context.Background(), name, metav1.GetOptions{})
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "HelmApplicationRepository %s/%s still exists", namespace, name)
-	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
-}
 
-func HelmApplicationRepositoryInternalName(namespace, name string) string {
-	return naming.ApplicationRepositoryInternalName(namespace, name)
+		_, err = GetHelmApplicationRepositoryInternalHelmRepository(internalName)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "internal helm repository %s still exists", internalName)
+	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
 func GetHelmApplicationRepositoryInternalHelmRepository(internalName string) (*unstructured.Unstructured, error) {

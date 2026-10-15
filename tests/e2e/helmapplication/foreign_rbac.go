@@ -22,8 +22,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/util"
@@ -115,9 +117,12 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 			"a role that is not ours must not be labelled as ours")
 
 		By("Nothing must be installed while the identity cannot be built")
-		_, err = f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
-			Get(context.Background(), util.ApplicationServiceAccountName(f.NamespaceName(), appName), metav1.GetOptions{})
-		Expect(err).To(HaveOccurred(), "no binding must be created for a stalled identity")
+		bindingName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
+		Consistently(func(g Gomega) {
+			_, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+				Get(context.Background(), bindingName, metav1.GetOptions{})
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no binding must be created for a stalled identity")
+		}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 	})
 
 	It("should take the role over once it is labelled as the module's", func() {

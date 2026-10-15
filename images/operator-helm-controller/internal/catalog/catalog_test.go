@@ -196,7 +196,7 @@ func TestReconcileWritesNamespacedCatalogNextToTheRepository(t *testing.T) {
 	}
 
 	got := &helmv1alpha1.HelmApplicationChart{}
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 	if err := c.Get(context.Background(), key, got); err != nil {
 		t.Fatalf("chart object was not created in the repository namespace: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestReconcileRepairsAnObjectStrippedOfItsLabels(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
 	repo := applicationRepo("team-a", "stable")
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 
 	stripped := &helmv1alpha1.HelmApplicationChart{
 		ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
@@ -271,7 +271,7 @@ func TestReconcileRejectsPublishingOntoAnObjectCreatedAfterTheRead(t *testing.T)
 		repushed = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 	)
 
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 
 	overtaken := false
 	c := newClientWithInterceptor(t, interceptor.Funcs{
@@ -381,7 +381,7 @@ func TestClusterCatalogObjectsHaveNoNamespace(t *testing.T) {
 	}
 
 	got := &helmv1alpha1.HelmClusterApplicationChart{}
-	key := client.ObjectKey{Name: naming.ClusterApplicationChartName("shared", "podinfo")}
+	key := client.ObjectKey{Name: naming.HelmClusterApplicationChartName("shared", "podinfo")}
 	if err := c.Get(context.Background(), key, got); err != nil {
 		t.Fatalf("cluster chart object was not created: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestLookupReturnsTheCatalogObjectAndItsStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup returned %v", err)
 	}
-	if obj.GetNamespace() != "team-a" || obj.GetName() != naming.ApplicationChartName("stable", "podinfo") {
+	if obj.GetNamespace() != "team-a" || obj.GetName() != naming.HelmApplicationChartName("stable", "podinfo") {
 		t.Fatalf("Lookup returned %s/%s, want the catalog object next to the repository", obj.GetNamespace(), obj.GetName())
 	}
 	if len(status.Versions) != 1 || status.Versions[0].Version != "6.7.1" {
@@ -1018,7 +1018,7 @@ func TestAFailedProbeOnAVersionInUseIsExaminedAgainOnTheNextPass(t *testing.T) {
 	}
 
 	stored := &helmv1alpha1.HelmApplicationChart{}
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 	if err := c.Get(context.Background(), key, stored); err != nil {
 		t.Fatalf("reading the catalog object: %v", err)
 	}
@@ -1085,7 +1085,7 @@ func TestAnIncompletePassKeepsTheVersionsItDidNotExamine(t *testing.T) {
 	}
 
 	stored := &helmv1alpha1.HelmApplicationChart{}
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 	if err := c.Get(context.Background(), key, stored); err != nil {
 		t.Fatalf("reading the catalog object: %v", err)
 	}
@@ -1163,7 +1163,7 @@ func TestAForcedPassKeepsTheMarkOnTheVersionsItDidNotReach(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
 	repo := applicationRepo("team-a", "stable")
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 
 	complete := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
 		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
@@ -1230,7 +1230,7 @@ func TestAnIncompletePassMarksNothingItself(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
 	repo := applicationRepo("team-a", "stable")
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 
 	complete := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
 		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},
@@ -1255,7 +1255,7 @@ func TestAMarkedVersionTheRepositoryNoLongerOffersIsReportedRemoved(t *testing.T
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
 	repo := applicationRepo("team-a", "stable")
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 
 	app := &helmv1alpha1.HelmApplication{
 		ObjectMeta: metav1.ObjectMeta{Name: "podinfo", Namespace: "team-a"},
@@ -1309,7 +1309,7 @@ func TestForcingARefreshMarksARetainedRemovedVersionAndALaterPassClearsIt(t *tes
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
 	repo := applicationRepo("team-a", "stable")
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 
 	app := &helmv1alpha1.HelmApplication{
 		ObjectMeta: metav1.ObjectMeta{Name: "podinfo", Namespace: "team-a"},
@@ -1371,7 +1371,7 @@ func TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved(t *te
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
 	repo := applicationRepo("team-a", "stable")
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "legacy")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "legacy")}
 
 	app := &helmv1alpha1.HelmApplication{
 		ObjectMeta: metav1.ObjectMeta{Name: "legacy", Namespace: "team-a"},
@@ -1429,7 +1429,7 @@ func TestAChartTheFetchNoLongerOffersHasItsRetainedVersionsRecordedRemoved(t *te
 func TestAFailedAbsenceWriteIsReportedAndRetried(t *testing.T) {
 	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
 
-	absentName := naming.ApplicationChartName("stable", "legacy")
+	absentName := naming.HelmApplicationChartName("stable", "legacy")
 	failAbsenceWrite := false
 
 	c := newClientWithInterceptor(t, interceptor.Funcs{
@@ -1509,7 +1509,7 @@ func TestForcingARefreshLeavesAVersionAwaitingAVerdictUnmarked(t *testing.T) {
 	c := newClient(t)
 	cat := adapter.NewApplicationCatalog(c, c)
 	repo := applicationRepo("team-a", "stable")
-	key := client.ObjectKey{Namespace: "team-a", Name: naming.ApplicationChartName("stable", "podinfo")}
+	key := client.ObjectKey{Namespace: "team-a", Name: naming.HelmApplicationChartName("stable", "podinfo")}
 
 	pending := repoclient.Chart{Name: "podinfo", Versions: []repoclient.ChartVersion{
 		{Version: semver.MustParse("6.7.1"), MediaType: mediaType},

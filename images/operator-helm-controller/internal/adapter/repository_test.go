@@ -22,6 +22,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/utils"
@@ -106,8 +107,8 @@ func TestApplicationRepositoryCarriesNamespaceInLabelsAndNames(t *testing.T) {
 
 	want := contract.InternalNames{
 		HelmRepository: "hapr-team-a-stable-42df68033b1e",
-		AuthSecret:     utils.DerivedName("hapr-auth", helmv1alpha1.HelmApplicationRepositoryKind, "team-a", "stable"),
-		TLSSecret:      utils.DerivedName("hapr-tls", helmv1alpha1.HelmApplicationRepositoryKind, "team-a", "stable"),
+		AuthSecret:     naming.DerivedName("hapr-auth", helmv1alpha1.HelmApplicationRepositoryKind, "team-a", "stable"),
+		TLSSecret:      naming.DerivedName("hapr-tls", helmv1alpha1.HelmApplicationRepositoryKind, "team-a", "stable"),
 	}
 	if got := repo.InternalNames(); got != want {
 		t.Fatalf("InternalNames = %+v, want %+v", got, want)

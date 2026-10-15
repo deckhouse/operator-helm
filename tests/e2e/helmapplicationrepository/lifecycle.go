@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
@@ -88,7 +89,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
 			By("The catalog must appear in the repository's own namespace")
-			labelSelector := fmt.Sprintf("repository=%s", repoName)
+			labelSelector := apiv1alpha1.LabelRepositoryName + "=" + repoName
 			Eventually(func(g Gomega) {
 				charts, err := f.OperatorClient().HelmV1alpha1().
 					HelmApplicationCharts(f.NamespaceName()).
@@ -142,7 +143,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			By("Both repositories must reach Ready independently")
 			util.UntilConditionTrue(apiv1alpha1.ConditionTypeReady, framework.LongTimeout, createdTwin)
 
-			labelSelector := fmt.Sprintf("repository=%s", repoName)
+			labelSelector := apiv1alpha1.LabelRepositoryName + "=" + repoName
 			By("The twin must publish its own catalog into its own namespace")
 			Eventually(func(g Gomega) {
 				charts, err := f.OperatorClient().HelmV1alpha1().
@@ -175,7 +176,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			if strings.EqualFold(repoType, "helm") {
 				By("The original's internal HelmRepository must survive the twin's deletion")
 				_, err = util.GetHelmApplicationRepositoryInternalHelmRepository(
-					util.HelmApplicationRepositoryInternalName(f.NamespaceName(), repoName),
+					naming.DerivedName(naming.ApplicationRepositoryPrefix, apiv1alpha1.HelmApplicationRepositoryKind, f.NamespaceName(), repoName),
 				)
 				Expect(err).NotTo(HaveOccurred())
 			}

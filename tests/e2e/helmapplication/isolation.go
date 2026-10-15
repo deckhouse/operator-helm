@@ -25,6 +25,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
@@ -84,7 +85,7 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 	})
 
 	It("should apply the chart as its own service account", func() {
-		saName := util.ApplicationServiceAccountName(f.NamespaceName(), appName)
+		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 
 		By("The service account lives in the module namespace and mounts no token")
 		sa, err := f.KubeClient().CoreV1().ServiceAccounts(moduleNS).
@@ -104,25 +105,25 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(binding.Subjects[0].Name).To(Equal(saName))
 		Expect(binding.Subjects[0].Namespace).To(Equal(moduleNS))
 
-		By("The internal HelmRelease actually impersonates that account and stores into the application namespace")
+		By("The internal HelmRelease names that account and the application namespace as its storage")
 		Eventually(func(g Gomega) {
-			gotServiceAccountName, gotStorageNamespace, err := util.HelmApplicationInternalReleaseSpec(saName)
+			gotServiceAccountName, gotStorageNamespace, err := util.HelmApplicationInternalReleaseSpec(f.NamespaceName(), appName)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(gotServiceAccountName).To(Equal(saName))
 			g.Expect(gotStorageNamespace).To(Equal(f.NamespaceName()))
 		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
-		By("The Helm storage secret lives in the application namespace, not the operator's")
+		By("A Helm storage secret exists in the application namespace")
 		Eventually(func(g Gomega) {
 			secrets, err := f.KubeClient().CoreV1().Secrets(f.NamespaceName()).
 				List(context.Background(), metav1.ListOptions{FieldSelector: "type=helm.sh/release.v1"})
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(secrets.Items).NotTo(BeEmpty(), "the release storage must live in the application namespace")
+			g.Expect(secrets.Items).NotTo(BeEmpty(), "a Helm release storage secret must exist in the application namespace")
 		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 	})
 
 	It("should create nothing else of its own in the namespace", func() {
-		saName := util.ApplicationServiceAccountName(f.NamespaceName(), appName)
+		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 
 		By("Every secret in the namespace is Helm's own release storage, not a projected credential")
 		secrets, err := f.KubeClient().CoreV1().Secrets(f.NamespaceName()).
@@ -149,7 +150,7 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(roles.Items).To(HaveLen(1))
 		Expect(roles.Items[0].Name).To(Equal(appRoleName))
 
-		By("No ClusterRoleBinding escalates the application's service account cluster-wide")
+		By("No ClusterRoleBinding names the application's service account as a direct subject")
 		clusterBindings, err := f.KubeClient().RbacV1().ClusterRoleBindings().
 			List(context.Background(), metav1.ListOptions{})
 		Expect(err).NotTo(HaveOccurred())
@@ -159,13 +160,13 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 					Kind:      rbacv1.ServiceAccountKind,
 					Name:      saName,
 					Namespace: moduleNS,
-				}), "the application's service account must never be granted cluster-wide rights")
+				}), "the application's service account must not be a direct subject of any ClusterRoleBinding")
 			}
 		}
 	})
 
 	It("should carry the module label on the role and the binding", func() {
-		saName := util.ApplicationServiceAccountName(f.NamespaceName(), appName)
+		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 
 		role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
 			Get(context.Background(), appRoleName, metav1.GetOptions{})
@@ -208,7 +209,7 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 	})
 
 	It("should recreate a deleted role and a deleted binding on its own", func() {
-		saName := util.ApplicationServiceAccountName(f.NamespaceName(), appName)
+		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 
 		By("Deleting both objects")
 		Expect(f.KubeClient().RbacV1().Roles(f.NamespaceName()).

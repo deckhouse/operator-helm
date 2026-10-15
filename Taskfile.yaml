@@ -130,7 +130,6 @@ tasks:
       - task: hooks:test:unit
       - task: operator-helm-controller:test:unit
       - task: chart-values-controller:test:unit
-      - task: e2e:test:unit
       - task: internalcrds:test:unit
       - task: test:rewrite-rules
 

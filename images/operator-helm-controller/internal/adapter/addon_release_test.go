@@ -149,7 +149,7 @@ func TestAddonReleaseBoundsALongReleaseName(t *testing.T) {
 	long := "abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefg"
 	rel := NewAddonRelease(addonRelease(long))
 
-	if got := rel.ReleaseName(); got != utils.HelmReleaseName(long) || len(got) > 53 {
+	if got := rel.ReleaseName(); got != naming.HelmReleaseName(long) || len(got) > 53 {
 		t.Fatalf("ReleaseName = %q (%d chars), want the bounded name", got, len(got))
 	}
 }

@@ -19,17 +19,10 @@ package adapter
 import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/status"
-	"github.com/deckhouse/operator-helm/internal/utils"
-)
-
-// Prefixes of the internal objects derived from a HelmClusterApplicationRepository.
-const (
-	clusterApplicationRepositoryPrefix     = "hcapr"
-	clusterApplicationRepositoryAuthPrefix = "hcapr-auth"
-	clusterApplicationRepositoryTLSPrefix  = "hcapr-tls"
 )
 
 var _ contract.Repository = (*ClusterApplicationRepository)(nil)
@@ -86,8 +79,8 @@ func (r *ClusterApplicationRepository) InternalNames() contract.InternalNames {
 	kind := helmv1alpha1.HelmClusterApplicationRepositoryKind
 
 	return contract.InternalNames{
-		HelmRepository: utils.DerivedName(clusterApplicationRepositoryPrefix, kind, "", r.obj.Name),
-		AuthSecret:     utils.DerivedName(clusterApplicationRepositoryAuthPrefix, kind, "", r.obj.Name),
-		TLSSecret:      utils.DerivedName(clusterApplicationRepositoryTLSPrefix, kind, "", r.obj.Name),
+		HelmRepository: naming.DerivedName(naming.ClusterApplicationRepositoryPrefix, kind, "", r.obj.Name),
+		AuthSecret:     naming.DerivedName(naming.ClusterApplicationRepositoryAuthPrefix, kind, "", r.obj.Name),
+		TLSSecret:      naming.DerivedName(naming.ClusterApplicationRepositoryTLSPrefix, kind, "", r.obj.Name),
 	}
 }

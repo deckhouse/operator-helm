@@ -628,7 +628,7 @@ func applicationFixtures() []client.Object {
 		},
 		&helmv1alpha1.HelmApplicationChart{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      naming.ApplicationChartName("stable", "podinfo"),
+				Name:      naming.HelmApplicationChartName("stable", "podinfo"),
 				Namespace: "team-a",
 				Labels: map[string]string{
 					helmv1alpha1.LabelRepositoryName: "stable",

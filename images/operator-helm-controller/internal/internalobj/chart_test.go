@@ -125,7 +125,7 @@ func TestChartsEnsureDropsTheCatalogLabelOfThePreviousRepositoryKind(t *testing.
 	app.Spec.Chart.ClusterRepository = "stable"
 
 	rel := adapter.NewApplicationRelease(app)
-	stale := naming.ApplicationChartName("stable", app.Spec.Chart.Name)
+	stale := naming.HelmApplicationChartName("stable", app.Spec.Chart.Name)
 
 	existing := &sourcev1.HelmChart{
 		ObjectMeta: metav1.ObjectMeta{
@@ -150,7 +150,7 @@ func TestChartsEnsureDropsTheCatalogLabelOfThePreviousRepositoryKind(t *testing.
 	if _, found := chart.Labels[helmv1alpha1.HelmApplicationChartLabelSourceName]; found {
 		t.Fatalf("labels = %v, want the catalog label of the previous repository kind removed", chart.Labels)
 	}
-	want := naming.ClusterApplicationChartName("stable", app.Spec.Chart.Name)
+	want := naming.HelmClusterApplicationChartName("stable", app.Spec.Chart.Name)
 	if chart.Labels[helmv1alpha1.HelmClusterApplicationChartLabelSourceName] != want {
 		t.Fatalf("labels = %v, want the catalog label of the current repository kind %q", chart.Labels, want)
 	}

@@ -90,7 +90,7 @@ var families = map[RepositoryKind]repositoryFamily{
 		},
 		ChartVersions: func(ctx context.Context, c client.Client, namespace, repository, chart string) ([]helmv1alpha1.ChartVersion, error) {
 			obj := &helmv1alpha1.HelmApplicationChart{}
-			key := client.ObjectKey{Namespace: namespace, Name: apinaming.ApplicationChartName(repository, chart)}
+			key := client.ObjectKey{Namespace: namespace, Name: apinaming.HelmApplicationChartName(repository, chart)}
 			if err := c.Get(ctx, key, obj); err != nil {
 				return nil, err
 			}
@@ -117,7 +117,7 @@ var families = map[RepositoryKind]repositoryFamily{
 		},
 		ChartVersions: func(ctx context.Context, c client.Client, _, repository, chart string) ([]helmv1alpha1.ChartVersion, error) {
 			obj := &helmv1alpha1.HelmClusterApplicationChart{}
-			key := client.ObjectKey{Name: apinaming.ClusterApplicationChartName(repository, chart)}
+			key := client.ObjectKey{Name: apinaming.HelmClusterApplicationChartName(repository, chart)}
 			if err := c.Get(ctx, key, obj); err != nil {
 				return nil, err
 			}

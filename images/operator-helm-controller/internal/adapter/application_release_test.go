@@ -30,7 +30,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
 func applicationClient(t *testing.T, objects ...client.Object) client.Client {
@@ -78,14 +77,14 @@ func TestApplicationReleaseResolvesTheRepositoryReference(t *testing.T) {
 			app:           namespacedApp("team-a", "my-app", "stable"),
 			wantRef:       contract.RepositoryRef{Kind: helmv1alpha1.HelmApplicationRepositoryKind, Namespace: "team-a", Name: "stable"},
 			wantChartLbl:  helmv1alpha1.HelmApplicationChartLabelSourceName,
-			wantChartName: naming.ApplicationChartName("stable", "podinfo"),
+			wantChartName: naming.HelmApplicationChartName("stable", "podinfo"),
 		},
 		{
 			name:          "cluster repository has no namespace",
 			app:           clusterApp("team-a", "my-app", "shared"),
 			wantRef:       contract.RepositoryRef{Kind: helmv1alpha1.HelmClusterApplicationRepositoryKind, Name: "shared"},
 			wantChartLbl:  helmv1alpha1.HelmClusterApplicationChartLabelSourceName,
-			wantChartName: naming.ClusterApplicationChartName("shared", "podinfo"),
+			wantChartName: naming.HelmClusterApplicationChartName("shared", "podinfo"),
 		},
 	}
 
@@ -131,7 +130,7 @@ func TestApplicationReleaseNamesAndLabels(t *testing.T) {
 	if got := rel.InternalNames(); got != want {
 		t.Fatalf("InternalNames = %+v, want %+v", got, want)
 	}
-	if want.HelmChart != utils.DerivedName("hap", helmv1alpha1.HelmApplicationKind, "team-a", "my-app") {
+	if want.HelmChart != naming.DerivedName("hap", helmv1alpha1.HelmApplicationKind, "team-a", "my-app") {
 		t.Fatal("the pinned literal drifted from DerivedName")
 	}
 

@@ -27,6 +27,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/deckhouse/operator-helm/api/naming"
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
@@ -48,7 +49,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 		repoName := "e2e-app-repo-" + suffix
 		appName := "e2e-test-app-" + suffix
 
-		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", util.ApplicationReleaseName(appName), chartName)
+		labelSelector := fmt.Sprintf("app.kubernetes.io/name=%s-%s", naming.HashedReleaseName(naming.ApplicationPrefix+"-"+appName), chartName)
 
 		BeforeAll(func() {
 			DeferCleanup(f.After)
@@ -139,7 +140,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 		})
 
 		It("should remove the release and its identity on delete", func() {
-			saName := util.ApplicationServiceAccountName(f.NamespaceName(), appName)
+			saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 
 			util.DeleteHelmApplication(f, f.NamespaceName(), appName, framework.LongTimeout)
 

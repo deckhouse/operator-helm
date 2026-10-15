@@ -29,11 +29,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/contract"
 	"github.com/deckhouse/operator-helm/internal/index"
 	"github.com/deckhouse/operator-helm/internal/status"
-	"github.com/deckhouse/operator-helm/internal/utils"
 )
-
-// applicationPrefix starts every internal object name and the Helm release name of a HelmApplication.
-const applicationPrefix = "hap"
 
 var _ contract.Release = (*ApplicationRelease)(nil)
 
@@ -93,7 +89,7 @@ func (r *ApplicationRelease) LastAppliedValues() *apiextensionsv1.JSON {
 // ReleaseName is the application name prefixed and unconditionally hashed, so it cannot
 // collide with a hand-installed release or with another application's.
 func (r *ApplicationRelease) ReleaseName() string {
-	return utils.HashedReleaseName(applicationPrefix + "-" + r.obj.Name)
+	return naming.HashedReleaseName(naming.ApplicationPrefix + "-" + r.obj.Name)
 }
 
 func (r *ApplicationRelease) SourceLabels() map[string]string {
@@ -110,16 +106,16 @@ func (r *ApplicationRelease) HelmChartLabels() map[string]string {
 
 	switch ref.Repository.Kind {
 	case helmv1alpha1.HelmApplicationRepositoryKind:
-		labels[helmv1alpha1.HelmApplicationChartLabelSourceName] = naming.ApplicationChartName(ref.Repository.Name, ref.Chart)
+		labels[helmv1alpha1.HelmApplicationChartLabelSourceName] = naming.HelmApplicationChartName(ref.Repository.Name, ref.Chart)
 	case helmv1alpha1.HelmClusterApplicationRepositoryKind:
-		labels[helmv1alpha1.HelmClusterApplicationChartLabelSourceName] = naming.ClusterApplicationChartName(ref.Repository.Name, ref.Chart)
+		labels[helmv1alpha1.HelmClusterApplicationChartLabelSourceName] = naming.HelmClusterApplicationChartName(ref.Repository.Name, ref.Chart)
 	}
 
 	return labels
 }
 
 func (r *ApplicationRelease) InternalNames() contract.ReleaseNames {
-	name := utils.DerivedName(applicationPrefix, helmv1alpha1.HelmApplicationKind, r.obj.Namespace, r.obj.Name)
+	name := naming.DerivedName(naming.ApplicationPrefix, helmv1alpha1.HelmApplicationKind, r.obj.Namespace, r.obj.Name)
 
 	return contract.ReleaseNames{
 		HelmChart:      name,
