@@ -32,7 +32,7 @@ import (
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/util"
 )
 
-var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func() {
+var _ = Describe("HelmApplication over a foreign role binding", Ordered, func() {
 	f := framework.NewFramework("application-foreign-rbac")
 
 	const (
@@ -41,17 +41,18 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 		appName  = "e2e-foreign-rbac-app"
 	)
 
-	var createdApp *apiv1alpha1.HelmApplication
+	var (
+		createdApp  *apiv1alpha1.HelmApplication
+		bindingName string
+	)
 
-	foreignRules := []rbacv1.PolicyRule{{
-		APIGroups: []string{""},
-		Resources: []string{"configmaps"},
-		Verbs:     []string{"get"},
-	}}
+	foreignRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "someone-elses-role"}
+	foreignSubjects := []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "someone-else"}}
 
 	BeforeAll(func() {
 		DeferCleanup(f.After)
 		f.Before()
+		bindingName = naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 	})
 
 	AfterEach(func() {
@@ -59,14 +60,15 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 		controller.AssertNoErrorsFor("operator-helm-controller")
 	})
 
-	It("should refuse to seize a role it does not own", func() {
-		By("Putting a role of someone else's under the name the identity needs")
-		role := &rbacv1.Role{
-			ObjectMeta: metav1.ObjectMeta{Name: appRoleName, Namespace: f.NamespaceName()},
-			Rules:      foreignRules,
+	It("should refuse to seize a role binding it does not own", func() {
+		By("Putting a role binding of someone else's under the name the identity needs")
+		binding := &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: bindingName, Namespace: f.NamespaceName()},
+			RoleRef:    foreignRef,
+			Subjects:   foreignSubjects,
 		}
-		_, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-			Create(context.Background(), role, metav1.CreateOptions{})
+		_, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+			Create(context.Background(), binding, metav1.CreateOptions{})
 		Expect(err).NotTo(HaveOccurred())
 
 		By("Creating the repository and the application over it")
@@ -114,36 +116,35 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 			createdApp,
 		)
 
-		By("The role must be left exactly as it was")
-		stored, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-			Get(context.Background(), appRoleName, metav1.GetOptions{})
+		By("The role binding must be left exactly as it was")
+		stored, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+			Get(context.Background(), bindingName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(stored.Rules).To(Equal(foreignRules), "a role that is not ours must not be widened")
+		Expect(stored.RoleRef).To(Equal(foreignRef), "a binding that is not ours must not be re-pointed")
+		Expect(stored.Subjects).To(Equal(foreignSubjects), "a binding that is not ours must keep its subjects")
 		Expect(stored.Labels).NotTo(HaveKey(apiv1alpha1.LabelManagedBy),
-			"a role that is not ours must not be labelled as ours")
+			"a binding that is not ours must not be labelled as ours")
 
 		By("Nothing must be installed while the identity cannot be built")
-		bindingName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 		Consistently(func(g Gomega) {
-			_, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
-				Get(context.Background(), bindingName, metav1.GetOptions{})
-			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no binding must be created for a stalled identity")
+			_, _, err := util.HelmApplicationInternalReleaseSpec(f.NamespaceName(), appName)
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no release must be created for a stalled identity")
 		}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 	})
 
-	It("should take the role over once it is labelled as the module's", func() {
-		By("Handing the role to the module")
+	It("should take the role binding over once it is labelled as the module's", func() {
+		By("Handing the role binding to the module")
 		Eventually(func(g Gomega) {
-			role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-				Get(context.Background(), appRoleName, metav1.GetOptions{})
+			binding, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+				Get(context.Background(), bindingName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 
-			if role.Labels == nil {
-				role.Labels = map[string]string{}
+			if binding.Labels == nil {
+				binding.Labels = map[string]string{}
 			}
-			role.Labels[apiv1alpha1.LabelManagedBy] = apiv1alpha1.LabelManagedByValue
-			_, err = f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-				Update(context.Background(), role, metav1.UpdateOptions{})
+			binding.Labels[apiv1alpha1.LabelManagedBy] = apiv1alpha1.LabelManagedByValue
+			_, err = f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+				Update(context.Background(), binding, metav1.UpdateOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 
@@ -151,13 +152,17 @@ var _ = Describe("HelmApplication over a foreign namespace role", Ordered, func(
 		util.UntilConditionAbsent(apiv1alpha1.ConditionTypeStalled, framework.LongTimeout, createdApp)
 		util.UntilConditionTrue(apiv1alpha1.ConditionTypeReady, framework.LongTimeout, createdApp)
 
-		By("The adopted role must be reconciled to full rights")
+		By("The adopted binding must be reconciled to the application ClusterRole and account")
 		Eventually(func(g Gomega) {
-			stored, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-				Get(context.Background(), appRoleName, metav1.GetOptions{})
+			stored, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+				Get(context.Background(), bindingName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(stored.Rules).To(HaveLen(1))
-			g.Expect(stored.Rules[0].Verbs).To(ContainElement("*"))
+			g.Expect(stored.RoleRef.Kind).To(Equal("ClusterRole"))
+			g.Expect(stored.RoleRef.Name).To(Equal(appClusterRoleName))
+			g.Expect(stored.Subjects).To(HaveLen(1))
+			g.Expect(stored.Subjects[0].Kind).To(Equal(rbacv1.ServiceAccountKind))
+			g.Expect(stored.Subjects[0].Name).To(Equal(bindingName))
+			g.Expect(stored.Subjects[0].Namespace).To(Equal(moduleNS))
 		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 	})
 })

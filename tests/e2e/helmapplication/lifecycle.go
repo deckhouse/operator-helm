@@ -35,10 +35,11 @@ import (
 )
 
 const (
-	chartName   = "podinfo"
-	chartVer    = "6.10.2"
-	moduleNS    = "d8-operator-helm"
-	appRoleName = "operator-helm-application"
+	chartName = "podinfo"
+	chartVer  = "6.10.2"
+	moduleNS  = "d8-operator-helm"
+	// The ClusterRole the module chart ships for every application; the chart is the source of truth.
+	appClusterRoleName = "d8:operator-helm:application"
 )
 
 func DefineLifecycleTests(repoType, repoURL string) {
@@ -157,12 +158,6 @@ func DefineLifecycleTests(repoType, repoURL string) {
 					Get(context.Background(), saName, metav1.GetOptions{})
 				g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the application's role binding must be deleted")
 			}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
-
-			By("The namespace role must survive the application")
-			_, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-				Get(context.Background(), appRoleName, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(),
-				"the role is shared by every application of the namespace")
 		})
 	})
 }

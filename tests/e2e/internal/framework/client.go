@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	operatorhelmclient "github.com/deckhouse/operator-helm/api/client/generated/clientset/versioned"
@@ -34,10 +35,17 @@ func GetClients() Clients {
 }
 
 type Clients struct {
+	restConfig     *rest.Config
 	kubeClient     kubernetes.Interface
 	operatorClient operatorhelmclient.Interface
 	generic        client.Client
 	dynamic        dynamic.Interface
+}
+
+// RestConfig returns a copy of the cluster configuration, for a client that acts as
+// someone else.
+func (c Clients) RestConfig() *rest.Config {
+	return rest.CopyConfig(c.restConfig)
 }
 
 func (c Clients) KubeClient() kubernetes.Interface {
@@ -63,6 +71,7 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+	clients.restConfig = restConfig
 
 	clients.kubeClient, err = kubernetes.NewForConfig(restConfig)
 	if err != nil {

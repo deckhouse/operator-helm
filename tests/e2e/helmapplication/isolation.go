@@ -23,7 +23,11 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/deckhouse/operator-helm/api/naming"
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -99,8 +103,8 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		binding, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 			Get(context.Background(), saName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(binding.RoleRef.Kind).To(Equal("Role"))
-		Expect(binding.RoleRef.Name).To(Equal(appRoleName))
+		Expect(binding.RoleRef.Kind).To(Equal("ClusterRole"))
+		Expect(binding.RoleRef.Name).To(Equal(appClusterRoleName))
 		Expect(binding.Subjects).To(HaveLen(1))
 		Expect(binding.Subjects[0].Name).To(Equal(saName))
 		Expect(binding.Subjects[0].Namespace).To(Equal(moduleNS))
@@ -134,7 +138,7 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 				"repository credentials must never be projected into a consumer namespace")
 		}
 
-		By("The operator's own objects here are exactly the role binding and the role")
+		By("The operator's own object here is exactly the role binding: the rights come from a ClusterRole")
 		bindings, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 			List(context.Background(), metav1.ListOptions{
 				LabelSelector: apiv1alpha1.LabelManagedBy + "=" + apiv1alpha1.LabelManagedByValue,
@@ -147,8 +151,7 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 				LabelSelector: apiv1alpha1.LabelManagedBy + "=" + apiv1alpha1.LabelManagedByValue,
 			})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(roles.Items).To(HaveLen(1))
-		Expect(roles.Items[0].Name).To(Equal(appRoleName))
+		Expect(roles.Items).To(BeEmpty(), "no namespace role must be created: the rights come from the module's ClusterRole")
 
 		By("No ClusterRoleBinding names the application's service account as a direct subject")
 		clusterBindings, err := f.KubeClient().RbacV1().ClusterRoleBindings().
@@ -165,13 +168,8 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		}
 	})
 
-	It("should carry the module label on the role and the binding", func() {
+	It("should carry the module label on the binding", func() {
 		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
-
-		role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-			Get(context.Background(), appRoleName, metav1.GetOptions{})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(role.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelManagedBy, apiv1alpha1.LabelManagedByValue))
 
 		binding, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 			Get(context.Background(), saName, metav1.GetOptions{})
@@ -179,59 +177,91 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(binding.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelManagedBy, apiv1alpha1.LabelManagedByValue))
 	})
 
-	It("should restore a narrowed role on its own", func() {
-		By("Narrowing the role the way a namespace owner would")
-		narrowed := []rbacv1.PolicyRule{{
-			APIGroups: []string{""},
-			Resources: []string{"configmaps"},
-			Verbs:     []string{"get", "list"},
-		}}
-
-		Eventually(func(g Gomega) {
-			role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-				Get(context.Background(), appRoleName, metav1.GetOptions{})
-			g.Expect(err).NotTo(HaveOccurred())
-
-			role.Rules = narrowed
-			_, err = f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-				Update(context.Background(), role, metav1.UpdateOptions{})
-			g.Expect(err).NotTo(HaveOccurred())
-		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
-
-		By("The full rights must come back")
-		Eventually(func(g Gomega) {
-			role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-				Get(context.Background(), appRoleName, metav1.GetOptions{})
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(role.Rules).To(HaveLen(1))
-			g.Expect(role.Rules[0].Verbs).To(ContainElement("*"))
-		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
-	})
-
-	It("should recreate a deleted role and a deleted binding on its own", func() {
+	It("should recreate a deleted binding on its own", func() {
 		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 
-		By("Deleting both objects")
-		Expect(f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-			Delete(context.Background(), appRoleName, metav1.DeleteOptions{})).To(Succeed())
+		By("Deleting the binding")
 		Expect(f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 			Delete(context.Background(), saName, metav1.DeleteOptions{})).To(Succeed())
 
-		By("Both must come back with the rights the release is applied with")
+		By("It must come back with the rights the release is applied with")
 		Eventually(func(g Gomega) {
-			role, err := f.KubeClient().RbacV1().Roles(f.NamespaceName()).
-				Get(context.Background(), appRoleName, metav1.GetOptions{})
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(role.Rules).To(HaveLen(1))
-			g.Expect(role.Rules[0].Verbs).To(ContainElement("*"))
-
 			binding, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 				Get(context.Background(), saName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(binding.RoleRef.Name).To(Equal(appRoleName))
+			g.Expect(binding.RoleRef.Kind).To(Equal("ClusterRole"))
+			g.Expect(binding.RoleRef.Name).To(Equal(appClusterRoleName))
 			g.Expect(binding.Subjects).To(HaveLen(1))
 			g.Expect(binding.Subjects[0].Name).To(Equal(saName))
 			g.Expect(binding.Subjects[0].Namespace).To(Equal(moduleNS))
 		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+	})
+
+	It("should keep the application identity inside the limits of its namespace", func() {
+		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
+		ns := f.NamespaceName()
+		ctx := context.Background()
+
+		By("Acting as the identity the release is applied with")
+		cfg := framework.GetClients().RestConfig()
+		cfg.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + moduleNS + ":" + saName}
+		asApp, err := kubernetes.NewForConfig(cfg)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("It holds the namespace: a Role of its own and a binding to it go through")
+		reader := &rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-reader", Namespace: ns},
+			Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get", "list"}}},
+		}
+		_, err = asApp.RbacV1().Roles(ns).Create(ctx, reader, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		toReader := &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-reader", Namespace: ns},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: reader.Name},
+			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "default", Namespace: ns}},
+		}
+		_, err = asApp.RbacV1().RoleBindings(ns).Create(ctx, toReader, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("The namespace object itself is out of its reach")
+		_, err = asApp.CoreV1().Namespaces().Patch(ctx, ns, types.MergePatchType,
+			[]byte(`{"metadata":{"labels":{"e2e":"touched"}}}`), metav1.PatchOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "patching the namespace: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
+
+		By("A Role granting a protected kind, in any spelling, is refused")
+		for _, resources := range [][]string{{"resourcequotas"}, {"*"}, {"*/status"}, {"namespaces/finalize"}} {
+			escalation := &rbacv1.Role{
+				ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-escalation", Namespace: ns},
+				Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: resources, Verbs: []string{"update"}}},
+			}
+			_, err = asApp.RbacV1().Roles(ns).Create(ctx, escalation, metav1.CreateOptions{})
+			Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a role on %v: %v", resources, err)
+			Expect(err.Error()).To(ContainSubstring("may not grant write access"), "resources %v", resources)
+		}
+
+		By("A Role with a verb the identity does not hold is refused by the API server")
+		wild := &rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-escalation", Namespace: ns},
+			Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"*"}}},
+		}
+		_, err = asApp.RbacV1().Roles(ns).Create(ctx, wild, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a role with every verb: %v", err)
+
+		By("A binding to a ClusterRole is refused, its own one included")
+		toCluster := &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-escalation", Namespace: ns},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: appClusterRoleName},
+			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "default", Namespace: ns}},
+		}
+		_, err = asApp.RbacV1().RoleBindings(ns).Create(ctx, toCluster, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "binding the application ClusterRole: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may reference only a Role"))
+
+		By("Nor may it add a subject to the binding the controller owns")
+		_, err = asApp.RbacV1().RoleBindings(ns).Patch(ctx, saName, types.JSONPatchType,
+			[]byte(`[{"op":"add","path":"/subjects/-","value":{"kind":"ServiceAccount","name":"default","namespace":"`+ns+`"}}]`),
+			metav1.PatchOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "widening the controller's binding: %v", err)
 	})
 })
