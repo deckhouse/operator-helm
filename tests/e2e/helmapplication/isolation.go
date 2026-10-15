@@ -230,14 +230,20 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
 
 		By("A Role granting a protected kind, in any spelling, is refused")
-		for _, resources := range [][]string{{"resourcequotas"}, {"*"}, {"*/status"}, {"namespaces/finalize"}} {
+		for _, rule := range []rbacv1.PolicyRule{
+			{APIGroups: []string{""}, Resources: []string{"resourcequotas"}, Verbs: []string{"update"}},
+			{APIGroups: []string{""}, Resources: []string{"*"}, Verbs: []string{"update"}},
+			{APIGroups: []string{""}, Resources: []string{"*/status"}, Verbs: []string{"update"}},
+			{APIGroups: []string{""}, Resources: []string{"namespaces/finalize"}, Verbs: []string{"update"}},
+			{APIGroups: []string{"deckhouse.io"}, Resources: []string{"projectnamespaces"}, Verbs: []string{"delete"}},
+		} {
 			escalation := &rbacv1.Role{
 				ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-escalation", Namespace: ns},
-				Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: resources, Verbs: []string{"update"}}},
+				Rules:      []rbacv1.PolicyRule{rule},
 			}
 			_, err = asApp.RbacV1().Roles(ns).Create(ctx, escalation, metav1.CreateOptions{})
-			Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a role on %v: %v", resources, err)
-			Expect(err.Error()).To(ContainSubstring("may not grant write access"), "resources %v", resources)
+			Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a role on %v: %v", rule.Resources, err)
+			Expect(err.Error()).To(ContainSubstring("may not grant write access"), "resources %v", rule.Resources)
 		}
 
 		By("A Role with a verb the identity does not hold is refused by the API server")
