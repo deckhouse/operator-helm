@@ -174,10 +174,12 @@ func Evaluate(in Inputs) Decision {
 }
 
 // observedGeneration decides whether this pass may claim to have finished with the spec it
-// was given. Only a verdict the release will keep counts: settled, or given up on for good.
+// was given. Only a verdict the release will keep counts: settled, given up on for good, or
+// refused as a fault of the spec.
 func observedGeneration(in Inputs, decision Decision) *int64 {
 	settled := apimeta.IsStatusConditionTrue(decision.Conditions, helmv1alpha1.ConditionTypeReady) ||
-		apimeta.IsStatusConditionTrue(decision.Conditions, helmv1alpha1.ConditionTypeStalled)
+		apimeta.IsStatusConditionTrue(decision.Conditions, helmv1alpha1.ConditionTypeStalled) ||
+		(decision.Reported != nil && decision.Reported.BadInput)
 	if !settled {
 		return nil
 	}

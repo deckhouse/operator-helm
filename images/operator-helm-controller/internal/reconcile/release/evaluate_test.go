@@ -762,6 +762,30 @@ func TestEvaluateCarriesTheObservedGeneration(t *testing.T) {
 			},
 			advance: true,
 		},
+		{
+			name: "a step failure marked as bad input has",
+			inputs: func(in *Inputs) {
+				in.Outcome = StepFailed{Failure{
+					Reason:   helmv1alpha1.ReasonChartVersionNotFound,
+					Message:  "Version 6.7.2 of chart podinfo is not in the catalog of repository example",
+					Err:      errChartVersionNotFound,
+					BadInput: true,
+				}}
+			},
+			advance: true,
+		},
+		{
+			name: "a version the catalog does not offer has",
+			inputs: func(in *Inputs) {
+				in.Outcome = ChartReached{Internal: SourceUnresolved{Failure: Failure{
+					Reason:   helmv1alpha1.ReasonChartVersionNotFound,
+					Message:  "Version 6.7.2 of chart podinfo is not in the catalog of repository example",
+					Err:      errChartVersionNotFound,
+					BadInput: true,
+				}}}
+			},
+			advance: true,
+		},
 	}
 
 	for _, test := range tests {
