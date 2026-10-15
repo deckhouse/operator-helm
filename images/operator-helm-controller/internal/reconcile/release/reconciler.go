@@ -390,10 +390,15 @@ func (r *Reconciler) finish(
 	decision := Evaluate(in)
 
 	if decision.Reported != nil {
-		// Bad input and a wait are logged at info: neither is a fault of this controller.
-		if decision.Reported.BadInput || decision.Reported.AwaitsWatch {
-			log.FromContext(ctx).Info(decision.Reported.Message,
-				"reason", decision.Reported.Reason, "cause", decision.Reported.Err)
+		// Bad input, a wait and a failure with no cause are logged at info: none is a fault of
+		// this controller.
+		if decision.Reported.Err == nil || decision.Reported.BadInput || decision.Reported.AwaitsWatch {
+			kv := []any{"reason", decision.Reported.Reason}
+			if decision.Reported.Err != nil {
+				kv = append(kv, "cause", decision.Reported.Err)
+			}
+
+			log.FromContext(ctx).Info(decision.Reported.Message, kv...)
 		} else {
 			log.FromContext(ctx).Error(decision.Reported.Err, decision.Reported.Message,
 				"reason", decision.Reported.Reason)
