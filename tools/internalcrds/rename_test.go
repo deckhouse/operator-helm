@@ -28,8 +28,8 @@ func TestInternalGroup(t *testing.T) {
 	}
 
 	for in, want := range cases {
-		if got := InternalGroup(in); got != want {
-			t.Fatalf("InternalGroup(%q) = %q, want %q", in, got, want)
+		if got := internalGroup(in); got != want {
+			t.Fatalf("internalGroup(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -54,8 +54,8 @@ func TestRenameRewritesEveryIdentity(t *testing.T) {
 		},
 	}
 
-	if err := Rename(doc); err != nil {
-		t.Fatalf("Rename returned %v", err)
+	if err := rename(doc); err != nil {
+		t.Fatalf("rename returned %v", err)
 	}
 
 	spec := doc["spec"].(map[string]any)
@@ -111,8 +111,8 @@ func TestRenameRewritesNestedReferences(t *testing.T) {
 		"metadata": map[string]any{"name": "helmreleases.helm.toolkit.fluxcd.io"},
 	}
 
-	if err := Rename(doc); err != nil {
-		t.Fatalf("Rename returned %v", err)
+	if err := rename(doc); err != nil {
+		t.Fatalf("rename returned %v", err)
 	}
 
 	enum := doc["spec"].(map[string]any)["versions"].([]any)[0].(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)["chartRef"].(map[string]any)["properties"].(map[string]any)["kind"].(map[string]any)["enum"].([]any)
@@ -142,7 +142,7 @@ func TestRenameFailsOnMissingNames(t *testing.T) {
 			"metadata": map[string]any{"name": "helmreleases.helm.toolkit.fluxcd.io"},
 		}
 
-		err := Rename(doc)
+		err := rename(doc)
 		if err == nil {
 			t.Fatalf("%s: expected an error, got nil", name)
 		}
@@ -181,8 +181,8 @@ func TestRenameRewritesKindNamesInProse(t *testing.T) {
 		"metadata": map[string]any{"name": "helmcharts.source.toolkit.fluxcd.io"},
 	}
 
-	if err := Rename(doc); err != nil {
-		t.Fatalf("Rename returned %v", err)
+	if err := rename(doc); err != nil {
+		t.Fatalf("rename returned %v", err)
 	}
 
 	schema := doc["spec"].(map[string]any)["versions"].([]any)[0].(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)
@@ -237,8 +237,8 @@ func TestRenameDropsTheSubstituteAnnotation(t *testing.T) {
 		},
 	}
 
-	if err := Rename(doc); err != nil {
-		t.Fatalf("Rename returned %v", err)
+	if err := rename(doc); err != nil {
+		t.Fatalf("rename returned %v", err)
 	}
 
 	annotations := doc["metadata"].(map[string]any)["annotations"].(map[string]any)
@@ -263,8 +263,8 @@ func TestRenameDropsAnEmptiedAnnotationsBlock(t *testing.T) {
 		},
 	}
 
-	if err := Rename(doc); err != nil {
-		t.Fatalf("Rename returned %v", err)
+	if err := rename(doc); err != nil {
+		t.Fatalf("rename returned %v", err)
 	}
 
 	if _, ok := doc["metadata"].(map[string]any)["annotations"]; ok {

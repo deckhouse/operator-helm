@@ -27,9 +27,9 @@ import (
 // internalPrefix is the group suffix upstream flux groups map onto, shared with the api rewriter.
 const internalPrefix = "internal.operator-helm.deckhouse.io"
 
-// InternalGroup maps an upstream flux API group to the internal one this module serves.
+// internalGroup maps an upstream flux API group to the internal one this module serves.
 // It returns an empty string for anything but the two flux groups.
-func InternalGroup(group string) string {
+func internalGroup(group string) string {
 	switch group {
 	case "source.toolkit.fluxcd.io":
 		return "source." + internalPrefix
@@ -57,16 +57,16 @@ const kindPrefix = "InternalNelmOperator"
 // kindWord matches an upstream kind standing alone as a word, not one inside a longer name.
 var kindWord = regexp.MustCompile(`\b(` + strings.Join(upstreamKinds, "|") + `)\b`)
 
-// Rename turns one upstream CustomResourceDefinition into the internal one this module serves.
+// rename turns one upstream CustomResourceDefinition into the internal one this module serves.
 // It rewrites the group, the names block, the object name and every kind reference in the schemas.
-func Rename(doc map[string]any) error {
+func rename(doc map[string]any) error {
 	spec, ok := doc["spec"].(map[string]any)
 	if !ok {
 		return errors.New("the document has no spec")
 	}
 
 	group, _ := spec["group"].(string)
-	internal := InternalGroup(group)
+	internal := internalGroup(group)
 	if internal == "" {
 		return fmt.Errorf("unexpected api group %q", group)
 	}

@@ -19,6 +19,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +71,51 @@ func TestCheckNoLeftoverUpstreamRejectsSubstituteAnnotation(t *testing.T) {
 
 	if err := checkNoLeftoverUpstream("out.yaml", []byte(rendered)); err == nil {
 		t.Fatal("expected an error, got nil")
+	}
+}
+
+func TestRunRenamesEveryDocumentOfAFile(t *testing.T) {
+	dir := t.TempDir()
+	crd := func(kind, plural, group string) string {
+		return `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: ` + plural + `.` + group + `
+spec:
+  group: ` + group + `
+  names:
+    kind: ` + kind + `
+    listKind: ` + kind + `List
+    plural: ` + plural + `
+    singular: ` + strings.ToLower(kind) + `
+`
+	}
+
+	multi := "---\n" + crd("HelmRepository", "helmrepositories", "source.toolkit.fluxcd.io") +
+		"---\n" + crd("HelmChart", "helmcharts", "source.toolkit.fluxcd.io") + "---\n"
+	if err := os.WriteFile(filepath.Join(dir, "source.yaml"), []byte(multi), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "helm.yml"), []byte(crd("HelmRelease", "helmreleases", "helm.toolkit.fluxcd.io")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "out.yaml")
+	if err := run(out, []string{dir}); err != nil {
+		t.Fatal(err)
+	}
+
+	rendered, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, kind := range []string{"InternalNelmOperatorHelmRepository", "InternalNelmOperatorHelmChart", "InternalNelmOperatorHelmRelease"} {
+		if !strings.Contains(string(rendered), "kind: "+kind+"\n") {
+			t.Fatalf("output lacks kind %s:\n%s", kind, rendered)
+		}
+	}
+	if got := strings.Count(string(rendered), "---\n"); got != 3 {
+		t.Fatalf("output has %d documents, want 3:\n%s", got, rendered)
 	}
 }

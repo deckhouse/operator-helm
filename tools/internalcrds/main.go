@@ -20,8 +20,10 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -58,7 +60,7 @@ func run(out string, dirs []string) error {
 		}
 
 		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+			if entry.IsDir() || !slices.Contains([]string{".yaml", ".yml"}, filepath.Ext(entry.Name())) {
 				continue
 			}
 
@@ -67,18 +69,26 @@ func run(out string, dirs []string) error {
 				return fmt.Errorf("reading %s: %w", entry.Name(), err)
 			}
 
-			doc := map[string]any{}
-			if err := yaml.Unmarshal(raw, &doc); err != nil {
-				return fmt.Errorf("parsing %s: %w", entry.Name(), err)
-			}
-			if err := checkKnownKind(entry.Name(), doc); err != nil {
-				return err
-			}
-			if err := Rename(doc); err != nil {
-				return fmt.Errorf("renaming %s: %w", entry.Name(), err)
-			}
+			decoder := yaml.NewDecoder(bytes.NewReader(raw))
+			for {
+				doc := map[string]any{}
+				if err := decoder.Decode(&doc); errors.Is(err, io.EOF) {
+					break
+				} else if err != nil {
+					return fmt.Errorf("parsing %s: %w", entry.Name(), err)
+				}
+				if len(doc) == 0 {
+					continue
+				}
+				if err := checkKnownKind(entry.Name(), doc); err != nil {
+					return err
+				}
+				if err := rename(doc); err != nil {
+					return fmt.Errorf("renaming %s: %w", entry.Name(), err)
+				}
 
-			docs = append(docs, doc)
+				docs = append(docs, doc)
+			}
 		}
 	}
 
