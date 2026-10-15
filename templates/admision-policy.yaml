@@ -100,6 +100,7 @@ spec:
   validations:
     - expression: "false"
       message: "An application may not modify its namespace, resource quotas or limit ranges."
+      reason: Forbidden
 ---
 apiVersion: {{ $apiVersion }}
 kind: ValidatingAdmissionPolicy
@@ -125,6 +126,7 @@ spec:
           r.apiGroups.exists(g, g == "*" || g == "") &&
           r.resources.exists(res, res == "*" || res.startsWith("*/") || res.split("/")[0] in {{ $protected | toJson }}))
       message: "A Role written by an application may not grant write access to namespaces, resource quotas or limit ranges."
+      reason: Forbidden
 ---
 apiVersion: {{ $apiVersion }}
 kind: ValidatingAdmissionPolicy
@@ -145,6 +147,7 @@ spec:
   validations:
     - expression: 'object.roleRef.kind == "Role"'
       message: "A RoleBinding written by an application may reference only a Role of its namespace, not a ClusterRole."
+      reason: Forbidden
 {{- range list "protected-kinds" "role" "rolebinding" }}
 ---
 apiVersion: {{ $apiVersion }}
