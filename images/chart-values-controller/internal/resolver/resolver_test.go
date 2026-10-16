@@ -659,23 +659,44 @@ func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
 }
 
 func TestAHitIsServedOnlyAtTheRevisionTheObjectHolds(t *testing.T) {
-	repo := &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 1},
-		Spec: helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"}}
 	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
-	name := cvnaming.AuxResourceName(string(req.Kind), "", req.RepositoryName, req.Chart, req.Version, identityOf(repo.ObjectMeta))
 
 	tests := []struct {
 		name   string
+		url    string
+		failed bool
 		cached string
 		want   Outcome
 	}{
-		{name: "the cache holds the object's revision", cached: "sha256:current", want: OutcomeReady},
-		{name: "the cache holds another revision", cached: "sha256:stale", want: OutcomePending},
+		{name: "the cache holds the object's revision", url: "https://charts.example.invalid/stable", cached: "sha256:current", want: OutcomeReady},
+		{name: "the cache holds another revision", url: "https://charts.example.invalid/stable", cached: "sha256:stale", want: OutcomePending},
+		{
+			name: "a failed reconcile keeps the revision the object holds", url: "https://charts.example.invalid/stable",
+			failed: true, cached: "sha256:current", want: OutcomeReady,
+		},
+		{name: "an OCI repository holds the revision", url: "oci://registry.example.invalid/stable", cached: "sha256:current", want: OutcomeReady},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := newTestResolver(t, repo, chartWithVersions("example", "podinfo", helmv1alpha1.ChartVersion{Version: "6.7.1"}),
-				readySource(name, "sha256:current", time.Now().Add(time.Hour)))
+			repo := &helmv1alpha1.HelmClusterAddonRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 1},
+				Spec:       helmv1alpha1.RepositorySpec{URL: tt.url},
+			}
+			name := cvnaming.AuxResourceName(string(req.Kind), "", req.RepositoryName, req.Chart, req.Version, identityOf(repo.ObjectMeta))
+
+			chart := readySource(name, "sha256:current", time.Now().Add(time.Hour))
+			if tt.failed {
+				chart.Status.Conditions = failedConditions()
+			}
+			var source client.Object = chart
+			if isOCI(tt.url) {
+				source = &sourcev1.OCIRepository{
+					ObjectMeta: chart.ObjectMeta,
+					Status:     sourcev1.OCIRepositoryStatus{Conditions: chart.Status.Conditions, Artifact: chart.Status.Artifact},
+				}
+			}
+
+			r := newTestResolver(t, repo, chartWithVersions("example", "podinfo", helmv1alpha1.ChartVersion{Version: "6.7.1"}), source)
 			if err := r.cache.Put(name, tt.cached, []byte("replicaCount: 1\n")); err != nil {
 				t.Fatalf("seeding cache: %v", err)
 			}
@@ -687,13 +708,25 @@ func TestAHitIsServedOnlyAtTheRevisionTheObjectHolds(t *testing.T) {
 			if got.Outcome != tt.want {
 				t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Message, tt.want)
 			}
+			if tt.want == OutcomeReady && string(got.Values) != "replicaCount: 1\n" {
+				t.Fatalf("values = %q, want the cached values", got.Values)
+			}
 		})
 	}
 }
 
+func failedConditions() []metav1.Condition {
+	return []metav1.Condition{
+		{Type: "Ready", Status: metav1.ConditionFalse},
+		{Type: "FetchFailed", Status: metav1.ConditionTrue, Message: "upstream unavailable"},
+	}
+}
+
 func TestAHitRenewsAnExpiryThatIsMoreThanHalfSpent(t *testing.T) {
-	repo := &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 1},
-		Spec: helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"}}
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 1},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
+	}
 	helmRepo := &sourcev1.HelmRepository{ObjectMeta: metav1.ObjectMeta{
 		Name:      "hcar-example",
 		Namespace: "d8-operator-helm",
@@ -702,30 +735,53 @@ func TestAHitRenewsAnExpiryThatIsMoreThanHalfSpent(t *testing.T) {
 	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
 	name := cvnaming.AuxResourceName(string(req.Kind), "", req.RepositoryName, req.Chart, req.Version, identityOf(repo.ObjectMeta))
 
+	archive := buildValuesArchive(t, "replicaCount: 2\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(srv.Close)
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
+
 	tests := []struct {
 		name    string
 		left    time.Duration
+		failed  bool
+		seeded  bool
+		want    string
 		renewed bool
 	}{
-		{name: "less than half the ttl left", left: 15 * time.Minute, renewed: true},
-		{name: "more than half the ttl left", left: 45 * time.Minute, renewed: false},
+		{name: "less than half the ttl left", left: 15 * time.Minute, seeded: true, want: "replicaCount: 1\n", renewed: true},
+		{name: "more than half the ttl left", left: 45 * time.Minute, seeded: true, want: "replicaCount: 1\n", renewed: false},
+		{
+			name: "less than half the ttl left after a failed reconcile", left: 15 * time.Minute,
+			failed: true, seeded: true, want: "replicaCount: 1\n", renewed: true,
+		},
+		{name: "less than half the ttl left and nothing cached", left: 15 * time.Minute, want: "replicaCount: 2\n", renewed: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			source := readySource(name, "sha256:current", time.Now().Add(tt.left))
+			source := readySource(name, digest, time.Now().Add(tt.left))
+			source.Status.Artifact.URL = srv.URL
+			if tt.failed {
+				source.Status.Conditions = failedConditions()
+			}
 			original := source.Annotations[labels.ExpiresAtAnnotation]
 
 			r := newTestResolver(t, repo, helmRepo, chartWithVersions("example", "podinfo", helmv1alpha1.ChartVersion{Version: "6.7.1"}), source)
-			if err := r.cache.Put(name, "sha256:current", []byte("replicaCount: 1\n")); err != nil {
-				t.Fatalf("seeding cache: %v", err)
+			r.httpClient = srv.Client()
+			r.maxArtifactBytes = 1 << 20
+			if tt.seeded {
+				if err := r.cache.Put(name, digest, []byte("replicaCount: 1\n")); err != nil {
+					t.Fatalf("seeding cache: %v", err)
+				}
 			}
 
 			got, err := r.Resolve(context.Background(), req)
 			if err != nil {
 				t.Fatalf("Resolve returned %v", err)
 			}
-			if got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
-				t.Fatalf("got %+v, want the cached values", got)
+			if got.Outcome != OutcomeReady || string(got.Values) != tt.want {
+				t.Fatalf("got %+v, want values %q", got, tt.want)
 			}
 
 			stored := &sourcev1.HelmChart{}

@@ -270,6 +270,13 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		return Result{Outcome: OutcomeFetchFailed, Message: fmt.Sprintf("unsupported repository URL scheme: %q", repo.URL)}, nil
 	}
 
+	// Flux keeps the artifact across a failed reconcile, so the revision it names is still served.
+	if art != nil {
+		if values, ok := r.cache.Get(name, art.Digest); ok {
+			return Result{Outcome: OutcomeReady, Values: values}, nil
+		}
+	}
+
 	switch outcome, message := classify(conditions, art); outcome {
 	case OutcomeFetchFailed:
 		return Result{Outcome: OutcomeFetchFailed, Message: message}, nil
@@ -291,14 +298,14 @@ func sourceObjectFor(repoURL string, version *helmv1alpha1.ChartVersion) client.
 	}
 }
 
-func sourceStatus(obj client.Object) ([]metav1.Condition, *meta.Artifact) {
+func sourceArtifact(obj client.Object) *meta.Artifact {
 	switch source := obj.(type) {
 	case *sourcev1.HelmChart:
-		return source.Status.Conditions, source.Status.Artifact
+		return source.Status.Artifact
 	case *sourcev1.OCIRepository:
-		return source.Status.Conditions, source.Status.Artifact
+		return source.Status.Artifact
 	default:
-		return nil, nil
+		return nil
 	}
 }
 
@@ -317,8 +324,8 @@ func (r *Resolver) cachedValues(ctx context.Context, name string, obj client.Obj
 		return nil, false, nil
 	}
 
-	conditions, art := sourceStatus(obj)
-	if outcome, _ := classify(conditions, art); outcome != OutcomeReady {
+	art := sourceArtifact(obj)
+	if art == nil {
 		return nil, false, nil
 	}
 
@@ -334,11 +341,6 @@ const sharedDownloadTimeout = 90 * time.Second
 
 // shortcut: a download that outlasts the object's expiry leaves an orphan entry until restart; add a timestamp to entries if the budget ever fills with them.
 func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact) (Result, error) {
-	// A request sent down the slow path only to renew the expiry is served without a download.
-	if values, ok := r.cache.Get(name, art.Digest); ok {
-		return Result{Outcome: OutcomeReady, Values: values}, nil
-	}
-
 	ch := r.downloads.DoChan(name+"@"+art.Digest, func() (any, error) {
 		return r.download(ctx, name, art)
 	})
