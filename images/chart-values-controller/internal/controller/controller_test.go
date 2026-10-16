@@ -17,16 +17,8 @@ limitations under the License.
 package controller
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -44,8 +36,6 @@ import (
 	"github.com/deckhouse/chart-values-controller/internal/cache"
 	"github.com/deckhouse/chart-values-controller/internal/labels"
 )
-
-const cacheBlock = 4096
 
 const (
 	testNamespace   = "d8-operator-helm"
@@ -83,12 +73,10 @@ func newTestReconciler(t *testing.T, c client.Client) *reconciler {
 	t.Helper()
 
 	return &reconciler{
-		client:       c,
-		namespace:    testNamespace,
-		cache:        cache.New(t.TempDir(), testCacheBudget),
-		newObject:    func() client.Object { return &sourcev1.HelmChart{} },
-		artifactOf:   func(o client.Object) *meta.Artifact { return o.(*sourcev1.HelmChart).Status.Artifact },
-		conditionsOf: func(o client.Object) []metav1.Condition { return o.(*sourcev1.HelmChart).Status.Conditions },
+		client:    c,
+		namespace: testNamespace,
+		cache:     cache.New(t.TempDir(), testCacheBudget),
+		newObject: func() client.Object { return &sourcev1.HelmChart{} },
 	}
 }
 
@@ -278,273 +266,40 @@ func TestReconcileTreatsAnAlreadyDeletedObjectAsCollected(t *testing.T) {
 	}
 }
 
-type refreshStop struct {
-	name  string
-	build func(t *testing.T, current []byte) (*reconciler, string)
-	seal  func(t *testing.T, r *reconciler, dir string)
-}
-
-func refreshStops(t *testing.T) []refreshStop {
-	t.Helper()
-
-	return []refreshStop{
-		{
-			name:  "the cache refuses the write",
-			build: newRefreshFixture,
-			seal: func(t *testing.T, r *reconciler, dir string) {
-				t.Helper()
-
-				r.cache = cache.New(dir, cacheBlock)
-			},
-		},
-		{
-			name: "the artifact cannot be downloaded",
-			build: func(t *testing.T, _ []byte) (*reconciler, string) {
-				t.Helper()
-
-				handler := func(w http.ResponseWriter, _ *http.Request) {
-					http.Error(w, "storage is unavailable", http.StatusInternalServerError)
-				}
-
-				return newArtifactFixture(t, handler, "sha256:the-current-revision", 1<<20), "sha256:the-current-revision"
-			},
-		},
-		{
-			name: "the artifact is larger than the limit",
-			build: func(t *testing.T, current []byte) (*reconciler, string) {
-				t.Helper()
-
-				archive := buildArchive(t, "podinfo/values.yaml", current)
-				digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
-
-				return newArtifactFixture(t, serveBytes(archive), digest, 1), digest
-			},
-		},
-		{
-			name: "the republished artifact carries no values.yaml",
-			build: func(t *testing.T, _ []byte) (*reconciler, string) {
-				t.Helper()
-
-				archive := buildArchive(t, "podinfo/README.md", []byte("no values here\n"))
-				digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
-
-				return newArtifactFixture(t, serveBytes(archive), digest, 1<<20), digest
-			},
-		},
-	}
-}
-
-func TestARefreshThatCannotBeCompletedNeverLeavesAnEarlierRevisionUnderTheKey(t *testing.T) {
-	current := []byte("replicaCount: 2\n")
-	earlier := []byte("replicaCount: 1\n")
-
-	entries := []struct {
-		name     string
-		seed     func(t *testing.T, r *reconciler, dir, digest string)
-		wantKept []byte
-	}{
-		{
-			name: "recorded at a revision the artifact has moved off",
-			seed: func(t *testing.T, r *reconciler, _, _ string) {
-				t.Helper()
-
-				if err := r.cache.Put(testName, "sha256:the-previous-revision", earlier); err != nil {
-					t.Fatalf("seeding the entry: %v", err)
-				}
-			},
-			wantKept: nil,
-		},
-		{
-			name: "left by a container image from before entries recorded their revision",
-			seed: func(t *testing.T, _ *reconciler, dir, _ string) {
-				t.Helper()
-
-				if err := os.WriteFile(filepath.Join(dir, testName), earlier, 0o644); err != nil {
-					t.Fatalf("seeding a pre-format entry: %v", err)
-				}
-			},
-			wantKept: nil,
-		},
-		{
-			name: "recorded at the very revision being refreshed",
-			seed: func(t *testing.T, r *reconciler, _, digest string) {
-				t.Helper()
-
-				if err := r.cache.Put(testName, digest, current); err != nil {
-					t.Fatalf("seeding the entry: %v", err)
-				}
-			},
-			wantKept: current,
-		},
-	}
-
-	for _, stop := range refreshStops(t) {
-		for _, entry := range entries {
-			t.Run(stop.name+"/"+entry.name, func(t *testing.T) {
-				r, digest := stop.build(t, current)
-
-				dir := t.TempDir()
-				r.cache = cache.New(dir, 8*cacheBlock)
-				entry.seed(t, r, dir, digest)
-				r.cache = cache.New(dir, 8*cacheBlock)
-
-				if stop.seal != nil {
-					stop.seal(t, r, dir)
-				}
-
-				if _, err := reconcileOnce(t, r); err != nil {
-					t.Fatalf("a refresh that cannot complete is not a failure of the pass, got: %v", err)
-				}
-
-				got, ok := r.cache.GetEntry(testName)
-				switch {
-				case entry.wantKept == nil:
-					if ok {
-						t.Fatalf("a read after the pass is answered with %q; it must miss so the client is served the current values or told to retry", got.Values)
-					}
-				case !ok:
-					t.Fatal("the entry holding the revision being refreshed was thrown away")
-				case !bytes.Equal(got.Values, entry.wantKept):
-					t.Fatalf("entry = %q, want %q", got.Values, entry.wantKept)
-				case got.Digest != digest:
-					t.Fatalf("the surviving entry records %q, want the revision being refreshed %q", got.Digest, digest)
-				}
-			})
-		}
-	}
-}
-
-func TestARefreshThatCannotBeCompletedLeavesTheEntryOfAnotherChartAlone(t *testing.T) {
-	current := []byte("replicaCount: 2\n")
-	other := []byte("replicaCount: 9\n")
-
-	for _, stop := range refreshStops(t) {
-		t.Run(stop.name, func(t *testing.T) {
-			r, _ := stop.build(t, current)
-
-			dir := t.TempDir()
-			r.cache = cache.New(dir, 8*cacheBlock)
-			if err := r.cache.Put(testName, "sha256:the-previous-revision", []byte("replicaCount: 1\n")); err != nil {
-				t.Fatalf("seeding the entry being refreshed: %v", err)
-			}
-			if err := r.cache.Put(otherTestName, "sha256:another-chart", other); err != nil {
-				t.Fatalf("seeding another chart's entry: %v", err)
-			}
-
-			r.cache = cache.New(dir, 2*cacheBlock)
-
-			if _, err := reconcileOnce(t, r); err != nil {
-				t.Fatalf("a refresh that cannot complete is not a failure of the pass, got: %v", err)
-			}
-
-			if got, ok := r.cache.Get(testName); ok {
-				t.Fatalf("the refreshed key still answers with %q", got)
-			}
-
-			entry, ok := r.cache.GetEntry(otherTestName)
-			if !ok {
-				t.Fatal("another chart's entry was dropped by a failure it had nothing to do with")
-			}
-			if !bytes.Equal(entry.Values, other) {
-				t.Fatalf("another chart's entry = %q, want %q", entry.Values, other)
-			}
-			if entry.Digest != "sha256:another-chart" {
-				t.Fatalf("another chart's entry records %q, want its own revision", entry.Digest)
-			}
-		})
-	}
-}
-
-func TestRefreshReplacesTheValuesWhenTheArtifactRevisionMoves(t *testing.T) {
-	current := []byte("replicaCount: 2\n")
-
-	r, digest := newRefreshFixture(t, current)
-	if err := r.cache.Put(testName, "sha256:the-previous-revision", []byte("replicaCount: 1\n")); err != nil {
-		t.Fatalf("seeding the previous revision's entry: %v", err)
-	}
-
-	if _, err := reconcileOnce(t, r); err != nil {
-		t.Fatalf("refresh pass: %v", err)
-	}
-
-	got, ok := r.cache.GetEntry(testName)
-	if !ok {
-		t.Fatal("the refreshed values were not cached")
-	}
-	if !bytes.Equal(got.Values, current) {
-		t.Fatalf("entry = %q, want the current revision's values %q", got.Values, current)
-	}
-	if got.Digest != digest {
-		t.Fatalf("the entry records %q, want the revision it was extracted from %q", got.Digest, digest)
-	}
-}
-
-func newRefreshFixture(t *testing.T, values []byte) (*reconciler, string) {
-	t.Helper()
-
-	archive := buildValuesArchive(t, values)
-	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
-
-	return newArtifactFixture(t, serveBytes(archive), digest, 1<<20), digest
-}
-
-func newArtifactFixture(t *testing.T, handler http.HandlerFunc, digest string, maxArtifactBytes int64) *reconciler {
-	t.Helper()
-
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	chart := readyChartWithArtifact(srv.URL, digest)
-
-	r := newTestReconciler(t, fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(chart).Build())
-	r.httpClient = srv.Client()
-	r.maxArtifactBytes = maxArtifactBytes
-
-	return r
-}
-
 func TestReconcileLeavesTheEntryAloneForAnObjectInAnotherNamespace(t *testing.T) {
 	const otherNamespace = "tenant-namespace"
 
 	earlier := []byte("replicaCount: 1\n")
-	current := []byte("replicaCount: 2\n")
 
 	tests := []struct {
-		name    string
-		objects func(t *testing.T) (client.Client, *http.Client)
+		name   string
+		client func(t *testing.T) client.Client
 	}{
 		{
-			name: "a ready object with a new revision",
-			objects: func(t *testing.T) (client.Client, *http.Client) {
+			name: "an expired object",
+			client: func(t *testing.T) client.Client {
 				t.Helper()
 
-				archive := buildValuesArchive(t, current)
-				srv := httptest.NewServer(serveBytes(archive))
-				t.Cleanup(srv.Close)
-
-				chart := readyChartWithArtifact(srv.URL, fmt.Sprintf("sha256:%x", sha256.Sum256(archive)))
+				chart := expiredChart(time.Now().Add(-time.Minute))
 				chart.Namespace = otherNamespace
+				chart.Status.Artifact = &meta.Artifact{Digest: "sha256:newer"}
 
-				return fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(chart).Build(), srv.Client()
+				return fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(chart).Build()
 			},
 		},
 		{
 			name: "an object that is gone",
-			objects: func(t *testing.T) (client.Client, *http.Client) {
+			client: func(t *testing.T) client.Client {
 				t.Helper()
 
-				return fake.NewClientBuilder().WithScheme(testScheme(t)).Build(), nil
+				return fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, httpClient := tt.objects(t)
-
-			r := newTestReconciler(t, c)
-			r.httpClient = httpClient
-			r.maxArtifactBytes = 1 << 20
+			r := newTestReconciler(t, tt.client(t))
 			if err := r.cache.Put(testName, "sha256:earlier", earlier); err != nil {
 				t.Fatalf("seeding cache: %v", err)
 			}
@@ -555,192 +310,36 @@ func TestReconcileLeavesTheEntryAloneForAnObjectInAnotherNamespace(t *testing.T)
 				t.Fatalf("reconcile: %v", err)
 			}
 
-			entry, ok := r.cache.GetEntry(testName)
+			got, ok := r.cache.Get(testName)
 			if !ok {
 				t.Fatal("the entry was deleted for an object outside the served namespace")
 			}
-			if !bytes.Equal(entry.Values, earlier) || entry.Digest != "sha256:earlier" {
-				t.Fatalf("entry = %q at %q, want the seeded one: an object outside the served namespace must not write it", entry.Values, entry.Digest)
+			if !bytes.Equal(got, earlier) {
+				t.Fatalf("entry = %q, want the seeded %q", got, earlier)
 			}
 		})
 	}
 }
 
-func serveBytes(body []byte) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(body)
-	}
-}
-
-func TestARefusedRefreshDeletesAtMostOnce(t *testing.T) {
-	values := []byte("replicaCount: 2\n")
-	archive := buildValuesArchive(t, values)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(archive)
-	}))
-	t.Cleanup(srv.Close)
-
-	chart := readyChartWithArtifact(srv.URL, fmt.Sprintf("sha256:%x", sha256.Sum256(archive)))
+func TestReconcileLeavesTheEntryAloneWhenTheArtifactRevisionMoves(t *testing.T) {
+	chart := expiredChart(time.Now().Add(time.Hour))
+	chart.Status.Artifact = &meta.Artifact{Digest: "sha256:newer"}
+	chart.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(chart).Build()
 
 	r := newTestReconciler(t, c)
-	r.httpClient = srv.Client()
-	r.maxArtifactBytes = 1 << 20
-
-	dir := t.TempDir()
-	r.cache = cache.New(dir, 4*cacheBlock)
-	if err := r.cache.Put(testName, "sha256:the-previous-revision", []byte("replicaCount: 1\n")); err != nil {
-		t.Fatalf("seeding the stale entry: %v", err)
-	}
-	r.cache = cache.New(dir, cacheBlock)
-
-	if _, err := reconcileOnce(t, r); err != nil {
-		t.Fatalf("first pass: %v", err)
-	}
-	if _, ok := r.cache.Get(testName); ok {
-		t.Fatal("the stale entry should have been dropped by the first pass")
-	}
-
-	r.cache = cache.New(dir, 2*cacheBlock)
-	if err := r.cache.Put(testName, fmt.Sprintf("sha256:%x", sha256.Sum256(archive)), values); err != nil {
-		t.Fatalf("the resolver could not cache the current values: %v", err)
-	}
-	r.cache = cache.New(dir, cacheBlock)
-
-	if _, err := reconcileOnce(t, r); err != nil {
-		t.Fatalf("second pass: %v", err)
-	}
-
-	got, ok := r.cache.Get(testName)
-	if !ok {
-		t.Fatal("the current values cached by the resolver were deleted by a later refused pass")
-	}
-	if !bytes.Equal(got, values) {
-		t.Fatalf("entry = %q, want the current values %q", got, values)
-	}
-}
-
-func readyChartWithArtifact(url, digest string) *sourcev1.HelmChart {
-	return &sourcev1.HelmChart{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        testName,
-			Namespace:   testNamespace,
-			Labels:      map[string]string{labels.ManagedBy: labels.ManagedByValue},
-			Annotations: map[string]string{labels.ExpiresAtAnnotation: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)},
-		},
-		Status: sourcev1.HelmChartStatus{
-			Artifact:   &meta.Artifact{URL: url, Digest: digest},
-			Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Succeeded"}},
-		},
-	}
-}
-
-func buildValuesArchive(t *testing.T, values []byte) []byte {
-	t.Helper()
-
-	return buildArchive(t, "podinfo/values.yaml", values)
-}
-
-func buildArchive(t *testing.T, name string, content []byte) []byte {
-	t.Helper()
-
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-
-	if err := tw.WriteHeader(&tar.Header{
-		Name: name,
-		Mode: 0o644,
-		Size: int64(len(content)),
-	}); err != nil {
-		t.Fatalf("writing archive header: %v", err)
-	}
-	if _, err := tw.Write(content); err != nil {
-		t.Fatalf("writing archive entry: %v", err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("closing tar writer: %v", err)
-	}
-	if err := gz.Close(); err != nil {
-		t.Fatalf("closing gzip writer: %v", err)
-	}
-
-	return buf.Bytes()
-}
-
-func TestARefreshRepairsAnEntryLeftAtAnotherRevisionByALateWrite(t *testing.T) {
-	current := []byte("replicaCount: 2\n")
-	stale := []byte("replicaCount: 1\n")
-
-	r, digest := newRefreshFixture(t, current)
-
-	if _, err := reconcileOnce(t, r); err != nil {
-		t.Fatalf("first pass: %v", err)
-	}
-	if entry, ok := r.cache.GetEntry(testName); !ok || entry.Digest != digest {
-		t.Fatalf("the first pass left %+v under the key, want the current revision %q", entry, digest)
-	}
-
-	if err := r.cache.Put(testName, "sha256:the-revision-the-download-started-from", stale); err != nil {
-		t.Fatalf("the late write: %v", err)
-	}
-
-	if _, err := reconcileOnce(t, r); err != nil {
-		t.Fatalf("second pass: %v", err)
-	}
-
-	entry, ok := r.cache.GetEntry(testName)
-	if !ok {
-		t.Fatal("the key holds nothing at all after the repairing pass")
-	}
-	if !bytes.Equal(entry.Values, current) {
-		t.Fatalf("the entry holds %q, want the current revision's values %q: an entry recorded at another revision than the source publishes must be replaced", entry.Values, current)
-	}
-	if entry.Digest != digest {
-		t.Fatalf("the entry records %q, want the revision the source publishes %q", entry.Digest, digest)
-	}
-}
-
-func TestReconcileCollectsAnObjectThatExpiredDuringTheRefresh(t *testing.T) {
-	soon := time.Now().Add(2 * time.Second)
-
-	c := fake.NewClientBuilder().
-		WithScheme(testScheme(t)).
-		WithObjects(expiredChart(soon)).
-		Build()
-
-	r := newTestReconciler(t, c)
-	if err := r.cache.Put(testName, "sha256:cafe", []byte("replicaCount: 1\n")); err != nil {
+	if err := r.cache.Put(testName, "sha256:earlier", []byte("replicaCount: 1\n")); err != nil {
 		t.Fatalf("seeding cache: %v", err)
-	}
-
-	artifact := r.artifactOf
-	var refreshed bool
-	r.artifactOf = func(o client.Object) *meta.Artifact {
-		refreshed = true
-		time.Sleep(2500 * time.Millisecond)
-
-		return artifact(o)
 	}
 
 	result, err := reconcileOnce(t, r)
 	if err != nil {
-		t.Fatalf("reconcile returned an error: %v", err)
+		t.Fatalf("reconcile: %v", err)
 	}
-
-	if !refreshed {
-		t.Fatal("the pass never reached the refresh, so it did not exercise the expiry crossing it")
+	if result.RequeueAfter <= 0 || result.RequeueAfter > time.Hour {
+		t.Fatalf("requeue = %v, want the time left until expiry", result.RequeueAfter)
 	}
-	if result.RequeueAfter < 0 {
-		t.Fatalf("requeueAfter is %v: a negative delay is silently dropped", result.RequeueAfter)
-	}
-
-	err = c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testName}, &sourcev1.HelmChart{})
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("the expired object survived the pass that outlived its expiry: %v", err)
-	}
-	if _, cached := r.cache.Get(testName); cached {
-		t.Fatal("the entry of a collected object stayed on the volume")
+	if _, ok := r.cache.Get(testName); !ok {
+		t.Fatal("the controller must not touch an entry whose object is alive; the resolver re-reads the revision itself")
 	}
 }

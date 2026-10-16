@@ -18,16 +18,11 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
-	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -36,30 +31,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/deckhouse/chart-values-controller/internal/artifact"
 	"github.com/deckhouse/chart-values-controller/internal/cache"
 	"github.com/deckhouse/chart-values-controller/internal/labels"
-)
-
-type (
-	artifactFunc   func(client.Object) *meta.Artifact
-	conditionsFunc func(client.Object) []metav1.Condition
 )
 
 // conflictRetryDelay is how long a pass waits after a conflicted delete before judging
 // an auxiliary resource again.
 const conflictRetryDelay = 10 * time.Second
 
-// reconciler re-caches values.yaml on a new artifact revision and deletes a resource once expired.
+// reconciler deletes a resource once expired, together with its cache entry.
 type reconciler struct {
-	client           client.Client
-	namespace        string
-	cache            *cache.Cache
-	httpClient       *http.Client
-	maxArtifactBytes int64
-	newObject        func() client.Object
-	artifactOf       artifactFunc
-	conditionsOf     conditionsFunc
+	client    client.Client
+	namespace string
+	cache     *cache.Cache
+	newObject func() client.Object
 }
 
 func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -83,25 +68,16 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	name := obj.GetName()
-
 	expiresAt, hasExpiry := parseExpiry(obj, logger)
-	if hasExpiry && !time.Now().Before(expiresAt) {
-		return r.deleteExpired(ctx, obj, name)
-	}
-
-	r.refreshCache(ctx, obj, name)
-
 	if !hasExpiry {
 		return reconcile.Result{}, nil
 	}
 
-	// The refresh can outlast the expiry this pass judged to be ahead of it.
 	if remaining := time.Until(expiresAt); remaining > 0 {
 		return reconcile.Result{RequeueAfter: remaining}, nil
 	}
 
-	return r.deleteExpired(ctx, obj, name)
+	return r.deleteExpired(ctx, obj, obj.GetName())
 }
 
 func (r *reconciler) deleteExpired(ctx context.Context, obj client.Object, name string) (reconcile.Result, error) {
@@ -126,51 +102,6 @@ func (r *reconciler) deleteExpired(ctx context.Context, obj client.Object, name 
 	return reconcile.Result{}, nil
 }
 
-func (r *reconciler) refreshCache(ctx context.Context, obj client.Object, name string) {
-	art := r.artifactOf(obj)
-	if art == nil || !isReady(r.conditionsOf(obj)) {
-		return
-	}
-
-	// The entry records the revision it came from, which the resolver's own writes keep true too.
-	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest != cache.DigestUnknown && entry.Digest == art.Digest {
-		return
-	}
-
-	values, err := artifact.FetchValues(ctx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
-	if err != nil {
-		if !errors.Is(err, artifact.ErrValuesNotFound) {
-			log.FromContext(ctx).Error(err, "failed to refresh cached values.yaml", "name", name)
-		}
-
-		r.invalidateOutdated(ctx, name, art.Digest)
-
-		return
-	}
-
-	if err := r.cache.Put(name, art.Digest, values); err != nil {
-		if errors.Is(err, cache.ErrBudgetExhausted) {
-			log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
-		} else {
-			log.FromContext(ctx).Error(err, "failed to write cache entry", "name", name)
-		}
-
-		r.invalidateOutdated(ctx, name, art.Digest)
-
-		return
-	}
-}
-
-func (r *reconciler) invalidateOutdated(ctx context.Context, name, digest string) {
-	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest != cache.DigestUnknown && entry.Digest == digest {
-		return
-	}
-
-	if err := r.cache.Delete(name); err != nil {
-		log.FromContext(ctx).Error(err, "failed to drop an outdated cache entry", "name", name)
-	}
-}
-
 func parseExpiry(obj client.Object, logger interface{ Error(error, string, ...any) }) (time.Time, bool) {
 	raw := obj.GetAnnotations()[labels.ExpiresAtAnnotation]
 	if raw == "" {
@@ -186,46 +117,33 @@ func parseExpiry(obj client.Object, logger interface{ Error(error, string, ...an
 	return expiresAt, true
 }
 
-func isReady(conditions []metav1.Condition) bool {
-	c := apimeta.FindStatusCondition(conditions, "Ready")
-	return c != nil && c.Status == metav1.ConditionTrue
-}
-
-// SetupWithManager registers cache-sync and cleanup reconcilers for both auxiliary
-// resource kinds, filtered to the resources this controller manages.
-func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient *http.Client, namespace string, maxArtifactBytes int64) error {
+// SetupWithManager registers cleanup reconcilers for both auxiliary resource kinds,
+// filtered to the resources this controller manages.
+func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, namespace string) error {
 	helmChart := &reconciler{
-		client:           mgr.GetClient(),
-		namespace:        namespace,
-		cache:            valuesCache,
-		httpClient:       httpClient,
-		maxArtifactBytes: maxArtifactBytes,
-		newObject:        func() client.Object { return &sourcev1.HelmChart{} },
-		artifactOf:       func(o client.Object) *meta.Artifact { return o.(*sourcev1.HelmChart).Status.Artifact },
-		conditionsOf:     func(o client.Object) []metav1.Condition { return o.(*sourcev1.HelmChart).Status.Conditions },
+		client:    mgr.GetClient(),
+		namespace: namespace,
+		cache:     valuesCache,
+		newObject: func() client.Object { return &sourcev1.HelmChart{} },
 	}
 
 	if err := builder.ControllerManagedBy(mgr).
 		Named("chart-values-helmchart").
-		For(&sourcev1.HelmChart{}, builder.WithPredicates(changePredicate(helmChart.artifactOf))).
+		For(&sourcev1.HelmChart{}, builder.WithPredicates(changePredicate())).
 		Complete(helmChart); err != nil {
 		return fmt.Errorf("setting up helm chart controller: %w", err)
 	}
 
 	ociRepo := &reconciler{
-		client:           mgr.GetClient(),
-		namespace:        namespace,
-		cache:            valuesCache,
-		httpClient:       httpClient,
-		maxArtifactBytes: maxArtifactBytes,
-		newObject:        func() client.Object { return &sourcev1.OCIRepository{} },
-		artifactOf:       func(o client.Object) *meta.Artifact { return o.(*sourcev1.OCIRepository).Status.Artifact },
-		conditionsOf:     func(o client.Object) []metav1.Condition { return o.(*sourcev1.OCIRepository).Status.Conditions },
+		client:    mgr.GetClient(),
+		namespace: namespace,
+		cache:     valuesCache,
+		newObject: func() client.Object { return &sourcev1.OCIRepository{} },
 	}
 
 	if err := builder.ControllerManagedBy(mgr).
 		Named("chart-values-ocirepository").
-		For(&sourcev1.OCIRepository{}, builder.WithPredicates(changePredicate(ociRepo.artifactOf))).
+		For(&sourcev1.OCIRepository{}, builder.WithPredicates(changePredicate())).
 		Complete(ociRepo); err != nil {
 		return fmt.Errorf("setting up oci repository controller: %w", err)
 	}
@@ -233,16 +151,9 @@ func SetupWithManager(mgr manager.Manager, valuesCache *cache.Cache, httpClient 
 	return nil
 }
 
-func changePredicate(artifactOf artifactFunc) predicate.Predicate {
+func changePredicate() predicate.Predicate {
 	managed := func(o client.Object) bool {
 		return o.GetLabels()[labels.ManagedBy] == labels.ManagedByValue
-	}
-
-	digest := func(o client.Object) string {
-		if a := artifactOf(o); a != nil {
-			return a.Digest
-		}
-		return ""
 	}
 
 	return predicate.Funcs{
@@ -250,14 +161,9 @@ func changePredicate(artifactOf artifactFunc) predicate.Predicate {
 		DeleteFunc:  func(e event.DeleteEvent) bool { return managed(e.Object) },
 		GenericFunc: func(e event.GenericEvent) bool { return managed(e.Object) },
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			if !managed(e.ObjectNew) {
-				return false
-			}
-			if digest(e.ObjectOld) != digest(e.ObjectNew) {
-				return true
-			}
-			return e.ObjectOld.GetAnnotations()[labels.ExpiresAtAnnotation] !=
-				e.ObjectNew.GetAnnotations()[labels.ExpiresAtAnnotation]
+			return managed(e.ObjectNew) &&
+				e.ObjectOld.GetAnnotations()[labels.ExpiresAtAnnotation] !=
+					e.ObjectNew.GetAnnotations()[labels.ExpiresAtAnnotation]
 		},
 	}
 }
