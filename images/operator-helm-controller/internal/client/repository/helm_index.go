@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -38,8 +37,9 @@ var errIndexLayout = errors.New("index.yaml is not in the block layout helm writ
 // node tree some fifty times its size, so an index of tens of MiB would cost gigabytes. The block
 // layout helm writes lets each version be cut out by indentation and decoded in small batches.
 //
-// shortcut: an index over maxWholeIndexSize must be in that layout, a smaller one in any layout is
-// decoded whole; upgrade to an event-based parser if a producer in the wild emits large flow-style indexes.
+// shortcut: an index over maxWholeIndexSize must be in that layout, without anchors shared between
+// charts, a smaller one in any layout is decoded whole; upgrade to an event-based parser if a
+// producer in the wild emits large indexes outside it.
 func decodeIndex(body []byte) (HelmRepositoryIndex, error) {
 	index, err := decodeIndexByEntry(body)
 	if err == nil {
@@ -61,6 +61,8 @@ func decodeIndex(body []byte) (HelmRepositoryIndex, error) {
 func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 	var (
 		index       HelmRepositoryIndex
+		started     bool   // A document marker after this one ends the index, as a whole decode would.
+		top         []byte // The top-level block not decoded yet; the entries block never lands here.
 		inEntries   bool
 		chart       string
 		chartIndent = -1
@@ -69,7 +71,35 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 		itemStart   int    // Where the last of them begins in batch.
 	)
 
-	flush := func() error {
+	grow := func(buf *[]byte, line []byte, start int, what string) error {
+		*buf = append(*buf, line...)
+		if len(*buf)-start > maxIndexEntrySize {
+			return fmt.Errorf("%w: %s exceeds %d MiB", errIndexTooLarge, what, maxIndexEntrySize>>20)
+		}
+
+		return nil
+	}
+
+	flushTop := func() error {
+		if top == nil {
+			return nil
+		}
+
+		var block map[string]any
+		if err := yaml.Unmarshal(top, &block); err != nil {
+			return err
+		}
+
+		if v, ok := block["apiVersion"].(string); ok {
+			index.APIVersion = v
+		}
+
+		top = nil
+
+		return nil
+	}
+
+	flushBatch := func() error {
 		if batch == nil {
 			return nil
 		}
@@ -95,7 +125,11 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 		}
 
 		if len(line) > maxIndexEntrySize {
-			return HelmRepositoryIndex{}, fmt.Errorf("%w: a line of chart %q exceeds %d MiB", errIndexTooLarge, chart, maxIndexEntrySize>>20)
+			if chart != "" {
+				return HelmRepositoryIndex{}, fmt.Errorf("%w: a line of chart %q exceeds %d MiB", errIndexTooLarge, chart, maxIndexEntrySize>>20)
+			}
+
+			return HelmRepositoryIndex{}, fmt.Errorf("%w: a line exceeds %d MiB", errIndexTooLarge, maxIndexEntrySize>>20)
 		}
 
 		content := bytes.TrimLeft(line, " ")
@@ -103,52 +137,83 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 		trimmed := bytes.TrimRight(content, "\r\n")
 
 		if len(trimmed) == 0 || trimmed[0] == '#' {
-			if batch != nil {
-				batch = append(batch, line...)
+			var err error
+
+			switch {
+			case batch != nil:
+				err = grow(&batch, line, itemStart, fmt.Sprintf("a version of chart %q", chart))
+			case top != nil:
+				err = grow(&top, line, 0, "a top-level value")
+			}
+
+			if err != nil {
+				return HelmRepositoryIndex{}, err
 			}
 
 			continue
 		}
 
 		if indent == 0 {
-			if err := flush(); err != nil {
+			if trimmed[0] == '%' {
+				continue
+			}
+
+			if bytes.Equal(trimmed, []byte("---")) || bytes.Equal(trimmed, []byte("...")) {
+				if started {
+					break
+				}
+
+				continue
+			}
+
+			started = true
+
+			if err := errors.Join(flushBatch(), flushTop()); err != nil {
 				return HelmRepositoryIndex{}, err
 			}
 
 			inEntries, chart, chartIndent, itemIndent = false, "", -1, -1
 
-			if trimmed[0] == '%' || bytes.Equal(trimmed, []byte("---")) || bytes.Equal(trimmed, []byte("...")) {
+			var key map[string]any
+			if err := yaml.Unmarshal(line, &key); err != nil {
+				return HelmRepositoryIndex{}, err
+			}
+			if len(key) != 1 {
+				return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, trimmed)
+			}
+
+			v, ok := key["entries"]
+			if !ok {
+				top = append([]byte{}, line...)
+
 				continue
 			}
 
-			var top map[string]any
-			if err := yaml.Unmarshal(line, &top); err != nil {
-				return HelmRepositoryIndex{}, err
-			}
-
-			if v, ok := top["apiVersion"].(string); ok {
-				index.APIVersion = v
-			}
-
-			if v, ok := top["entries"]; ok {
-				switch v := v.(type) {
-				case nil:
-					inEntries = true
-				case map[string]any:
-					if len(v) != 0 {
-						return HelmRepositoryIndex{}, errIndexLayout
-					}
-
-					index.Entries = map[string][]HelmRepositoryChartVersion{}
-				default:
+			switch v := v.(type) {
+			case nil:
+				inEntries = true
+			case map[string]any:
+				if len(v) != 0 {
 					return HelmRepositoryIndex{}, errIndexLayout
 				}
+
+				index.Entries = map[string][]HelmRepositoryChartVersion{}
+			default:
+				return HelmRepositoryIndex{}, errIndexLayout
 			}
 
 			continue
 		}
 
 		if !inEntries {
+			if top == nil {
+				return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, trimmed)
+			}
+
+			if err := grow(&top, line, 0, "a top-level value"); err != nil {
+				return HelmRepositoryIndex{}, err
+			}
+
 			continue
 		}
 
@@ -157,7 +222,7 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 		switch {
 		case isItem && chart != "" && (itemIndent == -1 || indent == itemIndent) && indent >= chartIndent:
 			if len(batch) >= indexBatchSize {
-				if err := flush(); err != nil {
+				if err := flushBatch(); err != nil {
 					return HelmRepositoryIndex{}, err
 				}
 			}
@@ -165,18 +230,17 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 			itemIndent, itemStart = indent, len(batch)
 			batch = append(batch, line...)
 		case batch != nil && indent > itemIndent:
-			batch = append(batch, line...)
-			if len(batch)-itemStart > maxIndexEntrySize {
-				return HelmRepositoryIndex{}, fmt.Errorf("%w: a version of chart %q exceeds %d MiB", errIndexTooLarge, chart, maxIndexEntrySize>>20)
+			if err := grow(&batch, line, itemStart, fmt.Sprintf("a version of chart %q", chart)); err != nil {
+				return HelmRepositoryIndex{}, err
 			}
 		case !isItem && (chartIndent == -1 || indent == chartIndent):
-			if err := flush(); err != nil {
+			if err := flushBatch(); err != nil {
 				return HelmRepositoryIndex{}, err
 			}
 
 			var key map[string][]HelmRepositoryChartVersion
 			if err := yaml.Unmarshal(trimmed, &key); err != nil || len(key) != 1 {
-				return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, strings.TrimSpace(string(trimmed)))
+				return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, trimmed)
 			}
 
 			chartIndent, itemIndent = indent, -1
@@ -186,15 +250,19 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 			}
 
 			for name, versions := range key {
+				if _, dup := index.Entries[name]; dup {
+					return HelmRepositoryIndex{}, fmt.Errorf("%w: chart %q is listed twice", errIndexLayout, name)
+				}
+
 				chart = name
 				index.Entries[chart] = versions
 			}
 		default:
-			return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, strings.TrimSpace(string(trimmed)))
+			return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, trimmed)
 		}
 	}
 
-	if err := flush(); err != nil {
+	if err := errors.Join(flushBatch(), flushTop()); err != nil {
 		return HelmRepositoryIndex{}, err
 	}
 
