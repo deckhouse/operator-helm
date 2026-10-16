@@ -275,16 +275,13 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		if values, ok := r.cache.Get(name, art.Digest); ok {
 			return Result{Outcome: OutcomeReady, Values: values}, nil
 		}
+
+		return r.readValues(ctx, name, art)
 	}
 
-	switch outcome, message := classify(conditions, art); outcome {
-	case OutcomeFetchFailed:
-		return Result{Outcome: OutcomeFetchFailed, Message: message}, nil
-	case OutcomePending:
-		return Result{Outcome: OutcomePending}, nil
-	}
+	outcome, message := classify(conditions)
 
-	return r.readValues(ctx, name, art)
+	return Result{Outcome: outcome, Message: message}, nil
 }
 
 func sourceObjectFor(repoURL string, version *helmv1alpha1.ChartVersion) client.Object {
@@ -586,12 +583,7 @@ func (r *Resolver) findRepositorySecretNames(ctx context.Context, family reposit
 	return auth, tls, nil
 }
 
-func classify(conditions []metav1.Condition, art *meta.Artifact) (Outcome, string) {
-	if ready := apimeta.FindStatusCondition(conditions, "Ready"); ready != nil &&
-		ready.Status == metav1.ConditionTrue && art != nil {
-		return OutcomeReady, ""
-	}
-
+func classify(conditions []metav1.Condition) (Outcome, string) {
 	for _, conditionType := range []string{"FetchFailed", "StorageOperationFailed", "BuildFailed"} {
 		if c := apimeta.FindStatusCondition(conditions, conditionType); c != nil && c.Status == metav1.ConditionTrue {
 			return OutcomeFetchFailed, c.Message

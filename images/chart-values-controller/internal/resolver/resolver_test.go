@@ -757,6 +757,10 @@ func TestAHitRenewsAnExpiryThatIsMoreThanHalfSpent(t *testing.T) {
 			failed: true, seeded: true, want: "replicaCount: 1\n", renewed: true,
 		},
 		{name: "less than half the ttl left and nothing cached", left: 15 * time.Minute, want: "replicaCount: 2\n", renewed: true},
+		{
+			name: "nothing cached after a failed reconcile", left: 45 * time.Minute,
+			failed: true, want: "replicaCount: 2\n", renewed: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -783,6 +787,9 @@ func TestAHitRenewsAnExpiryThatIsMoreThanHalfSpent(t *testing.T) {
 			if got.Outcome != OutcomeReady || string(got.Values) != tt.want {
 				t.Fatalf("got %+v, want values %q", got, tt.want)
 			}
+			if _, ok := r.cache.Get(name, digest); !ok {
+				t.Fatal("the served revision is not cached")
+			}
 
 			stored := &sourcev1.HelmChart{}
 			if err := r.client.Get(context.Background(), client.ObjectKey{Namespace: "d8-operator-helm", Name: name}, stored); err != nil {
@@ -808,6 +815,34 @@ func TestAHitRenewsAnExpiryThatIsMoreThanHalfSpent(t *testing.T) {
 				t.Fatalf("expires-at is %s away, want a full ttl", left)
 			}
 		})
+	}
+}
+
+func TestAFailedReconcileWithoutAnArtifactIsFetchFailed(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 1},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
+	}
+	helmRepo := &sourcev1.HelmRepository{ObjectMeta: metav1.ObjectMeta{
+		Name:      "hcar-example",
+		Namespace: "d8-operator-helm",
+		Labels:    map[string]string{helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: "example"},
+	}}
+	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
+	name := cvnaming.AuxResourceName(string(req.Kind), "", req.RepositoryName, req.Chart, req.Version, identityOf(repo.ObjectMeta))
+
+	source := readySource(name, "", time.Now().Add(time.Hour))
+	source.Status.Conditions = failedConditions()
+	source.Status.Artifact = nil
+
+	r := newTestResolver(t, repo, helmRepo, chartWithVersions("example", "podinfo", helmv1alpha1.ChartVersion{Version: "6.7.1"}), source)
+
+	got, err := r.Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Resolve returned %v", err)
+	}
+	if got.Outcome != OutcomeFetchFailed || got.Message != "upstream unavailable" {
+		t.Fatalf("got %+v, want fetch_failed with the condition's message", got)
 	}
 }
 
