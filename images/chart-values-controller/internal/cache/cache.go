@@ -28,22 +28,17 @@ import (
 var ErrBudgetExhausted = errors.New("cache budget exhausted")
 
 // Cache is an in-memory cache for extracted values.yaml files, keyed by the auxiliary
-// resource name both the HTTP handler and the controller derive.
+// resource name both the HTTP handler and the controller derive and by the artifact revision.
 type Cache struct {
 	mu      sync.Mutex
 	budget  int64
 	used    int64
-	entries map[string]entry
-}
-
-type entry struct {
-	digest string
-	values []byte
+	entries map[string]map[string][]byte
 }
 
 // New returns an empty cache that holds at most budgetBytes of values.
 func New(budgetBytes int64) *Cache {
-	return &Cache{budget: budgetBytes, entries: make(map[string]entry)}
+	return &Cache{budget: budgetBytes, entries: make(map[string]map[string][]byte)}
 }
 
 // Get returns the cached values for a key when they were extracted from the artifact
@@ -56,36 +51,39 @@ func (c *Cache) Get(key, digest string) ([]byte, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	e, ok := c.entries[key]
-	if !ok || e.digest != digest {
-		return nil, false
-	}
+	values, ok := c.entries[key][digest]
 
-	return e.values, true
+	return values, ok
 }
 
-// Put replaces the entry for a key with values extracted from the artifact revision
-// with the given digest. Over budget it returns ErrBudgetExhausted and keeps the old entry.
+// Put stores values extracted from the artifact revision with the given digest under a key,
+// replacing only the entry of that revision. Over budget it returns ErrBudgetExhausted and
+// keeps the old entry.
 func (c *Cache) Put(key, digest string, values []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	next := c.used - int64(len(c.entries[key].values)) + int64(len(values))
+	next := c.used - int64(len(c.entries[key][digest])) + int64(len(values))
 	if next > c.budget {
 		return fmt.Errorf("caching %s: %w", key, ErrBudgetExhausted)
 	}
 
-	c.entries[key] = entry{digest: digest, values: bytes.Clone(values)}
+	if c.entries[key] == nil {
+		c.entries[key] = make(map[string][]byte)
+	}
+	c.entries[key][digest] = bytes.Clone(values)
 	c.used = next
 
 	return nil
 }
 
-// Delete removes the entry for a key and gives the space it took back to the budget.
+// Delete removes every revision stored under a key and gives the space they took back to the budget.
 func (c *Cache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.used -= int64(len(c.entries[key].values))
+	for _, values := range c.entries[key] {
+		c.used -= int64(len(values))
+	}
 	delete(c.entries, key)
 }

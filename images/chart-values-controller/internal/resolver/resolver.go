@@ -339,7 +339,7 @@ func (r *Resolver) cachedValues(ctx context.Context, name string, obj client.Obj
 // timeout already bounds the download itself.
 const sharedDownloadTimeout = 90 * time.Second
 
-// shortcut: a download that outlasts the object's expiry leaves an orphan entry until restart; add a timestamp to entries if the budget ever fills with them.
+// shortcut: a superseded revision stays cached until its object expires, and a download that outlasts the expiry leaves an orphan entry until restart; add a timestamp to entries if the budget ever fills with them.
 func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact) (Result, error) {
 	ch := r.downloads.DoChan(name+"@"+art.Digest, func() (any, error) {
 		return r.download(ctx, name, art)

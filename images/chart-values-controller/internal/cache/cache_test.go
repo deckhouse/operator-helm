@@ -70,19 +70,47 @@ func TestPutReplacesTheEntryAndChargesItOnce(t *testing.T) {
 	if err := c.Put("k", "sha256:a", bytes.Repeat([]byte("a"), 10)); err != nil {
 		t.Fatalf("first put: %v", err)
 	}
-	if err := c.Put("k", "sha256:b", newer); err != nil {
+	if err := c.Put("k", "sha256:a", newer); err != nil {
 		t.Fatalf("replacing put: %v", err)
 	}
 
-	if got, ok := c.Get("k", "sha256:b"); !ok || !bytes.Equal(got, newer) {
-		t.Fatalf("get of the replacing revision = (%q, %v), want (%q, true)", got, ok, newer)
-	}
-	if _, ok := c.Get("k", "sha256:a"); ok {
-		t.Fatal("the replaced revision must miss")
+	if got, ok := c.Get("k", "sha256:a"); !ok || !bytes.Equal(got, newer) {
+		t.Fatalf("get of the replaced pair = (%q, %v), want (%q, true)", got, ok, newer)
 	}
 
 	if err := c.Put("other", "sha256:c", bytes.Repeat([]byte("c"), 6)); !errors.Is(err, ErrBudgetExhausted) {
 		t.Fatalf("put over the 20 of 25 bytes in use = %v, want ErrBudgetExhausted", err)
+	}
+}
+
+func TestRevisionsOfOneKeyCoexistUntilTheKeyIsDeleted(t *testing.T) {
+	c := New(20)
+	older, newer := bytes.Repeat([]byte("a"), 10), bytes.Repeat([]byte("b"), 10)
+
+	if err := c.Put("k", "sha256:a", older); err != nil {
+		t.Fatalf("put of the older revision: %v", err)
+	}
+	if err := c.Put("k", "sha256:b", newer); err != nil {
+		t.Fatalf("put of the newer revision: %v", err)
+	}
+
+	if got, ok := c.Get("k", "sha256:a"); !ok || !bytes.Equal(got, older) {
+		t.Fatalf("get of the older revision = (%q, %v), want (%q, true)", got, ok, older)
+	}
+	if got, ok := c.Get("k", "sha256:b"); !ok || !bytes.Equal(got, newer) {
+		t.Fatalf("get of the newer revision = (%q, %v), want (%q, true)", got, ok, newer)
+	}
+
+	c.Delete("k")
+
+	if _, ok := c.Get("k", "sha256:a"); ok {
+		t.Fatal("the older revision must miss after the key is deleted")
+	}
+	if _, ok := c.Get("k", "sha256:b"); ok {
+		t.Fatal("the newer revision must miss after the key is deleted")
+	}
+	if err := c.Put("other", testDigest, bytes.Repeat([]byte("x"), 20)); err != nil {
+		t.Fatalf("put of the whole budget after the delete = %v, want nil: every revision's bytes must be given back", err)
 	}
 }
 

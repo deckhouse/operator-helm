@@ -966,6 +966,62 @@ func TestConcurrentMissesAtTwoRevisionsOfOneNameDoNotShareADownload(t *testing.T
 	}
 }
 
+func TestALateDownloadOfAnOlderRevisionKeepsTheNewerOneCached(t *testing.T) {
+	archiveA, archiveB := buildValuesArchive(t, "replicaCount: 1\n"), buildValuesArchive(t, "replicaCount: 2\n")
+
+	for _, olderLast := range []bool{true, false} {
+		t.Run(fmt.Sprintf("the older revision finishes last: %v", olderLast), func(t *testing.T) {
+			downloading := make(chan struct{}, 2)
+			release := map[string]chan struct{}{}
+			serve := func(archive []byte) *meta.Artifact {
+				digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
+				released := make(chan struct{})
+				release[digest] = released
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					downloading <- struct{}{}
+					<-released
+					_, _ = w.Write(archive)
+				}))
+				t.Cleanup(srv.Close)
+				return &meta.Artifact{URL: srv.URL, Digest: digest}
+			}
+			artA, artB := serve(archiveA), serve(archiveB)
+
+			r := &Resolver{cache: cache.New(testCacheBudget), httpClient: http.DefaultClient, maxArtifactBytes: 1 << 20}
+
+			done := map[string]chan struct{}{}
+			for _, art := range []*meta.Artifact{artA, artB} {
+				finished := make(chan struct{})
+				done[art.Digest] = finished
+				go func() {
+					defer close(finished)
+					if got, err := r.readValues(context.Background(), "entry", art); err != nil || got.Outcome != OutcomeReady {
+						t.Errorf("revision %s: got %+v, %v", art.Digest, got, err)
+					}
+				}()
+			}
+			<-downloading
+			<-downloading
+
+			order := []*meta.Artifact{artB, artA}
+			if !olderLast {
+				order = []*meta.Artifact{artA, artB}
+			}
+			for _, art := range order {
+				close(release[art.Digest])
+				<-done[art.Digest]
+			}
+
+			if _, ok := r.cache.Get("entry", artB.Digest); !ok {
+				t.Error("the newer revision is not cached")
+			}
+			if _, ok := r.cache.Get("entry", artA.Digest); !ok {
+				t.Error("the older revision is not cached")
+			}
+		})
+	}
+}
+
 type panickingTransport struct{}
 
 func (panickingTransport) RoundTrip(*http.Request) (*http.Response, error) {
