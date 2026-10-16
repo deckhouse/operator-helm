@@ -27,6 +27,7 @@ import (
 
 	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -105,8 +106,8 @@ type Resolver struct {
 	maxArtifactBytes int64
 	prober           chartartifact.Prober
 
-	// downloads collapses concurrent misses on one key into a single download, keyed like the cache.
-	downloads inflight
+	// downloads collapses concurrent misses on one artifact revision of one name into a single download.
+	downloads singleflight.Group
 }
 
 func New(c client.Client, valuesCache *cache.Cache, httpClient *http.Client, namespace string, ttl, sourceInterval time.Duration, maxArtifactBytes int64) *Resolver {
@@ -313,30 +314,19 @@ func artifactDigest(art *meta.Artifact) string {
 const sharedDownloadTimeout = 90 * time.Second
 
 func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact, current currentDigestFunc) (Result, error) {
-	values, err := r.downloads.do(ctx, name, func() ([]byte, error) {
-		downloadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sharedDownloadTimeout)
-		defer cancel()
-
-		values, err := artifact.FetchValues(downloadCtx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		if err := r.cache.PutUnless(name, art.Digest, values, func() bool {
-			return r.stillCurrent(downloadCtx, name, current, art.Digest)
-		}); err != nil {
-			switch {
-			case errors.Is(err, cache.ErrBudgetExhausted):
-				log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
-			case errors.Is(err, cache.ErrSuperseded):
-				// stillCurrent has already said which way it went.
-			default:
-				log.FromContext(ctx).Error(err, "failed to cache values.yaml")
-			}
-		}
-
-		return values, nil
+	ch := r.downloads.DoChan(name+"@"+art.Digest, func() (any, error) {
+		return r.download(ctx, name, art, current)
 	})
+
+	var values []byte
+	var err error
+	select {
+	case res := <-ch:
+		values, _ = res.Val.([]byte)
+		err = res.Err
+	case <-ctx.Done():
+		return Result{Outcome: OutcomePending}, nil
+	}
 	if err != nil {
 		if errors.Is(err, artifact.ErrValuesNotFound) {
 			return Result{Outcome: OutcomeValuesNotFound, Message: "chart has no values.yaml"}, nil
@@ -350,6 +340,37 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 	}
 
 	return Result{Outcome: OutcomeReady, Values: values}, nil
+}
+
+func (r *Resolver) download(ctx context.Context, name string, art *meta.Artifact, current currentDigestFunc) (values []byte, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			values, err = nil, fmt.Errorf("downloading %s: %v", name, recovered)
+		}
+	}()
+
+	downloadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sharedDownloadTimeout)
+	defer cancel()
+
+	values, err = artifact.FetchValues(downloadCtx, r.httpClient, art.URL, art.Digest, r.maxArtifactBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := r.cache.PutUnless(name, art.Digest, values, func() bool {
+		return r.stillCurrent(downloadCtx, name, current, art.Digest)
+	}); err != nil {
+		switch {
+		case errors.Is(err, cache.ErrBudgetExhausted):
+			log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
+		case errors.Is(err, cache.ErrSuperseded):
+			// stillCurrent has already said which way it went.
+		default:
+			log.FromContext(ctx).Error(err, "failed to cache values.yaml")
+		}
+	}
+
+	return values, nil
 }
 
 func (r *Resolver) stillCurrent(ctx context.Context, name string, current currentDigestFunc, downloaded string) bool {
@@ -368,9 +389,7 @@ func (r *Resolver) stillCurrent(ctx context.Context, name string, current curren
 }
 
 func isTransient(err error) bool {
-	return errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, errCallAborted)
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (r *Resolver) ensureHelmChart(ctx context.Context, family repositoryFamily, req Request, name, expiresAt string) (*sourcev1.HelmChart, bool, error) {

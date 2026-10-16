@@ -741,6 +741,74 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 	}
 }
 
+func TestConcurrentMissesAtTwoRevisionsOfOneNameDoNotShareADownload(t *testing.T) {
+	release := make(chan struct{})
+	serve := func(archive []byte) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			<-release
+			_, _ = w.Write(archive)
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	archiveA, archiveB := buildValuesArchive(t, "replicaCount: 1\n"), buildValuesArchive(t, "replicaCount: 2\n")
+	artA := &meta.Artifact{URL: serve(archiveA).URL, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archiveA))}
+	artB := &meta.Artifact{URL: serve(archiveB).URL, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archiveB))}
+
+	r := &Resolver{cache: cache.New(t.TempDir(), testCacheBudget), httpClient: http.DefaultClient, maxArtifactBytes: 1 << 20}
+
+	var joined sync.WaitGroup
+	var wg sync.WaitGroup
+	results := make([]Result, 2)
+	for i, art := range []*meta.Artifact{artA, artB} {
+		var once sync.Once
+		joined.Add(1)
+		ctx := joinSignal{Context: context.Background(), joined: func() { once.Do(joined.Done) }}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := r.readValues(ctx, "entry", art, stillAt(art.Digest))
+			if err != nil {
+				t.Errorf("revision %d: %v", i, err)
+				return
+			}
+			results[i] = got
+		}()
+	}
+	joined.Wait()
+	close(release)
+	wg.Wait()
+
+	if string(results[0].Values) != "replicaCount: 1\n" || string(results[1].Values) != "replicaCount: 2\n" {
+		t.Fatalf("got %q and %q: a request that saw a newer revision must not receive the values of the older one",
+			results[0].Values, results[1].Values)
+	}
+}
+
+type panickingTransport struct{}
+
+func (panickingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	panic("transport exploded")
+}
+
+func TestAPanicInsideTheSharedDownloadIsAnsweredAsAFailureNotACrash(t *testing.T) {
+	r := &Resolver{
+		cache:            cache.New(t.TempDir(), testCacheBudget),
+		httpClient:       &http.Client{Transport: panickingTransport{}},
+		maxArtifactBytes: 1 << 20,
+	}
+
+	got, err := r.readValues(context.Background(), "entry",
+		&meta.Artifact{URL: "http://artifact.invalid/chart.tgz", Digest: "sha256:any"}, stillAt("sha256:any"))
+	if err != nil {
+		t.Fatalf("readValues returned %v", err)
+	}
+	if got.Outcome != OutcomeFetchFailed || !strings.Contains(got.Message, "transport exploded") {
+		t.Fatalf("got %+v, want fetch_failed naming the panic", got)
+	}
+}
+
 func TestAWaiterGetsTheValuesWhenTheLeaderGivesUp(t *testing.T) {
 	archive := buildValuesArchive(t, "replicaCount: 1\n")
 
@@ -808,6 +876,18 @@ func TestAWaiterGetsTheValuesWhenTheLeaderGivesUp(t *testing.T) {
 	if entry, ok := r.cache.GetEntry("entry"); !ok || entry.Digest != art.Digest {
 		t.Fatalf("entry = %+v (present %v), want the downloaded revision cached despite the leader giving up", entry, ok)
 	}
+}
+
+// joinSignal reports that a caller of readValues is waiting on the shared download: readValues uses the context for nothing else.
+type joinSignal struct {
+	context.Context
+	joined func()
+}
+
+func (c joinSignal) Done() <-chan struct{} {
+	c.joined()
+
+	return c.Context.Done()
 }
 
 func buildValuesArchive(t *testing.T, values string) []byte {
