@@ -82,7 +82,7 @@ func main() {
 	flag.StringVar(&apiTLSCertFile, "api-tls-cert-file", "", "Path to the PEM-encoded certificate for the chart-values HTTP API; enables TLS together with --api-tls-key-file.")
 	flag.StringVar(&apiTLSKeyFile, "api-tls-key-file", "", "Path to the PEM-encoded private key for the chart-values HTTP API; enables TLS together with --api-tls-cert-file.")
 	flag.DurationVar(&cacheTTL, "chart-values-cache-ttl", time.Hour, "Lifetime of auxiliary source resources; a request renews it once less than half of it is left.")
-	flag.IntVar(&cacheBudgetMB, "cache-budget-mb", 32, "Total size in MiB of values.yaml the in-memory cache may hold; entries that do not fit are not cached.")
+	flag.IntVar(&cacheBudgetMB, "cache-budget-mb", 16, "Total size in MiB of values.yaml the in-memory cache may hold; entries that do not fit are not cached.")
 	flag.DurationVar(&sourceInterval, "source-interval", 10*time.Minute, "Reconcile interval set on auxiliary source resources.")
 	flag.IntVar(&maxChartSizeMB, "max-chart-size-mb", 100, "Maximum accepted chart artifact size in MiB; larger artifacts are rejected.")
 	flag.StringVar(&tokenAudiences, "api-token-audience", "", "Comma-separated audiences a bearer token of the chart-values HTTP API must be issued for; empty accepts any token the API server authenticates.")

@@ -81,7 +81,7 @@ spec:
             - --api-tls-key-file=/etc/chart-values-controller/tls/tls.key
             - --chart-values-cache-ttl=1h
             - --max-chart-size-mb=100
-            - --cache-budget-mb=32
+            - --cache-budget-mb=16
           volumeMounts:
             - mountPath: /etc/chart-values-controller/tls
               name: api-tls
