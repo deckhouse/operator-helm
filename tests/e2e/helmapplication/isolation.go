@@ -213,8 +213,11 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-reader", Namespace: ns},
 			Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get", "list"}}},
 		}
-		_, err = asApp.RbacV1().Roles(ns).Create(ctx, reader, metav1.CreateOptions{})
-		Expect(err).NotTo(HaveOccurred())
+		// The binding was just recreated: the authorizer's cache may lag behind the API server.
+		Eventually(func(g Gomega) {
+			_, err := asApp.RbacV1().Roles(ns).Create(ctx, reader, metav1.CreateOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+		}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 		toReader := &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-reader", Namespace: ns},
 			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: reader.Name},
