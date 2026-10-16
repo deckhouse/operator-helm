@@ -58,7 +58,7 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	obj := r.newObject()
 	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
 		if apierrors.IsNotFound(err) {
-			_ = r.cache.Delete(req.Name)
+			r.cache.Delete(req.Name)
 			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("getting %s: %w", req.Name, err)
@@ -93,7 +93,7 @@ func (r *reconciler) deleteExpired(ctx context.Context, obj client.Object, name 
 		return reconcile.Result{}, fmt.Errorf("deleting %s: %w", name, err)
 	}
 
-	_ = r.cache.Delete(name)
+	r.cache.Delete(name)
 
 	if err == nil {
 		log.FromContext(ctx).Info("deleted expired auxiliary resource", "name", name)

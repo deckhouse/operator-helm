@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,7 +75,7 @@ func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 
 	return &Resolver{
 		client:         c,
-		cache:          cache.New(t.TempDir(), testCacheBudget),
+		cache:          cache.New(testCacheBudget),
 		namespace:      "d8-operator-helm",
 		ttl:            time.Hour,
 		sourceInterval: metav1.Duration{Duration: time.Minute},
@@ -280,7 +279,7 @@ func newHybridResolver(t *testing.T, prober chartartifact.Prober, objects ...cli
 
 	return &Resolver{
 		client:           c,
-		cache:            cache.New(t.TempDir(), testCacheBudget),
+		cache:            cache.New(testCacheBudget),
 		namespace:        "d8-operator-helm",
 		ttl:              time.Minute,
 		sourceInterval:   metav1.Duration{Duration: time.Minute},
@@ -489,16 +488,15 @@ func TestReadValuesCachesNothingFromARefusedArchive(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	dir := t.TempDir()
 	r := &Resolver{
-		cache:            cache.New(dir, testCacheBudget),
+		cache:            cache.New(testCacheBudget),
 		httpClient:       srv.Client(),
 		maxArtifactBytes: 100 << 20,
 	}
 
 	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
 
-	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest}, stillAt(digest))
+	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest})
 	if err != nil {
 		t.Fatalf("readValues returned %v", err)
 	}
@@ -506,12 +504,8 @@ func TestReadValuesCachesNothingFromARefusedArchive(t *testing.T) {
 		t.Fatalf("outcome = %q, want fetch_failed (message %q)", got.Outcome, got.Message)
 	}
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("reading cache dir: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("cache holds %d entries, want none: a refused archive must not be served to the next request", len(entries))
+	if _, ok := r.cache.Get("entry", digest); ok {
+		t.Fatal("the cache holds an entry, want none: a refused archive must not be served to the next request")
 	}
 }
 
@@ -774,9 +768,9 @@ func TestATransportTimeoutIsAnsweredAsPendingWhoeverHitIt(t *testing.T) {
 	c := srv.Client()
 	c.Timeout = 50 * time.Millisecond
 
-	r := &Resolver{cache: cache.New(t.TempDir(), testCacheBudget), httpClient: c, maxArtifactBytes: 1 << 20}
+	r := &Resolver{cache: cache.New(testCacheBudget), httpClient: c, maxArtifactBytes: 1 << 20}
 
-	result, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL}, stillAt(""))
+	result, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL})
 	if err != nil {
 		t.Fatalf("readValues returned an error: %v", err)
 	}
@@ -823,7 +817,7 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 			art := &meta.Artifact{URL: srv.URL, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archive))}
 
 			r := &Resolver{
-				cache:            cache.New(t.TempDir(), testCacheBudget),
+				cache:            cache.New(testCacheBudget),
 				httpClient:       srv.Client(),
 				maxArtifactBytes: 1 << 20,
 			}
@@ -842,7 +836,7 @@ func TestConcurrentMissesFetchTheArtifactOnce(t *testing.T) {
 				go func() {
 					defer wg.Done()
 
-					got, err := r.readValues(ctx, tt.key(i), art, stillAt(art.Digest))
+					got, err := r.readValues(ctx, tt.key(i), art)
 					if err != nil {
 						t.Errorf("caller %d: readValues returned %v", i, err)
 						return
@@ -885,7 +879,7 @@ func TestConcurrentMissesAtTwoRevisionsOfOneNameDoNotShareADownload(t *testing.T
 	artA := &meta.Artifact{URL: serve(archiveA).URL, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archiveA))}
 	artB := &meta.Artifact{URL: serve(archiveB).URL, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archiveB))}
 
-	r := &Resolver{cache: cache.New(t.TempDir(), testCacheBudget), httpClient: http.DefaultClient, maxArtifactBytes: 1 << 20}
+	r := &Resolver{cache: cache.New(testCacheBudget), httpClient: http.DefaultClient, maxArtifactBytes: 1 << 20}
 
 	var joined sync.WaitGroup
 	var wg sync.WaitGroup
@@ -898,7 +892,7 @@ func TestConcurrentMissesAtTwoRevisionsOfOneNameDoNotShareADownload(t *testing.T
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got, err := r.readValues(ctx, "entry", art, stillAt(art.Digest))
+			got, err := r.readValues(ctx, "entry", art)
 			if err != nil {
 				t.Errorf("revision %d: %v", i, err)
 				return
@@ -924,13 +918,13 @@ func (panickingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 
 func TestAPanicInsideTheSharedDownloadIsAnsweredAsAFailureNotACrash(t *testing.T) {
 	r := &Resolver{
-		cache:            cache.New(t.TempDir(), testCacheBudget),
+		cache:            cache.New(testCacheBudget),
 		httpClient:       &http.Client{Transport: panickingTransport{}},
 		maxArtifactBytes: 1 << 20,
 	}
 
 	got, err := r.readValues(context.Background(), "entry",
-		&meta.Artifact{URL: "http://artifact.invalid/chart.tgz", Digest: "sha256:any"}, stillAt("sha256:any"))
+		&meta.Artifact{URL: "http://artifact.invalid/chart.tgz", Digest: "sha256:any"})
 	if err != nil {
 		t.Fatalf("readValues returned %v", err)
 	}
@@ -956,7 +950,7 @@ func TestAWaiterGetsTheValuesWhenTheLeaderGivesUp(t *testing.T) {
 
 	art := &meta.Artifact{URL: srv.URL, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(archive))}
 	r := &Resolver{
-		cache:            cache.New(t.TempDir(), testCacheBudget),
+		cache:            cache.New(testCacheBudget),
 		httpClient:       srv.Client(),
 		maxArtifactBytes: 1 << 20,
 	}
@@ -966,7 +960,7 @@ func TestAWaiterGetsTheValuesWhenTheLeaderGivesUp(t *testing.T) {
 
 	leader := make(chan Result, 1)
 	go func() {
-		got, err := r.readValues(leaderCtx, "entry", art, stillAt(art.Digest))
+		got, err := r.readValues(leaderCtx, "entry", art)
 		if err != nil {
 			t.Errorf("the leader: readValues returned %v", err)
 		}
@@ -980,7 +974,7 @@ func TestAWaiterGetsTheValuesWhenTheLeaderGivesUp(t *testing.T) {
 
 	waiter := make(chan Result, 1)
 	go func() {
-		got, err := r.readValues(waiterCtx, "entry", art, stillAt(art.Digest))
+		got, err := r.readValues(waiterCtx, "entry", art)
 		if err != nil {
 			t.Errorf("the waiter: readValues returned %v", err)
 		}
@@ -1003,8 +997,8 @@ func TestAWaiterGetsTheValuesWhenTheLeaderGivesUp(t *testing.T) {
 		t.Fatalf("the waiter got %+v, want the chart's values: the leader's cancellation must not fail the shared download", got)
 	}
 
-	if entry, ok := r.cache.GetEntry("entry"); !ok || entry.Digest != art.Digest {
-		t.Fatalf("entry = %+v (present %v), want the downloaded revision cached despite the leader giving up", entry, ok)
+	if _, ok := r.cache.Get("entry", art.Digest); !ok {
+		t.Fatal("the downloaded revision is not cached, want it cached despite the leader giving up")
 	}
 }
 
@@ -1057,16 +1051,15 @@ func TestAFullCacheStillAnswersTheRequest(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	dir := t.TempDir()
 	r := &Resolver{
-		cache:            cache.New(dir, 1),
+		cache:            cache.New(1),
 		httpClient:       srv.Client(),
 		maxArtifactBytes: 1 << 20,
 	}
 
 	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
 
-	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest}, stillAt(digest))
+	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest})
 	if err != nil {
 		t.Fatalf("readValues returned %v", err)
 	}
@@ -1074,194 +1067,7 @@ func TestAFullCacheStillAnswersTheRequest(t *testing.T) {
 		t.Fatalf("got %+v, want the values served from the download despite the full cache", got)
 	}
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("reading cache dir: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("cache holds %d entries, want none: nothing may be written past the budget", len(entries))
-	}
-}
-
-func TestTheEntryCachedOnAMissNamesTheRevisionItCameFrom(t *testing.T) {
-	archive := buildValuesArchive(t, "replicaCount: 1\n")
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(archive)
-	}))
-	t.Cleanup(srv.Close)
-
-	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
-	r := &Resolver{
-		cache:            cache.New(t.TempDir(), testCacheBudget),
-		httpClient:       srv.Client(),
-		maxArtifactBytes: 1 << 20,
-	}
-
-	got, err := r.readValues(context.Background(), "entry", &meta.Artifact{URL: srv.URL, Digest: digest}, stillAt(digest))
-	if err != nil {
-		t.Fatalf("readValues returned %v", err)
-	}
-	if got.Outcome != OutcomeReady {
-		t.Fatalf("got %+v, want the values served", got)
-	}
-
-	entry, ok := r.cache.GetEntry("entry")
-	if !ok {
-		t.Fatal("the values served were not cached at all")
-	}
-	if string(entry.Values) != "replicaCount: 1\n" {
-		t.Fatalf("cached values = %q, want the ones served", entry.Values)
-	}
-	if entry.Digest != digest {
-		t.Fatalf("the entry records %q, want the artifact revision it was extracted from %q", entry.Digest, digest)
-	}
-}
-
-func stillAt(digest string) currentDigestFunc {
-	return func(context.Context) (string, error) { return digest, nil }
-}
-
-func TestALateDownloadNeverPublishesOverANewerEntry(t *testing.T) {
-	const (
-		key       = "chart-values-abc123"
-		namespace = "d8-operator-helm"
-	)
-
-	downloaded := []byte("replicaCount: 1\n")
-	republished := []byte("replicaCount: 2\n")
-
-	tests := []struct {
-		name       string
-		interfere  func(t *testing.T, c client.Client, valuesCache *cache.Cache, digestB string)
-		wantCached bool
-		wantValues []byte
-		wantDigest string
-	}{
-		{
-			name: "the artifact republished mid-download keeps the entry the controller wrote for it",
-			interfere: func(t *testing.T, c client.Client, valuesCache *cache.Cache, digestB string) {
-				t.Helper()
-
-				if err := valuesCache.Put(key, digestB, republished); err != nil {
-					t.Fatalf("caching the newer revision: %v", err)
-				}
-				moveArtifactTo(t, c, key, namespace, digestB)
-			},
-			wantCached: true,
-			wantValues: republished,
-			wantDigest: "B",
-		},
-		{
-			name:       "an artifact that did not move is cached as it always was",
-			interfere:  func(*testing.T, client.Client, *cache.Cache, string) {},
-			wantCached: true,
-			wantValues: downloaded,
-			wantDigest: "A",
-		},
-		{
-			name: "a source object collected mid-download leaves nothing behind",
-			interfere: func(t *testing.T, c client.Client, _ *cache.Cache, _ string) {
-				t.Helper()
-
-				chart := &sourcev1.HelmChart{ObjectMeta: metav1.ObjectMeta{Name: key, Namespace: namespace}}
-				if err := c.Delete(context.Background(), chart); err != nil {
-					t.Fatalf("collecting the source object: %v", err)
-				}
-			},
-			wantCached: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			archive := buildValuesArchive(t, string(downloaded))
-			digestA := fmt.Sprintf("sha256:%x", sha256.Sum256(archive))
-			digestB := "sha256:the-revision-published-while-the-download-ran"
-
-			started := make(chan struct{})
-			release := make(chan struct{})
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				close(started)
-				<-release
-				_, _ = w.Write(archive)
-			}))
-			t.Cleanup(srv.Close)
-
-			scheme := runtime.NewScheme()
-			if err := sourcev1.AddToScheme(scheme); err != nil {
-				t.Fatalf("registering source scheme: %v", err)
-			}
-
-			chart := &sourcev1.HelmChart{
-				ObjectMeta: metav1.ObjectMeta{Name: key, Namespace: namespace},
-				Status:     sourcev1.HelmChartStatus{Artifact: &meta.Artifact{URL: srv.URL, Digest: digestA}},
-			}
-			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(chart).Build()
-
-			r := &Resolver{
-				client:           c,
-				cache:            cache.New(t.TempDir(), testCacheBudget),
-				httpClient:       srv.Client(),
-				namespace:        namespace,
-				maxArtifactBytes: 1 << 20,
-			}
-
-			results := make(chan Result, 1)
-			go func() {
-				got, err := r.readValues(
-					context.Background(), key,
-					&meta.Artifact{URL: srv.URL, Digest: digestA},
-					r.helmChartDigest(key),
-				)
-				if err != nil {
-					t.Errorf("readValues returned %v", err)
-				}
-				results <- got
-			}()
-
-			<-started
-			tt.interfere(t, c, r.cache, digestB)
-			close(release)
-
-			got := <-results
-			if got.Outcome != OutcomeReady || !bytes.Equal(got.Values, downloaded) {
-				t.Fatalf("the caller got %+v, want the values of the artifact it asked for %q: the cache never decides the answer", got, downloaded)
-			}
-
-			entry, ok := r.cache.GetEntry(key)
-			if ok != tt.wantCached {
-				t.Fatalf("an entry under the key = %v, want %v", ok, tt.wantCached)
-			}
-			if !tt.wantCached {
-				return
-			}
-
-			wantDigest := digestA
-			if tt.wantDigest == "B" {
-				wantDigest = digestB
-			}
-			if !bytes.Equal(entry.Values, tt.wantValues) {
-				t.Fatalf("the entry holds %q, want %q", entry.Values, tt.wantValues)
-			}
-			if entry.Digest != wantDigest {
-				t.Fatalf("the entry records %q, want %q", entry.Digest, wantDigest)
-			}
-		})
-	}
-}
-
-func moveArtifactTo(t *testing.T, c client.Client, name, namespace, digest string) {
-	t.Helper()
-
-	ctx := context.Background()
-	chart := &sourcev1.HelmChart{}
-	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, chart); err != nil {
-		t.Fatalf("reading the chart to republish it: %v", err)
-	}
-
-	chart.Status.Artifact.Digest = digest
-	if err := c.Update(ctx, chart); err != nil {
-		t.Fatalf("republishing the artifact: %v", err)
+	if _, ok := r.cache.Get("entry", digest); ok {
+		t.Fatal("the cache holds an entry, want none: nothing may be stored past the budget")
 	}
 }

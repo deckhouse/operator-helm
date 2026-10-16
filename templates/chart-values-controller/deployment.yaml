@@ -1,9 +1,5 @@
 {{- $priorityClassName := include "priorityClassName" . }}
 
-{{- /* The cache budget is three quarters of the cache volume. */}}
-{{- $cacheVolumeMB := 512 }}
-{{- $cacheBudgetMB := div (mul $cacheVolumeMB 3) 4 }}
-
 {{- define "operator_helm_chart_values_controller_resources" }}
 cpu: 50m
 memory: 64Mi
@@ -83,13 +79,10 @@ spec:
             - --api-bind-address=:9443
             - --api-tls-cert-file=/etc/chart-values-controller/tls/tls.crt
             - --api-tls-key-file=/etc/chart-values-controller/tls/tls.key
-            - --cache-dir=/cache
             - --chart-values-cache-ttl=1h
             - --max-chart-size-mb=100
-            - --cache-budget-mb={{ $cacheBudgetMB }}
+            - --cache-budget-mb=32
           volumeMounts:
-            - mountPath: /cache
-              name: cache
             - mountPath: /etc/chart-values-controller/tls
               name: api-tls
               readOnly: true
@@ -140,10 +133,6 @@ spec:
       {{- include "helm_lib_node_selector" (tuple . "system") | nindent 6 }}
       {{- include "helm_lib_tolerations" (tuple . "system") | nindent 6 }}
       volumes:
-        - name: cache
-          # Caps the cache volume; on overflow the kubelet evicts the pod.
-          emptyDir:
-            sizeLimit: {{ $cacheVolumeMB }}Mi
         - name: api-tls
           secret:
             secretName: chart-values-controller-tls

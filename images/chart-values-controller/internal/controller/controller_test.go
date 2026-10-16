@@ -40,7 +40,6 @@ import (
 const (
 	testNamespace   = "d8-operator-helm"
 	testName        = "chart-values-abc123"
-	otherTestName   = "chart-values-def456"
 	testCacheBudget = int64(16 << 20)
 )
 
@@ -75,7 +74,7 @@ func newTestReconciler(t *testing.T, c client.Client) *reconciler {
 	return &reconciler{
 		client:    c,
 		namespace: testNamespace,
-		cache:     cache.New(t.TempDir(), testCacheBudget),
+		cache:     cache.New(testCacheBudget),
 		newObject: func() client.Object { return &sourcev1.HelmChart{} },
 	}
 }
@@ -175,7 +174,7 @@ func TestReconcileDeletesOnlyTheExpiredObjectItRead(t *testing.T) {
 				t.Fatalf("object should have been deleted, got: %v", err)
 			}
 
-			_, cached := r.cache.Get(testName)
+			_, cached := r.cache.Get(testName, "sha256:cafe")
 			if cached != tt.survive {
 				t.Fatalf("cache entry present = %v, want %v", cached, tt.survive)
 			}
@@ -183,9 +182,6 @@ func TestReconcileDeletesOnlyTheExpiredObjectItRead(t *testing.T) {
 			if tt.survive {
 				if result.RequeueAfter <= 0 {
 					t.Fatalf("a refused delete must requeue, got %+v", result)
-				}
-				if entry, _ := r.cache.GetEntry(testName); entry.Digest != "sha256:cafe" {
-					t.Fatalf("the surviving entry records %q, want the revision it was seeded with", entry.Digest)
 				}
 			}
 		})
@@ -261,7 +257,7 @@ func TestReconcileTreatsAnAlreadyDeletedObjectAsCollected(t *testing.T) {
 	if result.RequeueAfter != 0 {
 		t.Fatalf("nothing to come back for, got %+v", result)
 	}
-	if _, cached := r.cache.Get(testName); cached {
+	if _, cached := r.cache.Get(testName, "sha256:cafe"); cached {
 		t.Fatal("cache entry of a deleted object should be dropped")
 	}
 }
@@ -310,7 +306,7 @@ func TestReconcileLeavesTheEntryAloneForAnObjectInAnotherNamespace(t *testing.T)
 				t.Fatalf("reconcile: %v", err)
 			}
 
-			got, ok := r.cache.Get(testName)
+			got, ok := r.cache.Get(testName, "sha256:earlier")
 			if !ok {
 				t.Fatal("the entry was deleted for an object outside the served namespace")
 			}
@@ -339,7 +335,7 @@ func TestReconcileLeavesTheEntryAloneWhenTheArtifactRevisionMoves(t *testing.T) 
 	if result.RequeueAfter <= 0 || result.RequeueAfter > time.Hour {
 		t.Fatalf("requeue = %v, want the time left until expiry", result.RequeueAfter)
 	}
-	if _, ok := r.cache.Get(testName); !ok {
+	if _, ok := r.cache.Get(testName, "sha256:earlier"); !ok {
 		t.Fatal("the controller must not touch an entry whose object is alive; the resolver re-reads the revision itself")
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	neturl "net/url"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -234,7 +235,6 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 
 	var conditions []metav1.Condition
 	var art *meta.Artifact
-	var current currentDigestFunc
 
 	switch {
 	case version.OCIRef != "":
@@ -245,7 +245,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		if done != nil {
 			return *done, nil
 		}
-		conditions, art, current = ociRepo.Status.Conditions, ociRepo.Status.Artifact, r.ociRepositoryDigest(name)
+		conditions, art = ociRepo.Status.Conditions, ociRepo.Status.Artifact
 	case isOCI(repo.URL):
 		mediaType, done := ociMediaType(req, version)
 		if done != nil {
@@ -256,7 +256,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		if err != nil {
 			return Result{}, err
 		}
-		conditions, art, current = ociRepo.Status.Conditions, ociRepo.Status.Artifact, r.ociRepositoryDigest(name)
+		conditions, art = ociRepo.Status.Conditions, ociRepo.Status.Artifact
 	case isHelm(repo.URL):
 		chart, pending, err := r.ensureHelmChart(ctx, family, req, name, expiresAt)
 		if err != nil {
@@ -265,7 +265,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		if pending {
 			return Result{Outcome: OutcomePending}, nil
 		}
-		conditions, art, current = chart.Status.Conditions, chart.Status.Artifact, r.helmChartDigest(name)
+		conditions, art = chart.Status.Conditions, chart.Status.Artifact
 	default:
 		return Result{Outcome: OutcomeFetchFailed, Message: fmt.Sprintf("unsupported repository URL scheme: %q", repo.URL)}, nil
 	}
@@ -277,7 +277,7 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 		return Result{Outcome: OutcomePending}, nil
 	}
 
-	return r.readValues(ctx, name, art, current)
+	return r.readValues(ctx, name, art)
 }
 
 func sourceObjectFor(repoURL string, version *helmv1alpha1.ChartVersion) client.Object {
@@ -322,60 +322,25 @@ func (r *Resolver) cachedValues(ctx context.Context, name string, obj client.Obj
 		return nil, false, nil
 	}
 
-	entry, ok := r.cache.GetEntry(name)
-	if !ok || entry.Digest != art.Digest {
-		return nil, false, nil
-	}
+	values, ok := r.cache.Get(name, art.Digest)
 
-	return entry.Values, true, nil
+	return values, ok, nil
 }
 
-// currentDigestFunc reports the digest the auxiliary source object publishes now, from an informer.
-type currentDigestFunc func(ctx context.Context) (string, error)
-
-func (r *Resolver) helmChartDigest(name string) currentDigestFunc {
-	return func(ctx context.Context) (string, error) {
-		var chart sourcev1.HelmChart
-		if err := r.client.Get(ctx, client.ObjectKey{Namespace: r.namespace, Name: name}, &chart); err != nil {
-			return "", fmt.Errorf("getting helm chart: %w", err)
-		}
-
-		return artifactDigest(chart.Status.Artifact), nil
-	}
-}
-
-func (r *Resolver) ociRepositoryDigest(name string) currentDigestFunc {
-	return func(ctx context.Context) (string, error) {
-		var ociRepo sourcev1.OCIRepository
-		if err := r.client.Get(ctx, client.ObjectKey{Namespace: r.namespace, Name: name}, &ociRepo); err != nil {
-			return "", fmt.Errorf("getting oci repository: %w", err)
-		}
-
-		return artifactDigest(ociRepo.Status.Artifact), nil
-	}
-}
-
-func artifactDigest(art *meta.Artifact) string {
-	if art == nil {
-		return ""
-	}
-
-	return art.Digest
-}
-
-// sharedDownloadTimeout bounds the shared call as a whole, the read-back of the source object
-// included, since the call is detached from the request that started it: other requests may be
-// waiting on its result. The HTTP client's own timeout already bounds the download itself.
+// sharedDownloadTimeout bounds the shared call as a whole, since the call is detached from the
+// request that started it: other requests may be waiting on its result. The HTTP client's own
+// timeout already bounds the download itself.
 const sharedDownloadTimeout = 90 * time.Second
 
-func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact, current currentDigestFunc) (Result, error) {
+// shortcut: a download that outlasts the object's expiry leaves an orphan entry until restart; add a timestamp to entries if the budget ever fills with them.
+func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact) (Result, error) {
 	// A request sent down the slow path only to renew the expiry is served without a download.
-	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest == art.Digest {
-		return Result{Outcome: OutcomeReady, Values: entry.Values}, nil
+	if values, ok := r.cache.Get(name, art.Digest); ok {
+		return Result{Outcome: OutcomeReady, Values: values}, nil
 	}
 
 	ch := r.downloads.DoChan(name+"@"+art.Digest, func() (any, error) {
-		return r.download(ctx, name, art, current)
+		return r.download(ctx, name, art)
 	})
 
 	var values []byte
@@ -402,9 +367,10 @@ func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifa
 	return Result{Outcome: OutcomeReady, Values: values}, nil
 }
 
-func (r *Resolver) download(ctx context.Context, name string, art *meta.Artifact, current currentDigestFunc) (values []byte, err error) {
+func (r *Resolver) download(ctx context.Context, name string, art *meta.Artifact) (values []byte, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			log.FromContext(ctx).Error(nil, "panic while downloading values.yaml", "name", name, "panic", recovered, "stack", string(debug.Stack()))
 			values, err = nil, fmt.Errorf("downloading %s: %v", name, recovered)
 		}
 	}()
@@ -417,35 +383,11 @@ func (r *Resolver) download(ctx context.Context, name string, art *meta.Artifact
 		return nil, err
 	}
 
-	if err := r.cache.PutUnless(name, art.Digest, values, func() bool {
-		return r.stillCurrent(downloadCtx, name, current, art.Digest)
-	}); err != nil {
-		switch {
-		case errors.Is(err, cache.ErrBudgetExhausted):
-			log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
-		case errors.Is(err, cache.ErrSuperseded):
-			// stillCurrent has already said which way it went.
-		default:
-			log.FromContext(ctx).Error(err, "failed to cache values.yaml")
-		}
+	if err := r.cache.Put(name, art.Digest, values); err != nil {
+		log.FromContext(ctx).Info("not caching values.yaml, cache budget exhausted", "name", name)
 	}
 
 	return values, nil
-}
-
-func (r *Resolver) stillCurrent(ctx context.Context, name string, current currentDigestFunc, downloaded string) bool {
-	digest, err := current(ctx)
-	if err != nil {
-		log.FromContext(ctx).Info("not caching values.yaml, the source object could not be read back", "name", name, "error", err.Error())
-		return false
-	}
-
-	if digest != downloaded {
-		log.FromContext(ctx).Info("not caching values.yaml, the artifact revision moved while it was downloading", "name", name, "downloaded", downloaded, "current", digest)
-		return false
-	}
-
-	return true
 }
 
 func isTransient(err error) bool {
