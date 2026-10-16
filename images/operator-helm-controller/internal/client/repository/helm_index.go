@@ -61,10 +61,14 @@ func decodeIndex(body []byte) (HelmRepositoryIndex, error) {
 func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 	var (
 		index       HelmRepositoryIndex
-		started     bool   // A document marker after this one ends the index, as a whole decode would.
+		started     bool // A document marker after this one ends the index, as a whole decode would.
+		marked      bool // A second marker before the content starts does too: the first document is empty.
+		seenTop     = map[string]struct{}{}
 		top         []byte // The top-level block not decoded yet; the entries block never lands here.
+		topKey      string
 		inEntries   bool
 		chart       string
+		chartClosed bool // The chart carried its versions inline, so no item may follow.
 		chartIndent = -1
 		itemIndent  = -1
 		batch       []byte // The versions of the current chart not decoded yet.
@@ -85,13 +89,14 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 			return nil
 		}
 
-		var block map[string]any
+		// Decoded into the index type so that apiVersion is checked and converted as a whole decode would.
+		var block HelmRepositoryIndex
 		if err := yaml.Unmarshal(top, &block); err != nil {
 			return err
 		}
 
-		if v, ok := block["apiVersion"].(string); ok {
-			index.APIVersion = v
+		if topKey == "apiVersion" {
+			index.APIVersion = block.APIVersion
 		}
 
 		top = nil
@@ -113,6 +118,28 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 		batch = nil
 
 		return nil
+	}
+
+	// singleKey decodes one mapping line into its only key and value node.
+	singleKey := func(line []byte) (string, yaml.Node, error) {
+		var key map[string]yaml.Node
+		if err := yaml.Unmarshal(line, &key); err != nil {
+			return "", yaml.Node{}, err
+		}
+		if len(key) != 1 {
+			return "", yaml.Node{}, fmt.Errorf("%w: %s", errIndexLayout, bytes.TrimSpace(line))
+		}
+
+		for name, node := range key {
+			return name, node, nil
+		}
+
+		return "", yaml.Node{}, nil
+	}
+
+	// open reports whether a key's value is still to come on the following lines.
+	open := func(node yaml.Node) bool {
+		return node.Tag == "!!null" && node.Value == ""
 	}
 
 	for len(body) > 0 {
@@ -158,10 +185,17 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 				continue
 			}
 
-			if bytes.Equal(trimmed, []byte("---")) || bytes.Equal(trimmed, []byte("...")) {
-				if started {
+			if bytes.HasPrefix(trimmed, []byte("---")) || bytes.HasPrefix(trimmed, []byte("...")) {
+				rest := bytes.TrimLeft(trimmed[3:], " \t")
+				if len(rest) != 0 && rest[0] != '#' {
+					return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, trimmed)
+				}
+
+				if started || marked {
 					break
 				}
+
+				marked = true
 
 				continue
 			}
@@ -174,29 +208,28 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 
 			inEntries, chart, chartIndent, itemIndent = false, "", -1, -1
 
-			var key map[string]any
-			if err := yaml.Unmarshal(line, &key); err != nil {
+			name, node, err := singleKey(line)
+			if err != nil {
 				return HelmRepositoryIndex{}, err
 			}
-			if len(key) != 1 {
-				return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, trimmed)
+
+			if _, dup := seenTop[name]; dup {
+				return HelmRepositoryIndex{}, fmt.Errorf("%w: key %q is listed twice", errIndexLayout, name)
 			}
 
-			v, ok := key["entries"]
-			if !ok {
-				top = append([]byte{}, line...)
+			seenTop[name] = struct{}{}
+
+			if name != "entries" {
+				top, topKey = append([]byte{}, line...), name
 
 				continue
 			}
 
-			switch v := v.(type) {
-			case nil:
+			switch {
+			case open(node):
 				inEntries = true
-			case map[string]any:
-				if len(v) != 0 {
-					return HelmRepositoryIndex{}, errIndexLayout
-				}
-
+			case node.Tag == "!!null":
+			case node.Kind == yaml.MappingNode && len(node.Content) == 0:
 				index.Entries = map[string][]HelmRepositoryChartVersion{}
 			default:
 				return HelmRepositoryIndex{}, errIndexLayout
@@ -220,7 +253,7 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 		isItem := trimmed[0] == '-' && (len(trimmed) == 1 || trimmed[1] == ' ')
 
 		switch {
-		case isItem && chart != "" && (itemIndent == -1 || indent == itemIndent) && indent >= chartIndent:
+		case isItem && chart != "" && !chartClosed && (itemIndent == -1 || indent == itemIndent) && indent >= chartIndent:
 			if len(batch) >= indexBatchSize {
 				if err := flushBatch(); err != nil {
 					return HelmRepositoryIndex{}, err
@@ -238,25 +271,28 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 				return HelmRepositoryIndex{}, err
 			}
 
-			var key map[string][]HelmRepositoryChartVersion
-			if err := yaml.Unmarshal(trimmed, &key); err != nil || len(key) != 1 {
+			name, node, err := singleKey(trimmed)
+			if err != nil {
 				return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, trimmed)
 			}
-
-			chartIndent, itemIndent = indent, -1
 
 			if index.Entries == nil {
 				index.Entries = map[string][]HelmRepositoryChartVersion{}
 			}
 
-			for name, versions := range key {
-				if _, dup := index.Entries[name]; dup {
-					return HelmRepositoryIndex{}, fmt.Errorf("%w: chart %q is listed twice", errIndexLayout, name)
-				}
-
-				chart = name
-				index.Entries[chart] = versions
+			if _, dup := index.Entries[name]; dup {
+				return HelmRepositoryIndex{}, fmt.Errorf("%w: chart %q is listed twice", errIndexLayout, name)
 			}
+
+			var versions []HelmRepositoryChartVersion
+			if !open(node) {
+				if err := node.Decode(&versions); err != nil {
+					return HelmRepositoryIndex{}, fmt.Errorf("chart %s: %w", name, err)
+				}
+			}
+
+			chart, chartClosed, chartIndent, itemIndent = name, !open(node), indent, -1
+			index.Entries[chart] = versions
 		default:
 			return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, trimmed)
 		}

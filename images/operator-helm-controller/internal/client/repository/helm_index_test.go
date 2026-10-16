@@ -73,7 +73,10 @@ func TestDecodeIndexMatchesAWholeDecode(t *testing.T) {
 		"entries first":   "entries:\n  a:\n  - version: 1.0.0\napiVersion: v1\n",
 		"no api version":  "entries:\n  a:\n  - version: 1.0.0\n",
 		"second document": testIndex + "---\napiVersion: v1\nentries: {}\n",
+		"empty first doc": "---\n---\n" + testIndex,
+		"marker comment":  "--- # helm\n" + testIndex,
 		"indented root":   "  apiVersion: v1\n  entries:\n    a:\n    - version: 1.0.0\n",
+		"numeric version": "apiVersion: 1\nentries: null\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			var want HelmRepositoryIndex
@@ -188,9 +191,13 @@ func TestDecodeIndexBoundsOneEntry(t *testing.T) {
 
 func TestDecodeIndexRefusesWhatAWholeDecodeRefuses(t *testing.T) {
 	for name, index := range map[string]string{
-		"duplicate chart": "apiVersion: v1\nentries:\n  a:\n  - version: 1.0.0\n  a:\n  - version: 2.0.0\n",
-		"broken trailer":  "apiVersion: v1\nentries:\n  a:\n  - version: 1.0.0\nserverInfo:\n  invalid: [\n",
-		"flow entries":    "apiVersion: v1\nentries: {a: [{version: 1.0.0}]}\n",
+		"duplicate chart":   "apiVersion: v1\nentries:\n  a:\n  - version: 1.0.0\n  a:\n  - version: 2.0.0\n",
+		"duplicate entries": "apiVersion: v1\nentries:\n  a:\n  - version: 1.0.0\nentries: {}\n",
+		"broken trailer":    "apiVersion: v1\nentries:\n  a:\n  - version: 1.0.0\nserverInfo:\n  invalid: [\n",
+		"flow entries":      "apiVersion: v1\nentries: {a: [{version: 1.0.0}]}\n",
+		"list api version":  "apiVersion: [v1]\nentries: {}\n",
+		"inline then block": "apiVersion: v1\nentries:\n  a: [{version: 0.1.0}]\n  - version: 1.0.0\n",
+		"null then block":   "apiVersion: v1\nentries: null\n  a:\n  - version: 1.0.0\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			var whole HelmRepositoryIndex
@@ -206,5 +213,15 @@ func TestDecodeIndexRefusesWhatAWholeDecodeRefuses(t *testing.T) {
 				t.Fatal("a large index must be refused instead of decoded whole")
 			}
 		})
+	}
+}
+
+func TestDecodeIndexAcceptsACommentedMarkerWhenLarge(t *testing.T) {
+	got, err := decodeIndex([]byte("--- # helm\n" + testIndex + paddingCharts()))
+	if err != nil {
+		t.Fatalf("a document marker followed by a comment must be accepted, got %v", err)
+	}
+	if len(got.Entries["podinfo"]) != 3 {
+		t.Fatalf("expected the 3 podinfo versions, got %d", len(got.Entries["podinfo"]))
 	}
 }
