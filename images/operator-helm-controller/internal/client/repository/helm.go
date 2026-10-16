@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"go.yaml.in/yaml/v3"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -148,9 +147,8 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 			return false, nil
 		}
 
-		// A fresh value: a retry must not merge its entries into what a previous attempt parsed.
-		var decoded HelmRepositoryIndex
-		if err := yaml.Unmarshal(body, &decoded); err != nil {
+		decoded, err := decodeIndex(body)
+		if err != nil {
 			return true, fmt.Errorf("cannot decode response: %w", err)
 		}
 
