@@ -68,8 +68,12 @@ func (s *Synchronizer) Sync(
 ) SyncOutcome {
 	forced := repo.ForceReconcileRequired()
 
+	// A changed spec re-examines every verdict the way a force does: the recorded ones answered
+	// the previous source.
+	refresh := forced || SpecChangeUnanswered(repo.Status(), repo.Generation())
+
 	// A helm repository is marked for nothing: its client ignores FetchOptions, so no pass skips a verdict.
-	marking := forced && repoType == chartsource.OCI
+	marking := refresh && repoType == chartsource.OCI
 
 	snapshot, err := s.catalog.Snapshot(ctx, repo)
 	if err != nil {
@@ -88,7 +92,7 @@ func (s *Synchronizer) Sync(
 	// Known is read after the marking, so a version this pass just marked is one the fetch re-examines.
 	charts, fetch := s.fetchCharts(ctx, repo, repoType, repoclient.FetchOptions{
 		Known: snapshot.Known(),
-		Full:  forced,
+		Full:  refresh,
 	})
 	if fetch.Err != nil {
 		return SyncOutcome{ForceRequestRecorded: true, FetchAttempted: true, Fetch: fetch}
@@ -102,6 +106,14 @@ func (s *Synchronizer) Sync(
 		Fetch:                fetch,
 		Catalog:              CatalogOutcome{Err: err, SkippedCharts: result.SkippedCharts},
 	}
+}
+
+// SpecChangeUnanswered reports whether the spec changed since the last pass that reached the
+// registry: the generation moved on, or the schedule stands cleared because a pass observed the
+// change without reaching the registry. Evaluate keeps the schedule cleared for as long as that
+// holds, so the answer survives any number of such passes.
+func SpecChangeUnanswered(status *helmv1alpha1.RepositoryStatus, generation int64) bool {
+	return generation != status.ObservedGeneration || status.NextSyncTime == nil
 }
 
 func (s *Synchronizer) fetchCharts(

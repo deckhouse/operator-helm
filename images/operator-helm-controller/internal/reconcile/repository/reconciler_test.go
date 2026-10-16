@@ -1164,6 +1164,9 @@ func TestReconcileKeepsAForceRequestItCouldNotRecord(t *testing.T) {
 
 func TestReconcileKeepsAForceRequestSetDuringAnUnforcedPass(t *testing.T) {
 	repo := ociRepository()
+	// A spec already observed and due again: a first pass would re-index in full on its own.
+	repo.Status.ObservedGeneration = repo.Generation
+	repo.Status.NextSyncTime = &metav1.Time{Time: testNow.Add(-time.Hour)}
 	stub := &stubRepoClient{charts: []repoclient.Chart{{
 		Name:     "podinfo",
 		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},

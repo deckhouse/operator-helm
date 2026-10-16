@@ -1393,6 +1393,7 @@ func TestEvaluateRetriesASpecChangeThatMadeNoAttempt(t *testing.T) {
 		{name: "auxiliary secrets", in: Inputs{SecretsErr: failure}},
 		{name: "internal repository", in: Inputs{InternalRepositoryErr: failure}},
 		{name: "catalog rename", in: Inputs{MigrateErr: failure}},
+		{name: "catalog read", in: Inputs{Attempted: true, Catalog: &reposync.CatalogOutcome{Err: failure}}},
 	}
 
 	for _, tc := range cases {
@@ -1415,6 +1416,19 @@ func TestEvaluateRetriesASpecChangeThatMadeNoAttempt(t *testing.T) {
 			if !errors.Is(decision.Err, failure) {
 				t.Fatalf("Decision.Err is %v, want %v to hand the retry to the work queue backoff",
 					decision.Err, failure)
+			}
+
+			// The retry fails the same way: observedGeneration no longer tells the spec apart, so
+			// the cleared schedule is all that still carries the change.
+			in.Current = decision.Status
+			retried := Evaluate(in)
+
+			if retried.Status.NextSyncTime != nil {
+				t.Fatalf("nextSyncTime = %v after a failed retry, want none: the generation is still unanswered",
+					retried.Status.NextSyncTime)
+			}
+			if !ShouldAttempt(retried.Status, in.Generation, testNow, false) {
+				t.Fatal("the pass after a failed retry must still attempt the generation")
 			}
 		})
 	}

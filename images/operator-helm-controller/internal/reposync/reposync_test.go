@@ -17,6 +17,7 @@ package reposync
 
 import (
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,9 +42,15 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
+// testRepository is a repository whose spec a previous pass already observed and scheduled,
+// so a synchronization of it is an ordinary one unless a test says otherwise.
 func testRepository() *helmv1alpha1.HelmClusterAddonRepository {
 	return &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
 		Spec:       helmv1alpha1.RepositorySpec{URL: "https://example.invalid/charts"},
+		Status: helmv1alpha1.RepositoryStatus{
+			ObservedGeneration: 1,
+			NextSyncTime:       &metav1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		},
 	}
 }

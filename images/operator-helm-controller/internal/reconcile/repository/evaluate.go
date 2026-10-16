@@ -89,11 +89,6 @@ func Evaluate(in Inputs) Decision {
 	in.Current.DeepCopyInto(&status)
 	// Confirmed on every pass, not held back: lastSyncedGeneration carries the verdict instead.
 	status.ObservedGeneration = in.Generation
-	if !in.Attempted && in.Generation != in.Current.ObservedGeneration {
-		// observedGeneration moved on without an attempt, so ShouldAttempt no longer sees the spec
-		// change; clearing the schedule keeps the next pass from waiting out the old one.
-		status.NextSyncTime = nil
-	}
 
 	internal := in.InternalRepository
 	if in.InternalRepositoryErr != nil {
@@ -172,6 +167,13 @@ func Evaluate(in Inputs) Decision {
 
 		next := scheduleBase(in).Add(withJitter(delay, in.Jitter))
 		status.NextSyncTime = &metav1.Time{Time: next}
+	}
+
+	if in.Fetch == nil && reposync.SpecChangeUnanswered(&in.Current, in.Generation) {
+		// observedGeneration moved on before the registry was read, so ShouldAttempt no longer sees
+		// the spec change; the cleared schedule keeps the next pass from waiting out the old one
+		// and tells the synchronization the change is still unanswered.
+		status.NextSyncTime = nil
 	}
 
 	requeueAfter := time.Duration(0)

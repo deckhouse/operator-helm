@@ -47,13 +47,14 @@ func (s stubRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.R
 
 type recordingRepoClient struct {
 	charts []repoclient.Chart
+	err    error
 	opts   repoclient.FetchOptions
 }
 
 func (s *recordingRepoClient) FetchCharts(_ context.Context, _ string, _ *repoclient.RepoConfig, opts repoclient.FetchOptions) ([]repoclient.Chart, error) {
 	s.opts = opts
 
-	return s.charts, nil
+	return s.charts, s.err
 }
 
 func newSynchronizer(t *testing.T, stub repoclient.ClientInterface, objects ...client.Object) (*Synchronizer, client.Client) {
@@ -311,6 +312,58 @@ func TestSynchronizerSyncRequestsFullPassOnForceReconcile(t *testing.T) {
 
 	if !stub.opts.Full {
 		t.Fatal("force reconcile must request a full re-index")
+	}
+}
+
+func TestSynchronizerSyncReexaminesEveryVerdictOnceTheSpecChanged(t *testing.T) {
+	const mediaType = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+
+	tests := []struct {
+		name   string
+		change func(repo *helmv1alpha1.HelmClusterAddonRepository)
+	}{
+		{
+			name:   "a generation no pass observed",
+			change: func(repo *helmv1alpha1.HelmClusterAddonRepository) { repo.Generation = 2 },
+		},
+		{
+			name:   "a schedule cleared by a pass that observed the change without reaching the registry",
+			change: func(repo *helmv1alpha1.HelmClusterAddonRepository) { repo.Status.NextSyncTime = nil },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := testRepository()
+			test.change(repo)
+			chart := existingChart(repo.Name, "podinfo",
+				helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: mediaType},
+				helmv1alpha1.ChartVersion{
+					Version:           "6.7.2",
+					UnavailableReason: helmv1alpha1.UnavailableReasonUnsupportedMediaType,
+				},
+			)
+
+			stub := &recordingRepoClient{err: errors.New("dial tcp: connection refused")}
+			service, c := newSynchronizer(t, stubRepoClient{}, repo, chart)
+			service.clientFactory = func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
+				return stub, nil
+			}
+
+			outcome := service.Sync(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
+			if outcome.Fetch.Err == nil {
+				t.Fatal("the fixture must reach a failed read")
+			}
+			if !stub.opts.Full {
+				t.Fatal("a changed spec must request a full re-index: the recorded verdicts answered the previous source")
+			}
+
+			for _, version := range chartStatus(t, c, repo.Name, "podinfo").Versions {
+				if !version.ReexaminationRequired {
+					t.Fatalf("version %s is not marked: the re-examination must outlast a failed read", version.Version)
+				}
+			}
+		})
 	}
 }
 
