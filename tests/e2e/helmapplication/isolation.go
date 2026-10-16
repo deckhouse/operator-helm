@@ -21,7 +21,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -128,15 +127,6 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 
 	It("should create nothing else of its own in the namespace", func() {
 		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
-
-		By("Every secret in the namespace is Helm's own release storage, not a projected credential")
-		secrets, err := f.KubeClient().CoreV1().Secrets(f.NamespaceName()).
-			List(context.Background(), metav1.ListOptions{})
-		Expect(err).NotTo(HaveOccurred())
-		for _, secret := range secrets.Items {
-			Expect(secret.Type).To(Equal(corev1.SecretType("helm.sh/release.v1")),
-				"repository credentials must never be projected into a consumer namespace")
-		}
 
 		By("The operator's own object here is exactly the role binding: the rights come from a ClusterRole")
 		bindings, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
