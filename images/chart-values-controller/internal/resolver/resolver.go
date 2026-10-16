@@ -212,11 +212,6 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 
 	name := naming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName, req.Chart, req.Version, repo.Identity)
 
-	// The auxiliary-resource controller keeps the entry fresh, so a hit is served without a read.
-	if values, ok := r.cache.Get(name); ok {
-		return Result{Outcome: OutcomeReady, Values: values}, nil
-	}
-
 	expiresAt := time.Now().UTC().Add(r.ttl).Format(time.RFC3339)
 
 	version, done, err := r.chartVersion(ctx, family, req)
@@ -225,6 +220,16 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 	}
 	if done != nil {
 		return *done, nil
+	}
+
+	if obj := sourceObjectFor(repo.URL, version); obj != nil {
+		values, ok, err := r.cachedValues(ctx, name, obj)
+		if err != nil {
+			return Result{}, err
+		}
+		if ok {
+			return Result{Outcome: OutcomeReady, Values: values}, nil
+		}
 	}
 
 	var conditions []metav1.Condition
@@ -275,6 +280,56 @@ func (r *Resolver) resolveChart(ctx context.Context, family repositoryFamily, re
 	return r.readValues(ctx, name, art, current)
 }
 
+func sourceObjectFor(repoURL string, version *helmv1alpha1.ChartVersion) client.Object {
+	switch {
+	case version.OCIRef != "" || isOCI(repoURL):
+		return &sourcev1.OCIRepository{}
+	case isHelm(repoURL):
+		return &sourcev1.HelmChart{}
+	default:
+		return nil
+	}
+}
+
+func sourceStatus(obj client.Object) ([]metav1.Condition, *meta.Artifact) {
+	switch source := obj.(type) {
+	case *sourcev1.HelmChart:
+		return source.Status.Conditions, source.Status.Artifact
+	case *sourcev1.OCIRepository:
+		return source.Status.Conditions, source.Status.Artifact
+	default:
+		return nil, nil
+	}
+}
+
+func (r *Resolver) cachedValues(ctx context.Context, name string, obj client.Object) ([]byte, bool, error) {
+	if err := r.client.Get(ctx, client.ObjectKey{Namespace: r.namespace, Name: name}, obj); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+
+		return nil, false, fmt.Errorf("getting auxiliary source object: %w", err)
+	}
+
+	expiresAt, err := time.Parse(time.RFC3339, obj.GetAnnotations()[labels.ExpiresAtAnnotation])
+	// Past half the ttl the slow path runs to renew the expiry before cleanup takes the object.
+	if err != nil || time.Until(expiresAt) <= r.ttl/2 {
+		return nil, false, nil
+	}
+
+	conditions, art := sourceStatus(obj)
+	if outcome, _ := classify(conditions, art); outcome != OutcomeReady {
+		return nil, false, nil
+	}
+
+	entry, ok := r.cache.GetEntry(name)
+	if !ok || entry.Digest != art.Digest {
+		return nil, false, nil
+	}
+
+	return entry.Values, true, nil
+}
+
 // currentDigestFunc reports the digest the auxiliary source object publishes now, from an informer.
 type currentDigestFunc func(ctx context.Context) (string, error)
 
@@ -314,6 +369,11 @@ func artifactDigest(art *meta.Artifact) string {
 const sharedDownloadTimeout = 90 * time.Second
 
 func (r *Resolver) readValues(ctx context.Context, name string, art *meta.Artifact, current currentDigestFunc) (Result, error) {
+	// A request sent down the slow path only to renew the expiry is served without a download.
+	if entry, ok := r.cache.GetEntry(name); ok && entry.Digest == art.Digest {
+		return Result{Outcome: OutcomeReady, Values: entry.Values}, nil
+	}
+
 	ch := r.downloads.DoChan(name+"@"+art.Digest, func() (any, error) {
 		return r.download(ctx, name, art, current)
 	})

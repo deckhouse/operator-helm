@@ -42,6 +42,7 @@ import (
 
 	"github.com/deckhouse/chart-values-controller/internal/cache"
 	"github.com/deckhouse/chart-values-controller/internal/chartartifact"
+	"github.com/deckhouse/chart-values-controller/internal/labels"
 	cvnaming "github.com/deckhouse/chart-values-controller/internal/naming"
 	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
@@ -59,6 +60,9 @@ func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 	if err := helmv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("registering helm scheme: %v", err)
 	}
+	if err := sourcev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering source scheme: %v", err)
+	}
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -70,7 +74,28 @@ func newTestResolver(t *testing.T, objects ...client.Object) *Resolver {
 		).
 		Build()
 
-	return &Resolver{client: c, cache: cache.New(t.TempDir(), testCacheBudget)}
+	return &Resolver{
+		client:         c,
+		cache:          cache.New(t.TempDir(), testCacheBudget),
+		namespace:      "d8-operator-helm",
+		ttl:            time.Hour,
+		sourceInterval: metav1.Duration{Duration: time.Minute},
+	}
+}
+
+func readySource(name, digest string, expiresAt time.Time) *sourcev1.HelmChart {
+	return &sourcev1.HelmChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   "d8-operator-helm",
+			Labels:      map[string]string{labels.ManagedBy: labels.ManagedByValue},
+			Annotations: map[string]string{labels.ExpiresAtAnnotation: expiresAt.UTC().Format(time.RFC3339)},
+		},
+		Status: sourcev1.HelmChartStatus{
+			Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}},
+			Artifact:   &meta.Artifact{Digest: digest},
+		},
+	}
 }
 
 func chartWithVersions(repoName, chartName string, versions ...helmv1alpha1.ChartVersion) *helmv1alpha1.HelmClusterAddonChart {
@@ -421,17 +446,23 @@ func TestClusterScopedRequestsIgnoreAStrayNamespace(t *testing.T) {
 	for _, kind := range []RepositoryKind{RepositoryKindHelmClusterAddon, RepositoryKindHelmClusterApplication} {
 		t.Run(string(kind), func(t *testing.T) {
 			meta := metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 2}
+			spec := helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"}
 
-			var repo client.Object = &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: meta}
+			var repo client.Object = &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: meta, Spec: spec}
+			var chart client.Object = chartWithVersions("example", "podinfo", helmv1alpha1.ChartVersion{Version: "6.7.1"})
 			if kind == RepositoryKindHelmClusterApplication {
-				repo = &helmv1alpha1.HelmClusterApplicationRepository{ObjectMeta: meta}
+				repo = &helmv1alpha1.HelmClusterApplicationRepository{ObjectMeta: meta, Spec: spec}
+				chart = &helmv1alpha1.HelmClusterApplicationChart{
+					ObjectMeta: metav1.ObjectMeta{Name: naming.HelmClusterApplicationChartName("example", "podinfo")},
+					Status:     helmv1alpha1.ChartCatalogStatus{Versions: []helmv1alpha1.ChartVersion{{Version: "6.7.1"}}},
+				}
 			}
-
-			r := newTestResolver(t, repo)
 
 			req := Request{Kind: kind, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
 			name := cvnaming.AuxResourceName(string(kind), "",
 				req.RepositoryName, req.Chart, req.Version, identityOf(meta))
+
+			r := newTestResolver(t, repo, chart, readySource(name, "sha256:seeded", time.Now().Add(time.Hour)))
 			if err := r.cache.Put(name, "sha256:seeded", []byte("replicaCount: 1\n")); err != nil {
 				t.Fatalf("seeding cache: %v", err)
 			}
@@ -592,12 +623,14 @@ func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
 
 	repo := &helmv1alpha1.HelmClusterAddonRepository{
 		ObjectMeta: metav1.ObjectMeta{Name: repoName, UID: "repo-uid", Generation: 1},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
 	}
-
-	r := newTestResolver(t, repo)
 
 	name := cvnaming.AuxResourceName(string(RepositoryKindHelmClusterAddon), "",
 		repoName, chart, version, identityOf(repo.ObjectMeta))
+
+	r := newTestResolver(t, repo, chartWithVersions(repoName, chart, helmv1alpha1.ChartVersion{Version: version}),
+		readySource(name, "sha256:seeded", time.Now().Add(time.Hour)))
 	if err := r.cache.Put(name, "sha256:seeded", []byte("replicaCount: 1\n")); err != nil {
 		t.Fatalf("seeding cache: %v", err)
 	}
@@ -628,6 +661,103 @@ func TestAStatusWriteDoesNotInvalidateTheEntry(t *testing.T) {
 	}
 	if got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
 		t.Fatalf("got %+v, want the cached entry: a status write must not cost a re-download", got)
+	}
+}
+
+func TestAHitIsServedOnlyAtTheRevisionTheObjectHolds(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 1},
+		Spec: helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"}}
+	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
+	name := cvnaming.AuxResourceName(string(req.Kind), "", req.RepositoryName, req.Chart, req.Version, identityOf(repo.ObjectMeta))
+
+	tests := []struct {
+		name   string
+		cached string
+		want   Outcome
+	}{
+		{name: "the cache holds the object's revision", cached: "sha256:current", want: OutcomeReady},
+		{name: "the cache holds another revision", cached: "sha256:stale", want: OutcomePending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newTestResolver(t, repo, chartWithVersions("example", "podinfo", helmv1alpha1.ChartVersion{Version: "6.7.1"}),
+				readySource(name, "sha256:current", time.Now().Add(time.Hour)))
+			if err := r.cache.Put(name, tt.cached, []byte("replicaCount: 1\n")); err != nil {
+				t.Fatalf("seeding cache: %v", err)
+			}
+
+			got, err := r.Resolve(context.Background(), req)
+			if err != nil {
+				t.Fatalf("Resolve returned %v", err)
+			}
+			if got.Outcome != tt.want {
+				t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Message, tt.want)
+			}
+		})
+	}
+}
+
+func TestAHitRenewsAnExpiryThatIsMoreThanHalfSpent(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 1},
+		Spec: helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"}}
+	helmRepo := &sourcev1.HelmRepository{ObjectMeta: metav1.ObjectMeta{
+		Name:      "hcar-example",
+		Namespace: "d8-operator-helm",
+		Labels:    map[string]string{helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName: "example"},
+	}}
+	req := Request{Kind: RepositoryKindHelmClusterAddon, RepositoryName: "example", Chart: "podinfo", Version: "6.7.1"}
+	name := cvnaming.AuxResourceName(string(req.Kind), "", req.RepositoryName, req.Chart, req.Version, identityOf(repo.ObjectMeta))
+
+	tests := []struct {
+		name    string
+		left    time.Duration
+		renewed bool
+	}{
+		{name: "less than half the ttl left", left: 15 * time.Minute, renewed: true},
+		{name: "more than half the ttl left", left: 45 * time.Minute, renewed: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := readySource(name, "sha256:current", time.Now().Add(tt.left))
+			original := source.Annotations[labels.ExpiresAtAnnotation]
+
+			r := newTestResolver(t, repo, helmRepo, chartWithVersions("example", "podinfo", helmv1alpha1.ChartVersion{Version: "6.7.1"}), source)
+			if err := r.cache.Put(name, "sha256:current", []byte("replicaCount: 1\n")); err != nil {
+				t.Fatalf("seeding cache: %v", err)
+			}
+
+			got, err := r.Resolve(context.Background(), req)
+			if err != nil {
+				t.Fatalf("Resolve returned %v", err)
+			}
+			if got.Outcome != OutcomeReady || string(got.Values) != "replicaCount: 1\n" {
+				t.Fatalf("got %+v, want the cached values", got)
+			}
+
+			stored := &sourcev1.HelmChart{}
+			if err := r.client.Get(context.Background(), client.ObjectKey{Namespace: "d8-operator-helm", Name: name}, stored); err != nil {
+				t.Fatalf("reading helm chart: %v", err)
+			}
+			annotation := stored.Annotations[labels.ExpiresAtAnnotation]
+
+			if !tt.renewed {
+				if annotation != original {
+					t.Fatalf("expires-at = %q, want it left at %q", annotation, original)
+				}
+				return
+			}
+
+			if annotation == original {
+				t.Fatalf("expires-at stayed at %q, want it renewed", original)
+			}
+			expiresAt, err := time.Parse(time.RFC3339, annotation)
+			if err != nil {
+				t.Fatalf("parsing expires-at %q: %v", annotation, err)
+			}
+			if left := time.Until(expiresAt); left < 59*time.Minute {
+				t.Fatalf("expires-at is %s away, want a full ttl", left)
+			}
+		})
 	}
 }
 
