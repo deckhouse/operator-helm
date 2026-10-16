@@ -37,9 +37,9 @@ var errIndexLayout = errors.New("index.yaml is not in the block layout helm writ
 // node tree some fifty times its size, so an index of tens of MiB would cost gigabytes. The block
 // layout helm writes lets each version be cut out by indentation and decoded in small batches.
 //
-// shortcut: an index over maxWholeIndexSize must be in that layout, without anchors shared between
-// charts, a smaller one in any layout is decoded whole; upgrade to an event-based parser if a
-// producer in the wild emits large indexes outside it.
+// shortcut: an index over maxWholeIndexSize must be in that layout and use no anchors, since a batch
+// is decoded on its own; a smaller one in any layout is decoded whole. Upgrade to an event-based
+// parser if a producer in the wild emits large indexes outside it.
 func decodeIndex(body []byte) (HelmRepositoryIndex, error) {
 	index, err := decodeIndexByEntry(body)
 	if err == nil {
@@ -182,6 +182,11 @@ func decodeIndexByEntry(body []byte) (HelmRepositoryIndex, error) {
 
 		if indent == 0 {
 			if trimmed[0] == '%' {
+				// A directive belongs before the document; anywhere else it is a syntax error.
+				if started || marked {
+					return HelmRepositoryIndex{}, fmt.Errorf("%w: %s", errIndexLayout, trimmed)
+				}
+
 				continue
 			}
 

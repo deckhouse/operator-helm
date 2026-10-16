@@ -198,6 +198,7 @@ func TestDecodeIndexRefusesWhatAWholeDecodeRefuses(t *testing.T) {
 		"list api version":  "apiVersion: [v1]\nentries: {}\n",
 		"inline then block": "apiVersion: v1\nentries:\n  a: [{version: 0.1.0}]\n  - version: 1.0.0\n",
 		"null then block":   "apiVersion: v1\nentries: null\n  a:\n  - version: 1.0.0\n",
+		"late directive":    "---\n%YAML 1.2\napiVersion: v1\nentries:\n  a:\n  - version: 1.0.0\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			var whole HelmRepositoryIndex
