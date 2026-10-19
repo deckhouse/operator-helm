@@ -36,9 +36,9 @@ import (
 // internal resources have finished being deleted, for one that stops emitting events.
 const InternalResourceDeletionRequeueInterval = 30 * time.Second
 
-// ConsumeForceAnnotation removes the force reconcile annotation from the object at key,
+// RemoveForceAnnotation removes the force reconcile annotation from the object at key,
 // re-reading it into obj rather than patching from the copy the pass started with.
-func ConsumeForceAnnotation(ctx context.Context, c client.Client, key client.ObjectKey, obj client.Object) error {
+func RemoveForceAnnotation(ctx context.Context, c client.Client, key client.ObjectKey, obj client.Object) error {
 	if err := c.Get(ctx, key, obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil

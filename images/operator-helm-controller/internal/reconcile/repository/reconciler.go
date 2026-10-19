@@ -173,7 +173,7 @@ func (r *Reconciler) applyDecision(
 		}
 
 		// Consumed even when the read failed: the catalog carries the request from here on.
-		if err := lifecycle.ConsumeForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(repo.Object()), r.deps.NewRepository().Object()); err != nil {
+		if err := lifecycle.RemoveForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(repo.Object()), r.deps.NewRepository().Object()); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 		}
 	}

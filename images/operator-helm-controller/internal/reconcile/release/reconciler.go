@@ -404,7 +404,7 @@ func (r *Reconciler) applyDecision(
 	}
 
 	if decision.ConsumeForce {
-		if err := lifecycle.ConsumeForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(rel.Object()), r.deps.NewRelease().Object()); err != nil {
+		if err := lifecycle.RemoveForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(rel.Object()), r.deps.NewRelease().Object()); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 		}
 	}
