@@ -100,7 +100,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			Err:     repoTypeErr,
 		}
 
-		return r.finish(ctx, repo, in, false)
+		return r.applyDecision(ctx, repo, in, false)
 	}
 
 	in.SecretsErr = r.deps.Secrets.Ensure(ctx, repo, repoType)
@@ -140,12 +140,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		in.Catalog = &outcome.Catalog
 	}
 
-	return r.finish(ctx, repo, in, in.Forced && forceRecorded)
+	return r.applyDecision(ctx, repo, in, in.Forced && forceRecorded)
 }
 
-// finish applies the decision and consumes the force annotation once a forced attempt has
+// applyDecision applies the decision and consumes the force annotation once a forced attempt has
 // recorded the request in the catalog. The annotation is removed after the status patch.
-func (r *Reconciler) finish(
+func (r *Reconciler) applyDecision(
 	ctx context.Context,
 	repo contract.Repository,
 	in Inputs,

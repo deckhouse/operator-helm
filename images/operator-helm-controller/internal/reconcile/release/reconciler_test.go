@@ -2034,8 +2034,8 @@ func TestBadInputIsNotLoggedAsAControllerError(t *testing.T) {
 				ConditionTypes: addon.GetConditionTypesForUpdate(),
 			}
 
-			if _, err := r.finish(ctx, adapter.NewAddonRelease(addon), in, StepFailed{tt.failure}); err != nil && !tt.wantAtError {
-				t.Fatalf("finish returned an error: %v", err)
+			if _, err := r.applyDecision(ctx, adapter.NewAddonRelease(addon), in, StepFailed{tt.failure}); err != nil && !tt.wantAtError {
+				t.Fatalf("applyDecision returned an error: %v", err)
 			}
 
 			if atError != tt.wantAtError {

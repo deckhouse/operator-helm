@@ -131,7 +131,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("acquiring chart claim: %w", err)
 	}
 	if !acquired {
-		return r.finish(ctx, rel, in, StepFailed{Failure{
+		return r.applyDecision(ctx, rel, in, StepFailed{Failure{
 			Reason: helmv1alpha1.ReasonChartClaimConflict,
 			Message: fmt.Sprintf("chart %q is already used by %s/%s",
 				rel.ChartRef().Chart, strings.ToLower(rel.Kind()), holder),
@@ -141,7 +141,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if utils.IsSystemNamespace(rel.TargetNamespace()) {
-		return r.finish(ctx, rel, in, StepFailed{Failure{
+		return r.applyDecision(ctx, rel, in, StepFailed{Failure{
 			Reason:   helmv1alpha1.ReasonFailed,
 			Message:  "Target namespace cannot be a system namespace",
 			Err:      fmt.Errorf("target namespace %q is a system namespace", rel.TargetNamespace()),
@@ -164,7 +164,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		result := r.deps.Maintenance.Ensure(ctx, rel)
 		if result.Err != nil || result.Activated {
-			return r.finish(ctx, rel, in, MaintenanceChanged{Result: result})
+			return r.applyDecision(ctx, rel, in, MaintenanceChanged{Result: result})
 		}
 
 		// Maintenance was lifted, so this pass has to go on and actually deploy the chart.
@@ -172,12 +172,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if rel.MaintenanceActivated() {
-		return r.finish(ctx, rel, in, InMaintenance{})
+		return r.applyDecision(ctx, rel, in, InMaintenance{})
 	}
 
 	repo, catalog, err := r.deps.Repositories.Resolve(ctx, rel.ChartRef().Repository)
 	if err != nil {
-		return r.finish(ctx, rel, in, StepFailed{Failure{
+		return r.applyDecision(ctx, rel, in, StepFailed{Failure{
 			Reason:  helmv1alpha1.ReasonFailed,
 			Message: "Failed to get internal repository",
 			Err:     fmt.Errorf("getting internal repository: %w", err),
@@ -189,7 +189,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	repoType, err := chartsource.KindOf(repo.URL())
 	if err != nil {
 		// The fault is the repository's url; the release comes back when its generation changes.
-		return r.finish(ctx, rel, in, StepFailed{Failure{
+		return r.applyDecision(ctx, rel, in, StepFailed{Failure{
 			Reason:   helmv1alpha1.ReasonUnsupportedRepositoryType,
 			Message:  fmt.Sprintf("Failed to parse repository type: %s", err.Error()),
 			Err:      err,
@@ -198,7 +198,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if err := r.deps.Namespaces.EnsureTarget(ctx, rel); err != nil {
-		return r.finish(ctx, rel, in, StepFailed{Failure{
+		return r.applyDecision(ctx, rel, in, StepFailed{Failure{
 			Reason:  helmv1alpha1.ReasonFailed,
 			Message: fmt.Sprintf("Failed to reconcile target namespace: %s", err.Error()),
 			Err:     err,
@@ -209,7 +209,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// Before the internal sources: helm-controller checks the account exists before impersonating.
 	if identity := r.deps.Identity.Ensure(ctx, rel); identity.Err != nil {
-		return r.finish(ctx, rel, in, StepFailed{Failure{
+		return r.applyDecision(ctx, rel, in, StepFailed{Failure{
 			Reason:   identity.Reason,
 			Message:  identity.Message,
 			Err:      identity.Err,
@@ -217,7 +217,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}})
 	}
 
-	// From here on every path reaches finish, which is what consumes the force request.
+	// From here on every path reaches applyDecision, which is what consumes the force request.
 	forced := rel.ForceReconcileRequired()
 	if forced {
 		if err := r.markForceReconcileInProgress(ctx, rel); err != nil {
@@ -225,7 +225,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
-	return r.finish(ctx, rel, in, r.reconcileChart(ctx, rel, repo, catalog, repoType, forced))
+	return r.applyDecision(ctx, rel, in, r.reconcileChart(ctx, rel, repo, catalog, repoType, forced))
 }
 
 // reconcileChart carries the pass to the internal objects: the source the version is served
@@ -370,9 +370,9 @@ func (r *Reconciler) serveFromOCIRepository(
 	return ServedByOCIRepository{Result: r.deps.OCIRepositories.Ensure(ctx, rel, repo, src, chartVersion)}
 }
 
-// finish applies the decision and consumes the force annotation. The annotation is
+// applyDecision applies the decision and consumes the force annotation. The annotation is
 // removed after the status patch so a conflict does not lose the request.
-func (r *Reconciler) finish(
+func (r *Reconciler) applyDecision(
 	ctx context.Context,
 	rel contract.Release,
 	in Inputs,
@@ -398,7 +398,7 @@ func (r *Reconciler) finish(
 	}
 
 	if err := r.deps.Status.PatchStatus(ctx, rel.Object(), func() {
-		applyDecision(rel, decision)
+		writeStatus(rel, decision)
 	}); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update status: %w", err)
 	}
@@ -412,9 +412,9 @@ func (r *Reconciler) finish(
 	return reconcile.Result{RequeueAfter: decision.RequeueAfter}, decision.Err
 }
 
-// applyDecision writes the evaluated status onto the release. Conditions are merged rather
+// writeStatus writes the evaluated status onto the release. Conditions are merged rather
 // than replaced, so the verdicts of steps this pass did not run stay where they are.
-func applyDecision(rel contract.Release, decision Decision) {
+func writeStatus(rel contract.Release, decision Decision) {
 	conditions := rel.Object().GetConditions()
 
 	for _, condition := range decision.Conditions {
