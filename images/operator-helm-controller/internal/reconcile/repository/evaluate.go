@@ -169,10 +169,10 @@ func Evaluate(in Inputs) Decision {
 		status.NextSyncTime = &metav1.Time{Time: next}
 	}
 
-	if in.Fetch == nil && reposync.SpecChangeUnanswered(&in.Current, in.Generation) {
+	if in.Fetch == nil && reposync.SpecChangePending(&in.Current, in.Generation) {
 		// observedGeneration moved on before the registry was read, so ShouldAttempt no longer sees
 		// the spec change; the cleared schedule keeps the next pass from waiting out the old one
-		// and tells the synchronization the change is still unanswered.
+		// and tells the synchronization the change is still pending.
 		status.NextSyncTime = nil
 	}
 

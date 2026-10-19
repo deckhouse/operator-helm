@@ -1424,7 +1424,7 @@ func TestEvaluateRetriesASpecChangeThatMadeNoAttempt(t *testing.T) {
 			retried := Evaluate(in)
 
 			if retried.Status.NextSyncTime != nil {
-				t.Fatalf("nextSyncTime = %v after a failed retry, want none: the generation is still unanswered",
+				t.Fatalf("nextSyncTime = %v after a failed retry, want none: the spec change is still pending",
 					retried.Status.NextSyncTime)
 			}
 			if !ShouldAttempt(retried.Status, in.Generation, testNow, false) {

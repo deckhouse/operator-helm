@@ -70,7 +70,7 @@ func (s *Synchronizer) Sync(
 
 	// A changed spec re-examines every verdict the way a force does: the recorded ones answered
 	// the previous source.
-	refresh := forced || SpecChangeUnanswered(repo.Status(), repo.Generation())
+	refresh := forced || SpecChangePending(repo.Status(), repo.Generation())
 
 	// A helm repository is marked for nothing: its client ignores FetchOptions, so no pass skips a verdict.
 	marking := refresh && repoType == chartsource.OCI
@@ -108,11 +108,11 @@ func (s *Synchronizer) Sync(
 	}
 }
 
-// SpecChangeUnanswered reports whether the spec changed since the last pass that reached the
+// SpecChangePending reports whether the spec changed since the last pass that reached the
 // registry: the generation moved on, or the schedule stands cleared because a pass observed the
 // change without reaching the registry. Evaluate keeps the schedule cleared for as long as that
 // holds, so the answer survives any number of such passes.
-func SpecChangeUnanswered(status *helmv1alpha1.RepositoryStatus, generation int64) bool {
+func SpecChangePending(status *helmv1alpha1.RepositoryStatus, generation int64) bool {
 	return generation != status.ObservedGeneration || status.NextSyncTime == nil
 }
 
