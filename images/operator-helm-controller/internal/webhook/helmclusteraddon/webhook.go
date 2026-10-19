@@ -79,7 +79,7 @@ func (v *HelmClusterAddonWebhookValidator) ValidateUpdate(ctx context.Context, o
 		return nil, nil
 	}
 
-	if forceReconcileToggled(oldObj, newObj) && !chartRefChanged(oldObj, newObj) {
+	if !chartRefChanged(oldObj, newObj) {
 		return nil, nil
 	}
 
@@ -118,10 +118,6 @@ func validateNotSystemNamespace(addon *helmv1alpha1.HelmClusterAddon) error {
 	}
 
 	return nil
-}
-
-func forceReconcileToggled(oldObj, newObj *helmv1alpha1.HelmClusterAddon) bool {
-	return oldObj.Annotations[helmv1alpha1.AnnotationForceReconcile] != newObj.Annotations[helmv1alpha1.AnnotationForceReconcile]
 }
 
 func chartRefChanged(oldObj, newObj *helmv1alpha1.HelmClusterAddon) bool {

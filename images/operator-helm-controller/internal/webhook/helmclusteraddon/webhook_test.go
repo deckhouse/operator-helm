@@ -270,7 +270,7 @@ func TestValidateAllowsTheAddonThatHoldsTheClaim(t *testing.T) {
 	})
 }
 
-func TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged(t *testing.T) {
+func TestValidateUpdateChecksUniquenessOnlyWhenTheChartReferenceChanged(t *testing.T) {
 	tests := []struct {
 		name    string
 		mutate  func(addon *helmv1alpha1.HelmClusterAddon)
@@ -299,9 +299,15 @@ func TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged(t *testin
 			wantErr: true,
 		},
 		{
-			name: "nothing about the annotation changed",
+			name: "only the values changed",
 			mutate: func(addon *helmv1alpha1.HelmClusterAddon) {
 				addon.Spec.Values = &apiextensionsv1.JSON{Raw: []byte(`{"a":1}`)}
+			},
+		},
+		{
+			name: "the chart reference changed alone",
+			mutate: func(addon *helmv1alpha1.HelmClusterAddon) {
+				addon.Spec.Chart.HelmClusterAddonChartName = "postgres"
 			},
 			wantErr: true,
 		},
@@ -325,7 +331,7 @@ func TestValidateUpdateSkipsTheCheckOnlyWhenForceReconcileAloneChanged(t *testin
 				t.Fatal("the uniqueness check must run on this update")
 			}
 			if !tt.wantErr && err != nil {
-				t.Fatalf("forcing a reconcile must stay possible, got %v", err)
+				t.Fatalf("an update that keeps the chart reference must not be checked, got %v", err)
 			}
 		})
 	}
