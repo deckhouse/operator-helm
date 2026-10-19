@@ -33,7 +33,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
-	"github.com/deckhouse/operator-helm/internal/reconcile/lifecycle"
+	"github.com/deckhouse/operator-helm/internal/force"
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
@@ -173,7 +173,7 @@ func (r *Reconciler) applyDecision(
 		}
 
 		// Consumed even when the read failed: the catalog carries the request from here on.
-		if err := lifecycle.RemoveForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(repo.Object()), r.deps.NewRepository().Object()); err != nil {
+		if err := force.RemoveAnnotation(ctx, r.Client, client.ObjectKeyFromObject(repo.Object()), r.deps.NewRepository().Object()); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 		}
 	}
@@ -208,7 +208,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, repo contract.Reposito
 			return reconcile.Result{}, err
 		}
 		if helmRepo != nil {
-			return lifecycle.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkDeletionPending, repo.Object(), "internal repository", helmRepo)
+			return status.AwaitDeletion(ctx, r.deps.Status.MarkDeletionPending, repo.Object(), "internal repository", helmRepo)
 		}
 	}
 

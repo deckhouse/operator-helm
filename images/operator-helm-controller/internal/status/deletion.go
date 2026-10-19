@@ -19,10 +19,13 @@ package status
 import (
 	"context"
 	"fmt"
+	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
@@ -133,4 +136,31 @@ func deletionFailure(resourceName string, resource DeletingResource) (bool, stri
 	}
 
 	return false, waiting
+}
+
+// DeletionRequeueInterval bounds how often a pass re-checks whether the
+// internal resources have finished being deleted, for one that stops emitting events.
+const DeletionRequeueInterval = 30 * time.Second
+
+type markPending func(ctx context.Context, obj ObjectWithConditions, resourceName string, resource DeletingResource) error
+
+// AwaitDeletion surfaces that an internal resource is still being deleted on
+// the owner's status and requeues without removing the finalizer.
+func AwaitDeletion(
+	ctx context.Context,
+	mark markPending,
+	owner ObjectWithConditions,
+	name string,
+	resource DeletingResource,
+) (reconcile.Result, error) {
+	log.FromContext(ctx).Info("Waiting for internal resource to be deleted before removing finalizer",
+		"resource", name,
+		"internalType", fmt.Sprintf("%T", resource),
+		"internalObject", client.ObjectKeyFromObject(resource))
+
+	if err := mark(ctx, owner, name, resource); client.IgnoreNotFound(err) != nil {
+		return reconcile.Result{}, fmt.Errorf("updating deletion status: %w", err)
+	}
+
+	return reconcile.Result{RequeueAfter: DeletionRequeueInterval}, nil
 }

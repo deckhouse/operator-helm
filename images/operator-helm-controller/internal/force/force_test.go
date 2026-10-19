@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package lifecycle
+package force
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func addonWithAnnotations(annotations map[string]string) *helmv1alpha1.HelmClust
 	}
 }
 
-func TestRemoveForceAnnotationRemovesTheRequest(t *testing.T) {
+func TestRemoveAnnotationRemovesTheRequest(t *testing.T) {
 	addon := addonWithAnnotations(map[string]string{
 		helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z",
 		"example.io/unrelated":                "value",
@@ -54,8 +54,8 @@ func TestRemoveForceAnnotationRemovesTheRequest(t *testing.T) {
 	c := newForceClient(t, addon)
 	key := types.NamespacedName{Name: addon.Name}
 
-	if err := RemoveForceAnnotation(context.Background(), c, key, &helmv1alpha1.HelmClusterAddon{}); err != nil {
-		t.Fatalf("RemoveForceAnnotation returned %v", err)
+	if err := RemoveAnnotation(context.Background(), c, key, &helmv1alpha1.HelmClusterAddon{}); err != nil {
+		t.Fatalf("RemoveAnnotation returned %v", err)
 	}
 
 	stored := &helmv1alpha1.HelmClusterAddon{}
@@ -70,7 +70,7 @@ func TestRemoveForceAnnotationRemovesTheRequest(t *testing.T) {
 	}
 }
 
-func TestRemoveForceAnnotationSkipsAnObjectWithoutTheRequest(t *testing.T) {
+func TestRemoveAnnotationSkipsAnObjectWithoutTheRequest(t *testing.T) {
 	addon := addonWithAnnotations(map[string]string{"example.io/unrelated": "value"})
 	c := newForceClient(t, addon)
 	key := types.NamespacedName{Name: addon.Name}
@@ -81,8 +81,8 @@ func TestRemoveForceAnnotationSkipsAnObjectWithoutTheRequest(t *testing.T) {
 	}
 	before := stored.ResourceVersion
 
-	if err := RemoveForceAnnotation(context.Background(), c, key, &helmv1alpha1.HelmClusterAddon{}); err != nil {
-		t.Fatalf("RemoveForceAnnotation returned %v", err)
+	if err := RemoveAnnotation(context.Background(), c, key, &helmv1alpha1.HelmClusterAddon{}); err != nil {
+		t.Fatalf("RemoveAnnotation returned %v", err)
 	}
 
 	if err := c.Get(context.Background(), key, stored); err != nil {
@@ -94,10 +94,10 @@ func TestRemoveForceAnnotationSkipsAnObjectWithoutTheRequest(t *testing.T) {
 	}
 }
 
-func TestRemoveForceAnnotationToleratesAMissingObject(t *testing.T) {
+func TestRemoveAnnotationToleratesAMissingObject(t *testing.T) {
 	c := newForceClient(t)
 
-	err := RemoveForceAnnotation(context.Background(), c,
+	err := RemoveAnnotation(context.Background(), c,
 		types.NamespacedName{Name: "gone"}, &helmv1alpha1.HelmClusterAddon{})
 	if err != nil {
 		t.Fatalf("an object deleted mid-pass must not fail the pass, got %v", err)

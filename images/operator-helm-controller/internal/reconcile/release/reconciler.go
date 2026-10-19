@@ -38,7 +38,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
-	"github.com/deckhouse/operator-helm/internal/reconcile/lifecycle"
+	"github.com/deckhouse/operator-helm/internal/force"
 	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
@@ -404,7 +404,7 @@ func (r *Reconciler) applyDecision(
 	}
 
 	if decision.ConsumeForce {
-		if err := lifecycle.RemoveForceAnnotation(ctx, r.Client, client.ObjectKeyFromObject(rel.Object()), r.deps.NewRelease().Object()); err != nil {
+		if err := force.RemoveAnnotation(ctx, r.Client, client.ObjectKeyFromObject(rel.Object()), r.deps.NewRelease().Object()); err != nil {
 			return reconcile.Result{}, fmt.Errorf("failed to reconcile force annotation: %w", err)
 		}
 	}
@@ -504,11 +504,11 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 				// No error is handed back, so this is the only place a foreign object is logged.
 				logger.Error(identity.Err, identity.Message, "reason", identity.Reason)
 
-				return reconcile.Result{RequeueAfter: lifecycle.InternalResourceDeletionRequeueInterval}, nil
+				return reconcile.Result{RequeueAfter: status.DeletionRequeueInterval}, nil
 			}
 		}
 
-		return lifecycle.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal release", release)
+		return status.AwaitDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal release", release)
 	}
 
 	chart, err := r.deps.Charts.Cleanup(ctx, names)
@@ -516,7 +516,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 		return reconcile.Result{}, err
 	}
 	if chart != nil {
-		return lifecycle.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal chart", chart)
+		return status.AwaitDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal chart", chart)
 	}
 
 	ociRepo, err := r.deps.OCIRepositories.Remove(ctx, names)
@@ -524,7 +524,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 		return reconcile.Result{}, err
 	}
 	if ociRepo != nil {
-		return lifecycle.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal repository", ociRepo)
+		return status.AwaitDeletion(ctx, r.deps.Status.MarkUninstallPending, rel.Object(), "internal repository", ociRepo)
 	}
 
 	// The identity goes last: helm-controller uninstalls as that account.
@@ -536,7 +536,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, rel contract.Release) 
 	}
 	if identity != nil {
 		// The identity objects carry no ownerReference, so nothing would collect one left behind.
-		return lifecycle.AwaitInternalResourceDeletion(ctx, r.deps.Status.MarkDeletionPending, rel.Object(), "release identity", identity)
+		return status.AwaitDeletion(ctx, r.deps.Status.MarkDeletionPending, rel.Object(), "release identity", identity)
 	}
 
 	// Released only once every downstream resource is gone, and every pair, not just the current.
