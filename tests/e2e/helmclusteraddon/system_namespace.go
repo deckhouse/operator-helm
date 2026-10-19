@@ -78,6 +78,7 @@ var _ = Describe("HelmClusterAddon system namespace restriction", Ordered, func(
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("system namespace"))
 		},
+		Entry("default", "default"),
 		Entry("kube-system", "kube-system"),
 		Entry("kube-public", "kube-public"),
 		Entry("kube-node-lease", "kube-node-lease"),
@@ -144,6 +145,7 @@ var _ = Describe("HelmClusterAddon system namespace restriction", Ordered, func(
 			Expect(err).NotTo(HaveOccurred())
 			Expect(stored.Spec.Namespace).To(Equal(f.NamespaceName()))
 		},
+		Entry("default", "default"),
 		Entry("kube-system", "kube-system"),
 		Entry("kube-public", "kube-public"),
 		Entry("kube-node-lease", "kube-node-lease"),

@@ -67,6 +67,7 @@ var _ = Describe("HelmApplication system namespace restriction", Ordered, func()
 			Expect(err).To(HaveOccurred(), "an application in %q must be rejected", namespace)
 			Expect(err.Error()).To(ContainSubstring("system namespace"))
 		},
+		Entry("default", "default"),
 		Entry("kube-system", "kube-system"),
 		Entry("kube-public", "kube-public"),
 		Entry("kube-node-lease", "kube-node-lease"),

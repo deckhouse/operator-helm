@@ -25,7 +25,7 @@ import (
 func IsSystemNamespace(namespace string) bool {
 	// The kube- prefix as a whole is not rejected: that would strand addons already installed under it.
 	switch namespace {
-	case "kube-system", "kube-node-lease", "kube-public":
+	case "default", "kube-system", "kube-node-lease", "kube-public":
 		return true
 	}
 
