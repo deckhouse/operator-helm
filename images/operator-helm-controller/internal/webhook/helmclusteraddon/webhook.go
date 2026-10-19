@@ -20,9 +20,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 
-	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -55,10 +53,6 @@ type HelmClusterAddonWebhookValidator struct {
 }
 
 func (v *HelmClusterAddonWebhookValidator) ValidateCreate(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
-	if err := validateNameFitsTheLabel(addon); err != nil {
-		return nil, err
-	}
-
 	if err := validateNotSystemNamespace(addon); err != nil {
 		return nil, err
 	}
@@ -92,24 +86,6 @@ func (v *HelmClusterAddonWebhookValidator) ValidateDelete(_ context.Context, add
 	}
 
 	return nil, nil
-}
-
-// validateNameFitsTheLabel rejects a name that is not a valid label value, since every
-// internal object derived from an addon repeats it in the source-name label.
-//
-// CREATE only, and deliberately not a CEL rule: a rule on the object runs on every write, so an
-// addon that already carries a longer name could not update its status nor shed its finalizer.
-func validateNameFitsTheLabel(addon *helmv1alpha1.HelmClusterAddon) error {
-	errs := validation.IsValidLabelValue(addon.Name)
-	if len(errs) == 0 {
-		return nil
-	}
-
-	return fmt.Errorf(
-		"helmclusteraddon/%s cannot be created: its name is carried as the value of the %s label "+
-			"on every internal object derived from it, and %s",
-		addon.Name, helmv1alpha1.HelmClusterAddonLabelSourceName, strings.Join(errs, "; "),
-	)
 }
 
 func validateNotSystemNamespace(addon *helmv1alpha1.HelmClusterAddon) error {

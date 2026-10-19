@@ -107,44 +107,6 @@ func requestBy(username string) context.Context {
 	})
 }
 
-func TestValidateCreateRejectsANameTooLongForTheSourceLabel(t *testing.T) {
-	tests := []struct {
-		name      string
-		addonName string
-		wantErr   bool
-	}{
-		{name: "at the limit", addonName: strings.Repeat("a", 63), wantErr: false},
-		{name: "one over the limit", addonName: strings.Repeat("a", 64), wantErr: true},
-		{name: "far over the limit", addonName: strings.Repeat("a", 200), wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			v := newValidator(t)
-
-			_, err := v.ValidateCreate(context.Background(), addonFixture(tt.addonName))
-			if tt.wantErr && err == nil {
-				t.Fatalf("a %d-character name must be rejected", len(tt.addonName))
-			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("a %d-character name must be allowed, got %v", len(tt.addonName), err)
-			}
-		})
-	}
-}
-
-func TestValidateCreateExplainsWhyTheNameIsBounded(t *testing.T) {
-	v := newValidator(t)
-
-	_, err := v.ValidateCreate(context.Background(), addonFixture(strings.Repeat("a", 64)))
-	if err == nil {
-		t.Fatal("an over-long name must be rejected")
-	}
-	if !strings.Contains(err.Error(), helmv1alpha1.HelmClusterAddonLabelSourceName) {
-		t.Fatalf("the error must name the label that bounds the name, got %v", err)
-	}
-}
-
 func TestValidateUpdateAllowsAnExistingOverlongName(t *testing.T) {
 	tests := []struct {
 		name   string
