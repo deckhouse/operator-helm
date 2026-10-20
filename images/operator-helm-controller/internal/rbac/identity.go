@@ -219,7 +219,8 @@ func (s *Identity) ensureServiceAccount(ctx context.Context, rel contract.Releas
 // applicationRBACLabels mark every role binding we own.
 func applicationRBACLabels() map[string]string {
 	return map[string]string{
-		helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue,
+		helmv1alpha1.LabelManagedBy:         helmv1alpha1.LabelManagedByValue,
+		helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
 	}
 }
 
