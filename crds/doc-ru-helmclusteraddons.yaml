@@ -15,7 +15,7 @@ spec:
           description: |-
             HelmClusterAddon описывает Helm-релиз, управляемый на уровне кластера.
 
-            Helm-чарт может содержать CRD и другие cluster-wide-ресурсы, поэтому для создания HelmClusterAddon требуются права `ClusterAdmin`.
+            Helm-чарт может содержать CRD и другие cluster-wide-ресурсы, поэтому для создания HelmClusterAddon требуются права `SuperAdmin`.
             Для одного Helm-чарта из определённого репозитория в кластере может существовать только один ресурс HelmClusterAddon.
           properties:
             spec:

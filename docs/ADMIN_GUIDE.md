@@ -4,7 +4,7 @@ description: "Managing the cluster-wide resources of the operator-helm module: r
 weight: 40
 ---
 
-This guide describes how to work with the `operator-helm` module using cluster-wide resources. Working with these custom resources requires permissions no lower than the [`ClusterAdmin`](/modules/user-authz/#current-role-based-model) role.
+This guide describes how to work with the `operator-helm` module using cluster-wide resources. Working with these custom resources requires permissions no lower than the [`SuperAdmin`](/modules/user-authz/#current-role-based-model) role.
 
 ## Adding an addon repository
 

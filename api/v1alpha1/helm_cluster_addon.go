@@ -34,7 +34,7 @@ const (
 
 // HelmClusterAddon describes a Helm release managed at the cluster level.
 //
-// The Helm chart may contain CRDs and other cluster-wide resources, so `ClusterAdmin` permissions are required to create a HelmClusterAddon.
+// The Helm chart may contain CRDs and other cluster-wide resources, so `SuperAdmin` permissions are required to create a HelmClusterAddon.
 // Only one HelmClusterAddon resource can exist in the cluster for a given Helm chart from a specific repository.
 //
 // +kubebuilder:object:root=true
