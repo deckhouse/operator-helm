@@ -2,16 +2,14 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: d8:namespace-capability:{{ .Chart.Name }}:user
+  name: d8:namespace-capability:{{ .Chart.Name }}:view_resources
   annotations:
-    en.meta.deckhouse.io/title: "Module {{ .Chart.Name }}: view"
-    ru.meta.deckhouse.io/title: "Модуль {{ .Chart.Name }}: просмотр"
+    en.meta.deckhouse.io/title: "Module {{ .Chart.Name }}: view resources"
+    ru.meta.deckhouse.io/title: "Модуль {{ .Chart.Name }}: просмотр ресурсов"
     en.meta.deckhouse.io/description: "Read-only access to {{ .Chart.Name }} applications and their chart catalog in a namespace."
     ru.meta.deckhouse.io/description: "Доступ только на чтение к приложениям модуля {{ .Chart.Name }} и их каталогу чартов в пространстве имён."
-  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "namespace-capability.%s.user" .Chart.Name) "rbac.deckhouse.io/scope" "namespace" "rbac.deckhouse.io/aggregate-to-namespace-as" "user")) | nindent 2 }}
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "namespace-capability.%s.view_resources" .Chart.Name) "rbac.deckhouse.io/scope" "namespace" "rbac.deckhouse.io/aggregate-to-namespace-as" "user")) | nindent 2 }}
 rules:
-# Grants no access to helmapplicationrepositories; reading one stays with the admin
-# capability.
 - apiGroups:
   - helm.deckhouse.io
   resources:
