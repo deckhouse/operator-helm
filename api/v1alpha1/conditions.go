@@ -140,6 +140,9 @@ const (
 	// ReasonReleaseFailed marks a release that is not deployed: the internal HelmRelease
 	// reports a failed deployment, or it could not be created or updated at all.
 	ReasonReleaseFailed = "ReleaseFailed"
+	// ReasonAccessDenied marks a release whose ServiceAccount the API server refused:
+	// the chart asks for an object the identity has no rights on, which no retry changes.
+	ReasonAccessDenied = "AccessDenied"
 	// ReasonTestFailed marks a release that was deployed but whose Helm tests did
 	// not pass.
 	ReasonTestFailed = "TestFailed"

@@ -293,3 +293,91 @@ func TestReduceInternalConditionsLeavesAnOrdinaryFailureRetriable(t *testing.T) 
 		t.Fatalf("reason = %q, want %q", state.Reason, helmv1alpha1.ReasonReleaseFailed)
 	}
 }
+
+// The message helm-controller reports while it keeps retrying a release whose own
+// ServiceAccount the API server refuses.
+const forbiddenCause = "Helm install failed for release delivery/hap-test-e0c69c93ec8e with chart " +
+	"crd-test@0.1.0+94f7c2be863c: failed to apply CustomResourceDefinitions: failed to create " +
+	"CustomResourceDefinition widgets.example.flant.com: server-side apply failed for object " +
+	"/widgets.example.flant.com apiextensions.k8s.io/v1, Kind=CustomResourceDefinition: " +
+	"customresourcedefinitions.apiextensions.k8s.io \"widgets.example.flant.com\" is forbidden: " +
+	"User \"system:serviceaccount:d8-operator-helm:hap-delivery-test-72660c37044f\" cannot patch " +
+	"resource \"customresourcedefinitions\" in API group \"apiextensions.k8s.io\" at the cluster scope"
+
+func TestReduceInternalConditionsStallsOnATerminalMessageUnderReconciling(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Progressing",
+			Message:            "Running 'install' action with timeout of 5m0s",
+			ObservedGeneration: 1,
+		},
+		{
+			Type:               helmv1alpha1.ConditionTypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "InstallFailed",
+			Message:            forbiddenCause,
+			ObservedGeneration: 1,
+		},
+		{
+			Type:               "Released",
+			Status:             metav1.ConditionFalse,
+			Reason:             "InstallFailed",
+			Message:            forbiddenCause,
+			ObservedGeneration: 1,
+		},
+	}, 1, helmReleaseErrorRules)
+
+	if !state.Observed || !state.Stalled || state.Status != metav1.ConditionFalse {
+		t.Fatalf("state = %+v, want an observed, stalled failure rather than work in flight", state)
+	}
+	if state.Reason != helmv1alpha1.ReasonAccessDenied {
+		t.Fatalf("reason = %q, want %q", state.Reason, helmv1alpha1.ReasonAccessDenied)
+	}
+	if state.Message != forbiddenCause {
+		t.Fatalf("message = %q, want the fault the internal object reported", state.Message)
+	}
+}
+
+func TestReduceInternalConditionsIgnoresATerminalMessageInAnotherCondition(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Progressing",
+			Message:            forbiddenCause,
+			ObservedGeneration: 1,
+		},
+	}, 1, helmReleaseErrorRules)
+
+	if state.Stalled {
+		t.Fatalf("state = %+v, want no rule to match a condition type it does not name", state)
+	}
+}
+
+func TestReduceInternalConditionsIgnoresATerminalMessageFromAnOlderGeneration(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Progressing",
+			Message:            "Running 'install' action with timeout of 5m0s",
+			ObservedGeneration: 2,
+		},
+		{
+			Type:               helmv1alpha1.ConditionTypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "InstallFailed",
+			Message:            forbiddenCause,
+			ObservedGeneration: 1,
+		},
+	}, 2, helmReleaseErrorRules)
+
+	if state.Stalled {
+		t.Fatalf("state = %+v, want the refusal of the previous generation ignored", state)
+	}
+	if state.Observed || state.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("state = %+v, want work in flight", state)
+	}
+}

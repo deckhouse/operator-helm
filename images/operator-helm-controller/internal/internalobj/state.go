@@ -17,6 +17,8 @@ limitations under the License.
 package internalobj
 
 import (
+	"regexp"
+
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -49,11 +51,33 @@ type ErrorConditionRule struct {
 	Reason        string
 }
 
+// TerminalMessageRule recognises, by the message it is reported with, a fault no retry
+// resolves while the internal object keeps retrying it and calling itself progressing.
+// ConditionTypes are the conditions the message may be found in.
+type TerminalMessageRule struct {
+	ConditionTypes []string
+	Pattern        *regexp.Regexp
+	Reason         string
+}
+
+var terminalMessageRules = []TerminalMessageRule{
+	{
+		ConditionTypes: []string{helmv1alpha1.ConditionTypeReady, "Released", "Remediated"},
+		Pattern:        regexp.MustCompile(`is forbidden: User "[^"]+" cannot [a-z]+ resource "[^"]+" in API group "[^"]*"`),
+		Reason:         helmv1alpha1.ReasonAccessDenied,
+	},
+}
+
 func reduceInternalConditions(
 	conditions []metav1.Condition,
 	generation int64,
 	errorRules []ErrorConditionRule,
 ) InternalObjectState {
+	// Checked first: such a fault is reported under a Reconciling the object never lifts.
+	if state, ok := matchTerminalMessage(conditions, generation); ok {
+		return state
+	}
+
 	stalled := currentCondition(conditions, helmv1alpha1.ConditionTypeStalled, generation)
 	gaveUp := stalled != nil && stalled.Status == metav1.ConditionTrue
 
@@ -105,6 +129,27 @@ func reduceInternalConditions(
 		Reason:   ready.Reason,
 		Message:  ready.Message,
 	}
+}
+
+func matchTerminalMessage(conditions []metav1.Condition, generation int64) (InternalObjectState, bool) {
+	for _, rule := range terminalMessageRules {
+		for _, conditionType := range rule.ConditionTypes {
+			cond := currentCondition(conditions, conditionType, generation)
+			if cond == nil || !rule.Pattern.MatchString(cond.Message) {
+				continue
+			}
+
+			return InternalObjectState{
+				Observed: true,
+				Stalled:  true,
+				Status:   metav1.ConditionFalse,
+				Reason:   rule.Reason,
+				Message:  cond.Message,
+			}, true
+		}
+	}
+
+	return InternalObjectState{}, false
 }
 
 func conditionObserved(conditions []metav1.Condition, conditionType string, generation int64) (*metav1.Condition, bool) {
