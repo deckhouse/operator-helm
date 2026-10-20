@@ -101,10 +101,8 @@ spec:
                 - NoResourceReconciliation
                 type: string
               namespace:
-                default: default
                 description: Namespace to deploy cluster addon release
                 maxLength: 63
-                minLength: 3
                 type: string
               values:
                 description: Values holds the values for this HelmClusterAddon release.
