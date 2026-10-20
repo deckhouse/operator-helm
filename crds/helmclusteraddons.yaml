@@ -107,7 +107,6 @@ spec:
                 - NoResourceReconciliation
                 type: string
               namespace:
-                default: default
                 description: Namespace to deploy a cluster addon release into.
                 maxLength: 63
                 minLength: 1
