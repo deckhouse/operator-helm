@@ -89,7 +89,7 @@ func (v *HelmClusterAddonWebhookValidator) ValidateDelete(_ context.Context, add
 }
 
 func validateNotSystemNamespace(addon *helmv1alpha1.HelmClusterAddon) error {
-	if utils.IsSystemNamespace(addon.Spec.Namespace) {
+	if utils.IsSystemNamespace(addon.Spec.Namespace) && addon.GetDeletionTimestamp().IsZero() {
 		return fmt.Errorf("helmclusteraddon/%s cannot use system namespace %s as target namespace", addon.Name, addon.Spec.Namespace)
 	}
 
