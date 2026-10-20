@@ -66,6 +66,11 @@ var terminalMessageRules = []TerminalMessageRule{
 		Pattern:        regexp.MustCompile(`is forbidden: User "[^"]+" cannot [a-z]+ resource "[^"]+" in API group "[^"]*"`),
 		Reason:         helmv1alpha1.ReasonAccessDenied,
 	},
+	{
+		ConditionTypes: []string{helmv1alpha1.ConditionTypeReady, "Released", "Remediated"},
+		Pattern:        regexp.MustCompile(`error while running post render on files`),
+		Reason:         helmv1alpha1.ReasonRenderFailed,
+	},
 }
 
 func reduceInternalConditions(

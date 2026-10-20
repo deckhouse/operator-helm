@@ -381,3 +381,43 @@ func TestReduceInternalConditionsIgnoresATerminalMessageFromAnOlderGeneration(t 
 		t.Fatalf("state = %+v, want work in flight", state)
 	}
 }
+
+func TestReduceInternalConditionsStallsOnAChartThatDoesNotRender(t *testing.T) {
+	const cause = "Helm install failed for release demo/html with chart example-html@21.3.278: " +
+		"error while running post render on files: map[string]interface {}(nil): yaml: unmarshal errors:\n" +
+		"  line 21: mapping key \"app.startx.fr/component\" already defined at line 13"
+
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Progressing",
+			Message:            "Running 'install' action with timeout of 5m0s",
+			ObservedGeneration: 1,
+		},
+		{
+			Type:               helmv1alpha1.ConditionTypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "InstallFailed",
+			Message:            cause,
+			ObservedGeneration: 1,
+		},
+		{
+			Type:               "Released",
+			Status:             metav1.ConditionFalse,
+			Reason:             "InstallFailed",
+			Message:            cause,
+			ObservedGeneration: 1,
+		},
+	}, 1, helmReleaseErrorRules)
+
+	if !state.Observed || !state.Stalled || state.Status != metav1.ConditionFalse {
+		t.Fatalf("state = %+v, want an observed, stalled failure rather than work in flight", state)
+	}
+	if state.Reason != helmv1alpha1.ReasonRenderFailed {
+		t.Fatalf("reason = %q, want %q", state.Reason, helmv1alpha1.ReasonRenderFailed)
+	}
+	if state.Message != cause {
+		t.Fatalf("message = %q, want the fault the internal object reported", state.Message)
+	}
+}

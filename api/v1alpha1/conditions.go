@@ -143,6 +143,9 @@ const (
 	// ReasonAccessDenied marks a release whose ServiceAccount the API server refused:
 	// the chart asks for an object the identity has no rights on, which no retry changes.
 	ReasonAccessDenied = "AccessDenied"
+	// ReasonRenderFailed marks a release whose chart did not render into applicable
+	// manifests, which only an edit to the chart or to its values changes.
+	ReasonRenderFailed = "RenderFailed"
 	// ReasonTestFailed marks a release that was deployed but whose Helm tests did
 	// not pass.
 	ReasonTestFailed = "TestFailed"
