@@ -158,33 +158,33 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		}
 	})
 
-	It("should carry the module label on the binding", func() {
+	It("should carry the module labels on the binding", func() {
 		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 
 		binding, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 			Get(context.Background(), saName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(binding.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelManagedBy, apiv1alpha1.LabelManagedByValue))
+		Expect(binding.Labels).To(HaveKeyWithValue(
+			apiv1alpha1.LabelDeckhouseHeritage, apiv1alpha1.LabelDeckhouseHeritageValue))
 	})
 
-	It("should recreate a deleted binding on its own", func() {
+	// The heritage label the binding carries puts it behind the platform's
+	// label-objects admission policy, so no user — not even a cluster
+	// administrator — can delete or edit it; the reconciler is the only writer.
+	It("should let no user delete the binding", func() {
 		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
 
-		By("Deleting the binding")
-		Expect(f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
-			Delete(context.Background(), saName, metav1.DeleteOptions{})).To(Succeed())
+		err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
+			Delete(context.Background(), saName, metav1.DeleteOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "deleting the binding: %v", err)
 
-		By("It must come back with the rights the release is applied with")
-		Eventually(func(g Gomega) {
+		Consistently(func(g Gomega) {
 			binding, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 				Get(context.Background(), saName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(binding.RoleRef.Kind).To(Equal("ClusterRole"))
 			g.Expect(binding.RoleRef.Name).To(Equal(appClusterRoleName))
-			g.Expect(binding.Subjects).To(HaveLen(1))
-			g.Expect(binding.Subjects[0].Name).To(Equal(saName))
-			g.Expect(binding.Subjects[0].Namespace).To(Equal(moduleNS))
-		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+		}).WithTimeout(framework.ShortTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
 	})
 
 	It("should keep the application identity inside the limits of its namespace", func() {
