@@ -135,8 +135,6 @@ func applyHelmRepositorySpec(repo contract.Repository, existing *sourcev1.HelmRe
 
 	existing.Spec.URL = repo.URL()
 	existing.Spec.Interval = metav1.Duration{Duration: InternalRepositoryInterval}
-	// Held at false: flux reads this field for an oci repository only, and an oci url never
-	// reaches this object. Reset rather than left alone, to clear what an earlier pass wrote.
 	existing.Spec.Insecure = false
 	existing.Spec.CertSecretRef = nil
 	existing.Spec.SecretRef = nil

@@ -72,8 +72,6 @@ func (c *helmRepositoryClient) FetchCharts(ctx context.Context, url string, conf
 	var indexFile HelmRepositoryIndex
 
 	httpClient := http.DefaultClient
-	// Insecure is left out on purpose: the index is served over http(s), and flux verifies the
-	// certificate of every chart this index points to anyway, bar an oci one.
 	if config != nil && config.CACertificate != "" {
 		tlsTransport, err := BuildTLSTransport(&RepoConfig{CACertificate: config.CACertificate})
 		if err != nil {
