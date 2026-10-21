@@ -21,13 +21,18 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	operatorhelmclient "github.com/deckhouse/operator-helm/api/client/generated/clientset/versioned"
 	"github.com/deckhouse/operator-helm/api/naming"
 	apiv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/controller"
@@ -193,9 +198,7 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		ctx := context.Background()
 
 		By("Acting as the identity the release is applied with")
-		cfg := framework.GetClients().RestConfig()
-		cfg.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + moduleNS + ":" + saName}
-		asApp, err := kubernetes.NewForConfig(cfg)
+		asApp, err := kubernetes.NewForConfig(applicationRestConfig(saName))
 		Expect(err).NotTo(HaveOccurred())
 
 		By("It holds the namespace: a Role of its own and a binding to it go through")
@@ -222,22 +225,106 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "patching the namespace: %v", err)
 		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
 
+		By("So are the kinds that decide the limits of the namespace from inside")
+		daemon := &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-daemon", Namespace: ns},
+			Spec: appsv1.DaemonSetSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "e2e"}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "e2e"}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "pause", Image: "registry.k8s.io/pause:3.9"}}},
+				},
+			},
+		}
+		_, err = asApp.AppsV1().DaemonSets(ns).Create(ctx, daemon, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a daemon set: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
+
+		policy := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-netpol", Namespace: ns},
+			Spec:       networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}},
+		}
+		_, err = asApp.NetworkingV1().NetworkPolicies(ns).Create(ctx, policy, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a network policy: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
+
+		quota := &corev1.ResourceQuota{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-quota", Namespace: ns},
+			Spec:       corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{"count/configmaps": resource.MustParse("100")}},
+		}
+		_, err = asApp.CoreV1().ResourceQuotas(ns).Create(ctx, quota, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a resource quota: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
+
+		limits := &corev1.LimitRange{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-limits", Namespace: ns},
+			Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{
+				Type:           corev1.LimitTypeContainer,
+				DefaultRequest: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1m")},
+			}}},
+		}
+		_, err = asApp.CoreV1().LimitRanges(ns).Create(ctx, limits, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a limit range: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
+
+		By("Nor may it edit or remove one the namespace already carries")
+		_, err = f.KubeClient().CoreV1().ResourceQuotas(ns).Create(ctx, quota, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred(), "the test itself, as an administrator, seeds the quota")
+		DeferCleanup(func() {
+			_ = f.KubeClient().CoreV1().ResourceQuotas(ns).Delete(context.Background(), quota.Name, metav1.DeleteOptions{})
+		})
+
+		_, err = asApp.CoreV1().ResourceQuotas(ns).Patch(ctx, quota.Name, types.MergePatchType,
+			[]byte(`{"spec":{"hard":{"count/configmaps":"1"}}}`), metav1.PatchOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "patching the quota: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
+
+		err = asApp.CoreV1().ResourceQuotas(ns).Delete(ctx, quota.Name, metav1.DeleteOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "deleting the quota: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
+
 		By("A Role granting a protected kind, in any spelling, is refused")
-		for _, rule := range []rbacv1.PolicyRule{
-			{APIGroups: []string{""}, Resources: []string{"resourcequotas"}, Verbs: []string{"update"}},
-			{APIGroups: []string{""}, Resources: []string{"*"}, Verbs: []string{"update"}},
-			{APIGroups: []string{""}, Resources: []string{"*/status"}, Verbs: []string{"update"}},
-			{APIGroups: []string{""}, Resources: []string{"namespaces/finalize"}, Verbs: []string{"update"}},
-			{APIGroups: []string{"deckhouse.io"}, Resources: []string{"projectnamespaces"}, Verbs: []string{"delete"}},
+		for _, rules := range [][]rbacv1.PolicyRule{
+			{{APIGroups: []string{""}, Resources: []string{"resourcequotas"}, Verbs: []string{"update"}}},
+			{{APIGroups: []string{""}, Resources: []string{"*"}, Verbs: []string{"update"}}},
+			{{APIGroups: []string{""}, Resources: []string{"*/status"}, Verbs: []string{"update"}}},
+			{{APIGroups: []string{""}, Resources: []string{"namespaces/finalize"}, Verbs: []string{"update"}}},
+			{{APIGroups: []string{"deckhouse.io"}, Resources: []string{"projectnamespaces"}, Verbs: []string{"delete"}}},
+			{{APIGroups: []string{"apps"}, Resources: []string{"daemonsets"}, Verbs: []string{"create"}}},
+			{{APIGroups: []string{"extensions"}, Resources: []string{"daemonsets"}, Verbs: []string{"create"}}},
+			{{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}, Verbs: []string{"create"}}},
+			// Every kind at once, the spelling a chart reaches for first. The verb is one
+			// the identity holds: a verb it does not reach the API server's escalation
+			// check instead, which is the case below.
+			{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"create"}}},
+			// The group spelled as a wildcard rather than by name.
+			{{APIGroups: []string{"*"}, Resources: []string{"limitranges"}, Verbs: []string{"deletecollection"}}},
+			// The resource spelled as a wildcard inside a protected group.
+			{{APIGroups: []string{"apps"}, Resources: []string{"*"}, Verbs: []string{"patch"}}},
+			// A subresource of a protected kind.
+			{{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies/status"}, Verbs: []string{"update"}}},
+			// The protected kind carried by the cross product of a single rule.
+			{{APIGroups: []string{"", "apps"}, Resources: []string{"configmaps", "daemonsets"}, Verbs: []string{"get", "create"}}},
+			// And hidden behind a harmless rule that comes first.
+			{
+				{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}},
+				{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}, Verbs: []string{"patch"}},
+			},
 		} {
 			escalation := &rbacv1.Role{
 				ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-escalation", Namespace: ns},
-				Rules:      []rbacv1.PolicyRule{rule},
+				Rules:      rules,
 			}
 			_, err = asApp.RbacV1().Roles(ns).Create(ctx, escalation, metav1.CreateOptions{})
-			Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a role on %v: %v", rule.Resources, err)
-			Expect(err.Error()).To(ContainSubstring("may not grant write access"), "resources %v", rule.Resources)
+			Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a role on %v: %v", rules, err)
+			Expect(err.Error()).To(ContainSubstring("may not grant write access"), "rules %v", rules)
 		}
+
+		By("Nor may an existing Role of its own grow one later")
+		_, err = asApp.RbacV1().Roles(ns).Patch(ctx, reader.Name, types.MergePatchType,
+			[]byte(`{"rules":[{"apiGroups":[""],"resources":["resourcequotas"],"verbs":["update"]}]}`), metav1.PatchOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "widening its own role: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may not grant write access"))
 
 		By("A Role with a verb the identity does not hold is refused by the API server")
 		wild := &rbacv1.Role{
@@ -257,10 +344,91 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "binding the application ClusterRole: %v", err)
 		Expect(err.Error()).To(ContainSubstring("may reference only a Role"))
 
+		// A ClusterRole granting strictly less than the identity holds here: the API
+		// server's escalation check lets it by, so the policy is what refuses it.
+		harmless := &rbacv1.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-bindable"},
+			Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}},
+		}
+		_, err = f.KubeClient().RbacV1().ClusterRoles().Create(ctx, harmless, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred(), "the test itself, as an administrator, seeds the cluster role")
+		DeferCleanup(func() {
+			_ = f.KubeClient().RbacV1().ClusterRoles().Delete(context.Background(), harmless.Name, metav1.DeleteOptions{})
+		})
+
+		toHarmless := &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-escalation-harmless", Namespace: ns},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: harmless.Name},
+			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "default", Namespace: ns}},
+		}
+		_, err = asApp.RbacV1().RoleBindings(ns).Create(ctx, toHarmless, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "binding a harmless ClusterRole: %v", err)
+		Expect(err.Error()).To(ContainSubstring("may reference only a Role"))
+
 		By("Nor may it add a subject to the binding the controller owns")
 		_, err = asApp.RbacV1().RoleBindings(ns).Patch(ctx, saName, types.JSONPatchType,
 			[]byte(`[{"op":"add","path":"/subjects/-","value":{"kind":"ServiceAccount","name":"default","namespace":"`+ns+`"}}]`),
 			metav1.PatchOptions{})
 		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "widening the controller's binding: %v", err)
 	})
+
+	It("should reach nothing outside the namespace it was granted", func() {
+		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
+		ctx := context.Background()
+
+		cfg := applicationRestConfig(saName)
+		asApp, err := kubernetes.NewForConfig(cfg)
+		Expect(err).NotTo(HaveOccurred())
+		asAppOperator, err := operatorhelmclient.NewForConfig(cfg)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Cluster-scoped objects are out of reach: the rights arrive by a RoleBinding")
+		_, err = asApp.CoreV1().Namespaces().Create(ctx,
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-sibling"}}, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a namespace: %v", err)
+
+		_, err = asApp.RbacV1().ClusterRoles().Create(ctx, &rbacv1.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-cluster-role"},
+			Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}}},
+		}, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a cluster role: %v", err)
+
+		_, err = asApp.RbacV1().ClusterRoleBindings().Create(ctx, &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-cluster-binding"},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: appClusterRoleName},
+			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: saName, Namespace: moduleNS}},
+		}, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a cluster role binding: %v", err)
+
+		_, err = asApp.CoreV1().PersistentVolumes().Create(ctx,
+			&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-volume"}}, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a persistent volume: %v", err)
+
+		_, err = asAppOperator.HelmV1alpha1().HelmClusterApplicationCharts().Create(ctx,
+			&apiv1alpha1.HelmClusterApplicationChart{ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-cluster-chart"}},
+			metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "forging a cluster chart: %v", err)
+
+		By("The policies that hold it there are out of reach too")
+		err = asApp.AdmissionregistrationV1().ValidatingAdmissionPolicies().
+			Delete(ctx, "operator-helm-application-protected-kinds-policy", metav1.DeleteOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "deleting the policy: %v", err)
+
+		By("And so is every other namespace, the module's own included")
+		_, err = asApp.CoreV1().ConfigMaps(moduleNS).Create(ctx,
+			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-foothold", Namespace: moduleNS}},
+			metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "writing into the module namespace: %v", err)
+
+		_, err = asApp.CoreV1().Secrets(moduleNS).List(ctx, metav1.ListOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "reading the module's secrets: %v", err)
+	})
 })
+
+// applicationRestConfig returns a configuration acting as the identity a release is applied
+// with, so a test may try from the outside what a chart could try from the inside.
+func applicationRestConfig(saName string) *rest.Config {
+	cfg := framework.GetClients().RestConfig()
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + moduleNS + ":" + saName}
+	return cfg
+}

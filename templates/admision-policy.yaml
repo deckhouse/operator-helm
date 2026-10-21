@@ -72,7 +72,8 @@ spec:
     objectSelector: {}
 {{- if semverCompare ">=1.28.0" $kubeVersion }}
 {{- $applicationSubject := printf "system:serviceaccount:d8-%s:hap-" .Chart.Name }}
-{{- $protected := list "namespaces" "resourcequotas" "limitranges" }}
+{{- $protected := dict "" (list "namespaces" "resourcequotas" "limitranges") "apps" (list "daemonsets") "extensions" (list "daemonsets") "networking.k8s.io" (list "networkpolicies") "deckhouse.io" (list "projectnamespaces") }}
+{{- $subresources := list "status" "finalize" }}
 {{- $mutating := list "*" "create" "update" "patch" "delete" "deletecollection" }}
 ---
 apiVersion: {{ $apiVersion }}
@@ -84,26 +85,24 @@ spec:
   failurePolicy: Fail
   matchConstraints:
     resourceRules:
-      - apiGroups: [""]
-        apiVersions: ["v1"]
-        operations: ["CREATE", "UPDATE", "DELETE"]
-        resources:
-          {{- range $protected }}
-          - {{ . | quote }}
-          {{- end }}
-          - "namespaces/status"
-          - "namespaces/finalize"
-          - "resourcequotas/status"
-      - apiGroups: ["deckhouse.io"]
+      {{- range $group, $resources := $protected }}
+      - apiGroups: [{{ $group | quote }}]
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE", "DELETE"]
-        resources: ["projectnamespaces", "projectnamespaces/status"]
+        resources:
+          {{- range $resource := $resources }}
+          - {{ $resource | quote }}
+          {{- range $sub := $subresources }}
+          - {{ printf "%s/%s" $resource $sub | quote }}
+          {{- end }}
+          {{- end }}
+      {{- end }}
   matchConditions:
     - name: application-identity
       expression: 'request.userInfo.username.startsWith("{{ $applicationSubject }}")'
   validations:
     - expression: "false"
-      message: "An application may not modify its namespace, resource quotas, limit ranges or project namespaces."
+      message: "An application may not modify its namespace, resource quotas, limit ranges, daemon sets, network policies or project namespaces."
       reason: Forbidden
 ---
 apiVersion: {{ $apiVersion }}
@@ -127,11 +126,13 @@ spec:
         !has(object.rules) || !object.rules.exists(r,
           has(r.apiGroups) && has(r.resources) &&
           r.verbs.exists(v, v in {{ $mutating | toJson }}) &&
-          ((r.apiGroups.exists(g, g == "*" || g == "") &&
-            r.resources.exists(res, res == "*" || res.startsWith("*/") || res.split("/")[0] in {{ $protected | toJson }})) ||
-           (r.apiGroups.exists(g, g == "*" || g == "deckhouse.io") &&
-            r.resources.exists(res, res == "*" || res.startsWith("*/") || res.split("/")[0] == "projectnamespaces"))))
-      message: "A Role written by an application may not grant write access to namespaces, resource quotas, limit ranges or project namespaces."
+          (
+          {{- range $i, $group := keys $protected | sortAlpha }}
+          {{ if $i }}|| {{ end }}(r.apiGroups.exists(g, g == "*" || g == {{ $group | quote }}) &&
+            r.resources.exists(res, res == "*" || res.startsWith("*/") || res.split("/")[0] in {{ index $protected $group | toJson }}))
+          {{- end }}
+          ))
+      message: "A Role written by an application may not grant write access to namespaces, resource quotas, limit ranges, daemon sets, network policies or project namespaces."
       reason: Forbidden
 ---
 apiVersion: {{ $apiVersion }}
