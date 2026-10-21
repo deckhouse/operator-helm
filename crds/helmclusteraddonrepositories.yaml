@@ -89,8 +89,8 @@ spec:
                 type: string
               insecureSkipVerify:
                 description: |-
-                  InsecureSkipVerify disable TLS certificate verification. It applies to the catalog fetch and,
-                  for an OCI registry, to the chart pull; a self-signed HTTPS Helm repository needs caCertificate.
+                  InsecureSkipVerify disable TLS certificate verification. It applies to OCI registry only;
+                  a self-signed HTTPS Helm repository needs caCertificate.
                 type: boolean
               url:
                 description: URL of the Helm repository. Supports http(s):// and oci://

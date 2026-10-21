@@ -358,3 +358,16 @@ func TestFetchChartsThrottleIsRetriedNotDecoded(t *testing.T) {
 		t.Fatalf("expected the status code in the reported cause, got %v", err)
 	}
 }
+
+func TestFetchChartsVerifiesTheIndexCertificateDespiteInsecure(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(testIndex))
+	}))
+	defer srv.Close()
+
+	_, err := HelmRepositoryDefaultClient.FetchCharts(
+		context.Background(), srv.URL, &RepoConfig{Insecure: true}, FetchOptions{})
+	if err == nil {
+		t.Fatal("expected the self-signed index certificate to be rejected: insecureSkipVerify covers an oci pull only")
+	}
+}
