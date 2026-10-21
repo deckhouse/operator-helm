@@ -1,0 +1,6 @@
+breaking:
+  - "Do not enable module by default when using Deckhouse Platform minimal bundle. If you are using the minimal bundle, you need to explicitly enable the operator-helm module in the platform configuration"
+features: []
+fixes: []
+security: []
+chore: []

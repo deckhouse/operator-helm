@@ -3,6 +3,12 @@ title: "Release Notes"
 description: "Release notes for Deckhouse operator-helm."
 ---
 
+## v0.4.0
+
+### Breaking Changes
+
+* Do not enable module by default when using Deckhouse Platform minimal bundle. If you are using the minimal bundle, you need to explicitly enable the operator-helm module in the platform configuration
+
 ## v0.3.0
 
 ### New Features
@@ -105,4 +111,3 @@ description: "Release notes for Deckhouse operator-helm."
 ### New Features
 
 * initial release with basic capabilities
-
