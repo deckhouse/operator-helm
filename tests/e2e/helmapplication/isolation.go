@@ -28,7 +28,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -370,6 +373,48 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 			[]byte(`[{"op":"add","path":"/subjects/-","value":{"kind":"ServiceAccount","name":"default","namespace":"`+ns+`"}}]`),
 			metav1.PatchOptions{})
 		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "widening the controller's binding: %v", err)
+	})
+
+	It("should keep the application identity out of the operator's own objects", func() {
+		saName := naming.DerivedName(naming.ApplicationPrefix, apiv1alpha1.HelmApplicationKind, f.NamespaceName(), appName)
+		ns := f.NamespaceName()
+		ctx := context.Background()
+
+		cfg := applicationRestConfig(saName)
+		asAppOperator, err := operatorhelmclient.NewForConfig(cfg)
+		Expect(err).NotTo(HaveOccurred())
+		asAppDynamic, err := dynamic.NewForConfig(cfg)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("The chart catalog is written by the controllers alone")
+		chart := &apiv1alpha1.HelmApplicationChart{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-forged-chart", Namespace: ns},
+		}
+		_, err = asAppOperator.HelmV1alpha1().HelmApplicationCharts(ns).Create(ctx, chart, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "forging a chart: %v", err)
+		Expect(err.Error()).To(ContainSubstring("Operation forbidden for this user"))
+
+		By("So is the source the controllers reconcile underneath")
+		repository := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "source.internal.operator-helm.deckhouse.io/v1",
+			"kind":       "InternalNelmOperatorOCIRepository",
+			"metadata":   map[string]any{"name": "e2e-app-forged-source", "namespace": ns},
+			"spec":       map[string]any{"url": "oci://example.invalid/charts", "interval": "1h"},
+		}}
+		internalOCIRepository := schema.GroupVersionResource{
+			Group:    "source.internal.operator-helm.deckhouse.io",
+			Version:  "v1",
+			Resource: "internalnelmoperatorocirepositories",
+		}
+		_, err = asAppDynamic.Resource(internalOCIRepository).Namespace(ns).Create(ctx, repository, metav1.CreateOptions{})
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "forging a source: %v", err)
+		Expect(err.Error()).To(ContainSubstring("Operation forbidden for this user"))
+
+		By("And so is the status of the application that runs it")
+		_, err = asAppOperator.HelmV1alpha1().HelmApplications(ns).Patch(ctx, appName, types.MergePatchType,
+			[]byte(`{"status":{"observedGeneration":99}}`), metav1.PatchOptions{}, "status")
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "patching its own status: %v", err)
+		Expect(err.Error()).To(ContainSubstring("Operation forbidden for this user"))
 	})
 
 	It("should reach nothing outside the namespace it was granted", func() {

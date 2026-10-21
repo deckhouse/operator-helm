@@ -57,6 +57,7 @@ spec:
           "system:serviceaccount:d8-operator-helm:chart-values-controller",
         ]
       message: "Operation forbidden for this user."
+      reason: Forbidden
 ---
 apiVersion: {{ $apiVersion }}
 kind: ValidatingAdmissionPolicyBinding
