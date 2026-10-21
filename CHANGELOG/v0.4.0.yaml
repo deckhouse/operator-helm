@@ -1,0 +1,10 @@
+
+breaking: []
+features:
+  - "do not enable module in the minimal bundle"
+fixes:
+  - "do not enable module in the minimal bundle"
+security: []
+chore:
+  - "Revert \"fix: do not enable module in the minimal bundle\""
+
