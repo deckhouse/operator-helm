@@ -175,10 +175,10 @@ var _ = Describe("HelmClusterAddonRepository with an unreachable source", Ordere
 
 	// No AssertNoErrorsFor here on purpose: this scenario breaks the repository
 	// deliberately, so error-level log lines from the controller are expected.
-	// Dropping the assertion is not enough on its own — the log watcher
-	// accumulates errors suite-wide and never resets, so every other scenario's
-	// assertion and the suite-teardown one would fail too. The repository name is
-	// excluded in default_config.yaml; keep the two in step if it ever changes.
+	// Dropping the assertion is not enough on its own — errors left unasserted are
+	// handed to the next scenario's assertion, which would fail for them. The
+	// repository name is excluded in default_config.yaml; keep the two in step if
+	// it ever changes.
 
 	It("should stall on a missing source and recover after the url is fixed", func() {
 		repo := &apiv1alpha1.HelmClusterAddonRepository{

@@ -84,7 +84,8 @@ func StopAll() {
 	}
 }
 
-// AssertNoErrors fails the test if any controller logged errors.
+// AssertNoErrors fails the test if any controller logged errors no scenario has
+// already reported.
 func AssertNoErrors() {
 	GinkgoHelper()
 	if manager == nil {
@@ -93,7 +94,7 @@ func AssertNoErrors() {
 
 	var allErrors []LogError
 	for _, w := range manager.watchers {
-		allErrors = append(allErrors, w.getErrors()...)
+		allErrors = append(allErrors, w.takeErrors()...)
 	}
 
 	if len(allErrors) > 0 {
@@ -106,22 +107,18 @@ func AssertNoErrors() {
 	}
 }
 
-// GetErrors returns collected errors for a specific controller.
-func GetErrors(controllerName string) []LogError {
+// AssertNoErrorsFor fails the test if the named controller logged errors since the
+// previous assertion.
+func AssertNoErrorsFor(controllerName string) {
+	GinkgoHelper()
 	if manager == nil {
-		return nil
+		return
 	}
 	w, ok := manager.watchers[controllerName]
 	if !ok {
-		return nil
+		return
 	}
-	return w.getErrors()
-}
-
-// AssertNoErrorsFor fails the test if the named controller has errors.
-func AssertNoErrorsFor(controllerName string) {
-	GinkgoHelper()
-	errs := GetErrors(controllerName)
+	errs := w.takeErrors()
 	Expect(errs).To(BeEmpty(),
 		"controller %q has %d error(s) in logs:\n%v", controllerName, len(errs), errs)
 }
@@ -238,10 +235,13 @@ func (w *controllerWatcher) addError(err LogError) {
 	w.errors = append(w.errors, err)
 }
 
-func (w *controllerWatcher) getErrors() []LogError {
+// takeErrors hands over the errors collected since the previous call and forgets them,
+// so one bad line fails the scenario that produced it rather than every scenario after
+// it. A scenario that skips its assertion therefore leaves its errors to the next one.
+func (w *controllerWatcher) takeErrors() []LogError {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	copied := make([]LogError, len(w.errors))
-	copy(copied, w.errors)
-	return copied
+	taken := w.errors
+	w.errors = nil
+	return taken
 }
