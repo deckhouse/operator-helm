@@ -84,7 +84,7 @@ spec:
                       Specifies the name of the cluster-wide HelmClusterApplicationRepository custom resource
                       that contains the connection details and credentials for the repository holding the chart.
                     maxLength: 63
-                    minLength: 3
+                    minLength: 1
                     type: string
                   name:
                     description: |-
@@ -97,7 +97,7 @@ spec:
                       Specifies the name of the HelmApplicationRepository custom resource in the same namespace
                       that contains the connection details and credentials for the repository holding the chart.
                     maxLength: 63
-                    minLength: 3
+                    minLength: 1
                     type: string
                   version:
                     description: Version holds the HelmApplication chart version.

@@ -295,21 +295,9 @@ func accessFor(kind, namespace string) (access auth.Access, displayKind string, 
 	}
 }
 
-func repositoryNameMinLen(kind string) int {
-	switch strings.ToLower(kind) {
-	case string(resolver.RepositoryKindHelmApplication), string(resolver.RepositoryKindHelmClusterApplication):
-		return 3
-	default:
-		return 0
-	}
-}
-
 func validateChartValuesFields(req chartValuesRequest) error {
 	if errs := validation.IsDNS1123Subdomain(req.RepositoryName); len(errs) > 0 {
 		return fmt.Errorf("repositoryName must be a valid object name: %s", strings.Join(errs, "; "))
-	}
-	if minLen := repositoryNameMinLen(req.RepositoryKind); minLen > 0 && len(req.RepositoryName) < minLen {
-		return fmt.Errorf("repositoryName must be at least %d characters long", minLen)
 	}
 	if len(req.RepositoryName) > maxRepositoryNameLen {
 		return fmt.Errorf("repositoryName must be at most %d characters long", maxRepositoryNameLen)

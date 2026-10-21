@@ -185,13 +185,13 @@ type HelmApplicationChartRef struct {
 	// Specifies the name of the HelmApplicationRepository custom resource in the same namespace
 	// that contains the connection details and credentials for the repository holding the chart.
 	// +optional
-	// +kubebuilder:validation:MinLength=3
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	Repository string `json:"repository,omitempty"`
 	// Specifies the name of the cluster-wide HelmClusterApplicationRepository custom resource
 	// that contains the connection details and credentials for the repository holding the chart.
 	// +optional
-	// +kubebuilder:validation:MinLength=3
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	ClusterRepository string `json:"clusterRepository,omitempty"`
 	// Version holds the HelmApplication chart version.

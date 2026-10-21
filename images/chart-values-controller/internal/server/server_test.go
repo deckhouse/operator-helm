@@ -573,10 +573,6 @@ func TestHandleValidatesRepositoryName(t *testing.T) {
 			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"Not Valid!","chart":"podinfo","version":"6.7.1"}`,
 		},
 		{
-			name: "shorter than the application repository CRD allows",
-			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`,
-		},
-		{
 			name: "longer than the application repository CRD allows",
 			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"` +
 				strings.Repeat("a", 64) + `","chart":"podinfo","version":"6.7.1"}`,
@@ -605,12 +601,33 @@ func TestHandleValidatesRepositoryName(t *testing.T) {
 	}
 }
 
-func TestHandleAcceptsAShortAddonRepositoryName(t *testing.T) {
-	rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}},
-		`{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`)
+func TestHandleAcceptsAShortRepositoryName(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "addon",
+			body: `{"repositoryKind":"HelmClusterAddonRepository","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			name: "application",
+			body: `{"repositoryKind":"HelmApplicationRepository","namespace":"team-a","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`,
+		},
+		{
+			name: "cluster application",
+			body: `{"repositoryKind":"HelmClusterApplicationRepository","namespace":"team-a","repositoryName":"ab","chart":"podinfo","version":"6.7.1"}`,
+		},
+	}
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, fakeResolver{result: resolver.Result{Outcome: resolver.OutcomeReady}}, tc.body)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
