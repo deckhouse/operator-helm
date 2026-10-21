@@ -397,7 +397,7 @@ spec:
   enabled: true
   settings:
     bundle: Minimal
-    releaseChannel: EarlyAccess
+    releaseChannel: Stable
     logLevel: Info
     allowExperimentalModules: true
 ---
