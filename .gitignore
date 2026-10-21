@@ -48,3 +48,6 @@ go.work.sum
 # Task
 .task/
 
+# e2e: local cluster artifacts and environment, both carry registry credentials
+/tests/e2e/kind/
+/tests/e2e/.env
