@@ -47,7 +47,7 @@ var _ = Describe("HelmApplication over a foreign role binding", Ordered, func() 
 	)
 
 	foreignRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "someone-elses-role"}
-	foreignSubjects := []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "someone-else"}}
+	foreignSubjects := []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: rbacv1.UserKind, Name: "someone-else"}}
 
 	BeforeAll(func() {
 		DeferCleanup(f.After)
