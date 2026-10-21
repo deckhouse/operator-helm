@@ -236,9 +236,10 @@ func applyOCIRepositorySpec(
 
 	// An artifact the index points at another host is reached as a public registry, with no credentials.
 	if sameRegistryHost(repo.URL(), src.URL) {
-		existing.Spec.Insecure = repo.InsecureSkipVerify()
-
-		if repo.CACertificate() != "" {
+		switch {
+		case repo.InsecureSkipVerify():
+			existing.Spec.Insecure = true
+		case repo.CACertificate() != "":
 			existing.Spec.CertSecretRef = &meta.LocalObjectReference{
 				Name: names.TLSSecret,
 			}

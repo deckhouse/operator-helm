@@ -33,6 +33,7 @@ import (
 
 	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -1216,5 +1217,57 @@ func TestAFullCacheStillAnswersTheRequest(t *testing.T) {
 
 	if _, ok := r.cache.Get("entry", digest); ok {
 		t.Fatal("the cache holds an entry, want none: nothing may be stored past the budget")
+	}
+}
+
+func TestResolveOCILetsInsecureOutweighTheCA(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid", Generation: 1},
+		Spec: helmv1alpha1.RepositorySpec{
+			URL:                "oci://registry.example.invalid/stable",
+			CACertificate:      "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+			InsecureSkipVerify: true,
+		},
+	}
+	chart := chartWithVersions("example", "nginx", helmv1alpha1.ChartVersion{
+		Version:   "0.1.0",
+		MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+	})
+	family := mustFamily(t, RepositoryKindHelmClusterAddon)
+	tlsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "hcar-tls",
+			Namespace: "d8-operator-helm",
+			Labels:    family.InternalLabels("", "example"),
+		},
+		Data: map[string][]byte{"ca.crt": []byte("-----BEGIN CERTIFICATE-----")},
+	}
+
+	req := Request{
+		Kind:           RepositoryKindHelmClusterAddon,
+		RepositoryName: "example",
+		Chart:          "nginx",
+		Version:        "0.1.0",
+	}
+
+	resolver, c := newHybridResolver(t, &stubProber{}, repo, chart, tlsSecret)
+
+	if _, err := resolver.resolveChart(context.Background(), family, req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	name := cvnaming.AuxResourceName(string(req.Kind), req.Namespace, req.RepositoryName,
+		req.Chart, req.Version, identityOf(repo.ObjectMeta))
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: name, Namespace: "d8-operator-helm"}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if !ociRepo.Spec.Insecure {
+		t.Error("insecure applies to the repository's own host")
+	}
+	if ociRepo.Spec.CertSecretRef != nil {
+		t.Error("a repository that asked for no verification must not be handed a trust root")
 	}
 }

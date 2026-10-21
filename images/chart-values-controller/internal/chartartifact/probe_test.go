@@ -240,3 +240,23 @@ func pushTestChart(t *testing.T, host string, rt http.RoundTripper) {
 		t.Fatalf("pushing chart: %v", err)
 	}
 }
+
+func TestTransportLetsInsecureOutweighTheCA(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
+
+	rt, err := Transport(ca, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	transport, ok := rt.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport must return an *http.Transport, got %T", rt)
+	}
+	if !transport.TLSClientConfig.InsecureSkipVerify {
+		t.Error("a spec that asked for no verification must not have one put back by its caCertificate")
+	}
+}

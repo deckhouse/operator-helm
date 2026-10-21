@@ -242,3 +242,18 @@ func TestResolveChartArtifactRejectsAnUnparsableCACertificate(t *testing.T) {
 		t.Fatalf("reason = %q, want %q", terminal.Reason, helmv1alpha1.ReasonInvalidCACertificate)
 	}
 }
+
+func TestBuildTLSTransportLetsInsecureOutweighTheCA(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
+
+	built, err := BuildTLSTransport(&RepoConfig{CACertificate: ca, Insecure: true})
+	if err != nil {
+		t.Fatalf("BuildTLSTransport returned %v", err)
+	}
+	if !built.TLSClientConfig.InsecureSkipVerify {
+		t.Error("a spec that asked for no verification must not have one put back by its caCertificate")
+	}
+}

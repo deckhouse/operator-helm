@@ -462,8 +462,10 @@ func (r *Resolver) ensureOCIRepository(
 		ociRepo.Spec.SecretRef = nil
 		ociRepo.Spec.CertSecretRef = nil
 		if tls {
-			ociRepo.Spec.Insecure = repo.InsecureSkipVerify
-			if repo.CACertificate != "" && tlsSecret != "" {
+			switch {
+			case repo.InsecureSkipVerify:
+				ociRepo.Spec.Insecure = true
+			case repo.CACertificate != "" && tlsSecret != "":
 				ociRepo.Spec.CertSecretRef = &meta.LocalObjectReference{Name: tlsSecret}
 			}
 		}

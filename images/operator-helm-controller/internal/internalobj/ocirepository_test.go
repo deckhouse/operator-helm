@@ -330,11 +330,11 @@ func TestOCIRepositoriesEnsureCarriesTLSOnTheSameHost(t *testing.T) {
 		t.Fatalf("oci repository was not created: %v", err)
 	}
 
-	if ociRepo.Spec.CertSecretRef == nil {
-		t.Error("the repository CA applies to its own host")
-	}
 	if !ociRepo.Spec.Insecure {
 		t.Error("insecure applies to the repository's own host")
+	}
+	if ociRepo.Spec.CertSecretRef != nil {
+		t.Error("a repository that asked for no verification must not be handed a trust root")
 	}
 	if ociRepo.Spec.SecretRef != nil {
 		t.Error("a helm repository's Opaque auth secret must not be referenced by an OCIRepository")
