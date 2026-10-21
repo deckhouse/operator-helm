@@ -143,8 +143,9 @@ type HelmClusterAddonSpec struct {
 	// +optional
 	Values *apiextensionsv1.JSON `json:"values,omitempty"`
 	// Namespace to deploy cluster addon release
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
-	Namespace string `json:"namespace,omitempty"`
+	Namespace string `json:"namespace"`
 	// Maintenance specifies the reconciliation strategy for the resource. "NoResourceReconciliation"
 	// stops updating the underlying resources; empty ("") keeps standard reconciliation active.
 	// +kubebuilder:validation:Enum="";NoResourceReconciliation

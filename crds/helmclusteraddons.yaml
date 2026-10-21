@@ -103,12 +103,14 @@ spec:
               namespace:
                 description: Namespace to deploy cluster addon release
                 maxLength: 63
+                minLength: 1
                 type: string
               values:
                 description: Values holds the values for this HelmClusterAddon release.
                 x-kubernetes-preserve-unknown-fields: true
             required:
             - chart
+            - namespace
             type: object
           status:
             properties:
