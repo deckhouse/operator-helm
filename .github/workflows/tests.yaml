@@ -16,6 +16,8 @@ jobs:
   unit_tests:
     runs-on: [self-hosted, large]
     name: Unit tests
+    permissions:
+      contents: read
     steps:
       # The modules do not all declare the same Go version; the controllers ask
       # for the newest one, and a toolchain that satisfies them satisfies the rest.

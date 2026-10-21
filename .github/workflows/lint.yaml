@@ -17,6 +17,8 @@ jobs:
     runs-on: [self-hosted, large]
     continue-on-error: true
     name: Lint DH
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
       - uses: deckhouse/modules-actions/lint@main
@@ -27,6 +29,8 @@ jobs:
   generated_files:
     runs-on: [self-hosted, large]
     name: Generated files
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
 
@@ -52,6 +56,8 @@ jobs:
   lint:
     runs-on: [self-hosted, large]
     name: Lint
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
 
