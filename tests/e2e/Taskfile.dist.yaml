@@ -43,4 +43,6 @@ tasks:
       E2E_MODULE_TAG_NAME: '{{.E2E_MODULE_TAG_NAME | default "main"}}'
       E2E_MODULE_DIGEST: "{{.E2E_MODULE_DIGEST}}"
       E2E_MODULE_SOURCE: '{{.E2E_MODULE_SOURCE | default "operator-helm"}}'
+      E2E_MODULE_SOURCE_REPO: '{{.E2E_MODULE_SOURCE_REPO | default "dev-registry.deckhouse.io/sys/deckhouse-oss/modules"}}'
+      E2E_MODULE_SOURCE_CA: "{{.E2E_MODULE_SOURCE_CA}}"
       DEV_REGISTRY_DOCKER_CONFIG: "{{.DEV_REGISTRY_DOCKER_CONFIG}}"
