@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -248,4 +249,46 @@ func foldStringDataIntoData(secret *corev1.Secret) {
 	}
 
 	secret.StringData = nil
+}
+
+func TestSecretsEnsureFailsWhenTheReplacedAuthSecretIsBack(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		Spec: helmv1alpha1.RepositorySpec{
+			URL:  "oci://ghcr.io/example/podinfo",
+			Auth: &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"},
+		},
+	}
+
+	stale := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalRepositoryAuthSecretName(repo.Name),
+			Namespace: testNamespace,
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{"username": []byte("stale")},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(repo, stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(
+				ctx context.Context, wc client.WithWatch, obj client.Object,
+				opts ...client.CreateOption,
+			) error {
+				return apierrors.NewAlreadyExists(schema.GroupResource{Resource: "secrets"}, obj.GetName())
+			},
+		}).
+		Build()
+
+	service := NewSecrets(c, testNamespace)
+
+	err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
+	if err == nil {
+		t.Fatal("Ensure reported success without ever writing the auth secret data")
+	}
+	if !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("Ensure returned %v, want the AlreadyExists that stopped the write", err)
+	}
 }

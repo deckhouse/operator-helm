@@ -138,7 +138,7 @@ func (s *Secrets) reconcileAuthSecret(
 
 	if staleRemoved {
 		// The informer can still serve the deleted secret, turning CreateOrPatch into a patch of a ghost.
-		if err := s.client.Create(ctx, authSecret); client.IgnoreAlreadyExists(err) != nil {
+		if err := s.client.Create(ctx, authSecret); err != nil {
 			return fmt.Errorf("creating auth secret: %w", err)
 		}
 
