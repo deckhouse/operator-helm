@@ -49,4 +49,8 @@ type HelmRepositories interface {
 // Catalogs reads the remote and writes the chart catalog of one repository.
 type Catalogs interface {
 	Sync(ctx context.Context, repo contract.Repository, repoType chartsource.Kind) reposync.SyncOutcome
+	// MigrateNames moves the catalog objects to their current names.
+	//
+	// TRANSITIONAL: remove together with the catalog's own migration.
+	MigrateNames(ctx context.Context, repo contract.Repository) error
 }

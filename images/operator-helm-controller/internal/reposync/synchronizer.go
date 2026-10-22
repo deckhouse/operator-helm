@@ -51,6 +51,14 @@ func NewSynchronizer(client client.Client, factory RepoClientFactory, catalog co
 	}
 }
 
+// MigrateNames moves the repository's catalog objects to the names the current scheme
+// derives. It is separate from Sync because it must run whether the remote answers or not.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func (s *Synchronizer) MigrateNames(ctx context.Context, repo contract.Repository) error {
+	return s.catalog.MigrateNames(ctx, repo)
+}
+
 // Sync reads the repository catalog and reconciles the chart catalog objects that mirror it.
 // A fetch failure is about the remote, a catalog failure is about this cluster.
 func (s *Synchronizer) Sync(

@@ -137,6 +137,10 @@ func legacyAddonChart(name, repoName, chartName string, versions ...helmv1alpha1
 }
 
 func syncCatalog(cat contract.Catalog, repo contract.Repository, charts ...repoclient.Chart) error {
+	if err := cat.MigrateNames(context.Background(), repo); err != nil {
+		return err
+	}
+
 	_, err := reconcileOnce(cat, repo, charts)
 
 	return err
@@ -470,6 +474,51 @@ func TestListErrorNamesAClusterScopedRepositoryWithoutALeadingSlash(t *testing.T
 	}
 }
 
+func TestMigratesALegacyNamedObjectStillInUse(t *testing.T) {
+	const legacyName = "example-chart-podinfo"
+
+	c := newAddonClient(t,
+		legacyAddonChart(legacyName, "example", "podinfo",
+			helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+		),
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c, c)
+	repo := addonRepo()
+
+	if err := syncCatalog(cat, repo, chart("podinfo", "2.0.0")); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	newName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: newName}, got); err != nil {
+		t.Fatalf("new-scheme object was not created: %v", err)
+	}
+
+	var retained *helmv1alpha1.ChartVersion
+	for i := range got.Status.Versions {
+		if got.Status.Versions[i].Version == "1.0.0" {
+			retained = &got.Status.Versions[i]
+		}
+	}
+	if retained == nil {
+		t.Fatalf("versions = %+v, want 1.0.0 retained from the legacy object", got.Status.Versions)
+	}
+	if retained.UnavailableReason != helmv1alpha1.UnavailableReasonRemovedFromRepository {
+		t.Fatalf("1.0.0 unavailable reason = %q, want %q", retained.UnavailableReason, helmv1alpha1.UnavailableReasonRemovedFromRepository)
+	}
+	if retained.MediaType != "application/vnd.cncf.helm.chart.content.v1.tar+gzip" {
+		t.Fatalf("1.0.0 media type = %q, want it carried from the legacy object", retained.MediaType)
+	}
+
+	err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want NotFound: it must be deleted even though a consumer still uses one of its versions", err)
+	}
+}
+
 func TestMigratesALegacyNamedObjectNotInUse(t *testing.T) {
 	const legacyName = "example-chart-podinfo"
 
@@ -501,6 +550,53 @@ func TestMigratesALegacyNamedObjectNotInUse(t *testing.T) {
 	}
 }
 
+func TestMigrationIsANoOpOnASecondReconcile(t *testing.T) {
+	const legacyName = "example-chart-podinfo"
+
+	c := newAddonClient(t,
+		legacyAddonChart(legacyName, "example", "podinfo",
+			helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+		),
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c, c)
+	repo := addonRepo()
+
+	if err := syncCatalog(cat, repo, chart("podinfo", "2.0.0")); err != nil {
+		t.Fatalf("first Reconcile returned %v", err)
+	}
+
+	newName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	before := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: newName}, before); err != nil {
+		t.Fatalf("getting the migrated object: %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want NotFound after the first reconcile already migrated it", err)
+	}
+
+	deletes := 0
+	c = interceptedClient(t, c, func() { deletes++ })
+
+	cat = adapter.NewAddonCatalog(c, c)
+	if err := syncCatalog(cat, repo, chart("podinfo", "2.0.0")); err != nil {
+		t.Fatalf("second Reconcile returned %v", err)
+	}
+
+	if deletes != 0 {
+		t.Fatalf("second Reconcile issued %d delete(s), want none: nothing is left over to migrate", deletes)
+	}
+
+	after := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: newName}, after); err != nil {
+		t.Fatalf("getting the object after the second reconcile: %v", err)
+	}
+	if len(after.Status.Versions) != len(before.Status.Versions) || after.Status.Versions[0] != before.Status.Versions[0] {
+		t.Fatalf("status changed on a no-op reconcile: before %+v, after %+v", before.Status.Versions, after.Status.Versions)
+	}
+}
+
 func interceptedClient(t *testing.T, c client.WithWatch, onDelete func()) client.WithWatch {
 	t.Helper()
 
@@ -511,6 +607,273 @@ func interceptedClient(t *testing.T, c client.WithWatch, onDelete func()) client
 			return wc.Delete(ctx, obj, opts...)
 		},
 	})
+}
+
+func TestMigrationLeavesUnrelatedChartsToExistingPruning(t *testing.T) {
+	c := newAddonClient(t,
+		&helmv1alpha1.HelmClusterAddonChart{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   naming.HelmClusterAddonChartName("example", "kept"),
+				Labels: map[string]string{helmv1alpha1.LabelRepositoryName: "example", helmv1alpha1.LabelChartName: "kept"},
+			},
+		},
+		&helmv1alpha1.HelmClusterAddonChart{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   naming.HelmClusterAddonChartName("example", "pruned"),
+				Labels: map[string]string{helmv1alpha1.LabelRepositoryName: "example", helmv1alpha1.LabelChartName: "pruned"},
+			},
+		},
+		addonConsumer("consumer", "example", "kept", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c, c)
+	repo := addonRepo()
+
+	if err := syncCatalog(cat, repo, chart("podinfo", "1.0.0")); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "kept")}, &helmv1alpha1.HelmClusterAddonChart{})
+	if err != nil {
+		t.Fatalf("the referenced unrelated chart must be kept, got %v", err)
+	}
+
+	err = c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "pruned")}, &helmv1alpha1.HelmClusterAddonChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("the unreferenced unrelated chart must be pruned, got %v", err)
+	}
+}
+
+func TestMigratesAChartTheRepositoryNoLongerOffers(t *testing.T) {
+	const legacyName = "example-chart-gone"
+
+	c := newAddonClient(t,
+		legacyAddonChart(legacyName, "example", "gone",
+			helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+		),
+		addonConsumer("consumer", "example", "gone", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := syncCatalog(cat, addonRepo(), chart("podinfo", "2.0.0")); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "gone")}, got); err != nil {
+		t.Fatalf("the chart a consumer still holds was not moved to its new name: %v", err)
+	}
+	if len(got.Status.Versions) != 1 || got.Status.Versions[0].Version != "1.0.0" {
+		t.Fatalf("versions = %+v, want the legacy status carried over", got.Status.Versions)
+	}
+	if got.Status.Versions[0].MediaType == "" {
+		t.Fatal("the media type was lost, so the consumer's internal source cannot be built")
+	}
+
+	err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want NotFound", err)
+	}
+}
+
+func TestMigrationSurvivesAFailedStatusWrite(t *testing.T) {
+	const legacyName = "example-chart-podinfo"
+
+	failed := false
+	c := newAddonClientWithInterceptor(t, interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			if !failed {
+				failed = true
+
+				return errors.New("transient status patch failure")
+			}
+
+			return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	},
+		legacyAddonChart(legacyName, "example", "podinfo",
+			helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+		),
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := syncCatalog(cat, addonRepo(), chart("podinfo", "2.0.0")); err == nil {
+		t.Fatal("Reconcile must report the failed status write")
+	}
+
+	if err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{}); err != nil {
+		t.Fatalf("legacy object err = %v, want it kept until its status has been carried over", err)
+	}
+
+	if err := syncCatalog(cat, addonRepo(), chart("podinfo", "2.0.0")); err != nil {
+		t.Fatalf("second Reconcile returned %v", err)
+	}
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "podinfo")}, got); err != nil {
+		t.Fatalf("new-scheme object was not created: %v", err)
+	}
+
+	var retained bool
+	for _, version := range got.Status.Versions {
+		if version.Version == "1.0.0" && version.MediaType != "" {
+			retained = true
+		}
+	}
+	if !retained {
+		t.Fatalf("versions = %+v, want 1.0.0 and its media type carried over on the retry", got.Status.Versions)
+	}
+}
+
+func TestMigrationLeavesADestinationAnotherPassWroteAlone(t *testing.T) {
+	const (
+		legacyName = "example-chart-podinfo"
+		mediaType  = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+	)
+
+	currentName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	overtaken := false
+	c := newAddonClientWithInterceptor(t, interceptor.Funcs{
+		SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			if obj.GetName() == currentName && !overtaken {
+				overtaken = true
+
+				written := &helmv1alpha1.HelmClusterAddonChart{}
+				if err := cl.Get(ctx, client.ObjectKey{Name: currentName}, written); err != nil {
+					return err
+				}
+
+				written.Status.Versions = []helmv1alpha1.ChartVersion{
+					{Version: "2.0.0", MediaType: mediaType, ReexaminationRequired: true},
+				}
+
+				if err := cl.Status().Update(ctx, written); err != nil {
+					return err
+				}
+			}
+
+			return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	},
+		legacyAddonChart(legacyName, "example", "podinfo",
+			helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: mediaType},
+		),
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"),
+	)
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := cat.MigrateNames(context.Background(), addonRepo()); !apierrors.IsConflict(err) {
+		t.Fatalf("MigrateNames returned %v, want the copy rejected as a conflict: the destination moved on since it was read", err)
+	}
+
+	if err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{}); err != nil {
+		t.Fatalf("legacy object err = %v, want it kept: a rejected copy has migrated nothing", err)
+	}
+
+	written := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: currentName}, written); err != nil {
+		t.Fatalf("reading the destination: %v", err)
+	}
+	if len(written.Status.Versions) != 1 || written.Status.Versions[0].Version != "2.0.0" {
+		t.Fatalf("destination versions = %+v, want what the other pass wrote, untouched", written.Status.Versions)
+	}
+	if !written.Status.Versions[0].ReexaminationRequired {
+		t.Fatal("a rejected copy must not clear a mark the other pass recorded: the force asking for it is already consumed")
+	}
+
+	if err := cat.MigrateNames(context.Background(), addonRepo()); err != nil {
+		t.Fatalf("the pass after the conflict returned %v", err)
+	}
+
+	if err := c.Get(context.Background(), client.ObjectKey{Name: legacyName}, &helmv1alpha1.HelmClusterAddonChart{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy object err = %v, want it deleted once the migration finished", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: currentName}, written); err != nil {
+		t.Fatalf("reading the destination after the retry: %v", err)
+	}
+
+	migrated := make(map[string]helmv1alpha1.ChartVersion, len(written.Status.Versions))
+	for _, version := range written.Status.Versions {
+		migrated[version.Version] = version
+	}
+	if len(migrated) != 2 {
+		t.Fatalf("destination versions = %+v, want both the other pass's entry and the one only the legacy object held", written.Status.Versions)
+	}
+	if !migrated["2.0.0"].ReexaminationRequired {
+		t.Fatal("the retry must keep the mark the other pass recorded: it is still the only record of that request")
+	}
+	if migrated["1.0.0"].MediaType != mediaType {
+		t.Fatalf("1.0.0 = %+v, want the pinned version carried over with its media type before the legacy object was deleted", migrated["1.0.0"])
+	}
+}
+
+func TestMigrationKeepsTheDestinationOwnedByTheRepository(t *testing.T) {
+	const legacyName = "example-chart-gone"
+
+	repo := adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "example-uid"},
+	})
+
+	legacy := legacyAddonChart(legacyName, "example", "gone",
+		helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"},
+	)
+	legacy.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(repo.Object(), repo.OwnerGVK())}
+
+	c := newAddonClient(t, legacy, addonConsumer("consumer", "example", "gone", "1.0.0"))
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := cat.MigrateNames(context.Background(), repo); err != nil {
+		t.Fatalf("MigrateNames returned %v", err)
+	}
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "gone")}, got); err != nil {
+		t.Fatalf("reading the migrated object: %v", err)
+	}
+
+	if len(got.OwnerReferences) != 1 {
+		t.Fatalf("owner references = %v, want the destination owned by the repository the legacy object belonged to", got.OwnerReferences)
+	}
+	owner := got.OwnerReferences[0]
+	if owner.Kind != helmv1alpha1.HelmClusterAddonRepositoryKind || owner.Name != "example" ||
+		owner.UID != "example-uid" || owner.Controller == nil || !*owner.Controller {
+		t.Fatalf("owner = %+v, want a controller reference to HelmClusterAddonRepository/example", owner)
+	}
+}
+
+func TestMigrationStampsTheDestinationWithTheLiveRepository(t *testing.T) {
+	const legacyName = "example-chart-gone"
+
+	repo := adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "example-uid"},
+	})
+
+	legacy := legacyAddonChart(legacyName, "example", "gone",
+		helmv1alpha1.ChartVersion{Version: "1.0.0"},
+	)
+	// The repository was deleted and created again under the same name, so the owner
+	// reference the legacy object carries names an incarnation that is gone.
+	deleted := adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "deleted-uid"},
+	})
+	legacy.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(deleted.Object(), deleted.OwnerGVK())}
+
+	c := newAddonClient(t, legacy, addonConsumer("consumer", "example", "gone", "1.0.0"))
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := cat.MigrateNames(context.Background(), repo); err != nil {
+		t.Fatalf("MigrateNames returned %v", err)
+	}
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "gone")}, got); err != nil {
+		t.Fatalf("reading the migrated object: %v", err)
+	}
+
+	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].UID != "example-uid" {
+		t.Fatalf("owner references = %v, want the destination owned by the repository this pass reconciles", got.OwnerReferences)
+	}
 }
 
 func rejectInvalidLabels() interceptor.Funcs {
@@ -1258,4 +1621,97 @@ func versionsByName(t *testing.T, c client.Client, key client.ObjectKey) map[str
 	}
 
 	return versions
+}
+
+func TestMigrationCarriesAMarkAndAnIconTheDestinationLacks(t *testing.T) {
+	const (
+		legacyName = "example-chart-podinfo"
+		mediaType  = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+		iconURL    = "https://example.test/podinfo.png"
+	)
+
+	currentName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	legacy := legacyAddonChart(legacyName, "example", "podinfo",
+		helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: mediaType, ReexaminationRequired: true},
+	)
+	legacy.Status.IconURL = iconURL
+
+	destination := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   currentName,
+			Labels: map[string]string{"repository": "example", "chart": "podinfo"},
+		},
+		Status: helmv1alpha1.ChartCatalogStatus{
+			Versions: []helmv1alpha1.ChartVersion{
+				{Version: "1.0.0", MediaType: mediaType},
+			},
+		},
+	}
+
+	c := newAddonClient(t, legacy, destination,
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"))
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := cat.MigrateNames(context.Background(), addonRepo()); err != nil {
+		t.Fatalf("MigrateNames returned %v", err)
+	}
+
+	written := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: currentName}, written); err != nil {
+		t.Fatalf("reading the destination: %v", err)
+	}
+
+	if len(written.Status.Versions) != 1 {
+		t.Fatalf("destination versions = %+v, want the shared version alone", written.Status.Versions)
+	}
+	if !written.Status.Versions[0].ReexaminationRequired {
+		t.Fatal("a refresh recorded on the legacy object must survive the rename: nothing has answered it yet")
+	}
+	if written.Status.IconURL != iconURL {
+		t.Fatalf("destination icon = %q, want %q: the icon describes the chart, not one version", written.Status.IconURL, iconURL)
+	}
+}
+
+func TestMigrationCarriesAMarkWhenNothingElseIsMissing(t *testing.T) {
+	const (
+		legacyName = "example-chart-podinfo"
+		mediaType  = "application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+		iconURL    = "https://example.test/podinfo.png"
+	)
+
+	currentName := naming.HelmClusterAddonChartName("example", "podinfo")
+
+	legacy := legacyAddonChart(legacyName, "example", "podinfo",
+		helmv1alpha1.ChartVersion{Version: "1.0.0", MediaType: mediaType, ReexaminationRequired: true},
+	)
+	legacy.Status.IconURL = iconURL
+
+	destination := &helmv1alpha1.HelmClusterAddonChart{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   currentName,
+			Labels: map[string]string{"repository": "example", "chart": "podinfo"},
+		},
+		Status: helmv1alpha1.ChartCatalogStatus{
+			IconURL:  iconURL,
+			Versions: []helmv1alpha1.ChartVersion{{Version: "1.0.0", MediaType: mediaType}},
+		},
+	}
+
+	c := newAddonClient(t, legacy, destination,
+		addonConsumer("consumer", "example", "podinfo", "1.0.0"))
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := cat.MigrateNames(context.Background(), addonRepo()); err != nil {
+		t.Fatalf("MigrateNames returned %v", err)
+	}
+
+	written := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: currentName}, written); err != nil {
+		t.Fatalf("reading the destination: %v", err)
+	}
+
+	if len(written.Status.Versions) != 1 || !written.Status.Versions[0].ReexaminationRequired {
+		t.Fatalf("destination versions = %+v, want the mark carried over on its own", written.Status.Versions)
+	}
 }

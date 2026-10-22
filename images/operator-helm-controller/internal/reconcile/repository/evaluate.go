@@ -47,6 +47,12 @@ type Inputs struct {
 	InternalRepository    internalobj.InternalRepositoryState
 	ConfigErr             *ConfigFailure
 
+	// MigrateErr reports a failure to move the catalog objects to their current names. It is
+	// not tied to a synchronization attempt.
+	//
+	// TRANSITIONAL: remove together with the catalog's own migration.
+	MigrateErr error
+
 	// Forced reports whether this pass was requested through the force reconcile
 	// annotation.
 	Forced bool
@@ -97,9 +103,9 @@ func Evaluate(in Inputs) Decision {
 	fetchFailed := in.Attempted && in.Fetch != nil && in.Fetch.Err != nil
 	fetchSucceeded := in.Attempted && in.Fetch != nil && in.Fetch.Err == nil
 	fetchIncomplete := fetchSucceeded && in.Fetch.Unexamined > 0
-	catalogFailed := in.Attempted && in.Catalog != nil && in.Catalog.Err != nil
+	catalogFailed := in.MigrateErr != nil || (in.Attempted && in.Catalog != nil && in.Catalog.Err != nil)
 	// A lost race rather than a failure; a fetch failure cannot have happened alongside it.
-	catalogRaced := catalogFailed && apierrors.IsConflict(catalogErr(in))
+	catalogRaced := catalogFailed && apierrors.IsConflict(firstErr(in.MigrateErr, catalogErr(in)))
 
 	failures := in.Current.ConsecutiveFetchFailures
 	if in.Generation != in.Current.ObservedGeneration {
@@ -114,7 +120,8 @@ func Evaluate(in Inputs) Decision {
 
 	setCondition(&status, in, helmv1alpha1.ConditionTypeReady, ready.Status, ready.Reason, ready.Message)
 
-	if in.Attempted {
+	// A rename failure is reported even on a pass that attempted no synchronization.
+	if in.Attempted || in.MigrateErr != nil {
 		syncedStatus, syncedReason, syncedMessage := evaluateSynced(in, fetchFailed, catalogFailed)
 		setCondition(&status, in, helmv1alpha1.ConditionTypeSynced, syncedStatus, syncedReason, syncedMessage)
 	}
@@ -180,7 +187,7 @@ func Evaluate(in Inputs) Decision {
 	return Decision{
 		Status:       status,
 		RequeueAfter: requeueAfter,
-		Err:          firstErr(in.SecretsErr, in.InternalRepositoryErr, catalogErr(in)),
+		Err:          firstErr(in.SecretsErr, in.InternalRepositoryErr, in.MigrateErr, catalogErr(in)),
 	}
 }
 
@@ -237,7 +244,10 @@ func evaluateSynced(in Inputs, fetchFailed, catalogFailed bool) (metav1.Conditio
 	case fetchFailed:
 		return metav1.ConditionFalse, helmv1alpha1.ReasonSyncFailed, in.Fetch.Message
 	case catalogFailed:
-		err := in.Catalog.Err
+		err := in.MigrateErr
+		if err == nil {
+			err = in.Catalog.Err
+		}
 
 		if apierrors.IsConflict(err) {
 			// Named rather than reported verbatim: the API's conflict wording reads as a defect.

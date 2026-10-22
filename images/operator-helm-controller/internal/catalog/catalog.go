@@ -365,6 +365,137 @@ func (s *snapshot[C, CL]) recordAbsence(ctx context.Context, chart C, inUse map[
 	return nil
 }
 
+// MigrateNames moves a repository's catalog objects to the names the current scheme derives,
+// whatever scheme they were written under, recognising an object by its chart label.
+//
+// TRANSITIONAL: remove this method, its interface entry and its call once every cluster has
+// reconciled each repository at least once under the current scheme.
+func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repository) error {
+	logger := log.FromContext(ctx)
+
+	existingCharts, err := t.list(ctx, repo)
+	if err != nil {
+		return err
+	}
+
+	for _, legacy := range existingCharts {
+		chartName := legacy.GetLabels()[helmv1alpha1.LabelChartName]
+		if chartName == "" {
+			continue
+		}
+
+		name := t.cfg.ObjectName(repo.Name(), chartName)
+		if legacy.GetName() == name {
+			continue
+		}
+
+		current, err := t.destination(ctx, repo, name, chartName, legacy)
+		if err != nil {
+			return err
+		}
+
+		if err := t.carryOver(ctx, legacy, current); err != nil {
+			return err
+		}
+
+		logger.Info("Renamed a chart catalog object",
+			"kind", t.cfg.Kind, "from", client.ObjectKeyFromObject(legacy), "to", client.ObjectKeyFromObject(current), "chart", chartName)
+
+		if err := client.IgnoreNotFound(t.client.Delete(ctx, legacy)); err != nil {
+			return fmt.Errorf("deleting chart %s after renaming it: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+		}
+	}
+
+	return nil
+}
+
+func (t *typed[C, CL]) carryOver(ctx context.Context, legacy, current C) error {
+	status := t.cfg.Status(current)
+	legacyStatus := t.cfg.Status(legacy)
+
+	held := make(map[string]int, len(status.Versions))
+	for i, version := range status.Versions {
+		held[version.Version] = i
+	}
+
+	// The destination's verdict wins, but an outstanding refresh is not a verdict and is carried over.
+	var marks []int
+
+	missing := make([]helmv1alpha1.ChartVersion, 0, len(legacyStatus.Versions))
+	for _, version := range legacyStatus.Versions {
+		if i, ok := held[version.Version]; ok {
+			if version.ReexaminationRequired && !status.Versions[i].ReexaminationRequired {
+				marks = append(marks, i)
+			}
+
+			continue
+		}
+
+		missing = append(missing, version)
+	}
+
+	// The icon is a property of the chart, so it comes over with the versions it describes.
+	icon := status.IconURL == "" && legacyStatus.IconURL != ""
+	if len(missing) == 0 && !icon && len(marks) == 0 {
+		return nil
+	}
+
+	base := current.DeepCopyObject().(C)
+
+	for _, i := range marks {
+		status.Versions[i].ReexaminationRequired = true
+	}
+
+	if icon {
+		status.IconURL = legacyStatus.IconURL
+	}
+
+	status.Versions = append(status.Versions, missing...)
+	sortChartVersions(status.Versions)
+
+	if err := t.client.Status().Patch(ctx, current, lockedTo(base)); err != nil {
+		return fmt.Errorf("carrying the status of chart %s over: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+	}
+
+	return nil
+}
+
+func (t *typed[C, CL]) destination(ctx context.Context, repo contract.Repository, name, chartName string, legacy C) (C, error) {
+	current := t.cfg.NewObject()
+	key := client.ObjectKey{Namespace: repo.Namespace(), Name: name}
+
+	err := t.reader.Get(ctx, key, current)
+	switch {
+	case apierrors.IsNotFound(err):
+		current = t.cfg.NewObject()
+		current.SetName(name)
+		current.SetNamespace(repo.Namespace())
+		applyMeta(current, repo, chartName)
+
+		if err := t.client.Create(ctx, current); err != nil {
+			return current, fmt.Errorf("renaming chart %s: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+		}
+
+		return current, nil
+	case err != nil:
+		return current, fmt.Errorf("renaming chart %s: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+	}
+
+	base := current.DeepCopyObject().(C)
+	applyMeta(current, repo, chartName)
+
+	if equality.Semantic.DeepEqual(base.GetLabels(), current.GetLabels()) &&
+		equality.Semantic.DeepEqual(base.GetOwnerReferences(), current.GetOwnerReferences()) {
+		return current, nil
+	}
+
+	if err := t.client.Patch(ctx, current, lockedTo(base)); err != nil {
+		return current, fmt.Errorf("renaming chart %s: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
+	}
+
+	return current, nil
+}
+
 func (t *typed[C, CL]) InUseVersions(ctx context.Context, repo contract.Repository, chartName string) (map[string]struct{}, error) {
 	if chartName == "" || t.cfg.Consumers == nil {
 		return nil, nil

@@ -1392,6 +1392,7 @@ func TestEvaluateRetriesASpecChangeThatMadeNoAttempt(t *testing.T) {
 	}{
 		{name: "auxiliary secrets", in: Inputs{SecretsErr: failure}},
 		{name: "internal repository", in: Inputs{InternalRepositoryErr: failure}},
+		{name: "catalog rename", in: Inputs{MigrateErr: failure}},
 		{name: "catalog read", in: Inputs{Attempted: true, Catalog: &reposync.CatalogOutcome{Err: failure}}},
 	}
 
