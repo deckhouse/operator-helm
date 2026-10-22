@@ -1715,3 +1715,39 @@ func TestMigrationCarriesAMarkWhenNothingElseIsMissing(t *testing.T) {
 		t.Fatalf("destination versions = %+v, want the mark carried over on its own", written.Status.Versions)
 	}
 }
+
+func TestMigrationReadsTheCatalogOncePerRepository(t *testing.T) {
+	repo := adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "example-uid"},
+	})
+
+	lists := 0
+	c := newAddonClientWithInterceptor(t, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*helmv1alpha1.HelmClusterAddonChartList); ok {
+				lists++
+			}
+
+			return cl.List(ctx, list, opts...)
+		},
+	}, legacyAddonChart("example-chart-podinfo", "example", "podinfo",
+		helmv1alpha1.ChartVersion{Version: "1.0.0"},
+	))
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := cat.MigrateNames(context.Background(), repo); err != nil {
+		t.Fatalf("MigrateNames returned %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "podinfo")},
+		&helmv1alpha1.HelmClusterAddonChart{}); err != nil {
+		t.Fatalf("reading the migrated object: %v", err)
+	}
+
+	if err := cat.MigrateNames(context.Background(), repo); err != nil {
+		t.Fatalf("the second MigrateNames returned %v", err)
+	}
+
+	if lists != 1 {
+		t.Fatalf("catalog reads = %d, want 1: a repository whose catalog this process already migrated must not be read again", lists)
+	}
+}

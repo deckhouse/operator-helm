@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -63,6 +64,10 @@ type typed[C client.Object, CL client.ObjectList] struct {
 	client client.Client
 	reader client.Reader
 	cfg    Config[C, CL]
+
+	// TRANSITIONAL: repository UIDs whose catalog this process has already moved to the
+	// current names; nothing writes a legacy name again, so one pass settles them for good.
+	migrated sync.Map
 }
 
 func (t *typed[C, CL]) list(ctx context.Context, repo contract.Repository) ([]C, error) {
@@ -373,6 +378,11 @@ func (s *snapshot[C, CL]) recordAbsence(ctx context.Context, chart C, inUse map[
 func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repository) error {
 	logger := log.FromContext(ctx)
 
+	uid := repo.Object().GetUID()
+	if _, done := t.migrated.Load(uid); done {
+		return nil
+	}
+
 	existingCharts, err := t.list(ctx, repo)
 	if err != nil {
 		return err
@@ -405,6 +415,8 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repositor
 			return fmt.Errorf("deleting chart %s after renaming it: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
 		}
 	}
+
+	t.migrated.Store(uid, struct{}{})
 
 	return nil
 }

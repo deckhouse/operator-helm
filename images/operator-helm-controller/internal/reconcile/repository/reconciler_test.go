@@ -117,11 +117,17 @@ func newReconcilerWithInterceptor(
 		}).
 		Build()
 
+	return newAddonReconciler(c, stub), c
+}
+
+// newAddonReconciler builds a reconciler over an existing client, which a test that needs a
+// second one with no memory of the first pass asks for.
+func newAddonReconciler(c client.Client, stub *stubRepoClient) *Reconciler {
 	factory := func(_ chartsource.Kind) (repoclient.ClientInterface, error) {
 		return stub, nil
 	}
 
-	r := New(c, Deps{
+	return New(c, Deps{
 		NewRepository:    adapter.EmptyAddonRepository,
 		Secrets:          reposync.NewSecrets(c, c, helmv1alpha1.TargetNamespace),
 		HelmRepositories: internalobj.NewHelmRepositories(c, helmv1alpha1.TargetNamespace),
@@ -129,8 +135,6 @@ func newReconcilerWithInterceptor(
 		Catalogs:         reposync.NewSynchronizer(c, factory, adapter.NewAddonCatalog(c, c)),
 		Status:           status.NewManager(c),
 	})
-
-	return r, c
 }
 
 func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...client.Object) (*Reconciler, client.Client) {
@@ -406,7 +410,9 @@ func TestReconcileReportsAFailedMigrationWithoutAnAttempt(t *testing.T) {
 		t.Fatalf("creating the legacy object: %v", err)
 	}
 
-	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+	// A legacy object only ever predates the process that migrates it, so the rename is
+	// attempted again by a reconciler that has not yet seen this repository.
+	if _, err := newAddonReconciler(c, stub).Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: repo.Name},
 	}); err == nil {
 		t.Fatal("the pass must report the refused rename, or the work queue waits for the next sync instead of retrying")
