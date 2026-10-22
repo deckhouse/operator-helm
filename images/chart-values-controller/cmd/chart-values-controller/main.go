@@ -20,7 +20,6 @@ import (
 	"flag"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
@@ -43,17 +42,6 @@ import (
 
 const artifactDownloadTimeout = 60 * time.Second
 
-func splitAudiences(value string) []string {
-	var audiences []string
-	for _, audience := range strings.Split(value, ",") {
-		if trimmed := strings.TrimSpace(audience); trimmed != "" {
-			audiences = append(audiences, trimmed)
-		}
-	}
-
-	return audiences
-}
-
 var scheme = runtime.NewScheme()
 
 func init() {
@@ -73,7 +61,6 @@ func main() {
 		cacheBudgetMB   int
 		sourceInterval  time.Duration
 		maxChartSizeMB  int
-		tokenAudiences  string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "127.0.0.1:8080", "The address the metrics endpoint binds to.")
@@ -85,7 +72,6 @@ func main() {
 	flag.IntVar(&cacheBudgetMB, "cache-budget-mb", 16, "Total size in MiB of values.yaml the in-memory cache may hold; entries that do not fit are not cached.")
 	flag.DurationVar(&sourceInterval, "source-interval", 10*time.Minute, "Reconcile interval set on auxiliary source resources.")
 	flag.IntVar(&maxChartSizeMB, "max-chart-size-mb", 100, "Maximum accepted chart artifact size in MiB; larger artifacts are rejected.")
-	flag.StringVar(&tokenAudiences, "api-token-audience", "", "Comma-separated audiences a bearer token of the chart-values HTTP API must be issued for; empty accepts any token the API server authenticates.")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -131,7 +117,6 @@ func main() {
 	reviewer := auth.New(
 		clientset.AuthenticationV1().TokenReviews(),
 		clientset.AuthorizationV1().SubjectAccessReviews(),
-		splitAudiences(tokenAudiences),
 	)
 
 	valuesCache := cache.New(cacheBudgetBytes)
@@ -168,10 +153,6 @@ func main() {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		logger.Error(err, "unable to set up ready check")
 		os.Exit(1)
-	}
-
-	if audiences := splitAudiences(tokenAudiences); len(audiences) > 0 {
-		logger.Info("requiring an audience on API tokens", "audiences", audiences)
 	}
 
 	logger.Info("starting manager")

@@ -46,7 +46,7 @@ func TestReviewCarriesTheNamespaceIntoTheAccessReview(t *testing.T) {
 		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
 	})
 
-	reviewer := New(clientset.AuthenticationV1().TokenReviews(), clientset.AuthorizationV1().SubjectAccessReviews(), nil)
+	reviewer := New(clientset.AuthenticationV1().TokenReviews(), clientset.AuthorizationV1().SubjectAccessReviews())
 
 	result, err := reviewer.Review(context.Background(), "token", Access{
 		Group:     "helm.deckhouse.io",
@@ -73,76 +73,37 @@ func TestReviewCarriesTheNamespaceIntoTheAccessReview(t *testing.T) {
 	}
 }
 
-func reviewerFor(t *testing.T, audiences []string, status authnv1.TokenReviewStatus) (*Reviewer, **authnv1.TokenReview) {
+func reviewerFor(t *testing.T, status authnv1.TokenReviewStatus) *Reviewer {
 	t.Helper()
 
 	clientset := fake.NewClientset()
-	recorded := new(*authnv1.TokenReview)
 
-	clientset.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		*recorded = action.(k8stesting.CreateAction).GetObject().(*authnv1.TokenReview)
-
+	clientset.PrependReactor("create", "tokenreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, &authnv1.TokenReview{Status: status}, nil
 	})
 	clientset.PrependReactor("create", "subjectaccessreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
 	})
 
-	return New(clientset.AuthenticationV1().TokenReviews(), clientset.AuthorizationV1().SubjectAccessReviews(), audiences), recorded
+	return New(clientset.AuthenticationV1().TokenReviews(), clientset.AuthorizationV1().SubjectAccessReviews())
 }
 
 var testAccess = Access{Group: "helm.deckhouse.io", Resource: "helmclusteraddons", Verb: "create"}
 
-func TestReviewAcceptsATokenIssuedForTheConfiguredAudience(t *testing.T) {
-	reviewer, recorded := reviewerFor(t, []string{"chart-values-api"}, authnv1.TokenReviewStatus{
-		Authenticated: true,
-		Audiences:     []string{"chart-values-api"},
-		User:          authnv1.UserInfo{Username: "alice"},
-	})
+func TestReviewRejectsATokenTheAPIServerDoesNotAuthenticate(t *testing.T) {
+	reviewer := reviewerFor(t, authnv1.TokenReviewStatus{Authenticated: false})
 
 	result, err := reviewer.Review(context.Background(), "token", testAccess)
 	if err != nil {
 		t.Fatalf("Review returned %v", err)
 	}
-	if !result.Authenticated || !result.Authorized {
-		t.Fatalf("result = %+v, want an authenticated and authorized caller", result)
-	}
-	if *recorded == nil {
-		t.Fatal("no TokenReview was created")
-	}
-	if got := (*recorded).Spec.Audiences; len(got) != 1 || got[0] != "chart-values-api" {
-		t.Fatalf("requested audiences = %v, want the configured one", got)
+	if result.Authenticated || result.Authorized {
+		t.Fatalf("result = %+v, want the token rejected as unauthenticated", result)
 	}
 }
 
-func TestReviewRejectsATokenIssuedForAnotherAudience(t *testing.T) {
-	for name, status := range map[string]authnv1.TokenReviewStatus{
-		"no audience confirmed": {
-			Authenticated: true,
-			User:          authnv1.UserInfo{Username: "alice"},
-		},
-		"another audience confirmed": {
-			Authenticated: true,
-			Audiences:     []string{"some-other-service"},
-			User:          authnv1.UserInfo{Username: "alice"},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			reviewer, _ := reviewerFor(t, []string{"chart-values-api"}, status)
-
-			result, err := reviewer.Review(context.Background(), "token", testAccess)
-			if err != nil {
-				t.Fatalf("Review returned %v", err)
-			}
-			if result.Authenticated || result.Authorized {
-				t.Fatalf("result = %+v, want the token rejected as unauthenticated", result)
-			}
-		})
-	}
-}
-
-func TestReviewWithoutAConfiguredAudienceAsksForNone(t *testing.T) {
-	reviewer, recorded := reviewerFor(t, nil, authnv1.TokenReviewStatus{
+func TestReviewAcceptsATokenTheAPIServerAuthenticates(t *testing.T) {
+	reviewer := reviewerFor(t, authnv1.TokenReviewStatus{
 		Authenticated: true,
 		Audiences:     []string{"https://kubernetes.default.svc.cluster.local"},
 		User:          authnv1.UserInfo{Username: "alice"},
@@ -154,8 +115,5 @@ func TestReviewWithoutAConfiguredAudienceAsksForNone(t *testing.T) {
 	}
 	if !result.Authenticated || !result.Authorized {
 		t.Fatalf("result = %+v, want the token accepted", result)
-	}
-	if got := (*recorded).Spec.Audiences; len(got) != 0 {
-		t.Fatalf("requested audiences = %v, want none", got)
 	}
 }
