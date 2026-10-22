@@ -12,15 +12,17 @@ controllers:
         # Expected in the stall scenario that points a repository at a missing
         # source; the reconciler logs every failed read with the repository name.
         - "repo-source-not-found"
-        # Expected in the stall scenario that puts a foreign Role under the name the
-        # application identity needs; the reconciler logs the refusal to adopt it.
-        - "is not managed by the operator"
         # Transient controller-runtime cache reflector reconnects (watch/list drop,
         # unexpected EOF); self-recovering, not a real failure.
         - "Unexpected error when reading response body"
         - "Failed to watch"
         - "Failed to list"
-      excludeRegexp: []
+      excludeRegexp:
+        # Expected in the stall scenario that puts a foreign role binding under the
+        # name the application identity needs; the reconciler logs the refusal to
+        # adopt it. The application name is part of the derived binding name; keep
+        # the two in step if it ever changes.
+        - "e2e-foreign-rbac-a[^ ]* already exists and is not managed by the operator"
   - name: "chart-values-controller"
     namespace: "d8-operator-helm"
     labelSelector: "app=chart-values-controller"
