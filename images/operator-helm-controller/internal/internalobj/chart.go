@@ -29,6 +29,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/labels"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -108,7 +109,7 @@ func applyHelmChartSpec(rel contract.Release, repo contract.Repository, existing
 		setReconcileRequestAnnotations(existing)
 	}
 
-	applyOwnedLabels(existing, rel.HelmChartLabels())
+	labels.ApplyOwned(existing, rel.HelmChartLabels())
 
 	ref := rel.ChartRef()
 	existing.Spec.Chart = ref.Chart

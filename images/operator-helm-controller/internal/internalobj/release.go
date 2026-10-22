@@ -33,6 +33,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/labels"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -133,7 +134,7 @@ func applyHelmReleaseSpec(rel contract.Release, existing *helmv2.HelmRelease, so
 		setReconcileRequestAnnotations(existing)
 	}
 
-	applyOwnedLabels(existing, rel.SourceLabels())
+	labels.ApplyOwned(existing, rel.SourceLabels())
 
 	names := rel.InternalNames()
 

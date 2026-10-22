@@ -14,19 +14,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package internalobj
+package labels
 
 import (
 	"maps"
 	"testing"
 
-	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-func TestApplyOwnedLabelsReconcilesOnlyTheControllersOwnLabels(t *testing.T) {
+func TestApplyOwnedReconcilesOnlyTheControllersOwnLabels(t *testing.T) {
 	tests := []struct {
 		name     string
 		existing map[string]string
@@ -82,9 +81,9 @@ func TestApplyOwnedLabelsReconcilesOnlyTheControllersOwnLabels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			obj := &sourcev1.HelmChart{ObjectMeta: metav1.ObjectMeta{Labels: tt.existing}}
+			obj := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Labels: tt.existing}}
 
-			applyOwnedLabels(obj, tt.desired)
+			ApplyOwned(obj, tt.desired)
 
 			if !maps.Equal(obj.Labels, tt.want) {
 				t.Fatalf("labels = %v, want %v", obj.Labels, tt.want)

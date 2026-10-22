@@ -31,6 +31,7 @@ import (
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/labels"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -154,5 +155,5 @@ func applyHelmRepositorySpec(repo contract.Repository, existing *sourcev1.HelmRe
 		}
 	}
 
-	applyOwnedLabels(existing, repo.SourceLabels())
+	labels.ApplyOwned(existing, repo.SourceLabels())
 }

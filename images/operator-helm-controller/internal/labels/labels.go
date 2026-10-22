@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package internalobj
+package labels
 
 import (
 	"maps"
@@ -25,9 +25,9 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// applyOwnedLabels brings the labels this controller owns on an internal object to
-// the desired set and leaves every other label alone.
-func applyOwnedLabels(obj client.Object, desired map[string]string) {
+// ApplyOwned brings the labels this controller owns on an object to the desired
+// set and leaves every other label alone.
+func ApplyOwned(obj client.Object, desired map[string]string) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string, len(desired))

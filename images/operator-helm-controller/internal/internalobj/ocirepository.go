@@ -33,6 +33,7 @@ import (
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/labels"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -259,7 +260,7 @@ func applyOCIRepositorySpec(
 		Operation: "copy",
 	}
 
-	applyOwnedLabels(existing, rel.SourceLabels())
+	labels.ApplyOwned(existing, rel.SourceLabels())
 }
 
 func sameRegistryHost(repoURL, artifactURL string) bool {
