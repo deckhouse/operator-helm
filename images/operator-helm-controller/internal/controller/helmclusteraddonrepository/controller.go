@@ -45,7 +45,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 
 	r := reconcile.New(client, reconcile.Deps{
 		NewRepository:    adapter.EmptyAddonRepository,
-		Secrets:          reposync.NewSecrets(client, helmv1alpha1.TargetNamespace),
+		Secrets:          reposync.NewSecrets(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
 		HelmRepositories: internalobj.NewHelmRepositories(client, helmv1alpha1.TargetNamespace),
 		Consumers:        internalobj.NewConsumers(client, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(client)),
 		Catalogs:         reposync.NewSynchronizer(client, repoclient.NewClient, adapter.NewAddonCatalog(client, mgr.GetAPIReader())),

@@ -43,7 +43,7 @@ func newSecrets(t *testing.T, objects ...client.Object) (*Secrets, client.Client
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 
-	return NewSecrets(c, testNamespace), c
+	return NewSecrets(c, c, testNamespace), c
 }
 
 func TestSecretsEnsureCreatesAuthAndTLS(t *testing.T) {
@@ -222,7 +222,7 @@ func TestSecretsEnsureIsSilentOnASecondPassWithTheSameInputs(t *testing.T) {
 				}).
 				Build()
 
-			service := NewSecrets(c, testNamespace)
+			service := NewSecrets(c, c, testNamespace)
 
 			if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), tc.repoType); err != nil {
 				t.Fatalf("the first Ensure returned %v", err)
@@ -283,7 +283,7 @@ func TestSecretsEnsureFailsWhenTheReplacedAuthSecretIsBack(t *testing.T) {
 		}).
 		Build()
 
-	service := NewSecrets(c, testNamespace)
+	service := NewSecrets(c, c, testNamespace)
 
 	err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI)
 	if err == nil {
@@ -341,5 +341,120 @@ func TestSecretsEnsureKeepsLabelsSetBySomeoneElse(t *testing.T) {
 		if secret.Labels[helmv1alpha1.LabelManagedBy] != helmv1alpha1.LabelManagedByValue {
 			t.Fatalf("secret %s is missing the managed-by label, labels are %v", name, secret.Labels)
 		}
+	}
+}
+
+func TestSecretsEnsureKeepsAnAuthSecretTheCacheReportsWithAnOldType(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		Spec: helmv1alpha1.RepositorySpec{
+			URL:  "oci://ghcr.io/example/podinfo",
+			Auth: &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"},
+		},
+	}
+
+	authName := utils.GetInternalRepositoryAuthSecretName(repo.Name)
+	current := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: authName, Namespace: testNamespace},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte("{}")},
+	}
+
+	fresh := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(repo, current).Build()
+
+	var deletes []string
+	cached := interceptor.NewClient(fresh, interceptor.Funcs{
+		Get: func(
+			ctx context.Context, wc client.WithWatch, key client.ObjectKey,
+			obj client.Object, opts ...client.GetOption,
+		) error {
+			if err := wc.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+
+			if secret, ok := obj.(*corev1.Secret); ok && secret.Name == authName {
+				secret.Type = corev1.SecretTypeOpaque
+			}
+
+			return nil
+		},
+		Delete: func(
+			ctx context.Context, wc client.WithWatch, obj client.Object, opts ...client.DeleteOption,
+		) error {
+			deletes = append(deletes, obj.GetName())
+
+			return wc.Delete(ctx, obj, opts...)
+		},
+	})
+
+	service := NewSecrets(cached, fresh, testNamespace)
+
+	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); err != nil {
+		t.Fatalf("Ensure returned %v", err)
+	}
+
+	if len(deletes) > 0 {
+		t.Fatalf("an auth secret of the right type must survive a lagging cache, deleted %v", deletes)
+	}
+}
+
+func TestSecretsEnsureDoesNotDeleteAnAuthSecretThatChangedSinceItWasRead(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		Spec: helmv1alpha1.RepositorySpec{
+			URL:  "oci://ghcr.io/example/podinfo",
+			Auth: &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"},
+		},
+	}
+
+	authName := utils.GetInternalRepositoryAuthSecretName(repo.Name)
+	stale := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: authName, Namespace: testNamespace},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{"username": []byte("stale")},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(repo, stale).Build()
+
+	raced := false
+	cached := interceptor.NewClient(c, interceptor.Funcs{
+		Delete: func(
+			ctx context.Context, wc client.WithWatch, obj client.Object, opts ...client.DeleteOption,
+		) error {
+			if !raced {
+				raced = true
+
+				replaced := &corev1.Secret{}
+				if err := wc.Get(ctx, client.ObjectKeyFromObject(obj), replaced); err != nil {
+					return err
+				}
+				if err := wc.Delete(ctx, replaced); err != nil {
+					return err
+				}
+				if err := wc.Create(ctx, &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: authName, Namespace: testNamespace},
+					Type:       corev1.SecretTypeDockerConfigJson,
+					Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte("{}")},
+				}); err != nil {
+					return err
+				}
+			}
+
+			return wc.Delete(ctx, obj, opts...)
+		},
+	})
+
+	service := NewSecrets(cached, c, testNamespace)
+
+	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.OCI); err == nil {
+		t.Fatal("Ensure deleted an auth secret that had already been replaced")
+	}
+
+	secret := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authName, Namespace: testNamespace}, secret); err != nil {
+		t.Fatalf("the replacing auth secret is gone: %v", err)
+	}
+	if secret.Type != corev1.SecretTypeDockerConfigJson {
+		t.Fatalf("auth secret type is %q, want %q", secret.Type, corev1.SecretTypeDockerConfigJson)
 	}
 }

@@ -38,11 +38,12 @@ import (
 // either repository kind, and removes them again.
 type Secrets struct {
 	client          client.Client
+	reader          client.Reader
 	targetNamespace string
 }
 
-func NewSecrets(client client.Client, namespace string) *Secrets {
-	return &Secrets{client: client, targetNamespace: namespace}
+func NewSecrets(client client.Client, reader client.Reader, namespace string) *Secrets {
+	return &Secrets{client: client, reader: reader, targetNamespace: namespace}
 }
 
 // Ensure reconciles every auxiliary secret the repository needs. The auth secret's shape
@@ -163,8 +164,10 @@ func (s *Secrets) reconcileAuthSecret(
 func (s *Secrets) removeAuthSecretOfOtherType(
 	ctx context.Context, nn types.NamespacedName, secretType corev1.SecretType,
 ) (bool, error) {
+	// Direct reader, not the cache: a lagging cache would report the old type and cost the
+	// secret a needless delete and recreate.
 	existing := &corev1.Secret{}
-	if err := s.client.Get(ctx, nn, existing); err != nil {
+	if err := s.reader.Get(ctx, nn, existing); err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
@@ -182,7 +185,10 @@ func (s *Secrets) removeAuthSecretOfOtherType(
 	}
 
 	// A secret type is immutable, so a secret of the wrong type can only be replaced.
-	if err := s.client.Delete(ctx, existing); client.IgnoreNotFound(err) != nil {
+	if err := s.client.Delete(ctx, existing, client.Preconditions{
+		UID:             &existing.UID,
+		ResourceVersion: &existing.ResourceVersion,
+	}); client.IgnoreNotFound(err) != nil {
 		return false, fmt.Errorf("deleting auth secret of type %q: %w", existingType, err)
 	}
 

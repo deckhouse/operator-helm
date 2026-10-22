@@ -123,7 +123,7 @@ func newReconcilerWithInterceptor(
 
 	r := New(c, Deps{
 		NewRepository:    adapter.EmptyAddonRepository,
-		Secrets:          reposync.NewSecrets(c, helmv1alpha1.TargetNamespace),
+		Secrets:          reposync.NewSecrets(c, c, helmv1alpha1.TargetNamespace),
 		HelmRepositories: internalobj.NewHelmRepositories(c, helmv1alpha1.TargetNamespace),
 		Consumers:        internalobj.NewConsumers(c, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(c)),
 		Catalogs:         reposync.NewSynchronizer(c, factory, adapter.NewAddonCatalog(c, c)),
@@ -164,7 +164,7 @@ func newApplicationReconciler(t *testing.T, stub *stubRepoClient, objects ...cli
 
 	r := New(c, Deps{
 		NewRepository:    adapter.EmptyApplicationRepository,
-		Secrets:          reposync.NewSecrets(c, helmv1alpha1.TargetNamespace),
+		Secrets:          reposync.NewSecrets(c, c, helmv1alpha1.TargetNamespace),
 		HelmRepositories: internalobj.NewHelmRepositories(c, helmv1alpha1.TargetNamespace),
 		Consumers:        internalobj.NewConsumers(c, helmv1alpha1.TargetNamespace, adapter.ListApplicationReleases(c)),
 		Catalogs:         reposync.NewSynchronizer(c, factory, adapter.NewApplicationCatalog(c, c)),
