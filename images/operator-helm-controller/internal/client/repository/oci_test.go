@@ -913,3 +913,22 @@ func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing
 		t.Fatal("the pass that examined the re-pushed tag must clear the mark, or the refresh never ends")
 	}
 }
+
+func TestFetchChartsOCIOrdersVersionsNewestFirst(t *testing.T) {
+	_, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "2.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.10.0", helmConfigMediaType, currentChartMediaType)
+
+	chart := fetchOne(t, host, FetchOptions{})
+
+	got := make([]string, 0, len(chart.Versions))
+	for _, version := range chart.Versions {
+		got = append(got, version.Version.Original())
+	}
+
+	want := []string{"2.0.0", "1.10.0", "1.0.0"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("versions = %v, want %v: the catalog reads the newest version off the front", got, want)
+	}
+}

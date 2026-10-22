@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -287,6 +288,11 @@ func resolveChartVersions(
 			versions = append(versions, *resolved[i])
 		}
 	}
+
+	// The registry lists tags in its own order; the catalog reads the newest version off the front.
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].Version.GreaterThan(versions[j].Version)
+	})
 
 	return versions, unexamined, nil
 }
