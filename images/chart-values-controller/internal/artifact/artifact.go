@@ -37,6 +37,10 @@ var ErrValuesNotFound = errors.New("values.yaml not found in chart archive")
 // ErrArtifactTooLarge is returned when a chart artifact exceeds the configured size limit.
 var ErrArtifactTooLarge = errors.New("chart artifact exceeds the configured size limit")
 
+// ErrArtifactNotAChartPackage is returned when a chart archive holds files under more than
+// one root directory, which "helm package" never produces.
+var ErrArtifactNotAChartPackage = errors.New("chart archive is not a single-rooted chart package")
+
 // ErrArtifactTooManyEntries is returned when a chart archive holds more files than any
 // chart plausibly does, which the byte budget alone does not bound.
 var ErrArtifactTooManyEntries = errors.New("chart archive holds too many entries")
@@ -188,13 +192,13 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 	spent := &budget{ctx: ctx, limit: decompressedLimit(int64(len(data)))}
 	tr := tar.NewReader(spent.reader(gz))
 
+	var values []byte
+	var found bool
+	var root string
+
 	for entries := 0; ; entries++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
-		}
-
-		if entries >= maxArchiveEntries {
-			return nil, fmt.Errorf("%w (more than %d)", ErrArtifactTooManyEntries, maxArchiveEntries)
 		}
 
 		header, err := tr.Next()
@@ -210,11 +214,25 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 			return nil, fmt.Errorf("reading tar stream: %w", err)
 		}
 
+		if entries >= maxArchiveEntries {
+			return nil, fmt.Errorf("%w (more than %d)", ErrArtifactTooManyEntries, maxArchiveEntries)
+		}
+
 		if header.Typeflag != tar.TypeReg {
 			continue
 		}
 
 		parts := strings.Split(path.Clean(header.Name), "/")
+		if len(parts) < 2 || parts[0] == "" || parts[0] == ".." {
+			return nil, ErrArtifactNotAChartPackage
+		}
+		if root == "" {
+			root = parts[0]
+		}
+		if parts[0] != root {
+			return nil, ErrArtifactNotAChartPackage
+		}
+
 		if len(parts) == 2 && parts[1] == "values.yaml" {
 			if err := spent.afford(header.Size); err != nil {
 				return nil, err
@@ -234,9 +252,13 @@ func extractValues(ctx context.Context, data []byte, maxBytes int64) ([]byte, er
 				return nil, fmt.Errorf("%w (values.yaml > %d bytes)", ErrArtifactTooLarge, maxBytes)
 			}
 
-			return content, nil
+			values, found = content, true
 		}
 	}
 
-	return nil, ErrValuesNotFound
+	if !found {
+		return nil, ErrValuesNotFound
+	}
+
+	return values, nil
 }

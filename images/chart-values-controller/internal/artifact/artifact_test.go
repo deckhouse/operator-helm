@@ -390,3 +390,27 @@ func padToBlock(b []byte) []byte {
 
 	return b
 }
+
+func TestExtractValuesRejectsAnArchiveWithSeveralRootDirectories(t *testing.T) {
+	archive := buildOrderedChartArchive(t, []archiveEntry{
+		{name: "decoy/values.yaml", content: "shown: true\n"},
+		{name: "podinfo/Chart.yaml", content: "name: podinfo\n"},
+		{name: "podinfo/values.yaml", content: "applied: true\n"},
+	})
+
+	_, err := extractValues(context.Background(), archive, 1<<20)
+	if !errors.Is(err, ErrArtifactNotAChartPackage) {
+		t.Fatalf("expected ErrArtifactNotAChartPackage, got %v", err)
+	}
+}
+
+func TestExtractValuesRejectsAnArchiveWithoutARootDirectory(t *testing.T) {
+	archive := buildOrderedChartArchive(t, []archiveEntry{
+		{name: "/values.yaml", content: "shown: true\n"},
+	})
+
+	_, err := extractValues(context.Background(), archive, 1<<20)
+	if !errors.Is(err, ErrArtifactNotAChartPackage) {
+		t.Fatalf("expected ErrArtifactNotAChartPackage, got %v", err)
+	}
+}
