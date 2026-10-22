@@ -56,12 +56,6 @@ rules:
   - create
   - patch
 - apiGroups:
-  - ""
-  resources:
-  - serviceaccounts/token
-  verbs:
-  - create
-- apiGroups:
   - helm.deckhouse.io
   resources:
   - helmclusteraddons 
