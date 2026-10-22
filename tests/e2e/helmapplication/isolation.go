@@ -243,14 +243,6 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a daemon set: %v", err)
 		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
 
-		policy := &networkingv1.NetworkPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-netpol", Namespace: ns},
-			Spec:       networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}},
-		}
-		_, err = asApp.NetworkingV1().NetworkPolicies(ns).Create(ctx, policy, metav1.CreateOptions{})
-		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "creating a network policy: %v", err)
-		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
-
 		quota := &corev1.ResourceQuota{
 			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-quota", Namespace: ns},
 			Spec:       corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{"count/configmaps": resource.MustParse("100")}},
@@ -286,6 +278,14 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "deleting the quota: %v", err)
 		Expect(err.Error()).To(ContainSubstring("may not modify its namespace"))
 
+		By("A network policy, which the namespace administrator writes himself, is not protected")
+		policy := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-app-netpol", Namespace: ns},
+			Spec:       networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}},
+		}
+		_, err = asApp.NetworkingV1().NetworkPolicies(ns).Create(ctx, policy, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred(), "creating a network policy")
+
 		By("A Role granting a protected kind, in any spelling, is refused")
 		for _, rules := range [][]rbacv1.PolicyRule{
 			{{APIGroups: []string{""}, Resources: []string{"resourcequotas"}, Verbs: []string{"update"}}},
@@ -295,7 +295,6 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 			{{APIGroups: []string{"deckhouse.io"}, Resources: []string{"projectnamespaces"}, Verbs: []string{"delete"}}},
 			{{APIGroups: []string{"apps"}, Resources: []string{"daemonsets"}, Verbs: []string{"create"}}},
 			{{APIGroups: []string{"extensions"}, Resources: []string{"daemonsets"}, Verbs: []string{"create"}}},
-			{{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}, Verbs: []string{"create"}}},
 			// Every kind at once, the spelling a chart reaches for first. The verb is one
 			// the identity holds: a verb it does not reach the API server's escalation
 			// check instead, which is the case below.
@@ -305,13 +304,13 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 			// The resource spelled as a wildcard inside a protected group.
 			{{APIGroups: []string{"apps"}, Resources: []string{"*"}, Verbs: []string{"patch"}}},
 			// A subresource of a protected kind.
-			{{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies/status"}, Verbs: []string{"update"}}},
+			{{APIGroups: []string{"apps"}, Resources: []string{"daemonsets/status"}, Verbs: []string{"update"}}},
 			// The protected kind carried by the cross product of a single rule.
 			{{APIGroups: []string{"", "apps"}, Resources: []string{"configmaps", "daemonsets"}, Verbs: []string{"get", "create"}}},
 			// And hidden behind a harmless rule that comes first.
 			{
 				{APIGroups: []string{""}, Resources: []string{"configmaps"}, Verbs: []string{"get"}},
-				{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}, Verbs: []string{"patch"}},
+				{APIGroups: []string{"apps"}, Resources: []string{"daemonsets"}, Verbs: []string{"patch"}},
 			},
 		} {
 			escalation := &rbacv1.Role{

@@ -61,7 +61,7 @@ spec:
     namespaceSelector: {}
     objectSelector: {}
 {{- $applicationSubject := printf "system:serviceaccount:d8-%s:hap-" .Chart.Name }}
-{{- $protected := dict "" (list "namespaces" "resourcequotas" "limitranges") "apps" (list "daemonsets") "extensions" (list "daemonsets") "networking.k8s.io" (list "networkpolicies") "deckhouse.io" (list "projectnamespaces") }}
+{{- $protected := dict "" (list "namespaces" "resourcequotas" "limitranges") "apps" (list "daemonsets") "extensions" (list "daemonsets") "deckhouse.io" (list "projectnamespaces") }}
 {{- $subresources := list "status" "finalize" }}
 {{- $mutating := list "*" "create" "update" "patch" "delete" "deletecollection" }}
 ---
@@ -91,7 +91,7 @@ spec:
       expression: 'request.userInfo.username.startsWith("{{ $applicationSubject }}")'
   validations:
     - expression: "false"
-      message: "An application may not modify its namespace, resource quotas, limit ranges, daemon sets, network policies or project namespaces."
+      message: "An application may not modify its namespace, resource quotas, limit ranges, daemon sets or project namespaces."
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -121,7 +121,7 @@ spec:
             r.resources.exists(res, res == "*" || res.startsWith("*/") || res.split("/")[0] in {{ index $protected $group | toJson }}))
           {{- end }}
           ))
-      message: "A Role written by an application may not grant write access to namespaces, resource quotas, limit ranges, daemon sets, network policies or project namespaces."
+      message: "A Role written by an application may not grant write access to namespaces, resource quotas, limit ranges, daemon sets or project namespaces."
       reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
