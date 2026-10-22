@@ -22,6 +22,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -347,6 +348,74 @@ func TestResolveHybridVersionUsesOCIRepository(t *testing.T) {
 	helmChart := &sourcev1.HelmChart{}
 	if err := c.Get(context.Background(), key, helmChart); err == nil {
 		t.Fatal("no helm chart must be created for a version published in a registry")
+	}
+}
+
+func TestResolveHybridProbeFailureKeepsTheAddressOut(t *testing.T) {
+	req := Request{
+		Kind:           RepositoryKindHelmClusterAddon,
+		RepositoryName: "example",
+		Chart:          "nginx",
+		Version:        "0.1.0",
+	}
+
+	for _, tc := range []struct {
+		name    string
+		err     error
+		outcome Outcome
+		detail  string
+	}{
+		{
+			name:    "a tag the registry does not have is values_not_found",
+			err:     fmt.Errorf("%w: oci://10.0.0.7:5000/internal/nginx:0.1.0", chartartifact.ErrTagNotFound),
+			outcome: OutcomeValuesNotFound,
+			detail:  chartartifact.ErrTagNotFound.Error(),
+		},
+		{
+			name:    "an artifact that is not a chart is values_not_found",
+			err:     fmt.Errorf("%w: config media type of oci://10.0.0.7:5000/internal/nginx:0.1.0 is %q", chartartifact.ErrNotAChart, "application/vnd.oci.image.config.v1+json"),
+			outcome: OutcomeValuesNotFound,
+			detail:  chartartifact.ErrNotAChart.Error(),
+		},
+		{
+			name:    "a transport failure is pending and says nothing",
+			err:     errors.New("reading the manifest of oci://10.0.0.7:5000/internal/nginx:0.1.0: dial tcp 10.0.0.7:5000: connect: connection refused"),
+			outcome: OutcomePending,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &helmv1alpha1.HelmClusterAddonRepository{
+				ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "repo-uid"},
+				Spec:       helmv1alpha1.RepositorySpec{URL: "https://charts.example.invalid/stable"},
+			}
+			chart := chartWithVersions("example", "nginx", helmv1alpha1.ChartVersion{
+				Version: "0.1.0",
+				OCIRef:  "oci://10.0.0.7:5000/internal/nginx:0.1.0",
+			})
+
+			resolver, _ := newHybridResolver(t, &stubProber{err: tc.err}, repo, chart)
+
+			result, err := resolver.resolveChart(context.Background(), mustFamily(t, req.Kind), req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Outcome != tc.outcome {
+				t.Fatalf("outcome is %+v, want %q", result, tc.outcome)
+			}
+
+			for _, secret := range []string{"10.0.0.7", "5000", "internal/nginx", "connection refused", "application/vnd.oci.image.config.v1+json"} {
+				if strings.Contains(result.Message, secret) {
+					t.Errorf("message %q leaks %q from the probe", result.Message, secret)
+				}
+			}
+
+			if tc.detail != "" && !strings.Contains(result.Message, tc.detail) {
+				t.Errorf("message %q must still name the verdict %q", result.Message, tc.detail)
+			}
+			if tc.detail == "" && result.Message != "" {
+				t.Errorf("message is %q, want nothing for a transport failure", result.Message)
+			}
+		})
 	}
 }
 

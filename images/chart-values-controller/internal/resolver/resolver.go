@@ -509,11 +509,16 @@ func (r *Resolver) ensureHybridOCIRepository(
 
 		mediaType, err = r.prober.ChartLayerMediaType(ctx, version.OCIRef, rt)
 		if err != nil {
-			if errors.Is(err, chartartifact.ErrNotAChart) || errors.Is(err, chartartifact.ErrTagNotFound) {
-				return nil, &Result{Outcome: OutcomeValuesNotFound, Message: err.Error()}, nil
-			}
-
 			log.FromContext(ctx).Info("Probing the chart artifact failed", "ref", version.OCIRef, "error", err.Error())
+
+			for _, verdict := range []error{chartartifact.ErrNotAChart, chartartifact.ErrTagNotFound} {
+				if errors.Is(err, verdict) {
+					return nil, &Result{
+						Outcome: OutcomeValuesNotFound,
+						Message: fmt.Sprintf("chart version %s is not readable (%s)", req.Version, verdict),
+					}, nil
+				}
+			}
 
 			return nil, &Result{Outcome: OutcomePending}, nil
 		}
