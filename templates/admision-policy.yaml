@@ -1,15 +1,4 @@
-{{- $kubeVersion := .Values.global.discovery.kubernetesVersion }}
-{{- $apiVersion := "" }}
-{{- if semverCompare ">=1.30.0" $kubeVersion }}
-{{- $apiVersion = "admissionregistration.k8s.io/v1" }}
-{{- else if semverCompare ">=1.28.0" $kubeVersion }}
-{{- $apiVersion = "admissionregistration.k8s.io/v1beta1" }}
-{{- else if semverCompare ">=1.26.0" $kubeVersion }}
-{{- $apiVersion = "admissionregistration.k8s.io/v1alpha1" }}
-{{- end }}
-
-{{- if $apiVersion }}
-apiVersion: {{ $apiVersion }}
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
@@ -59,7 +48,7 @@ spec:
       message: "Operation forbidden for this user."
       reason: Forbidden
 ---
-apiVersion: {{ $apiVersion }}
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
@@ -71,13 +60,12 @@ spec:
   matchResources:
     namespaceSelector: {}
     objectSelector: {}
-{{- if semverCompare ">=1.28.0" $kubeVersion }}
 {{- $applicationSubject := printf "system:serviceaccount:d8-%s:hap-" .Chart.Name }}
 {{- $protected := dict "" (list "namespaces" "resourcequotas" "limitranges") "apps" (list "daemonsets") "extensions" (list "daemonsets") "networking.k8s.io" (list "networkpolicies") "deckhouse.io" (list "projectnamespaces") }}
 {{- $subresources := list "status" "finalize" }}
 {{- $mutating := list "*" "create" "update" "patch" "delete" "deletecollection" }}
 ---
-apiVersion: {{ $apiVersion }}
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
@@ -106,7 +94,7 @@ spec:
       message: "An application may not modify its namespace, resource quotas, limit ranges, daemon sets, network policies or project namespaces."
       reason: Forbidden
 ---
-apiVersion: {{ $apiVersion }}
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
@@ -136,7 +124,7 @@ spec:
       message: "A Role written by an application may not grant write access to namespaces, resource quotas, limit ranges, daemon sets, network policies or project namespaces."
       reason: Forbidden
 ---
-apiVersion: {{ $apiVersion }}
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
@@ -158,7 +146,7 @@ spec:
       reason: Forbidden
 {{- range list "protected-kinds" "role" "rolebinding" }}
 ---
-apiVersion: {{ $apiVersion }}
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
   {{- include "helm_lib_module_labels" (list $) | nindent 2 }}
@@ -169,6 +157,4 @@ spec:
   matchResources:
     namespaceSelector: {}
     objectSelector: {}
-{{- end }}
-{{- end }}
 {{- end }}
