@@ -90,9 +90,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		Current:    *repo.Status().DeepCopy(),
 	}
 
-	// TRANSITIONAL: renamed here rather than inside the synchronization, to run even without a fetch.
-	in.MigrateErr = r.deps.Catalogs.MigrateNames(ctx, repo)
-
 	if repoTypeErr != nil {
 		in.ConfigErr = &ConfigFailure{
 			Reason:  helmv1alpha1.ReasonUnsupportedRepositoryType,
@@ -119,8 +116,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	forceRecorded := false
 
-	// An unfinished rename stops the synchronization: a pass needs exactly one object per chart.
-	if in.MigrateErr == nil && in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
+	if in.SecretsErr == nil && in.InternalRepositoryErr == nil &&
 		ShouldAttempt(in.Current, in.Generation, in.Now, in.Forced) {
 		if err := r.markSyncInProgress(ctx, repo, in.Forced); err != nil {
 			return reconcile.Result{}, err

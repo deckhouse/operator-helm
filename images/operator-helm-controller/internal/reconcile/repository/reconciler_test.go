@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +39,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/deckhouse/operator-helm/api/naming"
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
@@ -273,45 +271,6 @@ func TestReconcileSkipsFetchBeforeSchedule(t *testing.T) {
 	}
 }
 
-func TestReconcileMigratesCatalogNamesWithoutAFetch(t *testing.T) {
-	repo := ociRepository()
-	legacy := &helmv1alpha1.HelmClusterAddonChart{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "e2e-repo-chart-podinfo",
-			Labels: map[string]string{
-				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
-				helmv1alpha1.LabelRepositoryName:    repo.Name,
-				helmv1alpha1.LabelChartName:         "podinfo",
-			},
-		},
-		Status: helmv1alpha1.ChartCatalogStatus{
-			Versions: []helmv1alpha1.ChartVersion{{Version: "1.0.0", MediaType: "application/tar+gzip"}},
-		},
-	}
-
-	stub := &stubRepoClient{err: &repoclient.TerminalError{
-		Reason:  helmv1alpha1.ReasonAuthenticationFailed,
-		Message: "repository rejected the credentials (HTTP 401)",
-	}}
-
-	r, c := newReconciler(t, stub, repo, legacy)
-	reconcileUntilStable(t, r, repo.Name)
-
-	moved := &helmv1alpha1.HelmClusterAddonChart{}
-	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
-	if err := c.Get(context.Background(), key, moved); err != nil {
-		t.Fatalf("catalog object was not renamed while the fetch was failing: %v", err)
-	}
-	if len(moved.Status.Versions) != 1 || moved.Status.Versions[0].MediaType == "" {
-		t.Fatalf("versions = %+v, want the legacy status carried over", moved.Status.Versions)
-	}
-
-	err := c.Get(context.Background(), client.ObjectKey{Name: legacy.Name}, &helmv1alpha1.HelmClusterAddonChart{})
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("legacy object err = %v, want NotFound", err)
-	}
-}
-
 func TestReconcileReportsAFailedMigration(t *testing.T) {
 	repo := ociRepository()
 	legacy := &helmv1alpha1.HelmClusterAddonChart{
@@ -356,157 +315,6 @@ func TestReconcileReportsAFailedMigration(t *testing.T) {
 	}
 	if updated.Status.ObservedGeneration != updated.Generation {
 		t.Fatalf("observedGeneration is %d, want %d", updated.Status.ObservedGeneration, updated.Generation)
-	}
-}
-
-func TestReconcileReportsAFailedMigrationWithoutAnAttempt(t *testing.T) {
-	repo := ociRepository()
-	refuse := false
-
-	stub := &stubRepoClient{charts: []repoclient.Chart{{
-		Name:     "podinfo",
-		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("6.7.1")}},
-	}}}
-
-	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
-		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-			if refuse && obj.GetName() == "e2e-repo-chart-podinfo" {
-				return errors.New("forbidden")
-			}
-
-			return cl.Delete(ctx, obj, opts...)
-		},
-	}, stub, repo)
-
-	reconcileUntilStable(t, r, repo.Name)
-
-	synced := &helmv1alpha1.HelmClusterAddonRepository{}
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), synced); err != nil {
-		t.Fatalf("getting repository: %v", err)
-	}
-	if !apimeta.IsStatusConditionTrue(synced.Status.Conditions, helmv1alpha1.ConditionTypeSynced) {
-		t.Fatalf("the first run must leave Synced=True, conditions: %v", synced.Status.Conditions)
-	}
-	if synced.Status.NextSyncTime == nil || !synced.Status.NextSyncTime.After(time.Now()) {
-		t.Fatalf("nextSyncTime = %v, want a schedule in the future", synced.Status.NextSyncTime)
-	}
-
-	refuse = true
-	legacy := &helmv1alpha1.HelmClusterAddonChart{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "e2e-repo-chart-podinfo",
-			Labels: map[string]string{
-				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
-				helmv1alpha1.LabelRepositoryName:    repo.Name,
-				helmv1alpha1.LabelChartName:         "podinfo",
-			},
-		},
-	}
-	if err := c.Create(context.Background(), legacy); err != nil {
-		t.Fatalf("creating the legacy object: %v", err)
-	}
-
-	if _, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Name: repo.Name},
-	}); err == nil {
-		t.Fatal("the pass must report the refused rename, or the work queue waits for the next sync instead of retrying")
-	}
-
-	updated := &helmv1alpha1.HelmClusterAddonRepository{}
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(repo), updated); err != nil {
-		t.Fatalf("getting repository: %v", err)
-	}
-
-	cond := apimeta.FindStatusCondition(updated.Status.Conditions, helmv1alpha1.ConditionTypeSynced)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != helmv1alpha1.ReasonCatalogUpdateFailed {
-		t.Fatalf("Synced = %v, want False with %s: the pass attempted no sync, so the stale True would stand", cond, helmv1alpha1.ReasonCatalogUpdateFailed)
-	}
-	if !strings.Contains(cond.Message, "forbidden") {
-		t.Fatalf("Synced message = %q, want the refusal in it", cond.Message)
-	}
-}
-
-func TestUnfinishedRenameDoesNotOverwriteTheCatalog(t *testing.T) {
-	repo := ociRepository()
-	legacy := &helmv1alpha1.HelmClusterAddonChart{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "example-chart-podinfo",
-			Labels: map[string]string{
-				helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
-				helmv1alpha1.LabelRepositoryName:    repo.Name,
-				helmv1alpha1.LabelChartName:         "podinfo",
-			},
-		},
-		Status: helmv1alpha1.ChartCatalogStatus{
-			Versions: []helmv1alpha1.ChartVersion{{
-				Version:   "1.0.0",
-				MediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
-			}},
-		},
-	}
-	consumer := &helmv1alpha1.HelmClusterAddon{
-		ObjectMeta: metav1.ObjectMeta{Name: "consumer"},
-		Spec: helmv1alpha1.HelmClusterAddonSpec{
-			Namespace: "app",
-			Chart: helmv1alpha1.HelmClusterAddonChartRef{
-				HelmClusterAddonRepository: repo.Name,
-				HelmClusterAddonChartName:  "podinfo",
-				Version:                    "1.0.0",
-			},
-		},
-	}
-
-	stub := &stubRepoClient{charts: []repoclient.Chart{{
-		Name:     "podinfo",
-		Versions: []repoclient.ChartVersion{{Version: semver.MustParse("2.0.0")}},
-	}}}
-
-	failed := false
-	r, c := newReconcilerWithInterceptor(t, interceptor.Funcs{
-		SubResourcePatch: func(
-			ctx context.Context,
-			cl client.Client,
-			sub string,
-			obj client.Object,
-			patch client.Patch,
-			opts ...client.SubResourcePatchOption,
-		) error {
-			if _, ok := obj.(*helmv1alpha1.HelmClusterAddonChart); ok && !failed {
-				failed = true
-
-				return errors.New("transient status patch failure")
-			}
-
-			return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
-		},
-	}, stub, repo, legacy, consumer)
-
-	for range 4 {
-		_, _ = r.Reconcile(context.Background(), reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: repo.Name},
-		})
-	}
-
-	moved := &helmv1alpha1.HelmClusterAddonChart{}
-	key := client.ObjectKey{Name: naming.HelmClusterAddonChartName(repo.Name, "podinfo")}
-	if err := c.Get(context.Background(), key, moved); err != nil {
-		t.Fatalf("the chart was never moved to its current name: %v", err)
-	}
-
-	var retained *helmv1alpha1.ChartVersion
-	for i := range moved.Status.Versions {
-		if moved.Status.Versions[i].Version == "1.0.0" {
-			retained = &moved.Status.Versions[i]
-		}
-	}
-	if retained == nil {
-		t.Fatalf("versions = %+v, want 1.0.0 carried over: a consumer still holds it and the repository no longer offers it", moved.Status.Versions)
-	}
-	if retained.MediaType == "" {
-		t.Fatal("1.0.0 lost its media type, so the consumer's internal source cannot be built")
-	}
-	if retained.UnavailableReason != helmv1alpha1.UnavailableReasonRemovedFromRepository {
-		t.Fatalf("1.0.0 reason = %q, want %q", retained.UnavailableReason, helmv1alpha1.UnavailableReasonRemovedFromRepository)
 	}
 }
 

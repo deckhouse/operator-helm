@@ -39,12 +39,6 @@ type Catalog interface {
 	// Snapshot reads the catalog objects of one repository and returns the state a
 	// synchronization pass decides from. It is a single read for the whole pass.
 	Snapshot(ctx context.Context, repo Repository) (CatalogSnapshot, error)
-	// MigrateNames moves the repository's catalog objects to the names the current scheme
-	// derives. It reads nothing from the repository and runs on every reconcile.
-	//
-	// TRANSITIONAL: remove once every cluster has reconciled each repository once
-	// under the current scheme.
-	MigrateNames(ctx context.Context, repo Repository) error
 	// InUseVersions reports the versions of one chart still referenced by the
 	// consumers of this family. An empty chart name yields no versions.
 	InUseVersions(ctx context.Context, repo Repository, chartName string) (map[string]struct{}, error)
