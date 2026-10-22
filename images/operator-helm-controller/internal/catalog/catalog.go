@@ -276,7 +276,7 @@ func (s *snapshot[C, CL]) ensure(ctx context.Context, existing C, present bool, 
 
 	if present {
 		base := existing.DeepCopyObject().(C)
-		s.applyMeta(existing, chartName)
+		applyMeta(existing, s.repo, chartName)
 
 		if equality.Semantic.DeepEqual(base.GetLabels(), existing.GetLabels()) &&
 			equality.Semantic.DeepEqual(base.GetOwnerReferences(), existing.GetOwnerReferences()) {
@@ -296,7 +296,7 @@ func (s *snapshot[C, CL]) ensure(ctx context.Context, existing C, present bool, 
 	created := s.cfg.NewObject()
 	created.SetName(name)
 	created.SetNamespace(s.repo.Namespace())
-	s.applyMeta(created, chartName)
+	applyMeta(created, s.repo, chartName)
 
 	err := s.client.Create(ctx, created)
 	switch {
@@ -323,7 +323,7 @@ func (s *snapshot[C, CL]) adopt(ctx context.Context, name, chartName string) err
 	}
 
 	base := fetched.DeepCopyObject().(C)
-	s.applyMeta(fetched, chartName)
+	applyMeta(fetched, s.repo, chartName)
 
 	if !equality.Semantic.DeepEqual(base.GetLabels(), fetched.GetLabels()) ||
 		!equality.Semantic.DeepEqual(base.GetOwnerReferences(), fetched.GetOwnerReferences()) {
@@ -339,13 +339,13 @@ func (s *snapshot[C, CL]) adopt(ctx context.Context, name, chartName string) err
 		errors.New("the chart catalog object was written after this pass read the catalog"))
 }
 
-func (s *snapshot[C, CL]) applyMeta(obj C, chartName string) {
+func applyMeta(obj client.Object, repo contract.Repository, chartName string) {
 	obj.SetOwnerReferences([]metav1.OwnerReference{
-		*metav1.NewControllerRef(s.repo.Object(), s.repo.OwnerGVK()),
+		*metav1.NewControllerRef(repo.Object(), repo.OwnerGVK()),
 	})
 	obj.SetLabels(map[string]string{
 		helmv1alpha1.LabelDeckhouseHeritage: helmv1alpha1.LabelDeckhouseHeritageValue,
-		helmv1alpha1.LabelRepositoryName:    s.repo.Name(),
+		helmv1alpha1.LabelRepositoryName:    repo.Name(),
 		helmv1alpha1.LabelChartName:         chartName,
 	})
 }
@@ -389,7 +389,7 @@ func (t *typed[C, CL]) MigrateNames(ctx context.Context, repo contract.Repositor
 			continue
 		}
 
-		current, err := t.destination(ctx, repo, name, legacy)
+		current, err := t.destination(ctx, repo, name, chartName, legacy)
 		if err != nil {
 			return err
 		}
@@ -460,7 +460,7 @@ func (t *typed[C, CL]) carryOver(ctx context.Context, legacy, current C) error {
 	return nil
 }
 
-func (t *typed[C, CL]) destination(ctx context.Context, repo contract.Repository, name string, legacy C) (C, error) {
+func (t *typed[C, CL]) destination(ctx context.Context, repo contract.Repository, name, chartName string, legacy C) (C, error) {
 	current := t.cfg.NewObject()
 	key := client.ObjectKey{Namespace: repo.Namespace(), Name: name}
 
@@ -470,8 +470,7 @@ func (t *typed[C, CL]) destination(ctx context.Context, repo contract.Repository
 		current = t.cfg.NewObject()
 		current.SetName(name)
 		current.SetNamespace(repo.Namespace())
-		current.SetOwnerReferences(legacy.GetOwnerReferences())
-		current.SetLabels(legacy.GetLabels())
+		applyMeta(current, repo, chartName)
 
 		if err := t.client.Create(ctx, current); err != nil {
 			return current, fmt.Errorf("renaming chart %s: %w", describeKey(client.ObjectKeyFromObject(legacy)), err)
@@ -483,8 +482,7 @@ func (t *typed[C, CL]) destination(ctx context.Context, repo contract.Repository
 	}
 
 	base := current.DeepCopyObject().(C)
-	current.SetOwnerReferences(legacy.GetOwnerReferences())
-	current.SetLabels(legacy.GetLabels())
+	applyMeta(current, repo, chartName)
 
 	if equality.Semantic.DeepEqual(base.GetLabels(), current.GetLabels()) &&
 		equality.Semantic.DeepEqual(base.GetOwnerReferences(), current.GetOwnerReferences()) {

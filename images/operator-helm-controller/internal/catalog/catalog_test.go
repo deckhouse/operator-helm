@@ -842,6 +842,40 @@ func TestMigrationKeepsTheDestinationOwnedByTheRepository(t *testing.T) {
 	}
 }
 
+func TestMigrationStampsTheDestinationWithTheLiveRepository(t *testing.T) {
+	const legacyName = "example-chart-gone"
+
+	repo := adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "example-uid"},
+	})
+
+	legacy := legacyAddonChart(legacyName, "example", "gone",
+		helmv1alpha1.ChartVersion{Version: "1.0.0"},
+	)
+	// The repository was deleted and created again under the same name, so the owner
+	// reference the legacy object carries names an incarnation that is gone.
+	deleted := adapter.NewAddonRepository(&helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", UID: "deleted-uid"},
+	})
+	legacy.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(deleted.Object(), deleted.OwnerGVK())}
+
+	c := newAddonClient(t, legacy, addonConsumer("consumer", "example", "gone", "1.0.0"))
+	cat := adapter.NewAddonCatalog(c, c)
+
+	if err := cat.MigrateNames(context.Background(), repo); err != nil {
+		t.Fatalf("MigrateNames returned %v", err)
+	}
+
+	got := &helmv1alpha1.HelmClusterAddonChart{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: naming.HelmClusterAddonChartName("example", "gone")}, got); err != nil {
+		t.Fatalf("reading the migrated object: %v", err)
+	}
+
+	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].UID != "example-uid" {
+		t.Fatalf("owner references = %v, want the destination owned by the repository this pass reconciles", got.OwnerReferences)
+	}
+}
+
 func rejectInvalidLabels() interceptor.Funcs {
 	check := func(obj client.Object) error {
 		for key, value := range obj.GetLabels() {
