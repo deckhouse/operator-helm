@@ -111,13 +111,14 @@ func (s *Releases) Cleanup(ctx context.Context, names contract.ReleaseNames) (*h
 }
 
 // SyncSpec re-applies the addon-derived fields onto an existing HelmRelease while the addon
-// is being deleted, without ever creating it, and always requests a reconcile.
+// is being deleted, without ever creating it, and always requests a reconcile. A suspended
+// release is resumed: helm-controller drops a suspended one without uninstalling it.
 func (s *Releases) SyncSpec(ctx context.Context, rel contract.Release, release *helmv2.HelmRelease) error {
 	base := release.DeepCopy()
 
 	release.Spec.TargetNamespace = rel.TargetNamespace()
 	release.Spec.Values = rel.Values()
-	release.Spec.Suspend = rel.MaintenanceActivated()
+	release.Spec.Suspend = false
 
 	setReconcileRequestAnnotations(release)
 

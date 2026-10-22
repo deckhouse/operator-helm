@@ -2433,6 +2433,34 @@ func TestReconcileDeleteKeepsTheServiceAccountUntilTheInternalReleaseIsGone(t *t
 	}
 }
 
+func TestReconcileDeleteResumesASuspendedInternalRelease(t *testing.T) {
+	app, objects := deletingApplicationFixtures(false)
+	app.Spec.Maintenance = string(helmv1alpha1.NoResourceReconciliation)
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	for _, object := range objects {
+		if release, ok := object.(*helmv2.HelmRelease); ok {
+			release.Spec.Suspend = true
+		}
+	}
+
+	r, c := newApplicationFullReconciler(t, nil, objects...)
+
+	ctx := context.Background()
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(app)}); err != nil {
+		t.Fatalf("Reconcile returned %v", err)
+	}
+
+	internal := &helmv2.HelmRelease{}
+	releaseKey := client.ObjectKey{Namespace: helmv1alpha1.TargetNamespace, Name: names.HelmRelease}
+	if err := c.Get(ctx, releaseKey, internal); err != nil {
+		t.Fatalf("getting internal release: %v", err)
+	}
+	if internal.Spec.Suspend {
+		t.Fatal("a suspended internal release is dropped without an uninstall, so the chart resources are left behind")
+	}
+}
+
 func TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight(t *testing.T) {
 	app, objects := deletingApplicationFixtures(false)
 	names := adapter.NewApplicationRelease(app).InternalNames()
