@@ -38,6 +38,7 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:singular=helmclusteraddon,scope=Cluster
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="addon name must be at most 63 characters long"
 // +kubebuilder:printcolumn:name="Chart",type="string",JSONPath=".spec.chart.helmClusterAddonChart",description="Helm release chart name."
 // +kubebuilder:printcolumn:name="Chart Version",type="string",JSONPath=".spec.chart.version",description="Helm release chart version."
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the addon"
