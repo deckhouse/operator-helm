@@ -18,6 +18,7 @@ package reposync
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"testing"
 
@@ -290,5 +291,55 @@ func TestSecretsEnsureFailsWhenTheReplacedAuthSecretIsBack(t *testing.T) {
 	}
 	if !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("Ensure returned %v, want the AlreadyExists that stopped the write", err)
+	}
+}
+
+func TestSecretsEnsureKeepsLabelsSetBySomeoneElse(t *testing.T) {
+	repo := &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example"},
+		Spec: helmv1alpha1.RepositorySpec{
+			URL:           "https://example.invalid/charts",
+			Auth:          &helmv1alpha1.RepositoryAuth{Username: "user", Password: "secret"},
+			CACertificate: "-----BEGIN CERTIFICATE-----",
+		},
+	}
+
+	names := adapter.NewAddonRepository(repo).InternalNames()
+
+	foreign := map[string]string{"cost-center": "team-a", "policy.example.com/tier": "gold"}
+	existing := []client.Object{repo}
+
+	for _, name := range []string{names.AuthSecret, names.TLSSecret} {
+		existing = append(existing, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: testNamespace,
+				Labels:    maps.Clone(foreign),
+			},
+			Type: corev1.SecretTypeOpaque,
+		})
+	}
+
+	service, c := newSecrets(t, existing...)
+
+	if err := service.Ensure(context.Background(), adapter.NewAddonRepository(repo), chartsource.Helm); err != nil {
+		t.Fatalf("Ensure returned %v", err)
+	}
+
+	for _, name := range []string{names.AuthSecret, names.TLSSecret} {
+		secret := &corev1.Secret{}
+		if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: testNamespace}, secret); err != nil {
+			t.Fatalf("getting secret %s: %v", name, err)
+		}
+
+		for key, value := range foreign {
+			if got, found := secret.Labels[key]; !found || got != value {
+				t.Fatalf("secret %s lost the label %q set by someone else, labels are %v", name, key, secret.Labels)
+			}
+		}
+
+		if secret.Labels[helmv1alpha1.LabelManagedBy] != helmv1alpha1.LabelManagedByValue {
+			t.Fatalf("secret %s is missing the managed-by label, labels are %v", name, secret.Labels)
+		}
 	}
 }

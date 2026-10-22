@@ -30,6 +30,7 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
+	"github.com/deckhouse/operator-helm/internal/labels"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -119,7 +120,7 @@ func (s *Secrets) reconcileAuthSecret(
 		return fmt.Errorf("building auth secret data: %w", err)
 	}
 
-	labels := repo.SourceLabels()
+	desired := repo.SourceLabels()
 
 	staleRemoved, err := s.removeAuthSecretOfOtherType(ctx, nn, secretType)
 	if err != nil {
@@ -130,7 +131,7 @@ func (s *Secrets) reconcileAuthSecret(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
 			Namespace: s.targetNamespace,
-			Labels:    labels,
+			Labels:    desired,
 		},
 		Type: secretType,
 		Data: data,
@@ -146,7 +147,7 @@ func (s *Secrets) reconcileAuthSecret(
 	}
 
 	if _, err := controllerutil.CreateOrPatch(ctx, s.client, authSecret, func() error {
-		authSecret.Labels = labels
+		labels.ApplyOwned(authSecret, desired)
 		authSecret.Type = secretType
 		// Assigned, not merged, so removed credentials do not linger in the secret.
 		authSecret.Data = data
@@ -208,7 +209,7 @@ func (s *Secrets) reconcileTLSSecret(ctx context.Context, repo contract.Reposito
 	}
 
 	if _, err := controllerutil.CreateOrPatch(ctx, s.client, tlsSecret, func() error {
-		tlsSecret.Labels = repo.SourceLabels()
+		labels.ApplyOwned(tlsSecret, repo.SourceLabels())
 
 		// Data, not StringData, for the reason given in reconcileAuthSecret.
 		tlsSecret.Data = map[string][]byte{
