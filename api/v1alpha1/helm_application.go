@@ -216,6 +216,9 @@ type HelmApplicationStatus struct {
 	// It records that the request was acted on, not that it succeeded.
 	// +optional
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
+	// Inventory lists the objects the chart of the application deployed.
+	// +optional
+	Inventory []InventoryEntry `json:"inventory,omitempty"`
 }
 
 // HelmApplicationLastAppliedChartRef identifies the chart a HelmApplication release was last deployed from.

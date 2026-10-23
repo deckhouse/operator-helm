@@ -35,6 +35,19 @@ spec:
                   description: Пользовательские значения для релиза HelmClusterAddon.
             status:
               properties:
+                inventory:
+                  description: Список объектов, развёрнутых чартом аддона.
+                  items:
+                    description: Запись описывает один объект, развёрнутый чартом релиза.
+                    properties:
+                      apiVersion:
+                        description: Группа и версия API объекта; `v1` для объекта основной группы.
+                      kind:
+                        description: Вид объекта.
+                      namespace:
+                        description: Пространство имён объекта; пусто для объекта уровня кластера.
+                      name:
+                        description: Имя объекта.
                 conditions:
                   description: Условия отражают последние наблюдения за состоянием ресурса.
                 lastAppliedChart:

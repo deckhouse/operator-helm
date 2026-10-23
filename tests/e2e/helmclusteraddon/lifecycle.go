@@ -137,6 +137,38 @@ func DefineLifecycleTests(repoType, repoURL string) {
 			util.UntilAllPodsReady(f.NamespaceName(), labelSelector, 1, framework.LongTimeout)
 		})
 
+		It("should publish what the chart deployed", func() {
+			var installed *apiv1alpha1.HelmClusterAddon
+
+			By("Waiting for the inventory to be published")
+			Eventually(func(g Gomega) {
+				var err error
+				installed, err = f.OperatorClient().HelmV1alpha1().
+					HelmClusterAddons().
+					Get(context.Background(), addonName, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(installed.Status.Inventory).NotTo(BeEmpty())
+			}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
+			By("Verifying the inventory names the deployed workload")
+			var deployed *apiv1alpha1.InventoryEntry
+			for i, entry := range installed.Status.Inventory {
+				if entry.APIVersion == "apps/v1" && entry.Kind == "Deployment" {
+					deployed = &installed.Status.Inventory[i]
+
+					break
+				}
+			}
+			Expect(deployed).NotTo(BeNil(), "the inventory must name the Deployment the chart installed")
+			Expect(deployed.Namespace).To(Equal(f.NamespaceName()))
+
+			By("Verifying the object the inventory names is really there")
+			_, err := f.KubeClient().AppsV1().
+				Deployments(deployed.Namespace).
+				Get(context.Background(), deployed.Name, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("should update chart version and apply changes", func() {
 			By("Updating addon chart version")
 			updated := util.UpdateHelmClusterAddon(addonName, func(addon *apiv1alpha1.HelmClusterAddon) {

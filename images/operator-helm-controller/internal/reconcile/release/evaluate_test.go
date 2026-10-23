@@ -18,6 +18,7 @@ package release
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1491,5 +1492,61 @@ func TestEvaluateDoesNotRecordValuesBehindAPendingSnapshot(t *testing.T) {
 
 	if Evaluate(in).ApplyValues {
 		t.Fatal("an attempt that has not finished must not be read as the deployed revision")
+	}
+}
+
+func TestEvaluateCarriesTheInventoryOfTheReleaseItReached(t *testing.T) {
+	inventory := []helmv1alpha1.InventoryEntry{
+		{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "team-a", Name: "web"},
+	}
+
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}},
+		Release: &internalobj.ReleaseOutcome{
+			Internal:      readyInternal(),
+			ChartDeployed: true,
+			Inventory:     inventory,
+		},
+	}
+
+	decision := Evaluate(in)
+
+	if decision.Inventory == nil || !reflect.DeepEqual(*decision.Inventory, inventory) {
+		t.Fatalf("Inventory = %+v, want %+v", decision.Inventory, inventory)
+	}
+}
+
+func TestEvaluateLeavesTheInventoryAloneWhenItNeverReachedTheRelease(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome ChartReached
+	}{
+		{
+			name: "the source was not resolved",
+			outcome: ChartReached{Internal: SourceUnresolved{Failure: Failure{
+				Reason:  helmv1alpha1.ReasonChartFetchFailed,
+				Message: "Failed to resolve the desired chart version",
+				Err:     errVersionResolvePending,
+			}}},
+		},
+		{
+			name: "the write of the internal release failed",
+			outcome: ChartReached{
+				Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}},
+				Release:  &internalobj.ReleaseOutcome{Err: errors.New("conflict")},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := baseInputs()
+			in.Outcome = tt.outcome
+
+			if decision := Evaluate(in); decision.Inventory != nil {
+				t.Fatalf("Inventory = %+v, want nil: the recorded list must stand", *decision.Inventory)
+			}
+		})
 	}
 }

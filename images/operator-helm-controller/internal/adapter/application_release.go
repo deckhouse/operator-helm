@@ -160,6 +160,10 @@ func (r *ApplicationRelease) SetLastForceReconcileTime(t metav1.Time) {
 	r.obj.Status.LastForceReconcileTime = &t
 }
 
+func (r *ApplicationRelease) SetInventory(entries []helmv1alpha1.InventoryEntry) {
+	r.obj.Status.Inventory = entries
+}
+
 type ApplicationRepositoryResolver struct {
 	client         client.Client
 	namespaced     contract.Catalog

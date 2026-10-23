@@ -21,6 +21,8 @@ import (
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	"github.com/fluxcd/pkg/apis/meta"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 // ChartOutcome is the result of reconciling the internal HelmChart of a release.
@@ -62,6 +64,7 @@ type ReleaseOutcome struct {
 	History       helmv2.Snapshots
 	Internal      InternalObjectState
 	ChartDeployed bool
+	Inventory     []helmv1alpha1.InventoryEntry
 }
 
 // MaintenanceOutcome is the result of moving the internal HelmRelease into or out of

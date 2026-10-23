@@ -172,6 +172,32 @@ spec:
                   - type
                   type: object
                 type: array
+              inventory:
+                description: Inventory lists the objects the chart of the addon deployed.
+                items:
+                  description: InventoryEntry identifies one object the chart of a
+                    release deployed.
+                  properties:
+                    apiVersion:
+                      description: APIVersion is the group and version of the object,
+                        "v1" for a core one.
+                      type: string
+                    kind:
+                      description: Kind is the kind of the object.
+                      type: string
+                    name:
+                      description: Name is the name of the object.
+                      type: string
+                    namespace:
+                      description: Namespace is the namespace of the object, empty
+                        for a cluster-scoped one.
+                      type: string
+                  required:
+                  - apiVersion
+                  - kind
+                  - name
+                  type: object
+                type: array
               lastAppliedChart:
                 description: LastAppliedChart represents the latest chart that triggered
                   addon install or update.

@@ -22,6 +22,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/status"
 )
 
@@ -83,6 +84,7 @@ type Release interface {
 	SetLastAppliedChart(ChartRef)
 	SetLastAppliedValues(*apiextensionsv1.JSON)
 	SetLastForceReconcileTime(metav1.Time)
+	SetInventory([]helmv1alpha1.InventoryEntry)
 	// IsChartStatusInfoOutdated reports whether the desired chart differs from the
 	// last applied one.
 	IsChartStatusInfoOutdated() bool

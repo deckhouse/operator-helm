@@ -95,6 +95,9 @@ type ChartReached struct {
 
 	Internal InternalSource
 	Release  *internalobj.ReleaseOutcome
+	// Inventory is what the internal release was read to hold when this pass did not write
+	// it. It is nil when the pass wrote the release, which reports the list itself.
+	Inventory *[]helmv1alpha1.InventoryEntry
 
 	// ChartInfoOutdated and ValuesDigest are the two facts the record of what was last applied
 	// turns on. ValuesDigest is compared against the deployed revision.
@@ -141,6 +144,9 @@ type Decision struct {
 	// ConsumeForce asks for the force annotation to be removed. Only a pass that acted on the
 	// request, or one that deliberately discarded it, may take it away.
 	ConsumeForce bool
+	// Inventory is the list of deployed objects this pass observed. It is nil on a pass that
+	// never reached the internal HelmRelease, which leaves the recorded list standing.
+	Inventory *[]helmv1alpha1.InventoryEntry
 	// ApplyChart and ApplyValues ask for the record of what was last applied to be advanced to
 	// what the spec asks for.
 	ApplyChart  bool
@@ -306,6 +312,13 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 
 	if progress, ok := evaluateReconciling(verdict, found, stalled); ok {
 		decision.setAbnormal(in, helmv1alpha1.ConditionTypeReconciling, progress)
+	}
+
+	switch {
+	case outcome.Release != nil && outcome.Release.Err == nil:
+		decision.Inventory = &outcome.Release.Inventory
+	case outcome.Inventory != nil:
+		decision.Inventory = outcome.Inventory
 	}
 
 	if outcome.Forced {

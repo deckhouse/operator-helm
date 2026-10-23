@@ -265,6 +265,8 @@ func (r *Reconciler) reconcileChart(
 	if revision, current, ok := artifactRevision(outcome.Internal); ok {
 		result := r.deps.Releases.Ensure(ctx, rel, src.Kind, revision, current)
 		outcome.Release = &result
+	} else if inventory := r.deps.Releases.Inventory(ctx, rel.InternalNames()); inventory != nil {
+		outcome.Inventory = &inventory
 	}
 
 	return outcome
@@ -427,6 +429,10 @@ func writeStatus(rel contract.Release, decision Decision) {
 
 	if decision.ObservedGeneration != nil {
 		rel.Object().SetObservedGeneration(*decision.ObservedGeneration)
+	}
+
+	if decision.Inventory != nil {
+		rel.SetInventory(*decision.Inventory)
 	}
 
 	if decision.ForceReconcileTime != nil {
