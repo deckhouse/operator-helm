@@ -1,11 +1,3 @@
-# One finding is knowingly left standing and cannot be recorded below: markdownlint
-# reports MD013/line-length on docs/README.ru.md, where the paragraph on what
-# creating a HelmApplication grants runs past the limit. Breaking it would split a
-# single argument the reader has to follow whole. The documentation linter takes no
-# exclusion list — only a severity — so silencing that one line would mean turning
-# off every documentation check. It stays a warning, and a warning does not fail the
-# lint.
-
 linters-settings:
   openapi:
     exclude-rules:
@@ -38,3 +30,5 @@ linters-settings:
       wildcards:
         - kind: ClusterRole
           name: d8:operator-helm:helm-controller
+        - kind: ClusterRole
+          name: d8:operator-helm:application
