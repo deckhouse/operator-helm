@@ -174,7 +174,9 @@ var _ = Describe("HelmApplication identity and isolation", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(binding.Labels).To(HaveKeyWithValue(apiv1alpha1.LabelManagedBy, apiv1alpha1.LabelManagedByValue))
 		Expect(binding.Labels).To(HaveKeyWithValue(
-			apiv1alpha1.LabelDeckhouseHeritage, apiv1alpha1.LabelDeckhouseHeritageValue))
+			apiv1alpha1.LabelDeckhouseHeritage,
+			apiv1alpha1.LabelDeckhouseHeritageValue,
+		))
 	})
 
 	// The heritage label the binding carries puts it behind the platform's
