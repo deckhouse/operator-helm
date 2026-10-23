@@ -366,7 +366,11 @@ func TestFetchChartsVerifiesTheIndexCertificateDespiteInsecure(t *testing.T) {
 	defer srv.Close()
 
 	_, err := HelmRepositoryDefaultClient.FetchCharts(
-		context.Background(), srv.URL, &RepoConfig{Insecure: true}, FetchOptions{})
+		context.Background(),
+		srv.URL,
+		&RepoConfig{Insecure: true},
+		FetchOptions{},
+	)
 	if err == nil {
 		t.Fatal("expected the self-signed index certificate to be rejected: insecureSkipVerify covers an oci pull only")
 	}
