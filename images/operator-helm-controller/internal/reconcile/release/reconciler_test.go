@@ -2848,3 +2848,107 @@ func TestReconcileDeleteReleasesTheClaimsItNeverGotToGiveUp(t *testing.T) {
 		}
 	}
 }
+
+func inventoryFixture(name string) *helmv2.HelmRelease {
+	return &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: helmv1alpha1.TargetNamespace},
+		Status: helmv2.HelmReleaseStatus{
+			Inventory: &helmv2.ResourceInventory{Entries: []helmv2.ResourceRef{
+				{ID: "app_podinfo_apps_Deployment", Version: "v1"},
+			}},
+		},
+	}
+}
+
+func wantInventory() []helmv1alpha1.InventoryEntry {
+	return []helmv1alpha1.InventoryEntry{
+		{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "app", Name: "podinfo"},
+	}
+}
+
+func TestReconcilePublishesWhatTheAddonDeployed(t *testing.T) {
+	addon := testAddon()
+	names := adapter.NewAddonRelease(addon).InternalNames()
+
+	r, c := newFullReconciler(t, nil, interceptor.Funcs{},
+		addon,
+		helmRepositoryFixture(),
+		addonChartFixture("example", "podinfo", helmv1alpha1.ChartVersion{Version: "6.7.1"}),
+		inventoryFixture(names.HelmRelease),
+	)
+
+	reconcileAddon(t, r, addon.Name)
+	markInternalChartReady(t, c, names.HelmChart)
+	reconcileAddon(t, r, addon.Name)
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	if !reflect.DeepEqual(settled.Status.Inventory, wantInventory()) {
+		t.Fatalf("inventory = %+v, want %+v", settled.Status.Inventory, wantInventory())
+	}
+}
+
+func TestReconcilePublishesWhatTheApplicationDeployed(t *testing.T) {
+	app := testApplication()
+	names := adapter.NewApplicationRelease(app).InternalNames()
+
+	r, c := newApplicationFullReconciler(t, nil,
+		append(applicationFixtures(), app, inventoryFixture(names.HelmRelease))...)
+
+	reconcileApplication(t, r, app)
+	markInternalChartReady(t, c, names.HelmChart)
+	reconcileApplication(t, r, app)
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(app), settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+
+	if !reflect.DeepEqual(settled.Status.Inventory, wantInventory()) {
+		t.Fatalf("inventory = %+v, want %+v", settled.Status.Inventory, wantInventory())
+	}
+}
+
+func TestReconcilePassThatNeverReachedTheReleaseKeepsTheInventory(t *testing.T) {
+	addon := testAddon()
+	addon.Spec.Chart.Version = "9.9.9"
+	addon.Status.Inventory = wantInventory()
+
+	r, c := newForceTestReconciler(t, interceptor.Funcs{}, append(forceTestFixtures(), addon)...)
+
+	reconcileAddon(t, r, addon.Name)
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	if !reflect.DeepEqual(settled.Status.Inventory, wantInventory()) {
+		t.Fatalf("inventory = %+v, want the recorded one to stand: %+v", settled.Status.Inventory, wantInventory())
+	}
+}
+
+func TestReconcilePublishesTheInventoryWithoutReachingTheRelease(t *testing.T) {
+	addon := testAddon()
+	addon.Spec.Chart.Version = "9.9.9"
+
+	names := adapter.NewAddonRelease(addon).InternalNames()
+
+	r, c := newForceTestReconciler(t, interceptor.Funcs{},
+		append(forceTestFixtures(), addon, inventoryFixture(names.HelmRelease))...)
+
+	reconcileAddon(t, r, addon.Name)
+
+	settled := &helmv1alpha1.HelmClusterAddon{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: addon.Name}, settled); err != nil {
+		t.Fatalf("getting addon: %v", err)
+	}
+
+	if !reflect.DeepEqual(settled.Status.Inventory, wantInventory()) {
+		t.Fatalf("inventory = %+v, want %+v: a pass that never wrote the release must still report what it holds",
+			settled.Status.Inventory, wantInventory())
+	}
+}

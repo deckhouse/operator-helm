@@ -18,6 +18,7 @@ package internalobj
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -27,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 	"github.com/deckhouse/operator-helm/internal/adapter"
 	"github.com/deckhouse/operator-helm/internal/chartsource"
 	"github.com/deckhouse/operator-helm/internal/contract"
@@ -295,5 +297,123 @@ func TestReleasesEnsureReportsNothingDeployedFromAnArtifactOfAnotherSpec(t *test
 				t.Fatalf("ChartDeployed = %v, want %v", res.ChartDeployed, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseInventory(t *testing.T) {
+	inventory := &helmv2.ResourceInventory{Entries: []helmv2.ResourceRef{
+		{ID: "team-a_web_apps_Deployment", Version: "v1"},
+		{ID: "team-a_web_" + "_ConfigMap", Version: "v1"},
+		{ID: "_system__controller__foo_rbac.authorization.k8s.io_ClusterRole", Version: "v1"},
+		{ID: "_cluster-wide_apiextensions.k8s.io_CustomResourceDefinition", Version: "v1"},
+		{ID: "nonsense", Version: "v1"},
+	}}
+
+	want := []helmv1alpha1.InventoryEntry{
+		{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "ClusterRole", Name: "system:controller:foo"},
+		{APIVersion: "v1", Kind: "ConfigMap", Namespace: "team-a", Name: "web"},
+		{APIVersion: "apiextensions.k8s.io/v1", Kind: "CustomResourceDefinition", Name: "cluster-wide"},
+		{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "team-a", Name: "web"},
+	}
+
+	got := parseInventory(context.Background(), inventory)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseInventory() = %+v, want %+v", got, want)
+	}
+
+	if parseInventory(context.Background(), nil) != nil {
+		t.Fatal("parseInventory(nil) returned entries")
+	}
+}
+
+func TestParseInventoryIDKeepsAnUnderscoreInAnRBACName(t *testing.T) {
+	got, err := parseInventoryID("team-a_my_role_rbac.authorization.k8s.io_Role", "v1")
+	if err != nil {
+		t.Fatalf("parseInventoryID returned %v", err)
+	}
+
+	want := helmv1alpha1.InventoryEntry{
+		APIVersion: "rbac.authorization.k8s.io/v1",
+		Kind:       "Role",
+		Namespace:  "team-a",
+		Name:       "my_role",
+	}
+	if got != want {
+		t.Fatalf("parseInventoryID() = %+v, want %+v", got, want)
+	}
+}
+
+func TestParseInventoryIDRejectsATruncatedID(t *testing.T) {
+	for _, id := range []string{"nonsense", "team-a_web", "team-a_web_Deployment"} {
+		if _, err := parseInventoryID(id, "v1"); err == nil {
+			t.Fatalf("parseInventoryID(%q) accepted an id missing a field", id)
+		}
+	}
+}
+
+func TestReleasesEnsureReportsTheInventory(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+
+	internal := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: rel.InternalNames().HelmRelease, Namespace: testNamespace},
+		Status: helmv2.HelmReleaseStatus{
+			Inventory: &helmv2.ResourceInventory{Entries: []helmv2.ResourceRef{
+				{ID: "team-a_web_apps_Deployment", Version: "v1"},
+			}},
+		},
+	}
+
+	service, _ := newReleases(t, internal)
+
+	res := service.Ensure(context.Background(), rel, chartsource.Helm, "", true)
+	if res.Err != nil {
+		t.Fatalf("Ensure returned %v", res.Err)
+	}
+
+	want := []helmv1alpha1.InventoryEntry{
+		{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "team-a", Name: "web"},
+	}
+	if !reflect.DeepEqual(res.Inventory, want) {
+		t.Fatalf("Inventory = %+v, want %+v", res.Inventory, want)
+	}
+}
+
+func TestReleasesInventoryReadsWithoutWriting(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+
+	internal := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: rel.InternalNames().HelmRelease, Namespace: testNamespace},
+		Status: helmv2.HelmReleaseStatus{
+			Inventory: &helmv2.ResourceInventory{Entries: []helmv2.ResourceRef{
+				{ID: "team-a_web_apps_Deployment", Version: "v1"},
+			}},
+		},
+	}
+
+	service, c := newReleases(t, internal)
+
+	want := []helmv1alpha1.InventoryEntry{
+		{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "team-a", Name: "web"},
+	}
+	if got := service.Inventory(context.Background(), rel.InternalNames()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Inventory() = %+v, want %+v", got, want)
+	}
+
+	got := &helmv2.HelmRelease{}
+	key := client.ObjectKey{Namespace: testNamespace, Name: rel.InternalNames().HelmRelease}
+	if err := c.Get(context.Background(), key, got); err != nil {
+		t.Fatalf("getting helm release: %v", err)
+	}
+	if got.ResourceVersion != internal.ResourceVersion {
+		t.Fatalf("resourceVersion = %q, want %q: the read must not write", got.ResourceVersion, internal.ResourceVersion)
+	}
+}
+
+func TestReleasesInventoryOfAnAbsentReleaseIsNothing(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+	service, _ := newReleases(t)
+
+	if got := service.Inventory(context.Background(), rel.InternalNames()); got != nil {
+		t.Fatalf("Inventory() = %+v, want nil: an absent release must not wipe the recorded list", got)
 	}
 }

@@ -17,13 +17,16 @@ limitations under the License.
 package internalobj
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -91,7 +94,106 @@ func (s *Releases) Ensure(
 		History:       existing.Status.History,
 		Internal:      internal,
 		ChartDeployed: deployed,
+		Inventory:     parseInventory(ctx, existing.Status.Inventory),
 	}
+}
+
+func parseInventory(ctx context.Context, inventory *helmv2.ResourceInventory) []helmv1alpha1.InventoryEntry {
+	if inventory == nil {
+		return nil
+	}
+
+	entries := make([]helmv1alpha1.InventoryEntry, 0, len(inventory.Entries))
+
+	for _, ref := range inventory.Entries {
+		entry, err := parseInventoryID(ref.ID, ref.Version)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "Skipping an unparsable inventory entry", "id", ref.ID)
+
+			continue
+		}
+
+		entries = append(entries, entry)
+	}
+
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// The status patch compares the whole field, so an unstable order would patch every pass.
+	slices.SortFunc(entries, func(a, b helmv1alpha1.InventoryEntry) int {
+		return cmp.Or(
+			strings.Compare(a.Kind, b.Kind),
+			strings.Compare(a.APIVersion, b.APIVersion),
+			strings.Compare(a.Namespace, b.Namespace),
+			strings.Compare(a.Name, b.Name),
+		)
+	})
+
+	return entries
+}
+
+func parseInventoryID(id, version string) (helmv1alpha1.InventoryEntry, error) {
+	malformed := fmt.Errorf("unable to parse stored object metadata: %s", id)
+
+	namespace, rest, ok := strings.Cut(id, "_")
+	if !ok {
+		return helmv1alpha1.InventoryEntry{}, malformed
+	}
+
+	rest, kind, ok := cutLast(rest, "_")
+	if !ok {
+		return helmv1alpha1.InventoryEntry{}, malformed
+	}
+
+	name, group, ok := cutLast(rest, "_")
+	if !ok {
+		return helmv1alpha1.InventoryEntry{}, malformed
+	}
+
+	// Mirrors ParseObjMetadata of fluxcd/cli-utils, which builds the id: an RBAC name carries
+	// its colons transcoded and an underscore of its own, so the name is never split on.
+	name = strings.ReplaceAll(name, "__", ":")
+
+	apiVersion := version
+	if group != "" {
+		apiVersion = group + "/" + version
+	}
+
+	return helmv1alpha1.InventoryEntry{
+		APIVersion: apiVersion,
+		Kind:       kind,
+		Namespace:  namespace,
+		Name:       name,
+	}, nil
+}
+
+func cutLast(s, sep string) (before, after string, found bool) {
+	i := strings.LastIndex(s, sep)
+	if i < 0 {
+		return s, "", false
+	}
+
+	return s[:i], s[i+len(sep):], true
+}
+
+// Inventory is what the internal HelmRelease currently records as deployed. It serves the
+// passes that do not get as far as writing the release: without it a release that settled
+// before the field existed would wait for a spec change to publish a list already there.
+func (s *Releases) Inventory(ctx context.Context, names contract.ReleaseNames) []helmv1alpha1.InventoryEntry {
+	release := &helmv2.HelmRelease{}
+	key := types.NamespacedName{Name: names.HelmRelease, Namespace: s.targetNamespace}
+
+	if err := s.client.Get(ctx, key, release); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.FromContext(ctx).Error(err, "Failed to read the inventory of the internal release",
+				"internalObject", key)
+		}
+
+		return nil
+	}
+
+	return parseInventory(ctx, release.Status.Inventory)
 }
 
 // Cleanup issues a delete for the internal HelmRelease and returns it while it is still

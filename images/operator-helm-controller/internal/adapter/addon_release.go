@@ -131,6 +131,10 @@ func (r *AddonRelease) SetLastForceReconcileTime(t metav1.Time) {
 	r.obj.Status.LastForceReconcileTime = &t
 }
 
+func (r *AddonRelease) SetInventory(entries []helmv1alpha1.InventoryEntry) {
+	r.obj.Status.Inventory = entries
+}
+
 type AddonRepositoryResolver struct {
 	client  client.Client
 	catalog contract.Catalog

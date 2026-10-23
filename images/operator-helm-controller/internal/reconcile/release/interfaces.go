@@ -96,6 +96,8 @@ type Releases interface {
 		// artifactCurrent reports whether that revision is the one the current spec asks for.
 		artifactCurrent bool,
 	) internalobj.ReleaseOutcome
+	// Inventory reads what the internal release records as deployed, without writing it.
+	Inventory(ctx context.Context, names contract.ReleaseNames) []helmv1alpha1.InventoryEntry
 	Cleanup(ctx context.Context, names contract.ReleaseNames) (*helmv2.HelmRelease, error)
 	// SyncSpec keeps a release that is being deleted in step with its spec, so an uninstall
 	// blocked by a bad parameter can be unblocked by correcting it.
