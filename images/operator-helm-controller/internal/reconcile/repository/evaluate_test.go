@@ -966,13 +966,13 @@ func TestEvaluateNamesChartsThatAreNotPlainASCII(t *testing.T) {
 	}{
 		{
 			name:    "a name of multi-byte runes is shown whole",
-			skipped: "диаграмма-графики",
-			want:    `"диаграмма-графики"`,
+			skipped: "図表-グラフ",
+			want:    `"図表-グラフ"`,
 		},
 		{
 			name:    "a long name of multi-byte runes is cut on a rune boundary",
-			skipped: strings.Repeat("я", 200),
-			want:    `"` + strings.Repeat("я", maxChartNameRunes) + `..."`,
+			skipped: strings.Repeat("字", 200),
+			want:    `"` + strings.Repeat("字", maxChartNameRunes) + `..."`,
 		},
 		{
 			name:    "characters that quoting escapes stay escaped",
