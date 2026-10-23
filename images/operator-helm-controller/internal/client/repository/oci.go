@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -41,13 +42,16 @@ var OCIRepositoryDefaultClient ClientInterface = &ociRepositoryClient{}
 
 type ociRepositoryClient struct{}
 
-// chartResolveConcurrency bounds the manifest requests of one pass. The requests are
-// small, but a repository with hundreds of new tags would otherwise open hundreds of
-// connections at once.
-const chartResolveConcurrency = 8
+const chartResolveConcurrency = 8 // Bounds the manifest requests in flight during one pass.
 
-// unavailableMessageLimit keeps a registry error from bloating the chart status.
-const unavailableMessageLimit = 256
+const unavailableMessageLimit = 256 // Keeps a registry error from bloating the chart status.
+
+// Variables rather than constants so the tests that pin them need not wait out real minutes.
+var (
+	tagListBudget          = time.Minute      // Bounds the whole listing: its pages, its internal retries and their pauses.
+	chartProbeTimeout      = 15 * time.Second // Bounds one manifest request.
+	chartResolvePassBudget = 3 * time.Minute  // Bounds the examination pass; what it reached is published, the rest reported unexamined.
+)
 
 func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, config *RepoConfig, opts FetchOptions) ([]Chart, error) {
 	url = trimSchemaPrefixes(url)
@@ -98,41 +102,42 @@ func (c *ociRepositoryClient) FetchCharts(ctx context.Context, url string, confi
 	}
 
 	if config != nil && (config.CACertificate != "" || config.Insecure) {
-		options = append(options, remote.WithTransport(BuildTLSTransport(config)))
+		tlsTransport, err := BuildTLSTransport(config)
+		if err != nil {
+			return nil, err
+		}
+		defer tlsTransport.CloseIdleConnections()
+
+		options = append(options, remote.WithTransport(tlsTransport))
 	}
 
-	tags, err := remote.List(repo, options...)
+	listCtx, cancelList := context.WithTimeout(ctx, tagListBudget)
+	defer cancelList()
+
+	// A fresh slice: the listing's deadline must not leak into the per-tag options. The later WithContext wins.
+	listOptions := make([]remote.Option, 0, len(options)+1)
+	listOptions = append(listOptions, options...)
+	listOptions = append(listOptions, remote.WithContext(listCtx))
+
+	tags, err := remote.List(repo, listOptions...)
 	if err != nil {
 		return nil, classifyRemoteError(err, url)
 	}
 
-	versions, err := resolveChartVersions(ctx, repo, chartName, tags, options, opts)
+	versions, unexamined, err := resolveChartVersions(ctx, repo, chartName, tags, options, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	return []Chart{
 		{
-			Name:     chartName,
-			Versions: versions,
+			Name:               chartName,
+			Versions:           versions,
+			UnexaminedVersions: unexamined,
 		},
 	}, nil
 }
 
-// resolveChartVersions turns the listed tags into one version entry per tag. A tag
-// whose verdict is already recorded is carried through without a request; the rest are
-// examined concurrently. A per-tag failure becomes a ResolvePending entry, not a
-// returned error, so the rest of the pass is still published. resolveChartVersions
-// itself returns an error in three cases, none of them a per-tag verdict, and all of
-// them a failure of the whole pass rather than of one tag:
-//   - building the shared puller fails: a transport/auth setup step that happens once
-//     for the repository, not per tag, so its failure cannot be attributed to any tag;
-//   - a per-tag request is rejected with 401/403: credentials rejected for one tag are
-//     rejected for all of them, so resolveChartVersion escalates it to a terminal
-//     error instead of a ResolvePending verdict, and group.Wait propagates it here;
-//   - the parent context is cancelled while tags are still in flight, which would
-//     otherwise make every in-flight remote.Get fail and be misreported as a pass full
-//     of fabricated ResolvePending verdicts instead of the abandoned pass it is.
 func resolveChartVersions(
 	ctx context.Context,
 	repo name.Repository,
@@ -140,11 +145,17 @@ func resolveChartVersions(
 	tags []string,
 	options []remote.Option,
 	opts FetchOptions,
-) ([]ChartVersion, error) {
+) ([]ChartVersion, []string, error) {
 	type candidate struct {
 		tag     string
 		version *semver.Version
 		known   *KnownVersion
+		// recorded says a previous pass wrote a verdict for this tag, whatever that verdict was.
+		recorded bool
+		// stale says a forced refresh marked the recorded verdict and no pass has answered it yet.
+		stale bool
+		// relisted says the verdict records the tag as removed while this listing offers it again.
+		relisted bool
 	}
 
 	candidates := make([]candidate, 0, len(tags))
@@ -159,109 +170,142 @@ func resolveChartVersions(
 			continue
 		}
 
-		c := candidate{tag: tag, version: semVersion}
+		known, recorded := opts.Known[chartName][tag]
+
+		c := candidate{
+			tag:      tag,
+			version:  semVersion,
+			recorded: recorded,
+			stale:    recorded && known.ReexaminationRequired,
+			relisted: recorded && known.UnavailableReason == helmv1alpha1.UnavailableReasonRemovedFromRepository,
+		}
 		if !opts.NeedsExamination(chartName, tag) {
-			known := opts.Known[chartName][tag]
 			c.known = &known
 		}
 
 		candidates = append(candidates, c)
 	}
 
-	resolved := make([]*ChartVersion, len(candidates))
+	// Order matters: never seen tags, then stale, then relisted, then unanswered — only the last never empties.
+	probeOrder := make([]int, 0, len(candidates))
 
-	group, groupCtx := errgroup.WithContext(ctx)
+	for _, group := range []func(candidate) bool{
+		func(c candidate) bool { return !c.recorded },
+		func(c candidate) bool { return c.stale },
+		func(c candidate) bool { return c.relisted && !c.stale },
+		func(c candidate) bool { return c.recorded && !c.stale && !c.relisted },
+	} {
+		for i := range candidates {
+			if candidates[i].known == nil && group(candidates[i]) {
+				probeOrder = append(probeOrder, i)
+			}
+		}
+	}
+
+	resolved := make([]*ChartVersion, len(candidates))
+	// A nil in resolved is also the verdict for a vanished tag, so examined tells the two apart.
+	examined := make([]bool, len(candidates))
+
+	// passCtx, not groupCtx: errgroup cancels its own context on any failure and as Wait returns.
+	passCtx, cancelPass := context.WithTimeout(ctx, chartResolvePassBudget)
+	defer cancelPass()
+
+	group, groupCtx := errgroup.WithContext(passCtx)
 	group.SetLimit(chartResolveConcurrency)
 
-	// A fresh slice per pass: appending to the shared options slice from several
-	// goroutines would race on its backing array.
+	// A fresh slice per pass: appending to the shared options from several goroutines would race.
 	tagOptions := make([]remote.Option, 0, len(options)+2)
 	tagOptions = append(tagOptions, options...)
 	tagOptions = append(tagOptions,
 		remote.WithContext(groupCtx),
-		// One attempt per tag: a failure is recorded as pending and retried by the next
-		// synchronization anyway, and retrying here would multiply the duration of a
-		// pass over a degraded registry.
+		// One attempt per tag: a failure is recorded as pending and retried by the next pass.
 		remote.WithRetryBackoff(remote.Backoff{Duration: time.Millisecond, Factor: 1.0, Steps: 1}),
 	)
 
-	// One puller for the whole repository: it caches its fetcher (and therefore the
-	// auth handshake) per repository behind a sync.Map/sync.Once and is safe for
-	// concurrent use. remote.Get would build a fresh Puller per call, paying a fresh
-	// /v2/ ping - and, against a bearer registry, a fresh token request - for every
-	// examined tag.
+	// One puller for the whole repository: it caches the auth handshake, its failure included, so a
+	// first probe that cannot reach the registry is answered to every later tag from that cache.
 	puller, err := remote.NewPuller(tagOptions...)
 	if err != nil {
-		return nil, fmt.Errorf("building the registry puller: %w", err)
+		return nil, nil, fmt.Errorf("building the registry puller: %w", err)
 	}
 
+	// Carried outside the group: a recorded verdict costs no request and must survive an expired budget.
 	for i := range candidates {
-		index, c := i, candidates[i]
+		if candidates[i].known != nil {
+			resolved[i], examined[i] = carryKnown(candidates[i].version, *candidates[i].known), true
+		}
+	}
+
+	for _, index := range probeOrder {
+		c := candidates[index]
 
 		group.Go(func() error {
-			if c.known != nil {
-				resolved[index] = carryKnown(c.version, *c.known)
-
+			// The budget is already spent: every probe from here on would fail on a cancelled context.
+			if passCtx.Err() != nil {
 				return nil
 			}
 
-			version, err := resolveChartVersion(groupCtx, puller, repo.Tag(c.tag), c.version)
+			// One tag that stalls must cost only its own deadline, not the slot every queued tag waits for.
+			probeCtx, cancelProbe := context.WithTimeout(groupCtx, chartProbeTimeout)
+			defer cancelProbe()
+
+			version, err := resolveChartVersion(probeCtx, puller, repo.Tag(c.tag), c.version)
 			if err != nil {
 				return err
 			}
-			resolved[index] = version
+
+			// A probe cut short by our own budget is reported as unexamined, not as the registry's answer.
+			if version != nil &&
+				version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending &&
+				passCtx.Err() != nil {
+				return nil
+			}
+
+			resolved[index], examined[index] = version, true
 
 			return nil
 		})
 	}
 
 	if err := group.Wait(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// A cancelled parent context makes every remote.Get fail without surfacing as a
-	// transport error, so every goroutine above would otherwise return a fabricated
-	// ResolvePending verdict instead of an error. That is indistinguishable from a real
-	// registry failure and must not be reported as a completed pass.
+	// The parent context, not passCtx: a cancelled parent leaves nobody to write the partial catalog.
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("examining the versions of %s: %w", chartName, err)
 	}
 
 	versions := make([]ChartVersion, 0, len(resolved))
-	for _, version := range resolved {
-		if version == nil {
-			continue
+
+	var unexamined []string
+
+	for i := range candidates {
+		switch {
+		case !examined[i]:
+			unexamined = append(unexamined, candidates[i].version.Original())
+		case resolved[i] != nil:
+			versions = append(versions, *resolved[i])
 		}
-		versions = append(versions, *version)
 	}
 
-	return versions, nil
+	// The registry lists tags in its own order; the catalog reads the newest version off the front.
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].Version.GreaterThan(versions[j].Version)
+	})
+
+	return versions, unexamined, nil
 }
 
-// carryKnown reuses a recorded verdict. A tag that is listed again is by definition no
-// longer removed from the repository, so that marker - and the message describing the
-// absence it no longer holds - is dropped here: presence in the listing is registry
-// truth, which is this client's domain.
 func carryKnown(version *semver.Version, known KnownVersion) *ChartVersion {
-	reason, message := known.UnavailableReason, known.UnavailableMessage
-	if reason == helmv1alpha1.UnavailableReasonRemovedFromRepository {
-		reason, message = "", ""
-	}
-
 	return &ChartVersion{
 		Version:            version,
 		MediaType:          known.MediaType,
-		UnavailableReason:  reason,
-		UnavailableMessage: message,
+		UnavailableReason:  known.UnavailableReason,
+		UnavailableMessage: known.UnavailableMessage,
 	}
 }
 
-// resolveChartVersion examines one tag. A nil version with a nil error means the tag
-// vanished between the listing and this request and must be treated as unlisted. A
-// non-nil error is always terminal: credentials rejected for one tag are rejected for
-// all of them, so there is no point in requesting the rest. puller is shared across all
-// tags of the pass so the auth handshake happens once for the repository rather than
-// once per tag.
 func resolveChartVersion(ctx context.Context, puller *remote.Puller, ref name.Reference, version *semver.Version) (*ChartVersion, error) {
 	desc, err := puller.Get(ctx, ref)
 	if err != nil {
@@ -269,6 +313,7 @@ func resolveChartVersion(ctx context.Context, puller *remote.Puller, ref name.Re
 		if errors.As(err, &transportErr) {
 			switch transportErr.StatusCode {
 			case http.StatusNotFound:
+				// The tag vanished between the listing and this request: nil/nil means unlisted.
 				return nil, nil
 			case http.StatusUnauthorized, http.StatusForbidden:
 				terminal := TerminalFromStatusCode(transportErr.StatusCode, ref.String())
@@ -283,8 +328,7 @@ func resolveChartVersion(ctx context.Context, puller *remote.Puller, ref name.Re
 
 	manifest, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
 	if err != nil {
-		// An unreadable manifest is a verdict about the artifact, not a transport
-		// problem, so it is recorded the same way as an unsupported media type.
+		// An unreadable manifest is a verdict about the artifact, not a transport problem.
 		return unsupportedVersion(version, "cannot parse the manifest: "+err.Error()), nil
 	}
 
@@ -343,9 +387,6 @@ func isCosignTag(tag string) bool {
 	return false
 }
 
-// classifyRemoteError maps a registry rejection to a terminal error and leaves
-// transport-level failures retriable. The original error is always wrapped so
-// callers keep the full cause.
 func classifyRemoteError(err error, url string) error {
 	var transportErr *transport.Error
 	if errors.As(err, &transportErr) {

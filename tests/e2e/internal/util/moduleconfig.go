@@ -75,7 +75,7 @@ func EnsureModuleConfig(f *framework.Framework) {
 	Expect(c.ModuleDigest).NotTo(BeEmpty(),
 		"E2E_MODULE_DIGEST is not set, so the suite cannot tell which module artifact the cluster will pull. "+
 			"In CI the build job supplies it; locally resolve it with "+
-			"crane digest dev-registry.deckhouse.io/sys/deckhouse-oss/modules/operator-helm:$E2E_MODULE_TAG_NAME")
+			"crane digest "+c.ModuleSourceRepo+"/"+moduleName+":"+c.ModuleTagName)
 
 	moduleSource := &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -86,10 +86,10 @@ func EnsureModuleConfig(f *framework.Framework) {
 			},
 			"spec": map[string]interface{}{
 				"registry": map[string]interface{}{
-					"ca":        "",
+					"ca":        c.ModuleSourceCA,
 					"dockerCfg": c.ModuleSourceDockerCfg,
 					"scheme":    "HTTPS",
-					"repo":      "dev-registry.deckhouse.io/sys/deckhouse-oss/modules",
+					"repo":      c.ModuleSourceRepo,
 				},
 			},
 		},

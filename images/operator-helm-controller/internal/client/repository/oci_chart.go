@@ -26,9 +26,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// chartVerdict is the outcome of examining one tag. MediaType is set only for an
-// artifact recognized as a chart; Message explains a negative verdict and is meant
-// for the status of the chart version.
 type chartVerdict struct {
 	MediaType string
 	Message   string
@@ -37,11 +34,8 @@ type chartVerdict struct {
 // OK reports whether the artifact is a usable chart.
 func (v chartVerdict) OK() bool { return v.MediaType != "" }
 
-// examineManifest decides whether a manifest describes a packaged Helm chart and, if
-// it does, which layer media type holds it. descMediaType is the media type of the
-// manifest descriptor: an index is rejected here rather than left to fail later,
-// because an index is never a chart and a failure would be re-probed forever.
 func examineManifest(descMediaType types.MediaType, manifest *v1.Manifest) chartVerdict {
+	// An index is rejected here rather than left to fail later: it is never a chart.
 	if descMediaType.IsIndex() {
 		return chartVerdict{
 			Message: fmt.Sprintf("the tag points to an index (%s), not to a chart manifest", descMediaType),

@@ -17,7 +17,7 @@ limitations under the License.
 package helmclusteraddonrepository
 
 import (
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -26,11 +26,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
 	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
-	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddonrepository"
-	"github.com/deckhouse/operator-helm/internal/services"
-	"github.com/deckhouse/operator-helm/internal/utils"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/repository"
+	"github.com/deckhouse/operator-helm/internal/reposync"
+	"github.com/deckhouse/operator-helm/internal/status"
 )
 
 const (
@@ -40,13 +41,16 @@ const (
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
-	r := reconcile.New(
-		client,
-		services.NewHelmRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
-		services.NewRepoSyncService(client, mgr.GetScheme(), repoclient.NewClient),
-		status.NewManager(client),
-	)
+	mapInternal := mapInternalResources()
+
+	r := reconcile.New(client, reconcile.Deps{
+		NewRepository:    adapter.EmptyAddonRepository,
+		Secrets:          reposync.NewSecrets(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
+		HelmRepositories: internalobj.NewHelmRepositories(client, helmv1alpha1.TargetNamespace),
+		Consumers:        internalobj.NewConsumers(client, helmv1alpha1.TargetNamespace, adapter.ListAddonReleases(client)),
+		Catalogs:         reposync.NewSynchronizer(client, repoclient.NewClient, adapter.NewAddonCatalog(client, mgr.GetAPIReader())),
+		Status:           status.NewManager(client),
+	})
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
@@ -60,26 +64,12 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Watches(
 			&sourcev1.HelmRepository{},
-			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalResources(
-					ControllerName,
-					helmv1alpha1.TargetNamespace,
-					helmv1alpha1.LabelManagedBy,
-					helmv1alpha1.LabelManagedByValue,
-					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName),
-			),
+			handler.EnqueueRequestsFromMapFunc(mapInternal),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Watches(
 			&corev1.Secret{},
-			handler.EnqueueRequestsFromMapFunc(
-				utils.MapInternalResources(
-					ControllerName,
-					helmv1alpha1.TargetNamespace,
-					helmv1alpha1.LabelManagedBy,
-					helmv1alpha1.LabelManagedByValue,
-					helmv1alpha1.HelmClusterAddonRepositoryLabelSourceName),
-			),
+			handler.EnqueueRequestsFromMapFunc(mapInternal),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Watches(

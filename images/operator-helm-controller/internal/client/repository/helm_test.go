@@ -18,10 +18,13 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
@@ -53,6 +56,98 @@ entries:
         - "oci://BAD_HOST//:::"
     - version: 21.0.0
 `
+
+func shortenIndexLimits(t *testing.T, attempt, budget time.Duration, size int) {
+	t.Helper()
+
+	attemptBefore, budgetBefore, sizeBefore := indexAttemptTimeout, indexFetchBudget, maxIndexSize
+
+	indexAttemptTimeout, indexFetchBudget, maxIndexSize = attempt, budget, size
+
+	t.Cleanup(func() {
+		indexAttemptTimeout, indexFetchBudget, maxIndexSize = attemptBefore, budgetBefore, sizeBefore
+	})
+}
+
+func TestFetchChartsRetriesAfterAnAttemptStalls(t *testing.T) {
+	shortenIndexLimits(t, 200*time.Millisecond, 10*time.Second, maxIndexSize)
+
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			<-r.Context().Done()
+
+			return
+		}
+
+		_, _ = w.Write([]byte(testIndex))
+	}))
+	defer srv.Close()
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+	if err != nil {
+		t.Fatalf("expected the second attempt to succeed, got %v", err)
+	}
+	if got := requests.Load(); got < 2 {
+		t.Fatalf("expected the stalled attempt to be retried, got %d request(s)", got)
+	}
+	if len(charts) != 1 {
+		t.Fatalf("expected the index of the second attempt to be decoded, got %d charts", len(charts))
+	}
+}
+
+func TestFetchChartsRejectsAnOversizeIndex(t *testing.T) {
+	const limit = 1 << 20
+
+	shortenIndexLimits(t, indexAttemptTimeout, indexFetchBudget, limit)
+
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+
+		_, _ = w.Write([]byte("apiVersion: v1\nentries:\n"))
+
+		for i := range 40000 {
+			_, _ = fmt.Fprintf(w, "  chart-%d:\n    - version: 1.0.0\n", i)
+		}
+	}))
+	defer srv.Close()
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+	if err == nil {
+		t.Fatalf("expected an oversize index to fail, got %d charts", len(charts))
+	}
+	if charts != nil {
+		t.Fatalf("expected no charts alongside the error, got %d", len(charts))
+	}
+	if !strings.Contains(err.Error(), "too large") || !strings.Contains(err.Error(), "1 MiB") {
+		t.Fatalf("expected the error to name the size limit, got %v", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("an oversize index must not be downloaded again, got %d request(s)", got)
+	}
+}
+
+func TestFetchChartsAcceptsAnIndexAtTheLimit(t *testing.T) {
+	index := testIndex + strings.Repeat("# pad\n", 4)
+
+	shortenIndexLimits(t, indexAttemptTimeout, indexFetchBudget, len(index))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(index))
+	}))
+	defer srv.Close()
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+	if err != nil {
+		t.Fatalf("an index of exactly the limit must be accepted, got %v", err)
+	}
+	if len(charts) != 1 {
+		t.Fatalf("expected 1 chart, got %d", len(charts))
+	}
+}
 
 func TestFetchChartsTerminalStatusCodes(t *testing.T) {
 	cases := []struct {
@@ -102,8 +197,6 @@ func TestFetchChartsServerErrorIsNotTerminal(t *testing.T) {
 	if _, ok := AsTerminal(err); ok {
 		t.Fatalf("5xx must stay retriable, got terminal error: %v", err)
 	}
-	// The exhausted backoff must report what actually went wrong rather than the
-	// bare "timed out waiting for the condition" the wait helper returns.
 	if !strings.Contains(err.Error(), "500") {
 		t.Fatalf("expected the status code in the reported cause, got %v", err)
 	}
@@ -130,10 +223,6 @@ func TestFetchChartsSkipsInvalidVersion(t *testing.T) {
 	}
 }
 
-// TestFetchChartsHelmRecordsOCIReferences pins how an index entry is classified. Only
-// urls[0] is examined, because the internal HelmChart downloads exactly that url:
-// picking an archive from urls[1] would send the version down the helm path where the
-// source controller would still trip over urls[0].
 func TestFetchChartsHelmRecordsOCIReferences(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(testHybridIndex))
@@ -163,7 +252,6 @@ func TestFetchChartsHelmRecordsOCIReferences(t *testing.T) {
 		t.Fatalf("24.0.0 oci ref = %q, want empty: its first url is an archive", got)
 	}
 
-	// The tag is made explicit on write, so the recorded reference is self-contained.
 	if got := byVersion["23.0.0"].OCIRef; got != "oci://registry-1.docker.io/bitnamicharts/airflow:23.0.0" {
 		t.Fatalf("23.0.0 oci ref = %q, want the entry version as the tag", got)
 	}
@@ -181,5 +269,109 @@ func TestFetchChartsHelmRecordsOCIReferences(t *testing.T) {
 
 	if got := byVersion["21.0.0"].OCIRef; got != "" {
 		t.Fatalf("21.0.0 oci ref = %q, want empty: the entry has no urls", got)
+	}
+}
+
+func TestFetchChartsRejectsAResponseWithoutAnIndex(t *testing.T) {
+	cases := []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{"empty body with 200", http.StatusOK, ""},
+		{"no content", http.StatusNoContent, ""},
+		{"blank document", http.StatusOK, "\n  \n"},
+		{"error page instead of the index", http.StatusOK, `{"error":"upstream unavailable"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+			if err == nil {
+				t.Fatalf("expected a response without an index to fail, got %d charts", len(charts))
+			}
+			if charts != nil {
+				t.Fatalf("expected no charts alongside the error, got %d", len(charts))
+			}
+			if _, ok := AsTerminal(err); ok {
+				t.Fatalf("a missing index document must stay retriable, got terminal error: %v", err)
+			}
+			if !strings.Contains(err.Error(), "no index document") {
+				t.Fatalf("expected the reported cause to name the missing index, got %v", err)
+			}
+			if got := requests.Load(); got < 2 {
+				t.Fatalf("expected the fetch to be retried, got %d request(s)", got)
+			}
+		})
+	}
+}
+
+func TestFetchChartsAcceptsAnIndexWithoutCharts(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty entries mapping":         "apiVersion: v1\nentries: {}\n",
+		"entries with no value":         "apiVersion: v1\nentries:\n",
+		"explicitly null entries":       "apiVersion: v1\nentries: null\n",
+		"charts without an api version": "entries:\n  podinfo:\n    - version: 6.7.1\n      urls: [https://example.test/podinfo-6.7.1.tgz]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+			if err != nil {
+				t.Fatalf("an index that lists no charts must be accepted, got %v", err)
+			}
+			if charts == nil {
+				t.Fatal("expected a chart list, got nil")
+			}
+		})
+	}
+}
+
+func TestFetchChartsThrottleIsRetriedNotDecoded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"errors":[{"code":"TOOMANYREQUESTS","message":"pull rate limit exceeded"}]}`))
+	}))
+	defer srv.Close()
+
+	charts, err := HelmRepositoryDefaultClient.FetchCharts(context.Background(), srv.URL, nil, FetchOptions{})
+	if err == nil {
+		t.Fatalf("expected an error for repeated 429 responses, got %d charts", len(charts))
+	}
+	if _, ok := AsTerminal(err); ok {
+		t.Fatalf("a throttle must stay retriable, got terminal error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Fatalf("expected the status code in the reported cause, got %v", err)
+	}
+}
+
+func TestFetchChartsVerifiesTheIndexCertificateDespiteInsecure(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(testIndex))
+	}))
+	defer srv.Close()
+
+	_, err := HelmRepositoryDefaultClient.FetchCharts(
+		context.Background(),
+		srv.URL,
+		&RepoConfig{Insecure: true},
+		FetchOptions{},
+	)
+	if err == nil {
+		t.Fatal("expected the self-signed index certificate to be rejected: insecureSkipVerify covers an oci pull only")
 	}
 }

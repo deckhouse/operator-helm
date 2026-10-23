@@ -5,7 +5,7 @@ cpu: 50m
 memory: 64Mi
 {{- end }}
 
-{{- if (.Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
+{{- if (.Values.global.enabledModules | has "vertical-pod-autoscaler") }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -74,25 +74,20 @@ spec:
           image: {{ include "helm_lib_module_image" (list . "chartValuesController") }}
           imagePullPolicy: IfNotPresent
           args:
-            - --metrics-bind-address=:8080
+            - --metrics-bind-address=127.0.0.1:8080
             - --health-probe-bind-address=:9440
             - --api-bind-address=:9443
             - --api-tls-cert-file=/etc/chart-values-controller/tls/tls.crt
             - --api-tls-key-file=/etc/chart-values-controller/tls/tls.key
-            - --cache-dir=/cache
             - --chart-values-cache-ttl=1h
             - --max-chart-size-mb=100
+            - --cache-budget-mb=16
           volumeMounts:
-            - mountPath: /cache
-              name: cache
             - mountPath: /etc/chart-values-controller/tls
               name: api-tls
               readOnly: true
             {{- include "kube_api_rewriter.kubeconfig_volume_mount" . | nindent 12 }}
           ports:
-            - containerPort: 8080
-              name: metrics
-              protocol: TCP
             - containerPort: 9443
               name: api
               protocol: TCP
@@ -102,7 +97,7 @@ spec:
           resources:
             requests:
               {{- include "helm_lib_module_ephemeral_storage_only_logs" . | nindent 14 }}
-              {{- if not ( .Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
+              {{- if not ( .Values.global.enabledModules | has "vertical-pod-autoscaler") }}
               {{- include "operator_helm_chart_values_controller_resources" . | nindent 14 }}
               {{- end }}
           env:
@@ -138,8 +133,6 @@ spec:
       {{- include "helm_lib_node_selector" (tuple . "system") | nindent 6 }}
       {{- include "helm_lib_tolerations" (tuple . "system") | nindent 6 }}
       volumes:
-        - name: cache
-          emptyDir: {}
         - name: api-tls
           secret:
             secretName: chart-values-controller-tls

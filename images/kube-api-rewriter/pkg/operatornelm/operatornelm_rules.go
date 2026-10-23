@@ -27,37 +27,36 @@ const (
 var OperatorNelmRewriteRules = &RewriteRules{
 	KindPrefix:         "InternalNelmOperator",
 	ResourceTypePrefix: "internalnelmoperator",
-	ShortNamePrefix:    "intnelm",
-	Categories:         []string{"intnelm"},
 	Rules:              OperatorNelmAPIGroupsRules,
 	Webhooks:           OperatorNelmWebhooks,
 	Labels: MetadataReplace{
 		Names: []MetadataReplaceRule{
-			{Original: "source.werf.io", Renamed: "source." + internalPrefix},
-			{Original: "helm.werf.io", Renamed: "helm." + internalPrefix},
+			{Original: "source.toolkit.fluxcd.io", Renamed: "source." + internalPrefix},
+			{Original: "helm.toolkit.fluxcd.io", Renamed: "helm." + internalPrefix},
 		},
 		Prefixes: []MetadataReplaceRule{
-			{Original: "source.werf.io", Renamed: "source." + internalPrefix},
-			{Original: "helm.werf.io", Renamed: "helm." + internalPrefix},
+			{Original: "source.toolkit.fluxcd.io", Renamed: "source." + internalPrefix},
+			{Original: "helm.toolkit.fluxcd.io", Renamed: "helm." + internalPrefix},
 		},
 	},
-	//reconcile.internal.operator-helm.deckhouse.io/forceAt
 	Annotations: MetadataReplace{
 		Names: []MetadataReplaceRule{
-			{Original: "reconcile.werf.io/forceAt", Renamed: "reconcile." + internalPrefix + "/forceAt"},
-			{Original: "reconcile.werf.io/requestedAt", Renamed: "reconcile." + internalPrefix + "/requestedAt"},
+			{Original: "reconcile.fluxcd.io/requestedAt", Renamed: "reconcile." + internalPrefix + "/requestedAt"},
+			{Original: "reconcile.fluxcd.io/forceAt", Renamed: "reconcile." + internalPrefix + "/forceAt"},
+			// Unlike its siblings, resetAt is never written by this module: no
+			// live object carries it, so there is nothing stored to preserve.
+			// It joins them in the internal namespace instead of freezing on
+			// the fork's domain.
+			{Original: "reconcile.fluxcd.io/resetAt", Renamed: "reconcile." + internalPrefix + "/resetAt"},
 		},
 		Prefixes: []MetadataReplaceRule{
-			{Original: "source.werf.io", Renamed: "source." + internalPrefix},
-			{Original: "helm.werf.io", Renamed: "helm." + internalPrefix},
+			{Original: "source.toolkit.fluxcd.io", Renamed: "source." + internalPrefix},
+			{Original: "helm.toolkit.fluxcd.io", Renamed: "helm." + internalPrefix},
 		},
 	},
 	Finalizers: MetadataReplace{
 		Names: []MetadataReplaceRule{
-			{Original: "finalizers.werf.io", Renamed: "finalizers." + internalPrefix},
-		},
-		Prefixes: []MetadataReplaceRule{
-			{Original: "werf.io", Renamed: "werf." + internalPrefix},
+			{Original: "finalizers.fluxcd.io", Renamed: "finalizers." + internalPrefix},
 		},
 	},
 	Excludes: []ExcludeRule{},
@@ -68,10 +67,10 @@ var OperatorNelmRewriteRules = &RewriteRules{
 }
 
 var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
-	"source.werf.io": {
+	"source.toolkit.fluxcd.io": {
 		GroupRule: GroupRule{
-			Group:            "source.werf.io",
-			Versions:         []string{"v1beta1", "v1beta2", "v1"},
+			Group:            "source.toolkit.fluxcd.io",
+			Versions:         []string{"v1"},
 			PreferredVersion: "v1",
 			Renamed:          "source." + internalPrefix,
 		},
@@ -81,7 +80,7 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "BucketList",
 				Plural:           "buckets",
 				Singular:         "bucket",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
 				ShortNames:       []string{},
@@ -101,47 +100,47 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "GitRepositoryList",
 				Plural:           "gitrepositories",
 				Singular:         "gitrepository",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
-				ShortNames:       []string{"gitrepo"},
+				ShortNames:       []string{},
 			},
 			"helmcharts": {
 				Kind:             "HelmChart",
 				ListKind:         "HelmChartList",
 				Plural:           "helmcharts",
 				Singular:         "helmchart",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
-				ShortNames:       []string{"hc"},
+				ShortNames:       []string{},
 			},
 			"helmrepositories": {
 				Kind:             "HelmRepository",
 				ListKind:         "HelmRepositoryList",
 				Plural:           "helmrepositories",
 				Singular:         "helmrepository",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
-				ShortNames:       []string{"helmrepo"},
+				ShortNames:       []string{},
 			},
 			"ocirepositories": {
 				Kind:             "OCIRepository",
 				ListKind:         "OCIRepositoryList",
 				Plural:           "ocirepositories",
 				Singular:         "ocirepository",
-				Versions:         []string{"v1beta2", "v1"},
+				Versions:         []string{"v1"},
 				PreferredVersion: "v1",
 				Categories:       []string{},
-				ShortNames:       []string{"ocirepo"},
+				ShortNames:       []string{},
 			},
 		},
 	},
-	"helm.werf.io": {
+	"helm.toolkit.fluxcd.io": {
 		GroupRule: GroupRule{
-			Group:            "helm.werf.io",
-			Versions:         []string{"v2beta1", "v2beta2", "v2"},
+			Group:            "helm.toolkit.fluxcd.io",
+			Versions:         []string{"v2"},
 			PreferredVersion: "v2",
 			Renamed:          "helm." + internalPrefix,
 		},
@@ -151,10 +150,10 @@ var OperatorNelmAPIGroupsRules = map[string]APIGroupRule{
 				ListKind:         "HelmReleaseList",
 				Plural:           "helmreleases",
 				Singular:         "helmrelease",
-				Versions:         []string{"v2beta1", "v2beta2", "v2"},
+				Versions:         []string{"v2"},
 				PreferredVersion: "v2",
 				Categories:       []string{},
-				ShortNames:       []string{"hr"},
+				ShortNames:       []string{},
 			},
 		},
 	},

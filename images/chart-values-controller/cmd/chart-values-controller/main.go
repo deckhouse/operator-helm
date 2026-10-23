@@ -22,7 +22,7 @@ import (
 	"os"
 	"time"
 
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -40,8 +40,6 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// artifactDownloadTimeout bounds a single artifact download from the in-cluster
-// source-controller.
 const artifactDownloadTimeout = 60 * time.Second
 
 var scheme = runtime.NewScheme()
@@ -59,19 +57,19 @@ func main() {
 		apiAddr         string
 		apiTLSCertFile  string
 		apiTLSKeyFile   string
-		cacheDir        string
 		cacheTTL        time.Duration
+		cacheBudgetMB   int
 		sourceInterval  time.Duration
 		maxChartSizeMB  int
 	)
 
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
+	flag.StringVar(&metricsAddr, "metrics-bind-address", "127.0.0.1:8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":9440", "The address the health probe endpoint binds to.")
 	flag.StringVar(&apiAddr, "api-bind-address", "127.0.0.1:8081", "The address the chart-values HTTP API binds to.")
 	flag.StringVar(&apiTLSCertFile, "api-tls-cert-file", "", "Path to the PEM-encoded certificate for the chart-values HTTP API; enables TLS together with --api-tls-key-file.")
 	flag.StringVar(&apiTLSKeyFile, "api-tls-key-file", "", "Path to the PEM-encoded private key for the chart-values HTTP API; enables TLS together with --api-tls-cert-file.")
-	flag.StringVar(&cacheDir, "cache-dir", "/cache", "Directory used to cache extracted values.yaml files.")
-	flag.DurationVar(&cacheTTL, "chart-values-cache-ttl", time.Hour, "Lifetime of auxiliary source resources and their cache entries; refreshed on each request.")
+	flag.DurationVar(&cacheTTL, "chart-values-cache-ttl", time.Hour, "Lifetime of auxiliary source resources; a request renews it once less than half of it is left.")
+	flag.IntVar(&cacheBudgetMB, "cache-budget-mb", 16, "Total size in MiB of values.yaml the in-memory cache may hold; entries that do not fit are not cached.")
 	flag.DurationVar(&sourceInterval, "source-interval", 10*time.Minute, "Reconcile interval set on auxiliary source resources.")
 	flag.IntVar(&maxChartSizeMB, "max-chart-size-mb", 100, "Maximum accepted chart artifact size in MiB; larger artifacts are rejected.")
 	opts := zap.Options{Development: false}
@@ -86,6 +84,12 @@ func main() {
 		os.Exit(1)
 	}
 	maxArtifactBytes := int64(maxChartSizeMB) << 20
+
+	if cacheBudgetMB <= 0 {
+		logger.Error(nil, "invalid --cache-budget-mb, must be greater than 0", "value", cacheBudgetMB)
+		os.Exit(1)
+	}
+	cacheBudgetBytes := int64(cacheBudgetMB) << 20
 
 	if (apiTLSCertFile == "") != (apiTLSKeyFile == "") {
 		logger.Error(nil, "--api-tls-cert-file and --api-tls-key-file must be set together")
@@ -115,7 +119,7 @@ func main() {
 		clientset.AuthorizationV1().SubjectAccessReviews(),
 	)
 
-	valuesCache := cache.New(cacheDir)
+	valuesCache := cache.New(cacheBudgetBytes)
 	httpClient := &http.Client{Timeout: artifactDownloadTimeout}
 
 	res := resolver.New(
@@ -137,7 +141,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := controller.SetupWithManager(mgr, valuesCache, httpClient, maxArtifactBytes); err != nil {
+	if err := controller.SetupWithManager(mgr, valuesCache, helmv1alpha1.TargetNamespace); err != nil {
 		logger.Error(err, "unable to setup auxiliary-resource controllers")
 		os.Exit(1)
 	}

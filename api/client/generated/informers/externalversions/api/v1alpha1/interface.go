@@ -24,12 +24,22 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
+	// HelmApplications returns a HelmApplicationInformer.
+	HelmApplications() HelmApplicationInformer
+	// HelmApplicationCharts returns a HelmApplicationChartInformer.
+	HelmApplicationCharts() HelmApplicationChartInformer
+	// HelmApplicationRepositories returns a HelmApplicationRepositoryInformer.
+	HelmApplicationRepositories() HelmApplicationRepositoryInformer
 	// HelmClusterAddons returns a HelmClusterAddonInformer.
 	HelmClusterAddons() HelmClusterAddonInformer
 	// HelmClusterAddonCharts returns a HelmClusterAddonChartInformer.
 	HelmClusterAddonCharts() HelmClusterAddonChartInformer
 	// HelmClusterAddonRepositories returns a HelmClusterAddonRepositoryInformer.
 	HelmClusterAddonRepositories() HelmClusterAddonRepositoryInformer
+	// HelmClusterApplicationCharts returns a HelmClusterApplicationChartInformer.
+	HelmClusterApplicationCharts() HelmClusterApplicationChartInformer
+	// HelmClusterApplicationRepositories returns a HelmClusterApplicationRepositoryInformer.
+	HelmClusterApplicationRepositories() HelmClusterApplicationRepositoryInformer
 }
 
 type version struct {
@@ -41,6 +51,21 @@ type version struct {
 // New returns a new Interface.
 func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakListOptions internalinterfaces.TweakListOptionsFunc) Interface {
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
+}
+
+// HelmApplications returns a HelmApplicationInformer.
+func (v *version) HelmApplications() HelmApplicationInformer {
+	return &helmApplicationInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// HelmApplicationCharts returns a HelmApplicationChartInformer.
+func (v *version) HelmApplicationCharts() HelmApplicationChartInformer {
+	return &helmApplicationChartInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// HelmApplicationRepositories returns a HelmApplicationRepositoryInformer.
+func (v *version) HelmApplicationRepositories() HelmApplicationRepositoryInformer {
+	return &helmApplicationRepositoryInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // HelmClusterAddons returns a HelmClusterAddonInformer.
@@ -56,4 +81,14 @@ func (v *version) HelmClusterAddonCharts() HelmClusterAddonChartInformer {
 // HelmClusterAddonRepositories returns a HelmClusterAddonRepositoryInformer.
 func (v *version) HelmClusterAddonRepositories() HelmClusterAddonRepositoryInformer {
 	return &helmClusterAddonRepositoryInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// HelmClusterApplicationCharts returns a HelmClusterApplicationChartInformer.
+func (v *version) HelmClusterApplicationCharts() HelmClusterApplicationChartInformer {
+	return &helmClusterApplicationChartInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// HelmClusterApplicationRepositories returns a HelmClusterApplicationRepositoryInformer.
+func (v *version) HelmClusterApplicationRepositories() HelmClusterApplicationRepositoryInformer {
+	return &helmClusterApplicationRepositoryInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }

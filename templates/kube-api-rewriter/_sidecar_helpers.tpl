@@ -160,7 +160,7 @@ spec:
   resources:
     requests:
       {{- include "helm_lib_module_ephemeral_storage_only_logs" . | nindent 6 }}
-      {{- if not ( $ctx.Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
+      {{- if not ( $ctx.Values.global.enabledModules | has "vertical-pod-autoscaler") }}
       {{- include "kube_api_rewriter.resources" . | nindent 6 }}
       {{- end }}
   securityContext:

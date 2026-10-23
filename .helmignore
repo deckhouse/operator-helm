@@ -21,5 +21,6 @@ LICENSE
 tests/
 Taskfile.yaml
 CHANGELOG/
+bin/
 build/
 requirements.lock

@@ -77,6 +77,8 @@ func (f *Framework) Before() {
 	Expect(err).NotTo(HaveOccurred())
 	By(fmt.Sprintf("Namespace %q has been created", ns.Name))
 	f.namespace = ns
+
+	f.objectsToDelete = append(f.objectsToDelete, ns)
 }
 
 // After handles cleanup and dump on failure.
@@ -224,12 +226,14 @@ func (f *Framework) DeferDeleteFunc(fn func() error) {
 }
 
 func (f *Framework) waitDeleted(objs []client.Object) {
+	GinkgoHelper()
+
 	for _, obj := range objs {
 		key := types.NamespacedName{
 			Namespace: obj.GetNamespace(),
 			Name:      obj.GetName(),
 		}
-		_ = wait.PollUntilContextTimeout(
+		err := wait.PollUntilContextTimeout(
 			context.Background(), time.Second, LongTimeout, true,
 			func(ctx context.Context) (bool, error) {
 				err := f.generic.Get(ctx, key, obj)
@@ -239,5 +243,6 @@ func (f *Framework) waitDeleted(objs []client.Object) {
 				return false, nil
 			},
 		)
+		Expect(err).NotTo(HaveOccurred(), "%T %s still exists %s after it was deleted", obj, key, LongTimeout)
 	}
 }

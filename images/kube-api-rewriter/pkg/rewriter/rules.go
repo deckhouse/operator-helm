@@ -55,15 +55,16 @@ func (rr *RewriteRules) Init() {
 	rr.annotationsRewriter = NewPrefixedNameRewriter(rr.Annotations)
 	rr.finalizersRewriter = NewPrefixedNameRewriter(rr.Finalizers)
 
-	// Add all original Kinds and KindList as implicit excludes.
-	originalKinds := make([]string, 0)
-	for _, apiGroupRule := range rr.Rules {
+	// Add all original Kinds and KindList as implicit excludes. Another
+	// group may declare the same kind, so each exclude is bound to its group.
+	for groupName, apiGroupRule := range rr.Rules {
+		originalKinds := make([]string, 0, 2*len(apiGroupRule.ResourceRules))
 		for _, resourceRule := range apiGroupRule.ResourceRules {
 			originalKinds = append(originalKinds, resourceRule.Kind, resourceRule.ListKind)
 		}
-	}
-	if len(originalKinds) > 0 {
-		rr.Excludes = append(rr.Excludes, ExcludeRule{Kinds: originalKinds})
+		if len(originalKinds) > 0 {
+			rr.Excludes = append(rr.Excludes, ExcludeRule{Groups: []string{groupName}, Kinds: originalKinds})
+		}
 	}
 
 	// Index apiGroups originals and their renames.
@@ -115,6 +116,7 @@ type MetadataReplaceRule struct {
 }
 
 type ExcludeRule struct {
+	Groups      []string          `json:"groups"`
 	Kinds       []string          `json:"kinds"`
 	MatchNames  []string          `json:"matchNames"`
 	MatchLabels map[string]string `json:"matchLabels"`
@@ -150,20 +152,6 @@ func (rr *RewriteRules) GetAPIGroupList() []interface{} {
 	}
 
 	return groups
-}
-
-func (rr *RewriteRules) ResourceByKind(kind string) (string, string, bool) {
-	for groupName, group := range rr.Rules {
-		for resName, res := range group.ResourceRules {
-			if res.Kind == kind {
-				return groupName, resName, false
-			}
-			if res.ListKind == kind {
-				return groupName, resName, true
-			}
-		}
-	}
-	return "", "", false
 }
 
 func (rr *RewriteRules) WebhookRule(path string) *WebhookRule {
@@ -349,10 +337,10 @@ func (rr *RewriteRules) FinalizersRewriter() *PrefixedNameRewriter {
 }
 
 // ShouldExclude returns true if object should be excluded from response back to the client.
-// Set kind when obj has no kind, e.g. a list item.
-func (rr *RewriteRules) ShouldExclude(obj []byte, kind string) bool {
+// Set apiVersion and kind when obj has none, e.g. a list item.
+func (rr *RewriteRules) ShouldExclude(obj []byte, apiVersion, kind string) bool {
 	for _, exclude := range rr.Excludes {
-		if exclude.Match(obj, kind) {
+		if exclude.Match(obj, apiVersion, kind) {
 			return true
 		}
 	}
@@ -360,7 +348,22 @@ func (rr *RewriteRules) ShouldExclude(obj []byte, kind string) bool {
 }
 
 // Match returns true if object matches all conditions in the exclude rule.
-func (r ExcludeRule) Match(obj []byte, kind string) bool {
+func (r ExcludeRule) Match(obj []byte, apiVersion, kind string) bool {
+	objAPIVersion := apiVersion
+	if objAPIVersion == "" {
+		objAPIVersion = gjson.GetBytes(obj, "apiVersion").String()
+	}
+	// Trim version and delimeter. A core object yields its version, not an empty
+	// group, so Groups cannot select the core group.
+	objGroup, _, _ := strings.Cut(objAPIVersion, "/")
+	groupMatch := len(r.Groups) == 0
+	for _, group := range r.Groups {
+		if objGroup == group {
+			groupMatch = true
+			break
+		}
+	}
+
 	objKind := kind
 	if objKind == "" {
 		objKind = gjson.GetBytes(obj, "kind").String()
@@ -386,7 +389,7 @@ func (r ExcludeRule) Match(obj []byte, kind string) bool {
 	}
 
 	// Return true if every condition match.
-	return kindMatch && matchLabels && matchName
+	return groupMatch && kindMatch && matchLabels && matchName
 }
 
 func mapStringStringFromBytes(obj []byte, path string) map[string]string {

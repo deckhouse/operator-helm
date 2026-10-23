@@ -137,6 +137,24 @@ func TestRewriteSpecKindRefs_UnknownKindPassThrough(t *testing.T) {
 	require.Equal(t, "SomeResource", got, "unknown kind should pass through unchanged")
 }
 
+// TestRewriteSpecKindRefs_ForeignGroupPassThrough tests that a kind listed in
+// KindRefPaths is rewritten only when its apiVersion belongs to a rule group.
+func TestRewriteSpecKindRefs_ForeignGroupPassThrough(t *testing.T) {
+	rules := testRulesWithKindRefPaths()
+
+	foreign := []byte(`{"apiVersion":"example.com/v1","kind":"SomeResource","spec":{"sourceRef":{"kind":"SomeResource"}}}`)
+	result, err := RewriteSpecKindRefs(rules, foreign, Rename)
+	require.NoError(t, err)
+	got := gjson.GetBytes(result, "spec.sourceRef.kind").String()
+	require.Equal(t, "SomeResource", got, "a kind of another group must keep its references")
+
+	own := []byte(`{"apiVersion":"original.group.io/v1","kind":"SomeResource","spec":{"sourceRef":{"kind":"SomeResource"}}}`)
+	result, err = RewriteSpecKindRefs(rules, own, Rename)
+	require.NoError(t, err)
+	got = gjson.GetBytes(result, "spec.sourceRef.kind").String()
+	require.Equal(t, "PrefixedSomeResource", got, "a kind of a rule group must still be rewritten")
+}
+
 // TestRewriteSpecKindRefs_NilKindRefPaths tests that nil KindRefPaths means
 // all objects pass through unchanged.
 func TestRewriteSpecKindRefs_NilKindRefPaths(t *testing.T) {

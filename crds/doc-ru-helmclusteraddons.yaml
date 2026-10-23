@@ -1,4 +1,8 @@
 ---
+# The twin carries the descriptions of the schema only, as every doc-ru- file in
+# this directory does: the descriptions of the printer columns of
+# helmclusteraddons.yaml have no counterpart here on purpose, so a column added or
+# reworded there needs no edit on this side.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
@@ -24,10 +28,7 @@ spec:
                       description: Версия Helm-чарта для HelmClusterAddon.
                 maintenance:
                   description: |
-                    Стратегия согласования ресурса.
-
-                    При значении `NoResourceReconciliation` контроллер прекращает обновление управляемых ресурсов, что позволяет выполнять ручное вмешательство или обслуживание без перезаписи изменений оператором.
-                    При пустом значении (`""`) используется стандартное согласование.
+                    Стратегия согласования ресурса. При значении `NoResourceReconciliation` контроллер прекращает обновление управляемых ресурсов; при пустом значении (`""`) используется стандартное согласование.
                 namespace:
                   description: Пространство имён для развёртывания релиза аддона.
                 values:
@@ -35,10 +36,7 @@ spec:
             status:
               properties:
                 conditions:
-                  description: |
-                    Условия отражают последние наблюдения за состоянием ресурса.
-
-                    `Reconciling` присутствует, только когда применимо, следуя соглашению kstatus. Пока выполняется реконсиляция, запрошенная аннотацией принудительной реконсиляции, это условие имеет причину `ForceReconcile`.
+                  description: Условия отражают последние наблюдения за состоянием ресурса.
                 lastAppliedChart:
                   description: Последний применённый чарт, инициировавший установку или обновление аддона.
                   properties:
@@ -54,4 +52,4 @@ spec:
                   description: Поколение ресурса, обработанное контроллером последним.
                 lastForceReconcileTime:
                   description: |
-                    Время обработки последнего запроса принудительной реконсиляции. Фиксирует, что запрос был обработан, а не что он завершился успешно — результат отражает `Ready`.
+                    Время обработки последнего запроса принудительной реконсиляции. Фиксирует, что запрос был обработан, а не что он завершился успешно.

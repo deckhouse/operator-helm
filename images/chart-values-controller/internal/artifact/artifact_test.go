@@ -26,26 +26,43 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
 func buildChartArchive(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 
+	entries := make([]archiveEntry, 0, len(files))
+	for name, content := range files {
+		entries = append(entries, archiveEntry{name: name, content: content})
+	}
+
+	return buildOrderedChartArchive(t, entries)
+}
+
+type archiveEntry struct {
+	name    string
+	content string
+}
+
+func buildOrderedChartArchive(t *testing.T, entries []archiveEntry) []byte {
+	t.Helper()
+
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 
-	for name, content := range files {
+	for _, entry := range entries {
 		if err := tw.WriteHeader(&tar.Header{
-			Name:     name,
+			Name:     entry.name,
 			Mode:     0o644,
-			Size:     int64(len(content)),
+			Size:     int64(len(entry.content)),
 			Typeflag: tar.TypeReg,
 		}); err != nil {
 			t.Fatalf("writing tar header: %v", err)
 		}
-		if _, err := tw.Write([]byte(content)); err != nil {
+		if _, err := tw.Write([]byte(entry.content)); err != nil {
 			t.Fatalf("writing tar content: %v", err)
 		}
 	}
@@ -58,6 +75,18 @@ func buildChartArchive(t *testing.T, files map[string]string) []byte {
 	}
 
 	return buf.Bytes()
+}
+
+func buildArchiveWithEntries(t *testing.T, count int) []byte {
+	t.Helper()
+
+	entries := make([]archiveEntry, 0, count+1)
+	for i := range count {
+		entries = append(entries, archiveEntry{name: fmt.Sprintf("podinfo/templates/entry-%d.yaml", i)})
+	}
+	entries = append(entries, archiveEntry{name: "podinfo/values.yaml", content: "a: b\n"})
+
+	return buildOrderedChartArchive(t, entries)
 }
 
 func digestOf(data []byte) string {
@@ -109,7 +138,6 @@ func TestFetchValuesMissing(t *testing.T) {
 }
 
 func TestFetchValuesNestedValuesIgnored(t *testing.T) {
-	// values.yaml of a subchart must not be mistaken for the chart's own.
 	archive := buildChartArchive(t, map[string]string{
 		"podinfo/charts/dep/values.yaml": "nested: true\n",
 	})
@@ -142,9 +170,247 @@ func TestFetchValuesTooLarge(t *testing.T) {
 
 	url := serve(t, archive)
 
-	// A limit smaller than the archive must be rejected before digest checks.
 	_, err := FetchValues(context.Background(), http.DefaultClient, url, digestOf(archive), 8)
 	if !errors.Is(err, ErrArtifactTooLarge) {
 		t.Fatalf("expected ErrArtifactTooLarge, got %v", err)
+	}
+}
+
+func TestExtractValuesRejectsAnArchiveThatExpandsPastTheTotalBudget(t *testing.T) {
+	archive := buildOrderedChartArchive(t, []archiveEntry{
+		{name: "podinfo/big.bin", content: strings.Repeat("\x00", 64<<20)},
+		{name: "podinfo/values.yaml", content: "a: b\n"},
+	})
+
+	if limit := decompressedLimit(int64(len(archive))); limit >= 64<<20 {
+		t.Fatalf("archive of %d bytes licenses %d decompressed bytes; the test payload no longer exceeds it", len(archive), limit)
+	}
+
+	_, err := extractValues(context.Background(), archive, testMaxBytes)
+	if !errors.Is(err, ErrArtifactTooLarge) {
+		t.Fatalf("expected ErrArtifactTooLarge, got %v", err)
+	}
+}
+
+func TestExtractValuesRejectsAnArchiveWithTooManyEntries(t *testing.T) {
+	archive := buildArchiveWithEntries(t, maxArchiveEntries+1)
+
+	_, err := extractValues(context.Background(), archive, testMaxBytes)
+	if !errors.Is(err, ErrArtifactTooManyEntries) {
+		t.Fatalf("expected ErrArtifactTooManyEntries, got %v", err)
+	}
+}
+
+func TestExtractValuesAcceptsAnArchiveWithinBothBudgets(t *testing.T) {
+	archive := buildArchiveWithEntries(t, maxArchiveEntries-1)
+
+	got, err := extractValues(context.Background(), archive, testMaxBytes)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != "a: b\n" {
+		t.Fatalf("values = %q", got)
+	}
+}
+
+func TestExtractValuesStopsOnACancelledContext(t *testing.T) {
+	archive := buildChartArchive(t, map[string]string{
+		"podinfo/values.yaml": "a: b\n",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := extractValues(ctx, archive, testMaxBytes)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestBoundedReaderStopsACopyInFlight(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	spent := &budget{ctx: ctx, limit: 1 << 20}
+	reader := spent.reader(bytes.NewReader(make([]byte, 1<<20)))
+
+	buf := make([]byte, 1024)
+	if _, err := reader.Read(buf); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+
+	cancel()
+
+	if _, err := reader.Read(buf); !errors.Is(err, context.Canceled) {
+		t.Fatalf("read after cancel = %v, want context.Canceled", err)
+	}
+}
+
+func TestExtractValuesChargesTheBytesOfAnOrdinaryEntryOnce(t *testing.T) {
+	values := strings.Repeat("replicaCount: 1\n", (5<<20)/16)
+
+	archive := buildOrderedChartArchive(t, []archiveEntry{{name: "podinfo/values.yaml", content: values}})
+
+	limit := decompressedLimit(int64(len(archive)))
+	if int64(len(values)) <= limit/2 || int64(len(values)) >= limit {
+		t.Fatalf("values of %d bytes against a budget of %d: the test needs a size between half the budget and all of it",
+			len(values), limit)
+	}
+
+	got, err := extractValues(context.Background(), archive, testMaxBytes)
+	if err != nil {
+		t.Fatalf("a chart within its budget was refused: %v", err)
+	}
+	if len(got) != len(values) {
+		t.Fatalf("values = %d bytes, want %d", len(got), len(values))
+	}
+}
+
+func TestCancellableReaderStopsAReaderThatYieldsNothing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reader := &cancellableReader{ctx: ctx, r: bytes.NewReader(make([]byte, 1<<20))}
+
+	buf := make([]byte, 1024)
+	if _, err := reader.Read(buf); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+
+	cancel()
+
+	if _, err := reader.Read(buf); !errors.Is(err, context.Canceled) {
+		t.Fatalf("read after cancel = %v, want context.Canceled", err)
+	}
+}
+
+func TestDecompressedLimit(t *testing.T) {
+	cases := []struct {
+		name       string
+		compressed int64
+		want       int64
+	}{
+		{"a tiny archive is judged by the floor, not by its ratio", 512, minDecompressedBytes},
+		{"an ordinary archive is judged by the ratio", 4 << 20, 4 << 20 * maxDecompressionRatio},
+		{"a huge archive is capped rather than multiplied", 1 << 40, maxDecompressedBytes},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := decompressedLimit(tc.compressed); got != tc.want {
+				t.Fatalf("decompressedLimit(%d) = %d, want %d", tc.compressed, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExtractValuesRejectsASparseEntryThatFabricatesItsSize(t *testing.T) {
+	archive := buildSparseArchive(t, "podinfo/values.yaml", 9<<20)
+
+	if limit := decompressedLimit(int64(len(archive))); limit >= 9<<20 {
+		t.Fatalf("archive of %d bytes licenses %d decompressed bytes; the entry no longer exceeds it",
+			len(archive), limit)
+	}
+	if testMaxBytes <= 9<<20 {
+		t.Fatal("the per-file limit would refuse this entry on its own; the test would prove nothing")
+	}
+
+	_, err := extractValues(context.Background(), archive, testMaxBytes)
+	if !errors.Is(err, ErrArtifactTooLarge) {
+		t.Fatalf("expected ErrArtifactTooLarge, got %v", err)
+	}
+}
+
+func buildSparseArchive(t *testing.T, name string, realsize int64) []byte {
+	t.Helper()
+
+	records := paxRecord("GNU.sparse.major", "1") +
+		paxRecord("GNU.sparse.minor", "0") +
+		paxRecord("GNU.sparse.name", name) +
+		paxRecord("GNU.sparse.realsize", fmt.Sprint(realsize))
+
+	sparseMap := padToBlock([]byte("1\n0\n0\n"))
+
+	var tarball bytes.Buffer
+	tarball.Write(tarHeader(t, "PaxHeaders/0", int64(len(records)), tar.TypeXHeader))
+	tarball.Write(padToBlock([]byte(records)))
+	tarball.Write(tarHeader(t, "GNUSparseFile.0/"+name, int64(len(sparseMap)), tar.TypeReg))
+	tarball.Write(sparseMap)
+	tarball.Write(make([]byte, 1024))
+
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
+	if _, err := gz.Write(tarball.Bytes()); err != nil {
+		t.Fatalf("compressing archive: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("closing gzip writer: %v", err)
+	}
+
+	return out.Bytes()
+}
+
+func tarHeader(t *testing.T, name string, size int64, typeflag byte) []byte {
+	t.Helper()
+
+	block := make([]byte, 512)
+	copy(block[0:100], name)
+	copy(block[100:108], "0000644\x00")
+	copy(block[124:136], fmt.Sprintf("%011o\x00", size))
+	copy(block[136:148], fmt.Sprintf("%011o\x00", 0))
+	block[156] = typeflag
+	copy(block[257:263], "ustar\x00")
+	copy(block[263:265], "00")
+
+	for i := 148; i < 156; i++ {
+		block[i] = ' '
+	}
+	sum := 0
+	for _, b := range block {
+		sum += int(b)
+	}
+	copy(block[148:156], fmt.Sprintf("%06o\x00 ", sum))
+
+	return block
+}
+
+func paxRecord(key, value string) string {
+	for n := 1; ; n++ {
+		record := fmt.Sprintf("%d %s=%s\n", n, key, value)
+		if len(record) == n {
+			return record
+		}
+	}
+}
+
+func padToBlock(b []byte) []byte {
+	for len(b)%512 != 0 {
+		b = append(b, 0)
+	}
+
+	return b
+}
+
+func TestExtractValuesRejectsAnArchiveWithSeveralRootDirectories(t *testing.T) {
+	archive := buildOrderedChartArchive(t, []archiveEntry{
+		{name: "decoy/values.yaml", content: "shown: true\n"},
+		{name: "podinfo/Chart.yaml", content: "name: podinfo\n"},
+		{name: "podinfo/values.yaml", content: "applied: true\n"},
+	})
+
+	_, err := extractValues(context.Background(), archive, 1<<20)
+	if !errors.Is(err, ErrArtifactNotAChartPackage) {
+		t.Fatalf("expected ErrArtifactNotAChartPackage, got %v", err)
+	}
+}
+
+func TestExtractValuesRejectsAnArchiveWithoutARootDirectory(t *testing.T) {
+	archive := buildOrderedChartArchive(t, []archiveEntry{
+		{name: "/values.yaml", content: "shown: true\n"},
+	})
+
+	_, err := extractValues(context.Background(), archive, 1<<20)
+	if !errors.Is(err, ErrArtifactNotAChartPackage) {
+		t.Fatalf("expected ErrArtifactNotAChartPackage, got %v", err)
 	}
 }

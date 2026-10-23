@@ -20,18 +20,14 @@ import (
 	"strings"
 )
 
+// IsSystemNamespace reports whether a namespace belongs to the cluster or to Deckhouse
+// rather than to a user: the three Kubernetes creates for itself, and every d8- one.
 func IsSystemNamespace(namespace string) bool {
-	systemNamespaces := []string{"kube-system", "kube-node-lease", "kube-public"}
-
-	for _, s := range systemNamespaces {
-		if namespace == s {
-			return true
-		}
-	}
-
-	if strings.HasPrefix(namespace, "d8-") {
+	// The kube- prefix as a whole is not rejected: that would strand addons already installed under it.
+	switch namespace {
+	case "default", "kube-system", "kube-node-lease", "kube-public":
 		return true
 	}
 
-	return false
+	return strings.HasPrefix(namespace, "d8-")
 }

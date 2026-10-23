@@ -20,7 +20,7 @@ spec:
   - additionalPrinterColumns:
     - description: Helm release chart name.
       jsonPath: .spec.chart.helmClusterAddonChart
-      name: Chart Name
+      name: Chart
       type: string
     - description: Helm release chart version.
       jsonPath: .spec.chart.version
@@ -30,9 +30,25 @@ spec:
       jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Status
       type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - description: The repository the chart is taken from
+      jsonPath: .spec.chart.helmClusterAddonRepository
+      name: Repository
+      priority: 1
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].message
+      name: Message
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: HelmClusterAddon represents a single cluster-wide installation
+          of a Helm chart, which may include custom resource definitions (CRDs) and
+          requires cluster-admin permissions to deploy. Only one instance of a specific
+          chart can be installed at any given time.
         properties:
           apiVersion:
             description: |-
@@ -64,10 +80,9 @@ spec:
                   helmClusterAddonRepository:
                     description: |-
                       Specifies the name of the HelmClusterAddonRepository custom resource that contains
-                      the connection details and credentials for the repository where
-                      the chart is located.
+                      the connection details and credentials for the repository where the chart is located.
                     maxLength: 63
-                    minLength: 3
+                    minLength: 1
                     type: string
                   version:
                     description: Versions holds the HelmClusterAddon chart version.
@@ -79,36 +94,29 @@ spec:
                 type: object
               maintenance:
                 description: |-
-                  Maintenance specifies the reconciliation strategy for the resource.
-                  When set to "NoResourceReconciliation", the controller will stop updating the
-                  underlying resources, allowing for manual intervention or maintenance
-                  without the operator overwriting changes.
-                  When empty (""), standard reconciliation is active.
+                  Maintenance specifies the reconciliation strategy for the resource. "NoResourceReconciliation"
+                  stops updating the underlying resources; empty ("") keeps standard reconciliation active.
                 enum:
                 - ""
                 - NoResourceReconciliation
                 type: string
               namespace:
-                default: default
                 description: Namespace to deploy cluster addon release
                 maxLength: 63
-                minLength: 3
+                minLength: 1
                 type: string
               values:
                 description: Values holds the values for this HelmClusterAddon release.
                 x-kubernetes-preserve-unknown-fields: true
             required:
             - chart
+            - namespace
             type: object
           status:
             properties:
               conditions:
-                description: |-
-                  Conditions represent the latest available observations of the addon state.
-
-                  Reconciling is present only while applicable, following the kstatus convention.
-                  It carries the reason ForceReconcile while a reconciliation requested through
-                  the force reconcile annotation is running.
+                description: Conditions represent the latest available observations
+                  of the addon state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -176,8 +184,7 @@ spec:
                   helmClusterAddonRepository:
                     description: |-
                       Specifies the name of the HelmClusterAddonRepository custom resource that contains
-                      the connection details and credentials for the repository where
-                      the chart is located.
+                      the connection details and credentials for the repository where the chart is located.
                     type: string
                   version:
                     description: Versions holds the HelmClusterAddon chart version.
@@ -189,9 +196,8 @@ spec:
                 x-kubernetes-preserve-unknown-fields: true
               lastForceReconcileTime:
                 description: |-
-                  LastForceReconcileTime is the time the most recent force reconcile request was
-                  processed. It records that the request was acted on, not that it succeeded:
-                  the outcome is reported by Ready.
+                  LastForceReconcileTime is the time the most recent force reconcile request was processed.
+                  It records that the request was acted on, not that it succeeded.
                 format: date-time
                 type: string
               observedGeneration:
@@ -203,6 +209,9 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: addon name must be at most 63 characters long
+          rule: self.metadata.name.size() <= 63
     served: true
     storage: true
     subresources:

@@ -1,0 +1,198 @@
+/*
+Copyright 2026 Flant JSC.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package reposync
+
+import (
+	"context"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
+	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/contract"
+)
+
+type Synchronizer struct {
+	client        client.Client
+	clientFactory RepoClientFactory
+	catalog       contract.Catalog
+}
+
+// RepoClientFactory builds the client used to read a repository catalog. It is
+// injected so the synchronization can be tested without a live repository.
+type RepoClientFactory func(repoType chartsource.Kind) (repoclient.ClientInterface, error)
+
+// NewSynchronizer builds the synchronization for one repository kind: the
+// catalog decides which chart catalog kind the fetched charts are mirrored into.
+func NewSynchronizer(client client.Client, factory RepoClientFactory, catalog contract.Catalog) *Synchronizer {
+	if factory == nil {
+		factory = repoclient.NewClient
+	}
+
+	return &Synchronizer{
+		client:        client,
+		clientFactory: factory,
+		catalog:       catalog,
+	}
+}
+
+// MigrateNames moves the repository's catalog objects to the names the current scheme
+// derives. It is separate from Sync because it must run whether the remote answers or not.
+//
+// TRANSITIONAL: remove together with the catalog's own migration.
+func (s *Synchronizer) MigrateNames(ctx context.Context, repo contract.Repository) error {
+	return s.catalog.MigrateNames(ctx, repo)
+}
+
+// Sync reads the repository catalog and reconciles the chart catalog objects that mirror it.
+// A fetch failure is about the remote, a catalog failure is about this cluster.
+func (s *Synchronizer) Sync(
+	ctx context.Context,
+	repo contract.Repository,
+	repoType chartsource.Kind,
+) SyncOutcome {
+	forced := repo.ForceReconcileRequired()
+
+	// A changed spec re-examines every verdict the way a force does: the recorded ones answered
+	// the previous source.
+	refresh := forced || SpecChangePending(repo.Status(), repo.Generation())
+
+	// A helm repository is marked for nothing: its client ignores FetchOptions, so no pass skips a verdict.
+	marking := refresh && repoType == chartsource.OCI
+
+	snapshot, err := s.catalog.Snapshot(ctx, repo)
+	if err != nil {
+		// The registry was never contacted. An oci request not yet marked still needs its annotation;
+		// a helm one is carried by the internal HelmRepository and the consumers, so its annotation can go.
+		return SyncOutcome{ForceRequestRecorded: !marking, Catalog: CatalogOutcome{Err: err}}
+	}
+
+	if marking {
+		if err := snapshot.MarkForReexamination(ctx); err != nil {
+			// ForceRequestRecorded stays false: nothing holds the request but the annotation.
+			return SyncOutcome{Catalog: CatalogOutcome{Err: err}}
+		}
+	}
+
+	// Known is read after the marking, so a version this pass just marked is one the fetch re-examines.
+	charts, fetch := s.fetchCharts(ctx, repo, repoType, repoclient.FetchOptions{
+		Known: snapshot.Known(),
+		Full:  refresh,
+	})
+	if fetch.Err != nil {
+		return SyncOutcome{ForceRequestRecorded: true, FetchAttempted: true, Fetch: fetch}
+	}
+
+	result, err := snapshot.Reconcile(ctx, charts)
+
+	return SyncOutcome{
+		ForceRequestRecorded: true,
+		FetchAttempted:       true,
+		Fetch:                fetch,
+		Catalog:              CatalogOutcome{Err: err, SkippedCharts: result.SkippedCharts},
+	}
+}
+
+// SpecChangePending reports whether the spec changed since the last pass that reached the
+// registry: the generation moved on, or the schedule stands cleared because a pass observed the
+// change without reaching the registry. Evaluate keeps the schedule cleared for as long as that
+// holds, so the answer survives any number of such passes.
+func SpecChangePending(status *helmv1alpha1.RepositoryStatus, generation int64) bool {
+	return generation != status.ObservedGeneration || status.NextSyncTime == nil
+}
+
+func (s *Synchronizer) fetchCharts(
+	ctx context.Context,
+	repo contract.Repository,
+	repoType chartsource.Kind,
+	opts repoclient.FetchOptions,
+) ([]repoclient.Chart, FetchOutcome) {
+	repoClient, err := s.clientFactory(repoType)
+	if err != nil {
+		return nil, FetchOutcome{
+			Err:      err,
+			Terminal: true,
+			Reason:   helmv1alpha1.ReasonUnsupportedRepositoryType,
+			Message:  "Unsupported repository type",
+		}
+	}
+
+	charts, err := repoClient.FetchCharts(ctx, repo.URL(), buildRepoConfig(repo), opts)
+	if err == nil {
+		return charts, FetchOutcome{
+			Pending:    countPending(charts),
+			Unexamined: countUnexamined(charts),
+			Charts:     len(charts),
+		}
+	}
+
+	if terminal, ok := repoclient.AsTerminal(err); ok {
+		return nil, FetchOutcome{
+			Err:      err,
+			Terminal: true,
+			Reason:   terminal.Reason,
+			Message:  terminal.Message,
+		}
+	}
+
+	return nil, FetchOutcome{
+		Err:     err,
+		Reason:  helmv1alpha1.ReasonSyncFailed,
+		Message: "Failed to read the repository catalog: " + err.Error(),
+	}
+}
+
+func countUnexamined(charts []repoclient.Chart) int {
+	unexamined := 0
+	for _, chart := range charts {
+		unexamined += len(chart.UnexaminedVersions)
+	}
+
+	return unexamined
+}
+
+func countPending(charts []repoclient.Chart) int {
+	pending := 0
+	for _, chart := range charts {
+		for _, version := range chart.Versions {
+			if version.UnavailableReason == helmv1alpha1.UnavailableReasonResolvePending {
+				pending++
+			}
+		}
+	}
+
+	return pending
+}
+
+func buildRepoConfig(repo contract.Repository) *repoclient.RepoConfig {
+	if repo.Auth() == nil && repo.CACertificate() == "" && !repo.InsecureSkipVerify() {
+		return nil
+	}
+
+	config := &repoclient.RepoConfig{
+		Insecure:      repo.InsecureSkipVerify(),
+		CACertificate: repo.CACertificate(),
+	}
+
+	if auth := repo.Auth(); auth != nil {
+		config.Username = auth.Username
+		config.Password = auth.Password
+	}
+
+	return config
+}

@@ -31,8 +31,6 @@ var (
 )
 
 // NamespaceHasWorkloads reports whether the namespace still contains any Deployment or Pod.
-// It is used during module teardown to make sure the controllers are gone before their
-// resources are touched.
 func NamespaceHasWorkloads(ctx context.Context, dynamicClient dynamic.Interface, namespace string) (bool, error) {
 	for _, gvr := range []schema.GroupVersionResource{deploymentGVR, podGVR} {
 		list, err := dynamicClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{Limit: 1})

@@ -100,7 +100,7 @@ var _ = Describe("HelmClusterAddon chart claim", Ordered, func() {
 		for _, name := range []string{repoAName, repoBName} {
 			repo := &apiv1alpha1.HelmClusterAddonRepository{
 				ObjectMeta: metav1.ObjectMeta{Name: name},
-				Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+				Spec: apiv1alpha1.RepositorySpec{
 					URL:                repoURL,
 					InsecureSkipVerify: false,
 				},

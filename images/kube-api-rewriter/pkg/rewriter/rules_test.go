@@ -69,8 +69,13 @@ func TestExcludeRuleKindsOnly(t *testing.T) {
 	}{
 		{
 			"original kind SomeResource in excludes",
-			`{"kind":"SomeResource"}`,
+			`{"kind":"SomeResource","apiVersion":"originalgroup.io/v1"}`,
 			true,
+		},
+		{
+			"original kind SomeResource in another group not in excludes",
+			`{"kind":"SomeResource","apiVersion":"othergroup.io/v1"}`,
+			false,
 		},
 		{
 			"kind UnknownResource not in excludes",
@@ -106,7 +111,7 @@ func TestExcludeRuleKindsOnly(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actual := rules.ShouldExclude([]byte(tt.obj), "")
+			actual := rules.ShouldExclude([]byte(tt.obj), "", "")
 
 			if tt.expectExcluded {
 				require.True(t, actual, "'%s' should be excluded. Not excluded obj: %s", tt.name, tt.obj)

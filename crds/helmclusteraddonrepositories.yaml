@@ -88,7 +88,9 @@ spec:
                   verification.
                 type: string
               insecureSkipVerify:
-                description: InsecureSkipVerify disable TLS certificate verification.
+                description: |-
+                  InsecureSkipVerify disable TLS certificate verification. It applies to OCI registry only;
+                  a self-signed HTTPS Helm repository needs caCertificate.
                 type: boolean
               url:
                 description: URL of the Helm repository. Supports http(s):// and oci://
@@ -103,21 +105,15 @@ spec:
             type: object
           status:
             properties:
-              conditions:
+              chartCount:
                 description: |-
-                  Conditions represent the latest available observations of the repository state.
-
-                  Ready reports whether the repository is usable: auxiliary resources are in place,
-                  the internal source object is healthy and the repository has responded to a catalog
-                  read on the current spec. A transient read failure does not flip Ready to False.
-
-                  Synced reports whether the chart catalog is up to date.
-
-                  Reconciling and Stalled follow the kstatus convention: they are present only while
-                  applicable. Reconciling means work is in progress or a retry is scheduled; Stalled
-                  means the repository will not recover without a change. While a synchronization is
-                  running Reconciling carries the reason Synchronization, or ForceReconcile when the
-                  pass was requested through the force reconcile annotation.
+                  ChartCount is the number of charts the last successful read found in the repository, minus the ones
+                  whose name cannot be recorded on a catalog object. It is absent until the first successful read.
+                format: int32
+                type: integer
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the repository state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -181,9 +177,8 @@ spec:
                 type: integer
               lastForceReconcileTime:
                 description: |-
-                  LastForceReconcileTime is the time the most recent force reconcile request was
-                  processed. It records that the request was acted on, not that it succeeded:
-                  the outcome is reported by Ready and Synced.
+                  LastForceReconcileTime is the time the most recent force reconcile request was processed.
+                  It records that the request was acted on, not that it succeeded.
                 format: date-time
                 type: string
               lastSuccessfulSyncTime:
@@ -192,6 +187,12 @@ spec:
                   including creating and pruning chart resources.
                 format: date-time
                 type: string
+              lastSyncedGeneration:
+                description: |-
+                  LastSyncedGeneration is the generation of the spec whose catalog is the one published now.
+                  It is written by every pass that published a catalog and keeps its value through later failures.
+                format: int64
+                type: integer
               nextSyncTime:
                 description: NextSyncTime is the scheduled time of the next synchronization
                   attempt.
@@ -202,10 +203,19 @@ spec:
                   processed by the controller.
                 format: int64
                 type: integer
+              unexaminedVersions:
+                description: |-
+                  UnexaminedVersions is how many chart versions the repository offers that the catalog published now
+                  says nothing about. Zero means the catalog lists every version the repository offers.
+                format: int32
+                type: integer
             type: object
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: repository name must be at most 63 characters long
+          rule: self.metadata.name.size() <= 63
     served: true
     storage: true
     subresources:

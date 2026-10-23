@@ -19,7 +19,9 @@ package repository
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/random"
@@ -108,11 +110,6 @@ func TestResolveChartArtifactMissingTagIsTerminal(t *testing.T) {
 	}
 }
 
-// TestResolveChartArtifactRejectionIsRetriable is the deliberate difference from
-// FetchCharts: there a 401/403 is escalated to a terminal failure of the whole pass,
-// because credentials rejected for one tag are rejected for all of them. Here the
-// pass is a single tag on a registry the repository merely names, and a rejection is
-// as likely to be a rate limit as a permission problem.
 func TestResolveChartArtifactRejectionIsRetriable(t *testing.T) {
 	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
@@ -133,5 +130,32 @@ func TestResolveChartArtifactUnparsableReferenceIsTerminal(t *testing.T) {
 	_, err := OCIChartResolverDefault.ResolveChartArtifact(context.Background(), "oci://BAD_HOST//:::", nil)
 	if _, ok := AsTerminal(err); !ok {
 		t.Fatalf("error %v must be terminal: the reference will not become valid by retrying", err)
+	}
+}
+
+func TestResolveChartArtifactAbandonsARegistryThatNeverAnswers(t *testing.T) {
+	budgetBefore := chartArtifactProbeBudget
+	chartArtifactProbeBudget = 300 * time.Millisecond
+	t.Cleanup(func() { chartArtifactProbeBudget = budgetBefore })
+
+	host := hangingRegistryHost(t)
+
+	start := time.Now()
+	_, err := OCIChartResolverDefault.ResolveChartArtifact(
+		context.Background(), "oci://"+host+"/podinfo:1.0.0", nil,
+	)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a registry that never answers must fail the probe")
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("the probe took %v: the budget did not bound it", elapsed)
+	}
+	if _, ok := AsTerminal(err); ok {
+		t.Fatalf("error %v must stay retriable: the artifact was never examined", err)
+	}
+	if !strings.Contains(err.Error(), "reading the manifest") {
+		t.Fatalf("error %v must say which call was abandoned", err)
 	}
 }

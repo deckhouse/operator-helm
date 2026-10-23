@@ -19,13 +19,16 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -110,26 +113,28 @@ const (
 	legacyChartMediaType  = "application/tar+gzip"
 )
 
-// fakeRegistry is an in-memory OCI registry that can count manifest reads and force a
-// status code for a specific tag. Counting is what proves the incremental behaviour:
-// the number of manifest requests, not the returned versions, is the point of D3.
 type fakeRegistry struct {
-	inner  http.Handler
-	mu     sync.Mutex
-	gets   map[string]int
-	forced map[string]int
+	inner       http.Handler
+	mu          sync.Mutex
+	gets        map[string]int
+	forced      map[string]int
+	stalledTags map[string]bool
+	stall       chan struct{}
 }
 
 func newFakeRegistry(t *testing.T) (*fakeRegistry, string) {
 	t.Helper()
 
 	f := &fakeRegistry{
-		inner:  registry.New(registry.Logger(log.New(io.Discard, "", 0))),
-		gets:   map[string]int{},
-		forced: map[string]int{},
+		inner:       registry.New(registry.Logger(log.New(io.Discard, "", 0))),
+		gets:        map[string]int{},
+		forced:      map[string]int{},
+		stalledTags: map[string]bool{},
+		stall:       make(chan struct{}),
 	}
 	server := httptest.NewServer(f)
 	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(f.stall) })
 
 	return f, strings.TrimPrefix(server.URL, "http://")
 }
@@ -139,7 +144,17 @@ func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.gets[tag]++
 		status := f.forced[tag]
+		stalling := f.stalledTags[tag]
 		f.mu.Unlock()
+
+		if stalling {
+			select {
+			case <-f.stall:
+			case <-r.Context().Done():
+			}
+
+			return
+		}
 
 		if status != 0 {
 			w.WriteHeader(status)
@@ -152,8 +167,6 @@ func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.inner.ServeHTTP(w, r)
 }
 
-// manifestTag reports the tag of a manifest read request. Digest references are
-// ignored: only tag reads are counted and forced.
 func manifestTag(r *http.Request) (string, bool) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return "", false
@@ -170,6 +183,12 @@ func manifestTag(r *http.Request) (string, bool) {
 	return ref, true
 }
 
+func (f *fakeRegistry) stallTag(tag string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stalledTags[tag] = true
+}
+
 func (f *fakeRegistry) force(tag string, status int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -183,17 +202,12 @@ func (f *fakeRegistry) manifestGets(tag string) int {
 	return f.gets[tag]
 }
 
-// reset clears the recorded manifest request counts. remote.Write can itself read
-// manifests while pushing test fixtures, so tests that assert on request counts must
-// reset the counter after the setup pushes and before the measured call.
 func (f *fakeRegistry) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.gets = map[string]int{}
 }
 
-// pushChart writes a single-layer artifact with the given config and layer media
-// types under host/podinfo:tag.
 func pushChart(t *testing.T, host, tag string, configType types.MediaType, layerTypes ...types.MediaType) {
 	t.Helper()
 
@@ -354,14 +368,6 @@ func TestFetchChartsOCIEscalatesUnauthorized(t *testing.T) {
 	}
 }
 
-// TestFetchChartsOCIResolveVersionsSurfacesCancelledContext exercises resolveChartVersions
-// directly rather than through FetchCharts: remote.List already fails a cancelled context
-// on its own (unaffected by this fix), so reproducing the bug end-to-end would require
-// cancelling the context after the listing but during the per-tag resolve, which is timing
-// dependent. Calling the resolve stage directly reproduces it deterministically: without
-// the ctx.Err() check, every goroutine's remote.Get fails with a wrapped context.Canceled
-// that is not a *transport.Error, so it falls through to a fabricated ResolvePending verdict
-// and resolveChartVersions returns a clean result with a nil error.
 func TestFetchChartsOCIResolveVersionsSurfacesCancelledContext(t *testing.T) {
 	_, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
@@ -374,12 +380,17 @@ func TestFetchChartsOCIResolveVersionsSurfacesCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = resolveChartVersions(ctx, repo, "podinfo", []string{"1.0.0"}, []remote.Option{remote.WithContext(ctx)}, FetchOptions{})
+	versions, unexamined, err := resolveChartVersions(
+		ctx, repo, "podinfo", []string{"1.0.0"}, []remote.Option{remote.WithContext(ctx)}, FetchOptions{},
+	)
 	if err == nil {
 		t.Fatal("a cancelled context must not produce a completed pass")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected an error wrapping context.Canceled, got %v", err)
+	}
+	if versions != nil || unexamined != nil {
+		t.Fatalf("an abandoned pass must publish nothing, got versions %+v and unexamined %v", versions, unexamined)
 	}
 }
 
@@ -391,9 +402,6 @@ func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 	pushChart(t, host, "1.0.3", helmConfigMediaType, currentChartMediaType)
 	reg.reset()
 
-	// The message a previous pass recorded for the unsupported verdict. A skipped tag
-	// is carried through verbatim, so this is test data rather than a message that
-	// examineManifest would actually produce for this fixture.
 	const unsupportedMessage = "config media type recorded by a previous pass is not a helm chart config"
 
 	known := KnownCharts{"podinfo": KnownVersions{
@@ -403,7 +411,6 @@ func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 			UnavailableMessage: unsupportedMessage,
 		},
 		"1.0.2": {UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending},
-		// An entry written before media types were recorded: the upgrade migration.
 		"1.0.3": {},
 	}}
 
@@ -424,6 +431,10 @@ func TestFetchChartsOCISkipsKnownTags(t *testing.T) {
 
 	if got := versionByTag(t, chart, "1.0.0").MediaType; got != currentChartMediaType {
 		t.Fatalf("a skipped tag must keep its media type, got %q", got)
+	}
+	if got := versionByTag(t, chart, "1.0.1").UnavailableReason; got != helmv1alpha1.UnavailableReasonUnsupportedMediaType {
+		t.Fatalf("a skipped unsupported tag must keep its recorded reason, got %q, want %q",
+			got, helmv1alpha1.UnavailableReasonUnsupportedMediaType)
 	}
 	if got := versionByTag(t, chart, "1.0.1").UnavailableMessage; got != unsupportedMessage {
 		t.Fatalf("a skipped unsupported tag must keep its recorded message, got %q, want %q", got, unsupportedMessage)
@@ -449,25 +460,21 @@ func TestFetchChartsOCIFullIgnoresKnown(t *testing.T) {
 	}
 }
 
-func TestFetchChartsOCIClearsRemovedFromRepository(t *testing.T) {
+func TestFetchChartsOCIReexaminesATagRecordedAsRemoved(t *testing.T) {
 	reg, host := newFakeRegistry(t)
 	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
 	reg.reset()
 
 	known := KnownCharts{"podinfo": KnownVersions{"1.0.0": {
-		MediaType:          currentChartMediaType,
+		MediaType:          legacyChartMediaType,
 		UnavailableReason:  helmv1alpha1.UnavailableReasonRemovedFromRepository,
 		UnavailableMessage: "no longer offered by the repository",
 	}}}
 
 	version := versionByTag(t, fetchOne(t, host, FetchOptions{Known: known}), "1.0.0")
 
-	// This must be the carry path, not a re-examination that happens to come back
-	// clean: a NeedsExamination bug that sent RemovedFromRepository down the examine
-	// path would also clear the reason, so the assertion above alone is not evidence
-	// of which path ran.
-	if got := reg.manifestGets("1.0.0"); got != 0 {
-		t.Fatalf("a tag carried from a known verdict must not be requested, got %d requests", got)
+	if got := reg.manifestGets("1.0.0"); got != 1 {
+		t.Fatalf("a tag the registry offers again must be examined once, got %d requests", got)
 	}
 	if version.UnavailableReason != "" {
 		t.Fatalf("a listed tag must not stay removed, got reason %q", version.UnavailableReason)
@@ -476,13 +483,11 @@ func TestFetchChartsOCIClearsRemovedFromRepository(t *testing.T) {
 		t.Fatalf("clearing the removed marker must also clear its message, got %q", version.UnavailableMessage)
 	}
 	if version.MediaType != currentChartMediaType {
-		t.Fatalf("the recorded media type must survive the carry, got %q", version.MediaType)
+		t.Fatalf("media type = %q, want the one the re-pushed artifact holds (%q)", version.MediaType, currentChartMediaType)
 	}
 }
 
 func TestTruncateCutsOnARuneBoundary(t *testing.T) {
-	// Every rune here is a 3-byte UTF-8 sequence (☃, U+2603), chosen so that the byte
-	// limit lands in the middle of one of them: a naive byte slice would corrupt it.
 	message := strings.Repeat("☃", unavailableMessageLimit/3+2)
 
 	got := truncate(message)
@@ -503,5 +508,427 @@ func TestTruncateLeavesAShortMessageUnchanged(t *testing.T) {
 
 	if got := truncate(message); got != message {
 		t.Fatalf("truncate(%q) = %q, want it unchanged", message, got)
+	}
+}
+
+func shortenOCILimits(t *testing.T, list, probe, pass time.Duration) {
+	t.Helper()
+
+	listBefore, probeBefore, passBefore := tagListBudget, chartProbeTimeout, chartResolvePassBudget
+
+	tagListBudget, chartProbeTimeout, chartResolvePassBudget = list, probe, pass
+
+	t.Cleanup(func() {
+		tagListBudget, chartProbeTimeout, chartResolvePassBudget = listBefore, probeBefore, passBefore
+	})
+}
+
+func hangingRegistryHost(t *testing.T) string {
+	t.Helper()
+
+	hang := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hang:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() {
+		close(hang)
+		server.Close()
+	})
+
+	return strings.TrimPrefix(server.URL, "http://")
+}
+
+func TestFetchChartsOCIAbandonsARegistryThatNeverAnswersTheListing(t *testing.T) {
+	shortenOCILimits(t, 300*time.Millisecond, chartProbeTimeout, chartResolvePassBudget)
+
+	host := hangingRegistryHost(t)
+
+	start := time.Now()
+	charts, err := OCIRepositoryDefaultClient.FetchCharts(
+		context.Background(), "oci://"+host+"/podinfo", nil, FetchOptions{},
+	)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("a registry that never answers must fail the listing, got %d charts", len(charts))
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("the listing took %v: the budget did not bound it", elapsed)
+	}
+	if _, ok := AsTerminal(err); ok {
+		t.Fatalf("error %v must stay retriable: a stalled registry may answer next time", err)
+	}
+	if !strings.Contains(err.Error(), "listing image tags") {
+		t.Fatalf("error %v must say which call was abandoned", err)
+	}
+}
+
+func TestFetchChartsOCIPublishesWhatAnExpiredPassExamined(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 10*time.Second, 500*time.Millisecond)
+
+	reg, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.0.1", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.0.2", helmConfigMediaType, currentChartMediaType)
+	reg.stallTag("1.0.1")
+
+	known := KnownCharts{"podinfo": KnownVersions{"1.0.2": {MediaType: legacyChartMediaType}}}
+
+	start := time.Now()
+	charts, err := OCIRepositoryDefaultClient.FetchCharts(
+		context.Background(), "oci://"+host+"/podinfo", nil, FetchOptions{Known: known},
+	)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("an expired budget must not fail the pass, got %v", err)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("the pass took %v: the budget did not bound it", elapsed)
+	}
+	if len(charts) != 1 {
+		t.Fatalf("expected one chart, got %d", len(charts))
+	}
+
+	if got := versionByTag(t, charts[0], "1.0.0").MediaType; got != currentChartMediaType {
+		t.Fatalf("a tag examined before the budget expired must be published, got media type %q", got)
+	}
+	if got := versionByTag(t, charts[0], "1.0.2").MediaType; got != legacyChartMediaType {
+		t.Fatalf("a carried verdict must survive an expired budget, got media type %q", got)
+	}
+
+	for _, version := range charts[0].Versions {
+		if version.Version.Original() == "1.0.1" {
+			t.Fatalf("the unexamined tag must carry no verdict, got %+v", version)
+		}
+	}
+	if got := charts[0].UnexaminedVersions; len(got) != 1 || got[0] != "1.0.1" {
+		t.Fatalf("unexamined versions = %v, want exactly the stalled tag", got)
+	}
+	if reg.manifestGets("1.0.1") == 0 {
+		t.Fatal("the stalled tag must have been attempted at all")
+	}
+}
+
+func TestFetchChartsOCIAbandonsThePassWhenTheParentDeadlineIsGone(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 10*time.Second, 30*time.Second)
+
+	reg, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.0.1", helmConfigMediaType, currentChartMediaType)
+	reg.stallTag("1.0.1")
+
+	repo, err := name.NewRepository(host + "/podinfo")
+	if err != nil {
+		t.Fatalf("parsing repository: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	versions, unexamined, err := resolveChartVersions(
+		ctx, repo, "podinfo", []string{"1.0.0", "1.0.1"}, []remote.Option{remote.WithContext(ctx)}, FetchOptions{},
+	)
+	if err == nil {
+		t.Fatalf("a dead parent context must fail the pass, got versions %+v and unexamined %v", versions, unexamined)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error %v must report the expired deadline", err)
+	}
+	if _, ok := AsTerminal(err); ok {
+		t.Fatalf("error %v must stay retriable: the next reconcile is worth running", err)
+	}
+}
+
+func TestFetchChartsOCIRecordsASingleStalledTagAsPending(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 300*time.Millisecond, 30*time.Second)
+
+	reg, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.0.1", helmConfigMediaType, currentChartMediaType)
+	reg.stallTag("1.0.1")
+
+	start := time.Now()
+	charts, err := OCIRepositoryDefaultClient.FetchCharts(
+		context.Background(), "oci://"+host+"/podinfo", nil, FetchOptions{},
+	)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("a stalled tag is a verdict, not a failed pass, got %v", err)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("the probes took %v: the per-probe timeout did not bound them", elapsed)
+	}
+	if len(charts) != 1 {
+		t.Fatalf("expected one chart, got %d", len(charts))
+	}
+
+	reasons := map[string]string{}
+	for _, version := range charts[0].Versions {
+		reasons[version.Version.String()] = version.UnavailableReason
+	}
+	if got := reasons["1.0.0"]; got != "" {
+		t.Fatalf("the tag that answered must be usable, got reason %q", got)
+	}
+	if got := reasons["1.0.1"]; got != helmv1alpha1.UnavailableReasonResolvePending {
+		t.Fatalf("the stalled tag reason = %q, want %q", got, helmv1alpha1.UnavailableReasonResolvePending)
+	}
+}
+
+func TestFetchChartsOCIExaminesANeverSeenTagAheadOfAStalledOne(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
+
+	reg, host := newFakeRegistry(t)
+
+	const (
+		stallingTags = 80
+		healthyTag   = "9.0.0"
+	)
+
+	stalled := make([]string, 0, stallingTags)
+
+	for i := range stallingTags {
+		tag := fmt.Sprintf("0.0.%d", i+1)
+		pushChart(t, host, tag, helmConfigMediaType, currentChartMediaType)
+		stalled = append(stalled, tag)
+	}
+
+	pushChart(t, host, healthyTag, helmConfigMediaType, currentChartMediaType)
+
+	for _, tag := range stalled {
+		reg.stallTag(tag)
+	}
+
+	first := fetchOne(t, host, FetchOptions{})
+	if !slices.Contains(first.UnexaminedVersions, healthyTag) {
+		t.Fatalf("the first pass was expected to run out of budget before %s; unexamined = %v",
+			healthyTag, first.UnexaminedVersions)
+	}
+
+	known := make(KnownVersions, len(stalled))
+	for _, tag := range stalled {
+		known[tag] = KnownVersion{UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending}
+	}
+
+	reg.reset()
+
+	second := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}})
+
+	if got := versionByTag(t, second, healthyTag).MediaType; got != currentChartMediaType {
+		t.Fatalf("%s media type is %q, want %q: a never seen tag must be examined before the stalled ones",
+			healthyTag, got, currentChartMediaType)
+	}
+
+	probed := 0
+	for _, tag := range stalled {
+		probed += reg.manifestGets(tag)
+	}
+	if probed == 0 {
+		t.Fatal("the pending tags must still be re-examined with the budget left after the new ones")
+	}
+}
+
+func TestFetchChartsOCIExaminesAMarkedTagAheadOfAStalledOne(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
+
+	reg, host := newFakeRegistry(t)
+
+	const (
+		stallingTags = 80
+		markedTag    = "9.0.0"
+		relistedTag  = "9.0.1"
+	)
+
+	known := make(KnownVersions, stallingTags+2)
+
+	for i := range stallingTags {
+		tag := fmt.Sprintf("0.0.%d", i+1)
+		pushChart(t, host, tag, helmConfigMediaType, currentChartMediaType)
+		known[tag] = KnownVersion{UnavailableReason: helmv1alpha1.UnavailableReasonResolvePending}
+	}
+
+	pushChart(t, host, markedTag, helmConfigMediaType, currentChartMediaType)
+	known[markedTag] = KnownVersion{MediaType: legacyChartMediaType, ReexaminationRequired: true}
+
+	pushChart(t, host, relistedTag, helmConfigMediaType, currentChartMediaType)
+	known[relistedTag] = KnownVersion{
+		MediaType:          legacyChartMediaType,
+		UnavailableReason:  helmv1alpha1.UnavailableReasonRemovedFromRepository,
+		UnavailableMessage: "the repository no longer offers this version",
+	}
+
+	for i := range stallingTags {
+		reg.stallTag(fmt.Sprintf("0.0.%d", i+1))
+	}
+
+	for pass := 1; pass <= 2; pass++ {
+		reg.reset()
+
+		chart := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}})
+
+		if got := versionByTag(t, chart, markedTag).MediaType; got != currentChartMediaType {
+			t.Fatalf("pass %d: %s media type is %q, want %q: a marked tag must be examined before the stalled ones",
+				pass, markedTag, got, currentChartMediaType)
+		}
+
+		relisted := versionByTag(t, chart, relistedTag)
+		if relisted.UnavailableReason != "" {
+			t.Fatalf("pass %d: %s reason is %q, want none: a tag the listing offers again must not stay removed",
+				pass, relistedTag, relisted.UnavailableReason)
+		}
+		if relisted.MediaType != currentChartMediaType {
+			t.Fatalf("pass %d: %s media type is %q, want %q: a relisted tag must be examined ahead of the stalling retries",
+				pass, relistedTag, relisted.MediaType, currentChartMediaType)
+		}
+
+		probed := 0
+		for i := range stallingTags {
+			probed += reg.manifestGets(fmt.Sprintf("0.0.%d", i+1))
+		}
+		if probed == 0 {
+			t.Fatalf("pass %d: the pending tags must still be re-examined with the budget left after the marked one", pass)
+		}
+
+		known = nextKnown(known, chart)
+	}
+}
+
+func TestFetchChartsOCIOrdersAForcedPassByWhatIsRecorded(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, time.Second)
+
+	reg, host := newFakeRegistry(t)
+
+	const (
+		stallingTags = 80
+		newTag       = "9.0.0"
+	)
+
+	known := make(KnownVersions, stallingTags)
+
+	for i := range stallingTags {
+		tag := fmt.Sprintf("0.0.%d", i+1)
+		pushChart(t, host, tag, helmConfigMediaType, currentChartMediaType)
+		known[tag] = KnownVersion{MediaType: currentChartMediaType}
+	}
+
+	pushChart(t, host, newTag, helmConfigMediaType, currentChartMediaType)
+
+	for i := range stallingTags {
+		reg.stallTag(fmt.Sprintf("0.0.%d", i+1))
+	}
+	reg.reset()
+
+	chart := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}, Full: true})
+
+	if got := versionByTag(t, chart, newTag).MediaType; got != currentChartMediaType {
+		t.Fatalf("%s media type is %q, want %q: a forced pass must order by what is recorded, not by what it examines",
+			newTag, got, currentChartMediaType)
+	}
+}
+
+func markAll(known KnownVersions) KnownVersions {
+	marked := make(KnownVersions, len(known))
+	for tag, version := range known {
+		version.ReexaminationRequired = true
+		marked[tag] = version
+	}
+
+	return marked
+}
+
+func nextKnown(previous KnownVersions, chart Chart) KnownVersions {
+	next := make(KnownVersions, len(previous))
+
+	for _, version := range chart.Versions {
+		next[version.Version.Original()] = KnownVersion{
+			MediaType:          version.MediaType,
+			UnavailableReason:  version.UnavailableReason,
+			UnavailableMessage: version.UnavailableMessage,
+		}
+	}
+
+	for _, tag := range chart.UnexaminedVersions {
+		if recorded, ok := previous[tag]; ok {
+			next[tag] = recorded
+		}
+	}
+
+	return next
+}
+
+func TestFetchChartsOCIReexaminesARepushedTagAForcedPassCouldNotReach(t *testing.T) {
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, 400*time.Millisecond)
+
+	reg, host := newFakeRegistry(t)
+
+	const (
+		blockingTags = 40
+		repushedTag  = "9.0.0"
+	)
+
+	known := make(KnownVersions, blockingTags+1)
+
+	for i := range blockingTags {
+		tag := fmt.Sprintf("0.0.%d", i+1)
+		pushChart(t, host, tag, helmConfigMediaType, currentChartMediaType)
+		known[tag] = KnownVersion{MediaType: currentChartMediaType}
+	}
+
+	pushChart(t, host, repushedTag, helmConfigMediaType, currentChartMediaType)
+	known[repushedTag] = KnownVersion{MediaType: legacyChartMediaType}
+
+	for i := range blockingTags {
+		reg.stallTag(fmt.Sprintf("0.0.%d", i+1))
+	}
+	reg.reset()
+
+	known = markAll(known)
+
+	forced := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}, Full: true})
+
+	if !slices.Contains(forced.UnexaminedVersions, repushedTag) {
+		t.Fatalf("the forced pass was expected to run out of budget before %s; unexamined = %v",
+			repushedTag, forced.UnexaminedVersions)
+	}
+
+	known = nextKnown(known, forced)
+
+	shortenOCILimits(t, tagListBudget, 200*time.Millisecond, 10*time.Second)
+	reg.reset()
+
+	second := fetchOne(t, host, FetchOptions{Known: KnownCharts{"podinfo": known}})
+
+	if got := reg.manifestGets(repushedTag); got == 0 {
+		t.Fatal("the re-pushed tag must be examined by the pass that follows the forced one")
+	}
+	if got := versionByTag(t, second, repushedTag).MediaType; got != currentChartMediaType {
+		t.Fatalf("%s media type is %q, want %q: the refresh must reach the tag it was asked for",
+			repushedTag, got, currentChartMediaType)
+	}
+	if nextKnown(known, second)[repushedTag].ReexaminationRequired {
+		t.Fatal("the pass that examined the re-pushed tag must clear the mark, or the refresh never ends")
+	}
+}
+
+func TestFetchChartsOCIOrdersVersionsNewestFirst(t *testing.T) {
+	_, host := newFakeRegistry(t)
+	pushChart(t, host, "1.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "2.0.0", helmConfigMediaType, currentChartMediaType)
+	pushChart(t, host, "1.10.0", helmConfigMediaType, currentChartMediaType)
+
+	chart := fetchOne(t, host, FetchOptions{})
+
+	got := make([]string, 0, len(chart.Versions))
+	for _, version := range chart.Versions {
+		got = append(got, version.Version.Original())
+	}
+
+	want := []string{"2.0.0", "1.10.0", "1.0.0"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("versions = %v, want %v: the catalog reads the newest version off the front", got, want)
 	}
 }

@@ -78,6 +78,43 @@ spec:
 Параметр `.spec.chart.version` является необязательным. Если он не указан, будет установлена последняя доступная версия чарта.
 {{< /alert >}}
 
+## Развёртывание приложения в пространстве имён
+
+Владелец namespace может развернуть чарт в собственном namespace без прав на весь кластер, используя HelmApplicationRepository и HelmApplication вместо кластерных ресурсов, описанных выше.
+
+Для добавления репозитория создайте ресурс HelmApplicationRepository в целевом namespace:
+
+```yaml
+apiVersion: helm.deckhouse.io/v1alpha1
+kind: HelmApplicationRepository
+metadata:
+  name: podinfo
+  namespace: test
+spec:
+  url: https://stefanprodan.github.io/podinfo
+```
+
+Для развёртывания чарта из него создайте ресурс HelmApplication в том же namespace, указав имя и версию чарта, а также репозиторий, из которого его нужно взять:
+
+```yaml
+apiVersion: helm.deckhouse.io/v1alpha1
+kind: HelmApplication
+metadata:
+  name: podinfo
+  namespace: test
+spec:
+  chart:
+    name: podinfo
+    repository: podinfo
+    version: 6.10.2
+```
+
+Релиз всегда разворачивается в namespace самого ресурса HelmApplication, поэтому отдельного поля для имени namespace здесь нет. Чарт также можно взять из кластерного HelmClusterApplicationRepository, указав вместо `.spec.chart.repository` поле `.spec.chart.clusterRepository`.
+
+{{< alert level="warning" >}}
+Создание HelmApplication даёт ему права уровня администратора внутри его namespace — подробнее см. раздел «Ограничения» документации модуля.
+{{< /alert >}}
+
 ## Ручной запуск реконсиляции
 
 Чтобы запустить немедленную реконсиляцию ресурса, не дожидаясь следующей запланированной синхронизации, добавьте к нему аннотацию `reconcile.helm.deckhouse.io/force`. Контроллер обнаружит аннотацию, выполнит полный цикл реконсиляции и автоматически удалит аннотацию после завершения обработки.

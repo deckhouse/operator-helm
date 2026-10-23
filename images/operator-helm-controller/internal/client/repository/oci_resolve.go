@@ -36,14 +36,11 @@ var OCIChartResolverDefault ChartResolverInterface = &ociChartResolver{}
 
 type ociChartResolver struct{}
 
-// ResolveChartArtifact reads one manifest and applies the same "is this a chart"
-// rule the catalog client applies, so the two can never disagree about an artifact.
-//
-// config carries transport settings only: its credentials are deliberately ignored.
-// A chart version a helm index points at lives on a registry the repository merely
-// names, and the internal OCIRepository is built without credentials for it — a probe
-// that authenticated would succeed where the pull it authorizes would fail, which is
-// worse than failing here.
+// Bounds the whole probe: both attempts and the pause between them. A variable so tests need not wait.
+var chartArtifactProbeBudget = 30 * time.Second
+
+// ResolveChartArtifact reads one manifest and applies the same "is this a chart" rule the
+// catalog client applies. config carries transport settings only: its credentials are ignored.
 func (r *ociChartResolver) ResolveChartArtifact(ctx context.Context, ref string, config *RepoConfig) (string, error) {
 	tag, err := name.NewTag(trimSchemaPrefixes(ref))
 	if err != nil {
@@ -54,11 +51,13 @@ func (r *ociChartResolver) ResolveChartArtifact(ctx context.Context, ref string,
 		}
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, chartArtifactProbeBudget)
+	defer cancel()
+
 	options := []remote.Option{
 		remote.WithContext(ctx),
 		remote.WithUserAgent("operator-helm-controller"),
-		// Two attempts: a failure is reported and retried by the next pass anyway,
-		// and a longer backoff here would hold the addon's reconciliation open.
+		// Two attempts: a longer backoff here would hold the addon's reconciliation open.
 		remote.WithRetryBackoff(remote.Backoff{
 			Duration: 1 * time.Second,
 			Factor:   2.0,
@@ -68,7 +67,13 @@ func (r *ociChartResolver) ResolveChartArtifact(ctx context.Context, ref string,
 	}
 
 	if config != nil && (config.CACertificate != "" || config.Insecure) {
-		options = append(options, remote.WithTransport(BuildTLSTransport(config)))
+		tlsTransport, err := BuildTLSTransport(config)
+		if err != nil {
+			return "", err
+		}
+		defer tlsTransport.CloseIdleConnections()
+
+		options = append(options, remote.WithTransport(tlsTransport))
 	}
 
 	desc, err := remote.Get(tag, options...)
@@ -87,8 +92,7 @@ func (r *ociChartResolver) ResolveChartArtifact(ctx context.Context, ref string,
 
 	manifest, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
 	if err != nil {
-		// An unreadable manifest is a verdict about the artifact, not a transport
-		// problem, so it is reported the same way as an unsupported one.
+		// An unreadable manifest is a verdict about the artifact, not a transport problem.
 		return "", &TerminalError{
 			Reason:  helmv1alpha1.ReasonUnsupportedChartArtifact,
 			Message: "cannot parse the manifest: " + err.Error(),

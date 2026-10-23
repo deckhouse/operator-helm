@@ -1,0 +1,76 @@
+/*
+Copyright 2026 Flant JSC.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package internalobj
+
+import (
+	"context"
+	"fmt"
+
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/deckhouse/operator-helm/internal/contract"
+)
+
+var _ contract.Consumers = (*Consumers)(nil)
+
+// Consumers pushes a repository's force reconcile request onto the internal
+// OCIRepository of every release consuming it. The lister naming those releases is injected.
+type Consumers struct {
+	client          client.Client
+	targetNamespace string
+	list            contract.ReleaseLister
+}
+
+func NewConsumers(c client.Client, targetNamespace string, list contract.ReleaseLister) *Consumers {
+	return &Consumers{client: c, targetNamespace: targetNamespace, list: list}
+}
+
+// ForceReconcileConsumers stamps the reconcile request annotations on the internal
+// OCIRepository of every release that references repo, skipping those that have none yet.
+func (s *Consumers) ForceReconcileConsumers(ctx context.Context, repo contract.Repository) error {
+	releases, err := s.list(ctx, repo, "")
+	if err != nil {
+		return err
+	}
+
+	for _, rel := range releases {
+		name := rel.InternalNames().OCIRepository
+		nn := types.NamespacedName{Name: name, Namespace: s.targetNamespace}
+
+		ociRepo := &sourcev1.OCIRepository{}
+		if err := s.client.Get(ctx, nn, ociRepo); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+
+			return fmt.Errorf("getting internal oci repository %s: %w", name, err)
+		}
+
+		base := ociRepo.DeepCopy()
+		setReconcileRequestAnnotations(ociRepo)
+
+		// The internal repository may be removed between the get and the patch.
+		if err := s.client.Patch(ctx, ociRepo, client.MergeFrom(base)); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("requesting reconciliation of internal oci repository %s: %w", name, err)
+		}
+	}
+
+	return nil
+}

@@ -17,8 +17,8 @@ limitations under the License.
 package helmclusteraddon
 
 import (
-	helmv2 "github.com/werf/3p-helm-controller/api/v2"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -26,9 +26,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
-	"github.com/deckhouse/operator-helm/internal/manager/status"
-	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/helmclusteraddon"
-	"github.com/deckhouse/operator-helm/internal/services"
+	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/claim"
+	"github.com/deckhouse/operator-helm/internal/internalobj"
+	"github.com/deckhouse/operator-helm/internal/namespace"
+	reconcile "github.com/deckhouse/operator-helm/internal/reconcile/release"
+	"github.com/deckhouse/operator-helm/internal/status"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -39,15 +42,18 @@ const (
 func SetupWithManager(mgr ctrl.Manager) error {
 	client := mgr.GetClient()
 
-	r := reconcile.New(
-		mgr.GetClient(),
-		services.NewChartService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewOCIRepoService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace, nil),
-		services.NewReleaseService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewMaintenanceService(client, mgr.GetScheme(), helmv1alpha1.TargetNamespace),
-		services.NewClaimService(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
-		status.NewManager(client),
-	)
+	r := reconcile.New(client, reconcile.Deps{
+		NewRelease:      adapter.EmptyAddonRelease,
+		Repositories:    adapter.NewAddonRepositoryResolver(client),
+		Charts:          internalobj.NewCharts(client, helmv1alpha1.TargetNamespace),
+		OCIRepositories: internalobj.NewOCIRepositories(client, helmv1alpha1.TargetNamespace, nil),
+		Releases:        internalobj.NewReleases(client, helmv1alpha1.TargetNamespace),
+		Maintenance:     internalobj.NewMaintenance(client, helmv1alpha1.TargetNamespace),
+		Claims:          claim.NewClaims(client, mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
+		Namespaces:      namespace.NewNamespaces(client, mgr.GetAPIReader()),
+		Identity:        reconcile.NoIdentity{},
+		Status:          status.NewManager(client),
+	})
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(ControllerName).
@@ -96,19 +102,17 @@ func SetupWithManager(mgr ctrl.Manager) error {
 					helmv1alpha1.HelmClusterAddonLabelSourceName,
 				),
 			),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
 		Watches(
 			&helmv1alpha1.HelmClusterAddonRepository{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapRepositoryToAddons(client)),
+			handler.EnqueueRequestsFromMapFunc(mapRepositoryToAddons(client)),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Watches(
 			&helmv1alpha1.HelmClusterAddonChart{},
-			handler.EnqueueRequestsFromMapFunc(utils.MapChartToAddons(client)),
-			// A catalog write is a status-only change on the chart, so a
-			// generation-only predicate (as used for HelmClusterAddonRepository
-			// above) would never let it through; only a terminal probe verdict
-			// being reversible depends on this watch firing here.
+			handler.EnqueueRequestsFromMapFunc(mapChartToAddons(client)),
+			// A catalog write is status-only, so a generation predicate would never let it through.
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
 		Complete(r)

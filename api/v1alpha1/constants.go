@@ -29,8 +29,33 @@ const (
 	// LabelManagedByValue is the value for the managed-by label.
 	LabelManagedByValue = "operator-helm"
 
+	// LabelSourceNamespace carries the namespace of the namespaced source resource
+	// an internal object was derived from.
+	LabelSourceNamespace = "helm.deckhouse.io/source-namespace"
+
 	LabelDeckhouseHeritage      = "heritage"
 	LabelDeckhouseHeritageValue = "deckhouse"
 
 	AnnotationForceReconcile = "reconcile.helm.deckhouse.io/force"
+
+	// LabelRepositoryName and LabelChartName are set on every chart catalog object
+	// and carry the repository/chart pair the object mirrors.
+	LabelRepositoryName = "repository"
+	LabelChartName      = "chart"
+
+	// UnavailableReason* are the values of the UnavailableReason field of a chart
+	// catalog version, in every family.
+
+	// UnavailableReasonRemovedFromRepository means the tag is no longer offered by
+	// the repository.
+	UnavailableReasonRemovedFromRepository = "RemovedFromRepository"
+	// UnavailableReasonUnsupportedMediaType means the manifest was read but the
+	// artifact is not a packaged Helm chart.
+	UnavailableReasonUnsupportedMediaType = "UnsupportedMediaType"
+	// UnavailableReasonResolvePending means the manifest request failed and no
+	// verdict was reached.
+	UnavailableReasonResolvePending = "ResolvePending"
+	// UnavailableReasonInvalidChartReference means the repository index points this
+	// version at a registry with a reference that is not a valid tagged reference.
+	UnavailableReasonInvalidChartReference = "InvalidChartReference"
 )

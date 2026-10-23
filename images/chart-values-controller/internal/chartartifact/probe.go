@@ -14,15 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package chartartifact reads an OCI artifact's manifest to find the layer that holds
-// a packaged Helm chart.
-//
-// A chart version that a helm repository's index publishes in a registry carries no
-// recorded media type: the operator resolves it when an addon is deployed and does not
-// persist it, so this service has to look for itself before it can build the source
-// object that fetches values.yaml. What counts as a chart is not decided here — the
-// media types come from the API module, so this service and the operator cannot drift
-// into disagreeing about the same artifact.
+// Package chartartifact reads an OCI artifact's manifest to find the layer that holds a
+// packaged Helm chart, against the media types the API module defines.
 package chartartifact
 
 import (
@@ -52,6 +45,9 @@ var ErrNotAChart = errors.New("artifact is not a packaged helm chart")
 // Also a verdict rather than a transient failure.
 var ErrTagNotFound = errors.New("registry has no such tag")
 
+// ProbeTimeout bounds one probe end to end, including when the caller's context carries no deadline.
+const ProbeTimeout = 20 * time.Second
+
 // Prober finds the chart layer of one OCI artifact.
 type Prober interface {
 	ChartLayerMediaType(ctx context.Context, ref string, transport http.RoundTripper) (string, error)
@@ -62,14 +58,17 @@ var Default Prober = registryProber{}
 
 type registryProber struct{}
 
-// ChartLayerMediaType reads the manifest behind ref and returns the media type of the
-// layer holding the chart.
-//
-// No credentials are ever sent: a version published through a third-party index is
-// pulled anonymously by the source object this answer feeds, so a probe that
-// authenticated would report a chart the pull could not fetch. rt carries transport
-// settings only and may be nil.
+// ChartLayerMediaType reads the manifest behind ref and returns the media type of the layer
+// holding the chart. No credentials are sent; rt carries transport settings only and may be nil.
 func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt http.RoundTripper) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
+	defer cancel()
+
+	// A transport built by Transport is single-use, so its pool is drained here.
+	if closer, ok := rt.(interface{ CloseIdleConnections() }); ok {
+		defer closer.CloseIdleConnections()
+	}
+
 	tag, err := name.NewTag(strings.TrimPrefix(ref, "oci://"))
 	if err != nil {
 		return "", fmt.Errorf("chart reference %q cannot be parsed: %w", ref, err)
@@ -100,7 +99,7 @@ func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt ht
 
 	manifest, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
 	if err != nil {
-		return "", fmt.Errorf("%w: cannot parse the manifest of %s: %s", ErrNotAChart, ref, err)
+		return "", fmt.Errorf("%w: cannot parse the manifest of %s: %w", ErrNotAChart, ref, err)
 	}
 
 	if !helmv1alpha1.IsChartConfigMediaType(string(manifest.Config.MediaType)) {
@@ -118,21 +117,32 @@ func (registryProber) ChartLayerMediaType(ctx context.Context, ref string, rt ht
 	return "", fmt.Errorf("%w: %s has no supported chart layer", ErrNotAChart, ref)
 }
 
-// Transport builds the transport settings for reaching a registry the repository
-// itself names. It returns nil when the repository has nothing to say about the
-// transport, which leaves the caller on the default one.
-func Transport(caCertificate string, insecure bool) http.RoundTripper {
+// ErrInvalidCACertificate means the repository's caCertificate holds no PEM encoded
+// certificate. Like the verdicts above it cannot be resolved by trying again.
+var ErrInvalidCACertificate = errors.New(
+	`caCertificate holds no PEM encoded certificate (it is the same value the operator mirrors into the "ca.crt" key of the repository's internal tls secret)`,
+)
+
+// Transport builds the transport settings for reaching a registry the repository names, as a clone
+// of http.DefaultTransport, or nil when it has none. It is built per probe, whose caller closes it.
+func Transport(caCertificate string, insecure bool) (http.RoundTripper, error) {
 	if caCertificate == "" && !insecure {
-		return nil
+		return nil, nil
 	}
 
 	tlsConfig := &tls.Config{InsecureSkipVerify: insecure} //nolint:gosec // opt-in via the repository spec
 
 	if caCertificate != "" {
 		pool := x509.NewCertPool()
-		pool.AppendCertsFromPEM([]byte(caCertificate))
+		if !pool.AppendCertsFromPEM([]byte(caCertificate)) {
+			return nil, ErrInvalidCACertificate
+		}
+
 		tlsConfig.RootCAs = pool
 	}
 
-	return &http.Transport{TLSClientConfig: tlsConfig}
+	rt := http.DefaultTransport.(*http.Transport).Clone()
+	rt.TLSClientConfig = tlsConfig
+
+	return rt, nil
 }

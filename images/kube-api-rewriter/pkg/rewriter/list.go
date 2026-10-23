@@ -27,24 +27,39 @@ import (
 // TODO merge this file into transformers.go
 
 // RewriteResourceOrList is a helper to transform a single resource or a list of resources.
+// transformFn follows the RewriteArray contract for a single resource too.
 func RewriteResourceOrList(payload []byte, listKind string, transformFn func(singleObj []byte) ([]byte, error)) ([]byte, error) {
 	kind := gjson.GetBytes(payload, "kind").String()
 
 	// Not a list, transform a single resource.
 	if kind != listKind {
-		return transformFn(payload)
+		return transformSingle(payload, transformFn)
 	}
 
 	return RewriteArray(payload, "items", transformFn)
 }
 
 // RewriteResourceOrList2 is a helper to transform a single resource or a list of resources.
+// transformFn follows the RewriteArray contract for a single resource too.
 func RewriteResourceOrList2(payload []byte, transformFn func(singleObj []byte) ([]byte, error)) ([]byte, error) {
 	kind := gjson.GetBytes(payload, "kind").String()
 	if !strings.HasSuffix(kind, "List") {
-		return transformFn(payload)
+		return transformSingle(payload, transformFn)
 	}
 	return RewriteArray(payload, "items", transformFn)
+}
+
+// transformSingle keeps the payload when transformFn returns nil bytes, as
+// RewriteArray keeps an item.
+func transformSingle(payload []byte, transformFn func(singleObj []byte) ([]byte, error)) ([]byte, error) {
+	rwrObj, err := transformFn(payload)
+	if err != nil {
+		return nil, err
+	}
+	if rwrObj == nil {
+		return payload, nil
+	}
+	return rwrObj, nil
 }
 
 // SkipItem may be used by the transformFn to indicate that the item should be skipped from the result.

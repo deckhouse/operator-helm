@@ -74,6 +74,8 @@ type Config struct {
 	ClusterTransport      ClusterTransport   `yaml:"clusterTransport"`
 	Controllers           []ControllerConfig `yaml:"controllers"`
 	ModuleSource          string
+	ModuleSourceRepo      string
+	ModuleSourceCA        string
 	ModuleSourceDockerCfg string
 	ModuleTagName         string
 	ModuleDigest          string
@@ -155,6 +157,13 @@ func (c *Config) applyEnvOverrides() {
 		c.ModuleSource = s
 	} else {
 		c.ModuleSource = "deckhouse"
+	}
+	c.ModuleSourceRepo = "dev-registry.deckhouse.io/sys/deckhouse-oss/modules"
+	if s, ok := os.LookupEnv("E2E_MODULE_SOURCE_REPO"); ok {
+		c.ModuleSourceRepo = s
+	}
+	if s, ok := os.LookupEnv("E2E_MODULE_SOURCE_CA"); ok {
+		c.ModuleSourceCA = s
 	}
 	if s, ok := os.LookupEnv("DEV_REGISTRY_DOCKER_CONFIG"); ok {
 		c.ModuleSourceDockerCfg = s

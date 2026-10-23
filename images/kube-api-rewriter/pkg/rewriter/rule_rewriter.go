@@ -363,7 +363,8 @@ func (rw *RuleBasedRewriter) FilterExcludes(obj []byte, action Action) ([]byte, 
 		return obj, nil
 	}
 
-	if rw.Rules.ShouldExclude(obj, kind) {
+	apiVersion := gjson.GetBytes(obj, "apiVersion").String()
+	if rw.Rules.ShouldExclude(obj, apiVersion, kind) {
 		return obj, SkipItem
 	}
 
@@ -374,7 +375,7 @@ func (rw *RuleBasedRewriter) FilterExcludes(obj []byte, action Action) ([]byte, 
 
 	singleKind := strings.TrimSuffix(kind, "List")
 	obj, err := RewriteResourceOrList2(obj, func(singleObj []byte) ([]byte, error) {
-		if rw.Rules.ShouldExclude(singleObj, singleKind) {
+		if rw.Rules.ShouldExclude(singleObj, apiVersion, singleKind) {
 			return nil, SkipItem
 		}
 		return nil, nil

@@ -26,8 +26,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/claim"
 	"github.com/deckhouse/operator-helm/internal/index"
-	"github.com/deckhouse/operator-helm/internal/services"
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
@@ -39,7 +40,7 @@ func SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &helmv1alpha1.HelmClusterAddon{}).
 		WithValidator(&HelmClusterAddonWebhookValidator{
 			Client:       mgr.GetClient(),
-			claimService: services.NewClaimService(mgr.GetClient(), mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
+			claimService: claim.NewClaims(mgr.GetClient(), mgr.GetAPIReader(), helmv1alpha1.TargetNamespace),
 		}).
 		Complete()
 }
@@ -48,7 +49,7 @@ var _ admission.Validator[*helmv1alpha1.HelmClusterAddon] = (*HelmClusterAddonWe
 
 type HelmClusterAddonWebhookValidator struct {
 	Client       client.Client
-	claimService *services.ClaimService
+	claimService *claim.Claims
 }
 
 func (v *HelmClusterAddonWebhookValidator) ValidateCreate(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
@@ -72,7 +73,7 @@ func (v *HelmClusterAddonWebhookValidator) ValidateUpdate(ctx context.Context, o
 		return nil, nil
 	}
 
-	if forceReconcileToggled(oldObj, newObj) && !chartRefChanged(oldObj, newObj) {
+	if !chartRefChanged(oldObj, newObj) {
 		return nil, nil
 	}
 
@@ -80,7 +81,7 @@ func (v *HelmClusterAddonWebhookValidator) ValidateUpdate(ctx context.Context, o
 }
 
 func (v *HelmClusterAddonWebhookValidator) ValidateDelete(_ context.Context, addon *helmv1alpha1.HelmClusterAddon) (admission.Warnings, error) {
-	if addon.Spec.Maintenance == "NoResourceReconciliation" {
+	if addon.MaintenanceModeActivated() {
 		return nil, fmt.Errorf("helmclusteraddon/%s cannot be deleted while maintenance mode is active", addon.Name)
 	}
 
@@ -88,15 +89,11 @@ func (v *HelmClusterAddonWebhookValidator) ValidateDelete(_ context.Context, add
 }
 
 func validateNotSystemNamespace(addon *helmv1alpha1.HelmClusterAddon) error {
-	if utils.IsSystemNamespace(addon.Spec.Namespace) {
+	if utils.IsSystemNamespace(addon.Spec.Namespace) && addon.GetDeletionTimestamp().IsZero() {
 		return fmt.Errorf("helmclusteraddon/%s cannot use system namespace %s as target namespace", addon.Name, addon.Spec.Namespace)
 	}
 
 	return nil
-}
-
-func forceReconcileToggled(oldObj, newObj *helmv1alpha1.HelmClusterAddon) bool {
-	return oldObj.Annotations[helmv1alpha1.AnnotationForceReconcile] != newObj.Annotations[helmv1alpha1.AnnotationForceReconcile]
 }
 
 func chartRefChanged(oldObj, newObj *helmv1alpha1.HelmClusterAddon) bool {
@@ -114,7 +111,7 @@ func isUniquenessBypassed(ctx context.Context) bool {
 }
 
 func (v *HelmClusterAddonWebhookValidator) checkUniqueness(ctx context.Context, addon *helmv1alpha1.HelmClusterAddon) error {
-	owned, err := v.claimService.OwnedBy(ctx, addon)
+	owned, err := v.claimService.OwnedBy(ctx, adapter.NewAddonRelease(addon))
 	if err != nil {
 		return fmt.Errorf("failed to check if helmclusteraddon/%s owns chart claim: %w", addon.Name, err)
 	}

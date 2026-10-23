@@ -24,10 +24,8 @@ import (
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-// TerminalError marks a repository failure that will not resolve by retrying:
-// the remote rejected the request or the configuration is invalid. Callers use
-// it to move the repository to Stalled instead of scheduling another attempt at
-// the normal cadence.
+// TerminalError marks a repository failure that will not resolve by retrying: the remote
+// rejected the request, or the configuration is invalid. Callers move to Stalled on it.
 type TerminalError struct {
 	Reason  string
 	Message string
@@ -68,6 +66,9 @@ func TerminalFromStatusCode(code int, url string) *TerminalError {
 			Reason:  helmv1alpha1.ReasonSourceNotFound,
 			Message: fmt.Sprintf("repository %s not found (HTTP %d)", url, code),
 		}
+	case code == http.StatusTooManyRequests:
+		// A throttle is the one rejection in this range that says "later", not "no".
+		return nil
 	case code >= 400 && code < 500:
 		return &TerminalError{
 			Reason:  helmv1alpha1.ReasonSourceRejectedRequest,

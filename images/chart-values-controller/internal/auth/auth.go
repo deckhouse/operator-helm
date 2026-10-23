@@ -27,12 +27,13 @@ import (
 	authzclientv1 "k8s.io/client-go/kubernetes/typed/authorization/v1"
 )
 
-// Access is the cluster-scoped resource permission a request must hold. It maps
-// directly onto a SubjectAccessReview resource attribute check.
+// Access is the resource permission a request must hold, as a SubjectAccessReview
+// resource attribute check. Namespace is empty only for a cluster-scoped resource.
 type Access struct {
-	Group    string
-	Resource string
-	Verb     string
+	Group     string
+	Resource  string
+	Verb      string
+	Namespace string
 }
 
 // Result reports the outcome of reviewing a bearer token. Authorized is only
@@ -43,20 +44,23 @@ type Result struct {
 	Username      string
 }
 
-// Reviewer authenticates bearer tokens via TokenReview and authorizes the
-// resulting subject via SubjectAccessReview.
+// Reviewer authenticates bearer tokens via TokenReview and authorizes the resulting
+// subject via SubjectAccessReview. The review asks for no audience, so the API server
+// falls back to its own --api-audiences.
 type Reviewer struct {
 	tokenReviews  authnclientv1.TokenReviewInterface
 	accessReviews authzclientv1.SubjectAccessReviewInterface
 }
 
 func New(tokenReviews authnclientv1.TokenReviewInterface, accessReviews authzclientv1.SubjectAccessReviewInterface) *Reviewer {
-	return &Reviewer{tokenReviews: tokenReviews, accessReviews: accessReviews}
+	return &Reviewer{
+		tokenReviews:  tokenReviews,
+		accessReviews: accessReviews,
+	}
 }
 
-// Review authenticates the token and, if authentication succeeds, checks whether
-// the subject is allowed the given access. A returned error indicates an
-// internal failure; expected states are reported via Result.
+// Review authenticates the token and, if that succeeds, checks whether the subject is
+// allowed the given access. A returned error is an internal failure, not a verdict.
 func (r *Reviewer) Review(ctx context.Context, token string, access Access) (Result, error) {
 	reviewed, err := r.tokenReviews.Create(ctx, &authnv1.TokenReview{
 		Spec: authnv1.TokenReviewSpec{Token: token},
@@ -77,9 +81,10 @@ func (r *Reviewer) Review(ctx context.Context, token string, access Access) (Res
 			Groups: user.Groups,
 			Extra:  convertExtra(user.Extra),
 			ResourceAttributes: &authzv1.ResourceAttributes{
-				Verb:     access.Verb,
-				Group:    access.Group,
-				Resource: access.Resource,
+				Namespace: access.Namespace,
+				Verb:      access.Verb,
+				Group:     access.Group,
+				Resource:  access.Resource,
 			},
 		},
 	}, metav1.CreateOptions{})

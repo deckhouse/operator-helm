@@ -1,0 +1,580 @@
+/*
+Copyright 2026 Flant JSC.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package internalobj
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/fluxcd/pkg/apis/meta"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/adapter"
+	"github.com/deckhouse/operator-helm/internal/chartsource"
+	repoclient "github.com/deckhouse/operator-helm/internal/client/repository"
+	"github.com/deckhouse/operator-helm/internal/index"
+	"github.com/deckhouse/operator-helm/internal/utils"
+)
+
+func newOCIRepositories(t *testing.T, objects ...client.Object) (*OCIRepositories, client.Client) {
+	t.Helper()
+
+	scheme := testScheme(t)
+	if err := sourcev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("registering source scheme: %v", err)
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithIndex(&helmv1alpha1.HelmClusterAddon{}, index.AddonRepository, func(obj client.Object) []string {
+			addon := obj.(*helmv1alpha1.HelmClusterAddon)
+
+			return []string{addon.Spec.Chart.HelmClusterAddonRepository}
+		}).
+		Build()
+
+	return NewOCIRepositories(c, testNamespace, nil), c
+}
+
+type countingResolver struct {
+	mediaType string
+	err       error
+	calls     int
+	refs      []string
+}
+
+func (r *countingResolver) ResolveChartArtifact(_ context.Context, ref string, _ *repoclient.RepoConfig) (string, error) {
+	r.calls++
+	r.refs = append(r.refs, ref)
+
+	return r.mediaType, r.err
+}
+
+func newOCIRepositoriesWithResolver(
+	t *testing.T,
+	resolver repoclient.ChartResolverInterface,
+	objects ...client.Object,
+) (*OCIRepositories, client.Client) {
+	t.Helper()
+
+	service, c := newOCIRepositories(t, objects...)
+	service.resolver = resolver
+
+	return service, c
+}
+
+func internalOCIRepository(addonName string) *sourcev1.OCIRepository {
+	return &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      utils.GetInternalOCIRepositoryName(addonName),
+			Namespace: testNamespace,
+		},
+	}
+}
+
+func ociTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
+	return &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
+		Spec:       helmv1alpha1.RepositorySpec{URL: "oci://example.invalid/podinfo"},
+	}
+}
+
+func ociSource(t *testing.T, repo *helmv1alpha1.HelmClusterAddonRepository, version *helmv1alpha1.ChartVersion) chartsource.Source {
+	t.Helper()
+
+	source, err := chartsource.Resolve(repo.Spec.URL, version)
+	if err != nil {
+		t.Fatalf("resolving chart source: %v", err)
+	}
+
+	return source
+}
+
+func hybridTestRepository() *helmv1alpha1.HelmClusterAddonRepository {
+	return &helmv1alpha1.HelmClusterAddonRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Generation: 1},
+		Spec: helmv1alpha1.RepositorySpec{
+			URL:                "https://charts.example.invalid/stable",
+			Auth:               &helmv1alpha1.RepositoryAuth{Username: "u", Password: "p"},
+			CACertificate:      "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+			InsecureSkipVerify: true,
+		},
+	}
+}
+
+func TestOCIRepositoriesEnsureUsesRecordedMediaType(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+	service, c := newOCIRepositories(t, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version:   "6.7.1",
+		MediaType: "application/tar+gzip",
+	}
+
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if ociRepo.Spec.LayerSelector == nil {
+		t.Fatal("layer selector must be set")
+	}
+	if ociRepo.Spec.LayerSelector.MediaType != "application/tar+gzip" {
+		t.Fatalf("layer media type is %q, want the recorded legacy one", ociRepo.Spec.LayerSelector.MediaType)
+	}
+}
+
+func TestOCIRepositoriesEnsureReportsRemovedVersion(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+	service, _ := newOCIRepositories(t, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version:           "6.7.1",
+		MediaType:         "application/tar+gzip",
+		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
+	}
+
+	result := service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+
+	if !result.VersionRemoved {
+		t.Fatal("the outcome must report that the repository no longer offers the tag")
+	}
+	if result.Version != "6.7.1" || result.RepositoryName != repo.Name {
+		t.Fatalf("outcome names %s/%s, want the pair the message is built from", result.RepositoryName, result.Version)
+	}
+}
+
+func TestOCIRepositoriesEnsureDoesNotRelabelReadyChildOnRemovedVersion(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+
+	version := &helmv1alpha1.ChartVersion{
+		Version:           "6.7.1",
+		MediaType:         "application/tar+gzip",
+		UnavailableReason: helmv1alpha1.UnavailableReasonRemovedFromRepository,
+	}
+
+	internal := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       utils.GetInternalOCIRepositoryName(addon.Name),
+			Namespace:  testNamespace,
+			Generation: 1,
+			Labels: map[string]string{
+				helmv1alpha1.LabelManagedBy:                  helmv1alpha1.LabelManagedByValue,
+				helmv1alpha1.HelmClusterAddonLabelSourceName: addon.Name,
+			},
+		},
+		Spec: sourcev1.OCIRepositorySpec{
+			URL:       repo.Spec.URL,
+			Reference: &sourcev1.OCIRepositoryRef{Tag: addon.Spec.Chart.Version},
+			Interval:  metav1.Duration{Duration: InternalRepositoryInterval},
+			LayerSelector: &sourcev1.OCILayerSelector{
+				MediaType: version.MediaType,
+				Operation: "copy",
+			},
+		},
+		Status: sourcev1.OCIRepositoryStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               helmv1alpha1.ConditionTypeReady,
+					Status:             metav1.ConditionTrue,
+					Reason:             "Succeeded",
+					Message:            "stored artifact for revision 6.7.1",
+					ObservedGeneration: 1,
+					LastTransitionTime: metav1.Now(),
+				},
+			},
+		},
+	}
+
+	service, _ := newOCIRepositories(t, addon, repo, internal)
+
+	result := service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+
+	if !result.Internal.Ready() {
+		t.Fatalf("expected the ready child to be mirrored as ready, got %+v", result.Internal)
+	}
+	if result.Internal.Reason != "Succeeded" {
+		t.Fatalf("reason is %q, want the child's own %q untouched", result.Internal.Reason, "Succeeded")
+	}
+	if result.Internal.Message != "stored artifact for revision 6.7.1" {
+		t.Fatalf("message is %q, want the child's own message untouched", result.Internal.Message)
+	}
+}
+
+func TestOCIRepositoriesEnsureForcesReconcileFromAddon(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	service, c := newOCIRepositories(t, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version:   "6.7.1",
+		MediaType: "application/tar+gzip",
+	}
+
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if ociRepo.Annotations[meta.ReconcileRequestAnnotation] == "" {
+		t.Errorf("%s must be stamped on the oci repository", meta.ReconcileRequestAnnotation)
+	}
+	if ociRepo.Annotations[meta.ForceRequestAnnotation] == "" {
+		t.Errorf("%s must be stamped on the oci repository", meta.ForceRequestAnnotation)
+	}
+}
+
+func TestOCIRepositoriesEnsureDoesNotForceReconcileWithoutAnnotation(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+	service, c := newOCIRepositories(t, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version:   "6.7.1",
+		MediaType: "application/tar+gzip",
+	}
+
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if _, found := ociRepo.Annotations[meta.ReconcileRequestAnnotation]; found {
+		t.Errorf("%s must not be stamped without a force request", meta.ReconcileRequestAnnotation)
+	}
+}
+
+func TestOCIRepositoriesEnsureAddressesTheIndexReference(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, c := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+
+	service.Ensure(
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
+	)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if ociRepo.Spec.URL != "oci://registry.example.com/charts/podinfo" {
+		t.Fatalf("url = %q, want the address from the index reference", ociRepo.Spec.URL)
+	}
+	if ociRepo.Spec.Reference == nil || ociRepo.Spec.Reference.Tag != "6.7.1" {
+		t.Fatalf("reference = %+v, want tag 6.7.1", ociRepo.Spec.Reference)
+	}
+
+	if ociRepo.Spec.SecretRef != nil {
+		t.Errorf("credentials must not be sent to a registry the index merely names")
+	}
+	if ociRepo.Spec.CertSecretRef != nil {
+		t.Errorf("the repository CA does not apply to a different host")
+	}
+	if ociRepo.Spec.Insecure {
+		t.Errorf("insecure must not be carried to a different host")
+	}
+}
+
+func TestOCIRepositoriesEnsureCarriesTLSOnTheSameHost(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, c := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://charts.example.invalid/charts/podinfo:6.7.1",
+	}
+
+	service.Ensure(
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
+	)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if !ociRepo.Spec.Insecure {
+		t.Error("insecure applies to the repository's own host")
+	}
+	if ociRepo.Spec.CertSecretRef != nil {
+		t.Error("a repository that asked for no verification must not be handed a trust root")
+	}
+	if ociRepo.Spec.SecretRef != nil {
+		t.Error("a helm repository's Opaque auth secret must not be referenced by an OCIRepository")
+	}
+}
+
+func TestOCIRepositoriesEnsureKeepsOCIRepositoryCredentials(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+	repo.Spec.Auth = &helmv1alpha1.RepositoryAuth{Username: "u", Password: "p"}
+	repo.Spec.CACertificate = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+
+	service, c := newOCIRepositories(t, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version:   "6.7.1",
+		MediaType: "application/tar+gzip",
+	}
+
+	service.Ensure(
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
+	)
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+
+	if ociRepo.Spec.URL != repo.Spec.URL {
+		t.Fatalf("url = %q, want %q", ociRepo.Spec.URL, repo.Spec.URL)
+	}
+	if ociRepo.Spec.SecretRef == nil {
+		t.Error("an oci repository's own credentials must still be referenced")
+	}
+	if ociRepo.Spec.CertSecretRef == nil {
+		t.Error("an oci repository's own CA must still be referenced")
+	}
+}
+
+func TestOCIRepositoriesEnsureProbesHybridVersion(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, c := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+
+	service.Ensure(
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
+	)
+
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolver.calls)
+	}
+	if resolver.refs[0] != "oci://registry.example.com/charts/podinfo:6.7.1" {
+		t.Fatalf("probed %q, want the full reference", resolver.refs[0])
+	}
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err != nil {
+		t.Fatalf("oci repository was not created: %v", err)
+	}
+	if ociRepo.Spec.LayerSelector == nil || ociRepo.Spec.LayerSelector.MediaType != resolver.mediaType {
+		t.Fatalf("layer selector = %+v, want the probed media type", ociRepo.Spec.LayerSelector)
+	}
+}
+
+func TestOCIRepositoriesEnsureReusesTheInternalObjectAsCache(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+	source := ociSource(t, repo, version)
+
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
+
+	if resolver.calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1: the internal object is the cache", resolver.calls)
+	}
+}
+
+func TestOCIRepositoriesEnsureReprobesChangedReference(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
+
+	first := &helmv1alpha1.ChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, first), first)
+
+	second := &helmv1alpha1.ChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://mirror.example.com/charts/podinfo:6.7.1",
+	}
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, second), second)
+
+	if resolver.calls != 2 {
+		t.Fatalf("resolver calls = %d, want 2: the reference changed", resolver.calls)
+	}
+}
+
+func TestOCIRepositoriesEnsureForceBypassesCache(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{mediaType: "application/vnd.cncf.helm.chart.content.v1.tar+gzip"}
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+	source := ociSource(t, repo, version)
+
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
+
+	addon.Annotations = map[string]string{helmv1alpha1.AnnotationForceReconcile: "2026-01-01T00:00:00Z"}
+	service.Ensure(context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), source, version)
+
+	if resolver.calls != 2 {
+		t.Fatalf("resolver calls = %d, want 2: a force request re-examines the artifact", resolver.calls)
+	}
+}
+
+func TestOCIRepositoriesEnsureNeverProbesRecordedMediaType(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+	resolver := &countingResolver{mediaType: "should-not-be-used"}
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version:   "6.7.1",
+		MediaType: "application/tar+gzip",
+	}
+
+	service.Ensure(
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
+	)
+
+	if resolver.calls != 0 {
+		t.Fatalf("resolver calls = %d, want 0", resolver.calls)
+	}
+}
+
+func TestOCIRepositoriesEnsureReportsTerminalProbeFailure(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{err: &repoclient.TerminalError{
+		Reason:  helmv1alpha1.ReasonUnsupportedChartArtifact,
+		Message: "config media type is not a helm chart config",
+	}}
+	service, c := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+
+	result := service.Ensure(
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
+	)
+
+	if result.ProbeReason != helmv1alpha1.ReasonUnsupportedChartArtifact {
+		t.Fatalf("reason = %q, want %q", result.ProbeReason, helmv1alpha1.ReasonUnsupportedChartArtifact)
+	}
+	if !result.ProbeTerminal {
+		t.Fatal("a verdict about the artifact must be marked terminal so the release reports it as Stalled")
+	}
+	if result.ProbeRequeueAfter != 0 {
+		t.Fatalf("requeue = %v, want none: the artifact will not become a chart on its own", result.ProbeRequeueAfter)
+	}
+
+	ociRepo := &sourcev1.OCIRepository{}
+	key := client.ObjectKey{Name: utils.GetInternalOCIRepositoryName(addon.Name), Namespace: testNamespace}
+	if err := c.Get(context.Background(), key, ociRepo); err == nil {
+		t.Fatal("no internal oci repository must be created for an unusable artifact")
+	}
+}
+
+func TestOCIRepositoriesEnsureRequeuesRetriableProbeFailure(t *testing.T) {
+	addon, repo := testAddon(), hybridTestRepository()
+	resolver := &countingResolver{err: errors.New("429 Too Many Requests")}
+	service, _ := newOCIRepositoriesWithResolver(t, resolver, addon, repo)
+
+	version := &helmv1alpha1.ChartVersion{
+		Version: "6.7.1",
+		OCIRef:  "oci://registry.example.com/charts/podinfo:6.7.1",
+	}
+
+	result := service.Ensure(
+		context.Background(), adapter.NewAddonRelease(addon), adapter.NewAddonRepository(repo), ociSource(t, repo, version), version,
+	)
+
+	if result.ProbeErr == nil {
+		t.Fatal("a probe that could not reach the registry must be reported")
+	}
+	if result.ProbeTerminal {
+		t.Fatal("a failure that may pass on its own must not be marked terminal")
+	}
+	if result.ProbeRequeueAfter != chartArtifactProbeRequeueInterval {
+		t.Fatalf("requeue = %v, want %v", result.ProbeRequeueAfter, chartArtifactProbeRequeueInterval)
+	}
+}
+
+func TestOCIRepositoriesEnsureKeepsForeignLabels(t *testing.T) {
+	addon, repo := testAddon(), ociTestRepository()
+
+	internal := internalOCIRepository(addon.Name)
+	internal.Labels = map[string]string{
+		"cost-center":                     "team-a",
+		helmv1alpha1.LabelSourceNamespace: "gone",
+	}
+
+	service, c := newOCIRepositories(t, addon, repo, internal)
+
+	version := &helmv1alpha1.ChartVersion{Version: "6.7.1", MediaType: "application/tar+gzip"}
+	rel := adapter.NewAddonRelease(addon)
+
+	service.Ensure(context.Background(), rel, adapter.NewAddonRepository(repo), ociSource(t, repo, version), version)
+
+	got := &sourcev1.OCIRepository{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(internal), got); err != nil {
+		t.Fatalf("getting oci repository: %v", err)
+	}
+
+	if got.Labels["cost-center"] != "team-a" {
+		t.Fatalf("labels = %v, want the foreign label preserved", got.Labels)
+	}
+	if _, found := got.Labels[helmv1alpha1.LabelSourceNamespace]; found {
+		t.Fatalf("labels = %v, want the owned label a cluster-scoped source does not set removed", got.Labels)
+	}
+	for key, want := range rel.SourceLabels() {
+		if got.Labels[key] != want {
+			t.Fatalf("label %q = %q, want %q", key, got.Labels[key], want)
+		}
+	}
+}
