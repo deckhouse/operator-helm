@@ -1,0 +1,9 @@
+
+breaking: []
+features:
+  - "add the namespace-scoped application family"
+  - "publish the objects a release deployed in its status"
+fixes: []
+security: []
+chore: []
+
