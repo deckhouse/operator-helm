@@ -2,6 +2,10 @@ version: "3"
 
 silent: true
 
+# Local e2e configuration written by dev:test:e2e:env; absent in CI, where the
+# workflow environment takes precedence anyway.
+dotenv: ["tests/e2e/.env"]
+
 vars:
   deckhouse_lib_helm_ver: 1.71.2
   target: ""
@@ -139,6 +143,93 @@ tasks:
     desc: "Check the proxy rewrite rules against the generated definitions."
     cmds:
       - cd images/kube-api-rewriter && go test -count=1 ./pkg/operatornelm/...
+
+  dev:build:
+    desc: "Build the module from the working tree (werf --dev) and publish it to DEV_REGISTRY."
+    preconditions:
+      - sh: test -n "{{.DEV_REGISTRY | default .E2E_MODULE_SOURCE_REPO}}"
+        msg: "Set DEV_REGISTRY=<registry>/<path>, or have E2E_MODULE_SOURCE_REPO in tests/e2e/.env."
+    vars:
+      # The registry, the tag, and the digest travel as one set: unless given
+      # explicitly, the tag recorded in tests/e2e/.env wins over the branch name.
+      DEV_TAG:
+        sh: |
+          if [ -n "${DEV_TAG:-}" ]; then printf '%s' "$DEV_TAG"
+          elif [ -n "${E2E_MODULE_TAG_NAME:-}" ]; then printf '%s' "$E2E_MODULE_TAG_NAME"
+          else
+            pr=$(gh pr view --json number --jq .number 2>/dev/null || true)
+            if [ -n "$pr" ]; then printf 'pr%s' "$pr"
+            else git rev-parse --abbrev-ref HEAD | tr -c 'A-Za-z0-9_.\n-' '-' | sed 's/^[.-]*//; s/-*$//' | cut -c1-128; fi
+          fi
+    cmds:
+      # systemd-run caps werf's own process tree; with the docker backend the
+      # RUN stages live under dockerd and are not covered.
+      - cmd: systemd-run --user --scope -p CPUQuota=400% -p MemoryMax=8G hack/dkp-build-module.sh --registry "{{.DEV_REGISTRY | default .E2E_MODULE_SOURCE_REPO}}" --tag "{{.DEV_TAG}}" --dev {{.CLI_ARGS}}
+        platforms: [linux]
+      - cmd: hack/dkp-build-module.sh --registry "{{.DEV_REGISTRY | default .E2E_MODULE_SOURCE_REPO}}" --tag "{{.DEV_TAG}}" --dev {{.CLI_ARGS}}
+        platforms: [darwin]
+
+  dev:test:e2e:env:
+    desc: "Write tests/e2e/.env pointing the e2e suite at the published dev build."
+    vars:
+      # With nothing given and an empty .env this resolves the way CI does for a
+      # pull request: the shared dev registry and the pr<N> tag of the current
+      # branch's PR (the sanitized branch name when there is none).
+      DEV_TAG:
+        sh: |
+          if [ -n "${DEV_TAG:-}" ]; then printf '%s' "$DEV_TAG"
+          elif [ -n "${E2E_MODULE_TAG_NAME:-}" ]; then printf '%s' "$E2E_MODULE_TAG_NAME"
+          else
+            pr=$(gh pr view --json number --jq .number 2>/dev/null || true)
+            if [ -n "$pr" ]; then printf 'pr%s' "$pr"
+            else git rev-parse --abbrev-ref HEAD | tr -c 'A-Za-z0-9_.\n-' '-' | sed 's/^[.-]*//; s/-*$//' | cut -c1-128; fi
+          fi
+      MODULE_NAME:
+        sh: "sed -n 's/^name: *//p' module.yaml"
+    cmds:
+      - |
+        set -eu
+        registry="{{.DEV_REGISTRY | default .E2E_MODULE_SOURCE_REPO | default "dev-registry.deckhouse.io/sys/deckhouse-oss/modules"}}"
+        digest=$(crane digest "$registry/{{.MODULE_NAME}}:{{.DEV_TAG}}")
+        f=tests/e2e/.env
+        tmp=$(mktemp); trap 'rm -f "$tmp" "$tmp.n"' EXIT
+        if [ -f "$f" ]; then cat "$f" > "$tmp"; else : > "$tmp"; fi
+        # Replace one key, dropping its existing entry first; a quoted value may
+        # span several lines (the CA certificate), so the removal is multiline-aware.
+        put() {
+          awk -v k="$1" '
+            skip { if (/"[[:space:]]*$/) skip=0; next }
+            $0 ~ "^(export )?"k"=" { if ($0 ~ /="/ && $0 !~ /"[[:space:]]*$/) skip=1; next }
+            { print }
+          ' "$tmp" > "$tmp.n" && mv "$tmp.n" "$tmp"
+          printf 'export %s="%s"\n' "$1" "$2" >> "$tmp"
+        }
+        # The tag and the digest always have values (branch default / derived);
+        # every other key is written only when this run was given one, otherwise
+        # whatever the file already holds stays untouched.
+        if [ -n "{{.DEV_REGISTRY}}" ]; then
+          put DEV_REGISTRY "{{.DEV_REGISTRY}}"
+          put E2E_MODULE_SOURCE_REPO "{{.DEV_REGISTRY}}"
+        elif [ -z "{{.E2E_MODULE_SOURCE_REPO}}" ]; then
+          put E2E_MODULE_SOURCE_REPO "$registry"
+        fi
+        if [ -n "{{.DEV_REGISTRY_DOCKER_CONFIG}}" ]; then put DEV_REGISTRY_DOCKER_CONFIG "{{.DEV_REGISTRY_DOCKER_CONFIG}}"; fi
+        if [ -n "{{.E2E_MODULE_SOURCE_CA}}" ]; then put E2E_MODULE_SOURCE_CA "{{.E2E_MODULE_SOURCE_CA}}"; fi
+        if [ -n "{{.KIND_REGISTRY_HOST}}" ]; then put KIND_REGISTRY_HOST "{{.KIND_REGISTRY_HOST}}"; fi
+        if [ -n "{{.KIND_REGISTRY_CA_FILE}}" ]; then put KIND_REGISTRY_CA_FILE "{{.KIND_REGISTRY_CA_FILE}}"; fi
+        if [ -n "{{.KIND_REGISTRY_AUTH}}" ]; then put KIND_REGISTRY_AUTH "{{.KIND_REGISTRY_AUTH}}"; fi
+        put E2E_MODULE_TAG_NAME "{{.DEV_TAG}}"
+        put E2E_MODULE_DIGEST "$digest"
+        mv "$tmp" "$f"
+        echo "tests/e2e/.env -> $registry/{{.MODULE_NAME}}:{{.DEV_TAG}} ($digest)"
+
+  dev:test:e2e:
+    desc: "dev:build, dev:test:e2e:env, then run the e2e tests against the dev build."
+    cmds:
+      - task: dev:build
+      - task: dev:test:e2e:env
+      # A fresh `task` process so the dotenv file written above is re-read.
+      - task --yes e2e:tests
 
   test:e2e:setup:
     desc: "Setup environment for e2e tests."
