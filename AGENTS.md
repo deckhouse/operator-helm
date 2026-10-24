@@ -5,6 +5,10 @@ Helm applications declaratively. User-facing CRDs in the `helm.deckhouse.io` gro
 into internal Flux objects (API groups renamed to `*.internal.operator-helm.deckhouse.io`) that
 vendored Flux controllers process behind a rewriting proxy.
 
+Every new source file (Go, shell, and similar) starts with the Apache 2.0 license header —
+`Copyright <year> Flant JSC` plus the standard license text, comment-styled for the language;
+copy it from a neighboring file (e.g. `tests/e2e/e2e_test.go`, `tests/e2e/scripts/kind-d8-ci.sh`).
+
 Run every `task` command with `TASK_X_REMOTE_TASKFILES=1` — the root Taskfile includes remote
 taskfiles from werf/common-ci and task refuses them otherwise. Non-interactive runs also need
 `task --yes` to accept the remote taskfile trust prompt. Formatting/linting of `crds/*.yaml`
