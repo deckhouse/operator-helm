@@ -44,6 +44,10 @@ this run; the private-registry keys (`DEV_REGISTRY_DOCKER_CONFIG`, `E2E_MODULE_S
 `KIND_REGISTRY_HOST`/`CA_FILE`/`AUTH`) can be passed to `dev:test:e2e:env` as variables, and
 hand-written entries — including the multiline CA — survive regeneration.
 
+A machine-local copy of the file can live in `~/.config/operator-helm/dev.env`: when bb
+provisions a fresh worktree, the root `.bb-env-setup.sh` copies it to `tests/e2e/.env` and
+re-exports the kind kubeconfig, so new workspaces are e2e-ready without manual steps.
+
 ## Running the tests
 
 ```shell
