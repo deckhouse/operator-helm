@@ -244,6 +244,7 @@ func applyHelmReleaseSpec(rel contract.Release, existing *helmv2.HelmRelease, so
 	existing.Spec.ReleaseName = rel.ReleaseName()
 	existing.Spec.TargetNamespace = rel.TargetNamespace()
 	existing.Spec.Values = rel.Values()
+	existing.Spec.CommonMetadata = &helmv2.CommonMetadata{Labels: rel.SourceLabels()}
 
 	existing.Spec.Suspend = rel.MaintenanceActivated()
 
