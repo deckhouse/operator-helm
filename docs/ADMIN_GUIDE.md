@@ -4,7 +4,7 @@ description: "Managing the cluster-wide resources of the operator-helm module: r
 weight: 40
 ---
 
-This guide describes how to work with the `operator-helm` module using cluster-wide resources. Working with these custom resources requires permissions no lower than the [`ClusterAdmin`](/modules/user-authz/#current-role-based-model) role.
+This guide describes how to work with the `operator-helm` module using cluster-wide resources. Working with these custom resources requires the [`SuperAdmin`](/modules/user-authz/#current-role-based-model) role.
 
 ## Adding an addon repository
 
@@ -167,24 +167,27 @@ status:
 | --- | --- | --- | --- |
 | `Ready` | `True` | `Success` | The repository is reachable and the chart catalog has been built. You can select a chart for an addon |
 | `Ready` | `Unknown` | `AwaitingInitialSync` | The repository has just been created and the first read has not finished yet. Wait for the synchronization to complete |
-| `Ready` | `False` | `AuxiliaryResourcesFailed` | The auxiliary secret holding the repository credentials could not be created. Check your permissions in the namespace |
+| `Ready` | `False` | `AuxiliaryResourcesFailed` | The auxiliary secrets holding the repository credentials and CA certificate could not be created. The attempt will be repeated automatically |
 | `Synced` | `True` | `Success` | The chart catalog matches the contents of the repository |
 | `Synced` | `False` | `SyncFailed` | The repository could not be read. Check the URL and that the repository is reachable from the cluster |
 | `Synced` | `False` | `CatalogUpdateFailed` | The repository has been read, but the chart catalog could not be written to the cluster. The attempt will be repeated automatically |
-| `Synced` | `False` | `PartialSync` | Some versions could not be parsed during the first read. The rest versions are already available, and the skipped ones will be picked up at the next synchronization |
+| `Synced` | `False` | `PartialSync` | The chart catalog is incomplete: some charts or versions offered by the repository are missing from it or have not been resolved yet. Versions without `unavailableReason` can be installed. Details are given in the `message` field |
 | `Reconciling` | `True` | `Synchronization` | A scheduled reconciliation is in progress |
+| `Reconciling` | `True` | `AwaitingInitialSync` | The first read of the repository has not completed yet |
+| `Reconciling` | `True` | `Reconciling` | The internal resources of the repository are not ready yet. Details are given in the `message` field |
 | `Reconciling` | `True` | `ForceReconcile` | A forced reconciliation is in progress |
 | `Reconciling` | `True` | `ProgressingWithRetry` | The previous reconciliation attempt has failed and a retry is scheduled |
 | `Stalled` | `True` | `UnsupportedRepositoryType` | The scheme in the URL is not supported. Only `http(s)://` and `oci://` are allowed |
 | `Stalled` | `True` | `InvalidRepositoryURL` | The URL could not be parsed. Check the repository address |
+| `Stalled` | `True` | `InvalidCACertificate` | The `caCertificate` field does not contain a PEM-encoded certificate. Check the repository specification |
 | `Stalled` | `True` | `AuthenticationFailed` | The repository rejected the credentials. Check the username and the password in the repository specification |
 | `Stalled` | `True` | `SourceNotFound` | No repository was found at the given URL |
 | `Stalled` | `True` | `SourceRejectedRequest` | The repository rejected the request. Contact the repository owner |
-| `Stalled` | `True` | `RetriesExceeded` | The number of read attempts has been exceeded. Fix the cause and request a forced reconciliation |
+| `Stalled` | `True` | `RetriesExceeded` | Several consecutive read attempts have failed. Attempts continue once an hour. Fix the cause and, to avoid waiting for the next attempt, request a forced reconciliation |
 
 {{< alert level="info" >}}
 
-The `Reconciling` and `Stalled` conditions are present only while they apply. The `Reconciling` condition is present until the work is finished, the `Stalled` condition is present until the cause of the failure is fixed.
+The `Reconciling` and `Stalled` conditions are present only while they apply. The `Reconciling` condition is present until the work is finished, the `Stalled` condition is present until the cause of the failure is fixed. While the `Stalled` condition is present, the `Ready` condition is `False`.
 
 {{< /alert >}}
 
@@ -320,15 +323,23 @@ status:
 | `Ready` | `False` | `ReleaseFailed` | Helm could not install or upgrade the release. The error text is given in the `message` field |
 | `Ready` | `False` | `TestFailed` | The chart tests failed |
 | `Ready` | `False` | `Remediated` | The release was rolled back to its previous state |
+| `Ready` | `False` | `RenderFailed` | The chart could not be rendered into applicable manifests. Fix the chart values or select another version |
 | `Ready` | `False` | `ChartFetchFailed`, `ChartStorageFailed` | The chart could not be downloaded from the repository or stored in the cluster |
+| `Ready` | `False` | `HelmChartFailed` | The internal resource used to download the chart could not be created or updated. The attempt will be repeated automatically |
 | `Ready` | `False` | `OCIFetchFailed`, `OCIIncludeUnavailable`, `OCIStorageFailed`, `OCIVerificationFailed` | The chart could not be retrieved from the OCI registry or verified |
+| `Ready` | `False` | `UnsupportedChartArtifact`, `SourceNotFound`, `InvalidRepositoryURL` | The chart version cannot be retrieved from the OCI registry: the reference to it is invalid, the tag is missing, or the artifact is not a Helm chart. Contact the repository owner |
 | `Ready` | `False` | `ChartVersionRemoved` | The specified chart version is no longer published by the repository. Select another version |
+| `Ready` | `False` | `ChartVersionNotFound` | The specified chart or version is not in the repository catalog, or the version cannot be installed. Check the addon specification or select another version |
 | `Ready` | `False` | `ChartClaimConflict` | This chart of this repository is already deployed by another addon: a single repository–chart pair can be served by only one HelmClusterAddon. The resource holding it is named in the `message` field. The state resolves on its own within half a minute after that addon is deleted or pointed at another chart |
 | `Ready` | `False` | `UnsupportedRepositoryType` | The repository the addon refers to has an unreadable URL. Contact the repository owner |
 | `Ready` | `False` | `Failed` | Other errors. The cause is given in the `message` field |
+| `Ready` | `False` | `MaintenanceModeActive` | Maintenance mode is on, reconciliation is paused |
+| `Ready` | `False` | `UninstallFailed` | The release or its internal resources could not be removed while the addon was being deleted. The error text is given in the `message` field |
 | `Installed` | Same as `Ready` | Same as for `Ready` | The outcome of the first installation of the release |
 | `UpdateInstalled` | Same as `Ready` | Same as for `Ready` | The outcome of a release upgrade. Appears when the chart version changes |
 | `ConfigurationApplied` | Same as `Ready` | Same as for `Ready` | The outcome of applying the chart values. Appears when the values change |
+| `UninstallFailed` | `Unknown` | `Reconciling` | The release and its internal resources are being removed. Appears while the addon is being deleted |
+| `UninstallFailed` | `True` | `UninstallFailed` | The release or its internal resources could not be removed. The error text is given in the `message` field |
 | `Managed` | `True` | `MaintenanceModeInactive` | The addon is managed by the module |
 | `Managed` | `False` | `MaintenanceModeActive` | Maintenance mode is on, reconciliation is paused |
 | `Reconciling` | `True` | `Reconciling` | The release is being rolled out |
@@ -338,7 +349,7 @@ status:
 
 {{< alert level="info" >}}
 
-The `Reconciling` and `Stalled` conditions are present only while they apply: `Reconciling` is present until the work is finished, `Stalled` is present until the cause of the failure is fixed. The `Installed`, `UpdateInstalled` and `ConfigurationApplied` conditions appear as the addon passes the corresponding stages and carry the same verdict as `Ready`.
+The `Reconciling` and `Stalled` conditions are present only while they apply: `Reconciling` is present until the work is finished, `Stalled` is present until the cause of the failure is fixed. The `Installed`, `UpdateInstalled` and `ConfigurationApplied` conditions appear as the addon passes the corresponding stages and carry the same verdict as `Ready`, except for maintenance mode and failures that occur before the chart is processed, such as `ChartClaimConflict` and `UnsupportedRepositoryType`: these are reflected only in `Ready`.
 
 {{< /alert >}}
 

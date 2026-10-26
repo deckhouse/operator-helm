@@ -171,24 +171,27 @@ status:
 | --- | --- | --- | --- |
 | `Ready` | `True` | `Success` | Репозиторий доступен, каталог чартов построен. Можно выбирать чарт для приложения |
 | `Ready` | `Unknown` | `AwaitingInitialSync` | Репозиторий был создан, первое чтение ещё не завершилось. Дождитесь окончания синхронизации |
-| `Ready` | `False` | `AuxiliaryResourcesFailed` | Не удалось создать служебный секрет с учётными данными репозитория. Проверьте свои полномочия в неймспейсе |
+| `Ready` | `False` | `AuxiliaryResourcesFailed` | Не удалось создать служебные секреты с учётными данными и CA-сертификатом репозитория. Попытка повторится автоматически |
 | `Synced` | `True` | `Success` | Каталог чартов соответствует содержимому репозитория |
 | `Synced` | `False` | `SyncFailed` | Не удалось прочитать репозиторий. Проверьте URL-адрес и доступность репозитория из кластера |
 | `Synced` | `False` | `CatalogUpdateFailed` | Репозиторий прочитан, но записать каталог чартов в кластер не удалось. Попытка повторится автоматически |
-| `Synced` | `False` | `PartialSync` | Не удалось разобрать часть версий при первом чтении. Остальные версии уже доступны, а пропущенные будут разобраны при следующей синхронизации |
+| `Synced` | `False` | `PartialSync` | Каталог чартов неполный: часть чартов или версий репозитория в нём отсутствует или ещё не обработана. Версии без `unavailableReason` можно устанавливать. Подробности приведены в поле `message` |
 | `Reconciling` | `True` | `Synchronization` | Выполняется плановая реконсиляция |
+| `Reconciling` | `True` | `AwaitingInitialSync` | Первое чтение репозитория ещё не завершилось |
+| `Reconciling` | `True` | `Reconciling` | Внутренние ресурсы репозитория ещё не готовы. Подробности приведены в поле `message` |
 | `Reconciling` | `True` | `ForceReconcile` | Выполняется принудительная реконсиляция |
 | `Reconciling` | `True` | `ProgressingWithRetry` | Предыдущая попытка реконсиляции не удалась, запланирована повторная попытка |
 | `Stalled` | `True` | `UnsupportedRepositoryType` | Схема в URL-адресе не поддерживается. Допустимы только `http(s)://` и `oci://` |
 | `Stalled` | `True` | `InvalidRepositoryURL` | URL-адрес не удалось разобрать. Проверьте адрес репозитория |
+| `Stalled` | `True` | `InvalidCACertificate` | Поле `caCertificate` не содержит сертификат в формате PEM. Проверьте спецификацию репозитория |
 | `Stalled` | `True` | `AuthenticationFailed` | Репозиторий отклонил учётные данные. Проверьте логин и пароль в спецификации репозитория |
 | `Stalled` | `True` | `SourceNotFound` | По указанному URL-адресу репозиторий не найден. |
 | `Stalled` | `True` | `SourceRejectedRequest` | Репозиторий отклонил запрос. Обратитесь к владельцу репозитория |
-| `Stalled` | `True` | `RetriesExceeded` | Превышено допустимое количество попыток чтения. Устраните причину сбоя и запросите принудительную реконсиляцию |
+| `Stalled` | `True` | `RetriesExceeded` | Несколько попыток чтения подряд завершились ошибкой. Попытки продолжаются раз в час. Устраните причину сбоя и, чтобы не ждать следующей попытки, запросите принудительную реконсиляцию |
 
 {{< alert level="info" >}}
 
-Условия `Reconciling` и `Stalled` присутствуют только пока они применимы: `Reconciling` — пока работа не завершена, `Stalled` — пока причина сбоя не устранена.
+Условия `Reconciling` и `Stalled` присутствуют только пока они применимы: `Reconciling` — пока работа не завершена, `Stalled` — пока причина сбоя не устранена. Пока присутствует условие `Stalled`, условие `Ready` имеет значение `False`.
 
 {{< /alert >}}
 
@@ -258,7 +261,7 @@ podinfo-chart-podinfo-dfbe83e63b0b   11d   chart=podinfo,heritage=deckhouse,repo
 1. Нажмите кнопку «Создать».
 
 {{< alert level="info" >}}
-В списке репозиториев у некоторых может быть указан постфикс «(cluster)». Это означает, что данный репозиторий — общий ([HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository)) и его создал администратор Deckhouse Platform.
+В списке репозиториев у некоторых может быть указан постфикс «(cluster)». Это означает, что данный репозиторий — общий ([HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository)) и его создал администратор Deckhouse Platform. Просмотр сведений об общих Helm-чартах приложений доступен любому пользователю неймспейса.
 {{< /alert >}}
 
 {{< alert level="info" >}}
@@ -269,25 +272,35 @@ podinfo-chart-podinfo-dfbe83e63b0b   11d   chart=podinfo,heritage=deckhouse,repo
 {{< /tabs >}}
 
 {{< alert level="warning" >}}
-Развёртывание [HelmApplication](/modules/operator-helm/cr.html#helmapplication) выполняется с полными привилегиями в рамках неймспейса.
+Развёртывание [HelmApplication](/modules/operator-helm/cr.html#helmapplication) выполняется с полными привилегиями в рамках неймспейса, за следующими исключениями:
+
+- приложение не может создавать, изменять или удалять ресурсы Namespace, ResourceQuota, LimitRange, DaemonSet и ProjectNamespace;
+- приложение не может создавать или изменять ресурс Role, дающий право на изменение этих ресурсов, а также ресурс RoleBinding, ссылающийся на ClusterRole;
+- ресурс Role, создаваемый приложением, может содержать только глаголы кластерной роли, приведённой ниже, поэтому глаголы вроде `bind`, `escalate` и `impersonate`, а также `verbs: ["*"]` отклоняются.
 
 {{< details summary="Правила роли, используемой при развёртывании приложения" >}}
 
+Модуль привязывает эту кластерную роль к ServiceAccount приложения ресурсом RoleBinding в неймспейсе приложения.
+
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
-  labels:
-    helm.deckhouse.io/managed-by: operator-helm
-  name: operator-helm-application
-  namespace: test
+  name: d8:operator-helm:application
 rules:
 - apiGroups:
   - '*'
   resources:
   - '*'
   verbs:
-  - '*'
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
 ```
 
 {{< /details >}}
@@ -369,16 +382,25 @@ status:
 | `Ready` | `False` | `ReleaseFailed` | Helm не смог установить или обновить релиз. Текст ошибки приведён в поле `message` |
 | `Ready` | `False` | `TestFailed` | Тесты чарта завершились с ошибкой |
 | `Ready` | `False` | `Remediated` | Выполнен откат к предыдущему состоянию релиза |
+| `Ready` | `False` | `RenderFailed` | Из чарта не удалось сформировать применимые манифесты. Исправьте значения чарта или выберите другую версию |
+| `Ready` | `False` | `AccessDenied` | API-сервер запретил ServiceAccount приложения доступ к ресурсу, которым управляет чарт. Причина приведена в поле `message` |
 | `Ready` | `False` | `ChartFetchFailed`, `ChartStorageFailed` | Чарт не удалось загрузить из репозитория или сохранить в кластере |
+| `Ready` | `False` | `HelmChartFailed` | Не удалось создать или обновить внутренний ресурс для загрузки чарта. Будет предпринята повторная попытка |
 | `Ready` | `False` | `OCIFetchFailed`, `OCIIncludeUnavailable`, `OCIStorageFailed`, `OCIVerificationFailed` | Не удалось получить или проверить чарт из OCI-хранилища |
+| `Ready` | `False` | `UnsupportedChartArtifact`, `SourceNotFound`, `InvalidRepositoryURL` | Версию чарта нельзя получить из OCI-хранилища: ссылка на неё некорректна, тег отсутствует или артефакт не является Helm-чартом. Обратитесь к владельцу репозитория |
 | `Ready` | `False` | `ChartVersionRemoved` | Указанная версия чарта больше не публикуется репозиторием. Выберите другую версию |
-| `Ready` | `False` | `RBACSetupFailed` | Не удалось подготовить ресурс ServiceAccount, Role или RoleBinding, от имени которых устанавливается чарт. Будет предпринята повторная попытка |
-| `Ready` | `False` | `ForeignRBACObject` | Имя ресурса Role или RoleBinding, которые модуль создаёт для приложения, уже занято. Role всегда называется `operator-helm-application`, а имя RoleBinding совпадает с именем ServiceAccount приложения и приведено в поле `message`. Объект с таким именем создан не модулем, поэтому модуль его не меняет. Удалите чужой объект и запросите принудительную реконсиляцию |
+| `Ready` | `False` | `ChartVersionNotFound` | Указанного чарта или версии нет в каталоге репозитория, либо версию нельзя установить. Проверьте спецификацию приложения или выберите другую версию |
+| `Ready` | `False` | `RBACSetupFailed` | Не удалось подготовить ресурс ServiceAccount или RoleBinding, от имени которых устанавливается чарт. Будет предпринята повторная попытка |
+| `Ready` | `False` | `ForeignRBACObject` | Имя ресурса RoleBinding, который модуль создаёт для приложения, уже занято. Имя RoleBinding совпадает с именем ServiceAccount приложения и приведено в поле `message`. Объект с таким именем создан не модулем, поэтому модуль его не меняет. Удалите чужой объект и запросите принудительную реконсиляцию |
 | `Ready` | `False` | `UnsupportedRepositoryType` | У репозитория, на который ссылается приложение, нечитаемый URL-адрес. Обратитесь к владельцу репозитория |
 | `Ready` | `False` | `Failed` | Прочие ошибки. Причина приведена в поле `message` |
+| `Ready` | `False` | `MaintenanceModeActive` | Включён режим обслуживания, реконсиляция приостановлена |
+| `Ready` | `False` | `UninstallFailed` | При удалении приложения не удалось удалить релиз или его внутренние ресурсы. Текст ошибки приведён в поле `message` |
 | `Installed` | Как у `Ready` | Та же, что у `Ready` | Результат первой установки релиза |
 | `UpdateInstalled` | Как у `Ready` | Та же, что у `Ready` | Результат обновления релиза. Появляется при смене версии чарта |
 | `ConfigurationApplied` | Как у `Ready` | Та же, что у `Ready` | Результат применения значений чарта. Появляется при изменении значений |
+| `UninstallFailed` | `Unknown` | `Reconciling` | Релиз и его внутренние ресурсы удаляются. Появляется при удалении приложения |
+| `UninstallFailed` | `True` | `UninstallFailed` | Релиз или его внутренние ресурсы не удалось удалить. Текст ошибки приведён в поле `message` |
 | `Managed` | `True` | `MaintenanceModeInactive` | Приложение находится под управлением модуля |
 | `Managed` | `False` | `MaintenanceModeActive` | Включён режим обслуживания, реконсиляция приостановлена |
 | `Reconciling` | `True` | `Reconciling` | Идёт разворачивание релиза |
@@ -388,7 +410,7 @@ status:
 
 {{< alert level="info" >}}
 
-Условия `Reconciling` и `Stalled` присутствуют, только пока применимы: `Reconciling` — пока работа не завершена, `Stalled` — пока причина сбоя не устранена. Условия `Installed`, `UpdateInstalled` и `ConfigurationApplied` появляются по мере того, как приложение проходит соответствующие этапы, и несут тот же вердикт, что и `Ready`.
+Условия `Reconciling` и `Stalled` присутствуют, только пока применимы: `Reconciling` — пока работа не завершена, `Stalled` — пока причина сбоя не устранена. Условия `Installed`, `UpdateInstalled` и `ConfigurationApplied` появляются по мере того, как приложение проходит соответствующие этапы, и несут тот же вердикт, что и `Ready`. Исключения — режим обслуживания и сбои до обработки чарта, например `ForeignRBACObject` и `UnsupportedRepositoryType`: они отражаются только в `Ready`.
 
 {{< /alert >}}
 

@@ -171,24 +171,27 @@ status:
 | --- | --- | --- | --- |
 | `Ready` | `True` | `Success` | The repository is reachable and the chart catalog has been built. You can select a chart for an application |
 | `Ready` | `Unknown` | `AwaitingInitialSync` | The repository has just been created and the first read has not finished yet. Wait for the synchronization to complete |
-| `Ready` | `False` | `AuxiliaryResourcesFailed` | The auxiliary secret holding the repository credentials could not be created. Check your permissions in the namespace |
+| `Ready` | `False` | `AuxiliaryResourcesFailed` | The auxiliary secrets holding the repository credentials and CA certificate could not be created. The attempt will be repeated automatically |
 | `Synced` | `True` | `Success` | The chart catalog matches the contents of the repository |
 | `Synced` | `False` | `SyncFailed` | The repository could not be read. Check the URL and that the repository is reachable from the cluster |
 | `Synced` | `False` | `CatalogUpdateFailed` | The repository was read, but the chart catalog could not be written to the cluster. The attempt will be repeated automatically |
-| `Synced` | `False` | `PartialSync` | Some versions could not be parsed during the first read. The rest are already available, and the skipped ones will be picked up at the next synchronization |
+| `Synced` | `False` | `PartialSync` | The chart catalog is incomplete: some charts or versions offered by the repository are missing from it or have not been resolved yet. Versions without `unavailableReason` can be installed. Details are given in the `message` field |
 | `Reconciling` | `True` | `Synchronization` | A scheduled reconciliation is in progress |
+| `Reconciling` | `True` | `AwaitingInitialSync` | The first read of the repository has not completed yet |
+| `Reconciling` | `True` | `Reconciling` | The internal resources of the repository are not ready yet. Details are given in the `message` field |
 | `Reconciling` | `True` | `ForceReconcile` | A forced reconciliation is in progress |
 | `Reconciling` | `True` | `ProgressingWithRetry` | The previous attempt failed and a retry is scheduled |
 | `Stalled` | `True` | `UnsupportedRepositoryType` | The scheme in the URL is not supported. Only `http(s)://` and `oci://` are allowed |
 | `Stalled` | `True` | `InvalidRepositoryURL` | The URL could not be parsed. Check the repository address |
+| `Stalled` | `True` | `InvalidCACertificate` | The `caCertificate` field does not contain a PEM-encoded certificate. Check the repository specification |
 | `Stalled` | `True` | `AuthenticationFailed` | The repository rejected the credentials. Check the username and the password in the repository specification |
 | `Stalled` | `True` | `SourceNotFound` | No repository was found at the given URL |
 | `Stalled` | `True` | `SourceRejectedRequest` | The repository rejected the request. Contact the repository owner. |
-| `Stalled` | `True` | `RetriesExceeded` | The number of read attempts has been exceeded. Fix the cause and request a forced reconciliation |
+| `Stalled` | `True` | `RetriesExceeded` | Several consecutive read attempts have failed. Attempts continue once an hour. Fix the cause and, to avoid waiting for the next attempt, request a forced reconciliation |
 
 {{< alert level="info" >}}
 
-The `Reconciling` and `Stalled` conditions are present only while they apply: `Reconciling` is present until the work is finished, `Stalled` is present until the cause of the failure is fixed.
+The `Reconciling` and `Stalled` conditions are present only while they apply: `Reconciling` is present until the work is finished, `Stalled` is present until the cause of the failure is fixed. While the `Stalled` condition is present, the `Ready` condition is `False`.
 
 {{< /alert >}}
 
@@ -258,7 +261,7 @@ podinfo-chart-podinfo-dfbe83e63b0b   11d   chart=podinfo,heritage=deckhouse,repo
 1. Click the "Create" button.
 
 {{< alert level="info" >}}
-Some repositories in the list may carry the "(cluster)" suffix. This means that the repository is shared ([HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository)) and was created by a Deckhouse Platform administrator.
+Some repositories in the list may carry the "(cluster)" suffix. This means that the repository is shared ([HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository)) and was created by a Deckhouse Platform administrator. Viewing information about shared application Helm charts is available to any user of the namespace.
 {{< /alert >}}
 
 {{< alert level="info" >}}
@@ -269,25 +272,35 @@ You can adjust the Helm chart parameters if needed. To see the parameters used b
 {{< /tabs >}}
 
 {{< alert level="warning" >}}
-A [HelmApplication](/modules/operator-helm/cr.html#helmapplication) is deployed with full privileges within the namespace.
+A [HelmApplication](/modules/operator-helm/cr.html#helmapplication) is deployed with full privileges within the namespace, with the following exceptions:
+
+- An application cannot create, modify or delete Namespace, ResourceQuota, LimitRange, DaemonSet and ProjectNamespace resources.
+- An application cannot create or modify a Role granting write access to these resources, or a RoleBinding referencing a ClusterRole.
+- A Role created by an application can contain only the verbs of the cluster role given below, so verbs such as `bind`, `escalate` and `impersonate`, as well as `verbs: ["*"]`, are rejected.
 
 {{< details summary="The rules of the role used when deploying an application" >}}
 
+The module binds this cluster role to the application's ServiceAccount with a RoleBinding resource in the application namespace.
+
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
-  labels:
-    helm.deckhouse.io/managed-by: operator-helm
-  name: operator-helm-application
-  namespace: test
+  name: d8:operator-helm:application
 rules:
 - apiGroups:
   - '*'
   resources:
   - '*'
   verbs:
-  - '*'
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
 ```
 
 {{< /details >}}
@@ -369,16 +382,25 @@ status:
 | `Ready` | `False` | `ReleaseFailed` | Helm could not install or upgrade the release. The error text is given in the `message` field |
 | `Ready` | `False` | `TestFailed` | The chart tests failed |
 | `Ready` | `False` | `Remediated` | The release was rolled back to its previous state |
+| `Ready` | `False` | `RenderFailed` | The chart could not be rendered into applicable manifests. Fix the chart values or select another version |
+| `Ready` | `False` | `AccessDenied` | The API server denied the application's ServiceAccount access to a resource managed by the chart. The cause is given in the `message` field |
 | `Ready` | `False` | `ChartFetchFailed`, `ChartStorageFailed` | The chart could not be downloaded from the repository or stored in the cluster |
+| `Ready` | `False` | `HelmChartFailed` | The internal resource used to download the chart could not be created or updated. The attempt will be repeated automatically |
 | `Ready` | `False` | `OCIFetchFailed`, `OCIIncludeUnavailable`, `OCIStorageFailed`, `OCIVerificationFailed` | The chart could not be retrieved from the OCI registry or verified |
+| `Ready` | `False` | `UnsupportedChartArtifact`, `SourceNotFound`, `InvalidRepositoryURL` | The chart version cannot be retrieved from the OCI registry: the reference to it is invalid, the tag is missing, or the artifact is not a Helm chart. Contact the repository owner |
 | `Ready` | `False` | `ChartVersionRemoved` | The specified chart version is no longer published by the repository. Select another version |
-| `Ready` | `False` | `RBACSetupFailed` | The ServiceAccount, Role or RoleBinding resource used to install the chart could not be prepared. The attempt will be repeated automatically |
-| `Ready` | `False` | `ForeignRBACObject` | The name of the Role or the RoleBinding resource that the module creates for the application is already taken. The Role is always named `operator-helm-application`, and the name of the RoleBinding matches the name of the application's ServiceAccount and is given in the `message` field. An object with such a name was not created by the module, so the module does not modify it. Delete the foreign object and request a forced reconciliation |
+| `Ready` | `False` | `ChartVersionNotFound` | The specified chart or version is not in the repository catalog, or the version cannot be installed. Check the application specification or select another version |
+| `Ready` | `False` | `RBACSetupFailed` | The ServiceAccount or RoleBinding resource used to install the chart could not be prepared. The attempt will be repeated automatically |
+| `Ready` | `False` | `ForeignRBACObject` | The name of the RoleBinding resource that the module creates for the application is already taken. The name of the RoleBinding matches the name of the application's ServiceAccount and is given in the `message` field. An object with such a name was not created by the module, so the module does not modify it. Delete the foreign object and request a forced reconciliation |
 | `Ready` | `False` | `UnsupportedRepositoryType` | The repository the application refers to has an unreadable URL. Contact the repository owner |
 | `Ready` | `False` | `Failed` | Other errors. The cause is given in the `message` field |
+| `Ready` | `False` | `MaintenanceModeActive` | Maintenance mode is on, reconciliation is paused |
+| `Ready` | `False` | `UninstallFailed` | The release or its internal resources could not be removed while the application was being deleted. The error text is given in the `message` field |
 | `Installed` | Same as `Ready` | Same as for `Ready` | The outcome of the first installation of the release |
 | `UpdateInstalled` | Same as `Ready` | Same as for `Ready` | The outcome of a release upgrade. Appears when the chart version changes |
 | `ConfigurationApplied` | Same as `Ready` | Same as for `Ready` | The outcome of applying the chart values. Appears when the values change |
+| `UninstallFailed` | `Unknown` | `Reconciling` | The release and its internal resources are being removed. Appears while the application is being deleted |
+| `UninstallFailed` | `True` | `UninstallFailed` | The release or its internal resources could not be removed. The error text is given in the `message` field |
 | `Managed` | `True` | `MaintenanceModeInactive` | The application is managed by the module |
 | `Managed` | `False` | `MaintenanceModeActive` | Maintenance mode is on, reconciliation is paused |
 | `Reconciling` | `True` | `Reconciling` | The release is being rolled out |
@@ -388,7 +410,7 @@ status:
 
 {{< alert level="info" >}}
 
-The `Reconciling` and `Stalled` conditions are present only while they apply: `Reconciling` is present until the work is finished, `Stalled` is present until the cause of the failure is fixed. The `Installed`, `UpdateInstalled` and `ConfigurationApplied` conditions appear as the application passes the corresponding stages and carry the same verdict as `Ready`.
+The `Reconciling` and `Stalled` conditions are present only while they apply: `Reconciling` is present until the work is finished, `Stalled` is present until the cause of the failure is fixed. The `Installed`, `UpdateInstalled` and `ConfigurationApplied` conditions appear as the application passes the corresponding stages and carry the same verdict as `Ready`, except for maintenance mode and failures that occur before the chart is processed, such as `ForeignRBACObject` and `UnsupportedRepositoryType`: these are reflected only in `Ready`.
 
 {{< /alert >}}
 
