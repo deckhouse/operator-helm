@@ -33,6 +33,7 @@ shell:
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
 fromImage: base/distroless
+vex: images/{{ .ImageName }}/known_vulnerabilities.vex
 import:
 - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
   add: /src/nelm-source-controller/source-controller
