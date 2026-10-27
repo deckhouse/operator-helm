@@ -34,6 +34,7 @@ shell:
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
 fromImage: base/distroless
+vex: images/{{ .ImageName }}/known_vulnerabilities.vex
 import:
 - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
   add: /src/3p-helm-controller/helm-controller
