@@ -96,6 +96,23 @@ func TestReleasesEnsureLeavesTheAddonIdentityAlone(t *testing.T) {
 	}
 }
 
+func TestReleasesEnsureLabelsDeployedObjectsWithTheSource(t *testing.T) {
+	for _, rel := range []contract.Release{
+		adapter.NewAddonRelease(testAddon()),
+		adapter.NewApplicationRelease(testApplication()),
+	} {
+		t.Run(rel.Kind(), func(t *testing.T) {
+			service, c := newReleases(t)
+
+			release := ensureRelease(t, service, c, rel)
+
+			if release.Spec.CommonMetadata == nil || !reflect.DeepEqual(release.Spec.CommonMetadata.Labels, rel.SourceLabels()) {
+				t.Fatalf("commonMetadata = %+v, want labels %v", release.Spec.CommonMetadata, rel.SourceLabels())
+			}
+		})
+	}
+}
+
 func TestReleasesEnsureKeepsForeignLabels(t *testing.T) {
 	rel := adapter.NewApplicationRelease(testApplication())
 	existing := &helmv2.HelmRelease{
