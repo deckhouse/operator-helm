@@ -1,4 +1,8 @@
 ---
+# The twin carries the descriptions of the schema only, as every doc-ru- file in
+# this directory does: the descriptions of the printer columns of
+# helmclusteraddons.yaml have no counterpart here on purpose, so a column added or
+# reworded there needs no edit on this side.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
@@ -24,16 +28,26 @@ spec:
                       description: Версия Helm-чарта для HelmClusterAddon.
                 maintenance:
                   description: |
-                    Стратегия согласования ресурса.
-
-                    При значении `NoResourceReconciliation` контроллер прекращает обновление управляемых ресурсов, что позволяет выполнять ручное вмешательство или обслуживание без перезаписи изменений оператором.
-                    При пустом значении (`""`) используется стандартное согласование.
+                    Стратегия согласования ресурса. При значении `NoResourceReconciliation` контроллер прекращает обновление управляемых ресурсов; при пустом значении (`""`) используется стандартное согласование.
                 namespace:
                   description: Пространство имён для развёртывания релиза аддона.
                 values:
                   description: Пользовательские значения для релиза HelmClusterAddon.
             status:
               properties:
+                inventory:
+                  description: Список объектов, развёрнутых чартом аддона.
+                  items:
+                    description: Запись описывает один объект, развёрнутый чартом релиза.
+                    properties:
+                      apiVersion:
+                        description: Группа и версия API объекта; `v1` для объекта основной группы.
+                      kind:
+                        description: Вид объекта.
+                      namespace:
+                        description: Пространство имён объекта; пусто для объекта уровня кластера.
+                      name:
+                        description: Имя объекта.
                 conditions:
                   description: Условия отражают последние наблюдения за состоянием ресурса.
                 lastAppliedChart:
@@ -49,3 +63,6 @@ spec:
                   description: Последние применённые значения, инициировавшие установку или обновление аддона.
                 observedGeneration:
                   description: Поколение ресурса, обработанное контроллером последним.
+                lastForceReconcileTime:
+                  description: |
+                    Время обработки последнего запроса принудительной реконсиляции. Фиксирует, что запрос был обработан, а не что он завершился успешно.

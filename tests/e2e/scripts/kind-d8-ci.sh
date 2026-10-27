@@ -41,11 +41,16 @@ KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME:-d8-operator-helm}
 KIND_CONFIG_DIR=${KIND_CONFIG_DIR:-$PARENT_DIR/kind}/$KIND_CLUSTER_NAME
 KIND_IMAGE=kindest/node:v1.31.6@sha256:28b7cbb993dfe093c76641a0c95807637213c9109b761f1d422c2400e22b8e87
 
-D8_RELEASE_CHANNEL_TAG=rock-solid
-D8_RELEASE_CHANNEL_NAME=RockSolid
+D8_RELEASE_CHANNEL_TAG=stable
+D8_RELEASE_CHANNEL_NAME=Stable
 D8_REGISTRY_ADDRESS=registry.deckhouse.io
 D8_REGISTRY_PATH=${D8_REGISTRY_ADDRESS}/deckhouse/ce
 D8_LICENSE_KEY=
+
+KIND_REGISTRY_HOST=${KIND_REGISTRY_HOST:-}
+KIND_REGISTRY_CA_FILE=${KIND_REGISTRY_CA_FILE:-}
+KIND_REGISTRY_AUTH=${KIND_REGISTRY_AUTH:-}
+KIND_REGISTRY_CA_PATH=/usr/local/share/ca-certificates/kind-registry-ca.crt
 
 OS_NAME=${OS_NAME:-}
 
@@ -320,6 +325,50 @@ preinstall_checks() {
   done
 }
 
+# A registry with a private CA or credentials is unreachable for the node's
+# containerd unless the certificate is mounted and the registry patched in
+# before the node starts; containerd reads neither at runtime.
+registry_config_append() {
+  if [[ -z "$KIND_REGISTRY_HOST" ]]; then
+    return 0
+  fi
+
+  if [[ -z "$KIND_REGISTRY_CA_FILE" || ! -r "$KIND_REGISTRY_CA_FILE" ]]; then
+    echo "KIND_REGISTRY_HOST is set, so KIND_REGISTRY_CA_FILE must point at a readable CA certificate." >&2
+    exit 1
+  fi
+
+  echo "Trusting registry ${KIND_REGISTRY_HOST} on the node (CA ${KIND_REGISTRY_CA_FILE})..."
+
+  cat <<EOF >${KIND_CONFIG_DIR}/hosts.toml
+server = "https://${KIND_REGISTRY_HOST}"
+
+[host."https://${KIND_REGISTRY_HOST}"]
+ca = "${KIND_REGISTRY_CA_PATH}"
+EOF
+
+  cat <<EOF >>${KIND_CONFIG_DIR}/kind.cfg
+  extraMounts:
+  - hostPath: ${KIND_REGISTRY_CA_FILE}
+    containerPath: ${KIND_REGISTRY_CA_PATH}
+    readOnly: true
+  - hostPath: ${KIND_CONFIG_DIR}/hosts.toml
+    containerPath: /etc/containerd/certs.d/${KIND_REGISTRY_HOST}/hosts.toml
+    readOnly: true
+containerdConfigPatches:
+- |-
+  [plugins."io.containerd.grpc.v1.cri".registry]
+    config_path = "/etc/containerd/certs.d"
+EOF
+
+  if [[ -n "$KIND_REGISTRY_AUTH" ]]; then
+    cat <<EOF >>${KIND_CONFIG_DIR}/kind.cfg
+  [plugins."io.containerd.grpc.v1.cri".registry.configs."${KIND_REGISTRY_HOST}".auth]
+    auth = "${KIND_REGISTRY_AUTH}"
+EOF
+  fi
+}
+
 configs_create() {
   mkdir -p ${KIND_CONFIG_DIR}
 
@@ -335,6 +384,8 @@ nodes:
 - role: control-plane
 EOF
 
+  registry_config_append
+
   echo "Creating Deckhouse Kubernetes Platform installation config file (${KIND_CONFIG_DIR}/config.yml)..."
   cat <<EOF >${KIND_CONFIG_DIR}/config.yml
 apiVersion: deckhouse.io/v1alpha1
@@ -346,7 +397,7 @@ spec:
   enabled: true
   settings:
     bundle: Minimal
-    releaseChannel: EarlyAccess
+    releaseChannel: ${D8_RELEASE_CHANNEL_NAME}
     logLevel: Info
     allowExperimentalModules: true
 ---

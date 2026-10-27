@@ -20,13 +20,10 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
 func MapInternalResources(controllerName, targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName string) handler.MapFunc {
@@ -44,8 +41,8 @@ func MapInternalResources(controllerName, targetNamespace, labelManagedBy, label
 
 		sourceName := labels[labelSourceName]
 		if sourceName == "" {
-			logger.Info("resource missing source label, skipping",
-				"controller", controllerName, "name", obj.GetName(), "namespace", obj.GetNamespace())
+			logger.V(1).Info("resource missing source label, skipping",
+				"controller", controllerName, "watchedObject", client.ObjectKeyFromObject(obj))
 
 			return nil
 		}
@@ -61,34 +58,38 @@ func MapInternalResources(controllerName, targetNamespace, labelManagedBy, label
 	}
 }
 
-const AddonRepositoryIndex = ".spec.chart.helmClusterAddonRepository"
-
-func SetupAddonRepositoryIndex(mgr ctrl.Manager) error {
-	return mgr.GetFieldIndexer().IndexField(context.Background(), &helmv1alpha1.HelmClusterAddon{}, AddonRepositoryIndex,
-		func(obj client.Object) []string {
-			addon := obj.(*helmv1alpha1.HelmClusterAddon)
-			if addon.Spec.Chart.HelmClusterAddonRepository == "" {
-				return nil
-			}
-			return []string{addon.Spec.Chart.HelmClusterAddonRepository}
-		},
-	)
-}
-
-func MapRepositoryToAddons(c client.Client) handler.MapFunc {
+// MapNamespacedInternalResources is MapInternalResources for a namespaced source kind: the
+// request it enqueues carries the namespace recorded in labelSourceNamespace next to the name.
+func MapNamespacedInternalResources(
+	controllerName, targetNamespace, labelManagedBy, labelManagedByValue, labelSourceName, labelSourceNamespace string,
+) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		addonList := &helmv1alpha1.HelmClusterAddonList{}
-		if err := c.List(ctx, addonList, client.MatchingFields{AddonRepositoryIndex: obj.GetName()}); err != nil {
-			log.FromContext(ctx).Error(err, "Failed to list HelmClusterAddons for repository mapping")
+		logger := log.FromContext(ctx)
+
+		if obj.GetNamespace() != targetNamespace {
 			return nil
 		}
 
-		requests := make([]reconcile.Request, 0, len(addonList.Items))
-		for _, addon := range addonList.Items {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: addon.Name},
-			})
+		labels := obj.GetLabels()
+		if labels[labelManagedBy] != labelManagedByValue {
+			return nil
 		}
-		return requests
+
+		sourceName, sourceNamespace := labels[labelSourceName], labels[labelSourceNamespace]
+		if sourceName == "" || sourceNamespace == "" {
+			logger.V(1).Info("resource missing source labels, skipping",
+				"controller", controllerName, "watchedObject", client.ObjectKeyFromObject(obj))
+
+			return nil
+		}
+
+		return []reconcile.Request{
+			{
+				NamespacedName: types.NamespacedName{
+					Name:      sourceName,
+					Namespace: sourceNamespace,
+				},
+			},
+		}
 	}
 }

@@ -1,0 +1,23 @@
+{{- if eq (include "operator-helm.enable_rbacv2" .) "true" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: d8:namespace-capability:{{ .Chart.Name }}:manage_applications
+  annotations:
+    en.meta.deckhouse.io/title: "Module {{ .Chart.Name }}: manage applications"
+    ru.meta.deckhouse.io/title: "Модуль {{ .Chart.Name }}: управление приложениями"
+    en.meta.deckhouse.io/description: "Manage {{ .Chart.Name }} applications in a namespace."
+    ru.meta.deckhouse.io/description: "Управление приложениями модуля {{ .Chart.Name }} в пространстве имён."
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "namespace-capability.%s.manage_applications" .Chart.Name) "rbac.deckhouse.io/scope" "namespace" "rbac.deckhouse.io/aggregate-to-namespace-as" "admin")) | nindent 2 }}
+rules:
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmapplications
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - patch
+  - update
+{{- end }}

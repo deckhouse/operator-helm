@@ -52,7 +52,7 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: repoName,
 				},
-				Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+				Spec: apiv1alpha1.RepositorySpec{
 					URL:                repoURL,
 					InsecureSkipVerify: false,
 				},
@@ -79,6 +79,29 @@ func DefineLifecycleTests(repoType, repoURL string) {
 				created,
 			)
 
+			By("Healthy repository must carry no abnormal-true conditions")
+			util.UntilConditionAbsent(
+				apiv1alpha1.ConditionTypeReconciling,
+				framework.LongTimeout,
+				created,
+			)
+			util.UntilConditionAbsent(
+				apiv1alpha1.ConditionTypeStalled,
+				framework.LongTimeout,
+				created,
+			)
+
+			By("Repository must report its synchronization schedule")
+			Eventually(func(g Gomega) {
+				current, err := f.OperatorClient().HelmV1alpha1().
+					HelmClusterAddonRepositories().
+					Get(context.Background(), repoName, metav1.GetOptions{})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(current.Status.LastSuccessfulSyncTime).NotTo(BeNil())
+				g.Expect(current.Status.NextSyncTime).NotTo(BeNil())
+				g.Expect(current.Status.ConsecutiveFetchFailures).To(BeZero())
+			}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
 			By("Should have existing HelmClusterAddonChart")
 			labelSelector := fmt.Sprintf("repository=%s", repoName)
 			charts, err := f.OperatorClient().
@@ -91,7 +114,13 @@ func DefineLifecycleTests(repoType, repoURL string) {
 
 			By("HelmClusterAddonChart should have versions")
 			for _, chart := range charts.Items {
-				Expect(chart.Status.Versions).NotTo(BeEmpty())
+				usable := 0
+				for _, version := range chart.Status.Versions {
+					if version.UnavailableReason == "" {
+						usable++
+					}
+				}
+				Expect(usable).To(BeNumerically(">", 0), "chart must expose at least one usable version")
 			}
 		})
 	})
@@ -122,7 +151,7 @@ var _ = Describe("Create HelmClusterAddonRepository with invalid url", Ordered, 
 			ObjectMeta: metav1.ObjectMeta{
 				Name: repoName,
 			},
-			Spec: apiv1alpha1.HelmClusterAddonRepositorySpec{
+			Spec: apiv1alpha1.RepositorySpec{
 				URL: "invalid-url",
 			},
 		}
@@ -132,5 +161,105 @@ var _ = Describe("Create HelmClusterAddonRepository with invalid url", Ordered, 
 			Create(context.Background(), repo, metav1.CreateOptions{})
 		Expect(err).To(HaveOccurred())
 		Expect(err).To(MatchError(ContainSubstring("is invalid: spec.url")))
+	})
+})
+
+var _ = Describe("HelmClusterAddonRepository with an unreachable source", Ordered, func() {
+	f := framework.NewFramework("repository-lifecycle")
+	repoName := "repo-source-not-found"
+
+	BeforeAll(func() {
+		DeferCleanup(f.After)
+		f.Before()
+	})
+
+	// No AssertNoErrorsFor here on purpose: this scenario breaks the repository
+	// deliberately, so error-level log lines from the controller are expected.
+	// Dropping the assertion is not enough on its own — errors left unasserted are
+	// handed to the next scenario's assertion, which would fail for them. The
+	// repository name is excluded in default_config.yaml; keep the two in step if
+	// it ever changes.
+
+	It("should stall on a missing source and recover after the url is fixed", func() {
+		repo := &apiv1alpha1.HelmClusterAddonRepository{
+			ObjectMeta: metav1.ObjectMeta{Name: repoName},
+			Spec: apiv1alpha1.RepositorySpec{
+				URL: "https://stefanprodan.github.io/podinfo-does-not-exist",
+			},
+		}
+
+		created, err := f.OperatorClient().HelmV1alpha1().
+			HelmClusterAddonRepositories().
+			Create(context.Background(), repo, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		f.DeferDelete(created)
+
+		By("Waiting for the repository to become Stalled")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypeStalled,
+			framework.LongTimeout,
+			created,
+		)
+
+		By("Stalled must name the terminal cause")
+		util.UntilConditionReason(
+			apiv1alpha1.ConditionTypeStalled,
+			apiv1alpha1.ReasonSourceNotFound,
+			framework.LongTimeout,
+			created,
+		)
+
+		By("Ready must be False while Stalled")
+		util.UntilConditionStatus(
+			apiv1alpha1.ConditionTypeReady,
+			string(metav1.ConditionFalse),
+			framework.LongTimeout,
+			created,
+		)
+
+		By("Reconciling must be absent while Stalled")
+		util.UntilConditionAbsent(
+			apiv1alpha1.ConditionTypeReconciling,
+			framework.LongTimeout,
+			created,
+		)
+
+		By("Fixing the url")
+		// The waits below must use the object as it exists AFTER the update:
+		// correcting the url bumps metadata.generation, and UntilConditionStatus
+		// compares the condition's observedGeneration against the generation of
+		// the object handed to it. Reusing `created`, frozen at generation 1 by
+		// the Create call, would compare 2 against 1 on every poll and fail the
+		// spec deterministically even though recovery worked.
+		var recovered *apiv1alpha1.HelmClusterAddonRepository
+
+		Eventually(func(g Gomega) {
+			current, err := f.OperatorClient().HelmV1alpha1().
+				HelmClusterAddonRepositories().
+				Get(context.Background(), repoName, metav1.GetOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+
+			current.Spec.URL = "https://stefanprodan.github.io/podinfo"
+
+			updated, err := f.OperatorClient().HelmV1alpha1().
+				HelmClusterAddonRepositories().
+				Update(context.Background(), current, metav1.UpdateOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+
+			recovered = updated
+		}).WithTimeout(framework.LongTimeout).WithPolling(framework.PollingInterval).Should(Succeed())
+
+		By("Waiting for the repository to recover")
+		util.UntilConditionTrue(
+			apiv1alpha1.ConditionTypeReady,
+			framework.LongTimeout,
+			recovered,
+		)
+		util.UntilConditionAbsent(
+			apiv1alpha1.ConditionTypeStalled,
+			framework.LongTimeout,
+			recovered,
+		)
 	})
 })

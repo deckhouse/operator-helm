@@ -26,6 +26,22 @@ spec:
       jsonPath: .status.conditions[?(@.type=='Synced')].status
       name: Synced
       type: string
+    - description: Time of the last successful catalog synchronization
+      jsonPath: .status.lastSuccessfulSyncTime
+      name: Last Sync
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - description: Scheduled time of the next synchronization attempt
+      jsonPath: .status.nextSyncTime
+      name: Next Sync
+      priority: 1
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].message
+      name: Message
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -72,7 +88,9 @@ spec:
                   verification.
                 type: string
               insecureSkipVerify:
-                description: InsecureSkipVerify disable TLS certificate verification.
+                description: |-
+                  InsecureSkipVerify disable TLS certificate verification. It applies to OCI registry only;
+                  a self-signed HTTPS Helm repository needs caCertificate.
                 type: boolean
               url:
                 description: URL of the Helm repository. Supports http(s):// and oci://
@@ -87,6 +105,12 @@ spec:
             type: object
           status:
             properties:
+              chartCount:
+                description: |-
+                  ChartCount is the number of charts the last successful read found in the repository, minus the ones
+                  whose name cannot be recorded on a catalog object. It is absent until the first successful read.
+                format: int32
+                type: integer
               conditions:
                 description: Conditions represent the latest available observations
                   of the repository state.
@@ -145,15 +169,53 @@ spec:
                   - type
                   type: object
                 type: array
+              consecutiveFetchFailures:
+                description: |-
+                  ConsecutiveFetchFailures counts consecutive failures to read from the repository.
+                  It drives the retry backoff and resets on the first success.
+                format: int32
+                type: integer
+              lastForceReconcileTime:
+                description: |-
+                  LastForceReconcileTime is the time the most recent force reconcile request was processed.
+                  It records that the request was acted on, not that it succeeded.
+                format: date-time
+                type: string
+              lastSuccessfulSyncTime:
+                description: |-
+                  LastSuccessfulSyncTime is the last time the chart catalog was fully brought up to date,
+                  including creating and pruning chart resources.
+                format: date-time
+                type: string
+              lastSyncedGeneration:
+                description: |-
+                  LastSyncedGeneration is the generation of the spec whose catalog is the one published now.
+                  It is written by every pass that published a catalog and keeps its value through later failures.
+                format: int64
+                type: integer
+              nextSyncTime:
+                description: NextSyncTime is the scheduled time of the next synchronization
+                  attempt.
+                format: date-time
+                type: string
               observedGeneration:
                 description: Generation represents resource generation that was last
                   processed by the controller.
                 format: int64
                 type: integer
+              unexaminedVersions:
+                description: |-
+                  UnexaminedVersions is how many chart versions the repository offers that the catalog published now
+                  says nothing about. Zero means the catalog lists every version the repository offers.
+                format: int32
+                type: integer
             type: object
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: repository name must be at most 63 characters long
+          rule: self.metadata.name.size() <= 63
     served: true
     storage: true
     subresources:

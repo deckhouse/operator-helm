@@ -1,0 +1,43 @@
+{{- $sourceControllerTag := "v1.9.5" }}
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+final: false
+fromImage: builder/distroless
+git:
+  - url: {{ .SOURCE_REPO }}/fluxcd/source-controller.git
+    tag: {{ $sourceControllerTag }}
+    add: /
+    to: /src/source-controller
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+final: false
+fromImage: builder/golang
+import:
+- image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+  add: /src
+  to: /src
+  before: install
+packages:
+  - type: go-mod
+    workdir: /src/source-controller
+    env:
+      GOPROXY: "{{ .GOPROXY }}"
+shell:
+  install:
+    - cd /src/source-controller
+    - |
+      export GOOS=linux
+      export GOARCH=amd64
+      export CGO_ENABLED=0
+      {{- include "image-build.build" (set $ "BuildCommand" `go build -mod=readonly -trimpath -a -o source-controller main.go`) | indent 6 }}
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+fromImage: base/distroless
+import:
+- image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+  add: /src/source-controller/source-controller
+  to: /usr/bin/source-controller
+  before: install
+imageSpec:
+  config:
+    entrypoint: ["/usr/bin/source-controller"]

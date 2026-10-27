@@ -21,34 +21,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
+
+	"github.com/google/go-containerregistry/pkg/name"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
 )
 
-type InternalRepositoryType string
-
-const (
-	InternalHelmRepository InternalRepositoryType = "helm"
-	InternalOCIRepository  InternalRepositoryType = "oci"
-)
-
-func GetRepositoryType(s string) (InternalRepositoryType, error) {
-	parsedURL, err := url.Parse(s)
-	if err != nil {
-		return "", fmt.Errorf("cannot parse url: %w", err)
-	}
-
-	switch parsedURL.Scheme {
-	case "http", "https":
-		return InternalHelmRepository, nil
-	case "oci":
-		return InternalOCIRepository, nil
-	default:
-		return "", fmt.Errorf("unsupported repository schema in use: %s", parsedURL.Scheme)
-	}
-}
-
-// GetRegistryHost extracts the registry host (with port, if any) from a repository
-// URL. Registry credentials in the docker config format are keyed by host, the
-// chart path inside the registry is not part of the key.
 func GetRegistryHost(s string) (string, error) {
 	parsedURL, err := url.Parse(s)
 	if err != nil {
@@ -62,8 +41,6 @@ func GetRegistryHost(s string) (string, error) {
 	return parsedURL.Host, nil
 }
 
-// dockerConfig is the subset of the docker config format carried by
-// kubernetes.io/dockerconfigjson secrets.
 type dockerConfig struct {
 	Auths map[string]dockerConfigEntry `json:"auths"`
 }
@@ -74,10 +51,8 @@ type dockerConfigEntry struct {
 	Auth     string `json:"auth"`
 }
 
-// BuildDockerConfigJSON renders the credentials for the registry behind
-// repositoryURL in the docker config format. OCIRepository resolves registry
-// credentials from a kubernetes.io/dockerconfigjson secret, so basic auth cannot be
-// passed to it as plain username/password keys.
+// BuildDockerConfigJSON renders the credentials for the registry behind repositoryURL in the
+// docker config format, the only shape OCIRepository resolves registry credentials from.
 func BuildDockerConfigJSON(repositoryURL, username, password string) (string, error) {
 	host, err := GetRegistryHost(repositoryURL)
 	if err != nil {
@@ -103,22 +78,16 @@ func BuildDockerConfigJSON(repositoryURL, username, password string) (string, er
 	return string(encoded), nil
 }
 
-// dockerHubAuthKey is the legacy config key credentials for Docker Hub are looked
-// up under.
-const dockerHubAuthKey = "https://index.docker.io/v1/"
+const dockerHubAuthKey = "https://index.docker.io/v1/" // Docker Hub's legacy config key.
 
-// dockerHubHosts lists the spellings of the Docker Hub registry.
 var dockerHubHosts = map[string]struct{}{
 	"docker.io":            {},
 	"index.docker.io":      {},
 	"registry-1.docker.io": {},
 }
 
-// registryAuthKeys returns the docker config keys the credentials for host have to
-// be stored under. Normally that is the host itself, but Docker Hub is resolved
-// under its legacy key and under the canonical host regardless of how the
-// repository URL spells it, so credentials are stored under every alias.
 func registryAuthKeys(host string) []string {
+	// Docker Hub resolves under its legacy key and its canonical host, however the url spells it.
 	if _, ok := dockerHubHosts[host]; !ok {
 		return []string{host}
 	}
@@ -129,4 +98,20 @@ func registryAuthKeys(host string) []string {
 	}
 
 	return keys
+}
+
+// SplitOCIRef splits an oci:// reference taken from a repository index into the repository
+// address and the tag, and rejects a reference that is not addressable.
+func SplitOCIRef(ref, fallbackTag string) (string, string, error) {
+	url, tag, err := helmv1alpha1.SplitOCIRef(ref, fallbackTag)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Parsed only to reject the unaddressable; the returned address keeps the index's spelling.
+	if _, err := name.NewTag(strings.TrimPrefix(url, "oci://") + ":" + tag); err != nil {
+		return "", "", fmt.Errorf("oci reference %q is not a valid tagged reference: %w", ref, err)
+	}
+
+	return url, tag, nil
 }

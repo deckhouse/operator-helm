@@ -34,8 +34,13 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:metadata:labels={heritage=deckhouse,module=operator-helm}
 // +kubebuilder:resource:singular=helmclusteraddonrepository,scope=Cluster
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63",message="repository name must be at most 63 characters long"
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="The readiness status of the repository"
 // +kubebuilder:printcolumn:name="Synced",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status",description="Repository synchronization status"
+// +kubebuilder:printcolumn:name="Last Sync",type="date",JSONPath=".status.lastSuccessfulSyncTime",description="Time of the last successful catalog synchronization"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Next Sync",type="string",JSONPath=".status.nextSyncTime",priority=1,description="Scheduled time of the next synchronization attempt"
+// +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].message",priority=1
 // +genclient
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -43,8 +48,8 @@ type HelmClusterAddonRepository struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   HelmClusterAddonRepositorySpec   `json:"spec"`
-	Status HelmClusterAddonRepositoryStatus `json:"status,omitempty"`
+	Spec   RepositorySpec   `json:"spec"`
+	Status RepositoryStatus `json:"status,omitempty"`
 }
 
 func (r *HelmClusterAddonRepository) GetConditions() *[]metav1.Condition {
@@ -59,12 +64,8 @@ func (r *HelmClusterAddonRepository) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
 }
 
-func (r *HelmClusterAddonRepository) GetStatus() any {
-	return r.Status
-}
-
 func (r *HelmClusterAddonRepository) GetConditionTypesForUpdate() []string {
-	return []string{"Ready"}
+	return []string{ConditionTypeReady}
 }
 
 func (r *HelmClusterAddonRepository) ForceReconcileRequired() bool {
@@ -76,42 +77,6 @@ func (r *HelmClusterAddonRepository) ForceReconcileRequired() bool {
 	_, found := annotations[AnnotationForceReconcile]
 
 	return found
-}
-
-type HelmClusterAddonRepositorySpec struct {
-	// URL of the Helm repository. Supports http(s):// and oci:// protocols.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:XValidation:rule="self.matches('^(https?|oci)://.+$')",message="URL must have a valid protocol (http, https, oci) and a non-empty path"
-	URL string `json:"url"`
-
-	// Auth contains authentication credentials for the repository.
-	// +optional
-	Auth *HelmClusterAddonRepositoryAuth `json:"auth,omitempty"`
-
-	// CACertificate is the PEM encoded CA certificate for TLS verification.
-	// +optional
-	CACertificate string `json:"caCertificate,omitempty"`
-
-	// InsecureSkipVerify disable TLS certificate verification.
-	// +optional
-	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
-}
-
-type HelmClusterAddonRepositoryAuth struct {
-	// Repository authentication username.
-	// +kubebuilder:validation:MinLength=1
-	Username string `json:"username"`
-	// Repository authentication password.
-	// +kubebuilder:validation:MinLength=1
-	Password string `json:"password"`
-}
-
-type HelmClusterAddonRepositoryStatus struct {
-	// Conditions represent the latest available observations of the repository state.
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generation represents resource generation that was last processed by the controller.
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // HelmClusterAddonRepositoryList contains a list of HelmClusterAddonRepositories.

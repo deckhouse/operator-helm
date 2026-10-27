@@ -71,6 +71,13 @@ func RewriteSpecKindRefs(rules *RewriteRules, obj []byte, action Action) ([]byte
 		return obj, nil
 	}
 
+	// Another group may declare the same kind: its references are not ours to rewrite.
+	if apiVersion := gjson.GetBytes(obj, "apiVersion").String(); apiVersion != "" {
+		if _, resRule := rules.KindRules(rules.RestoreApiVersion(apiVersion), origKind); resRule == nil {
+			return obj, nil
+		}
+	}
+
 	var err error
 	for _, path := range paths {
 		obj, err = TransformObject(obj, path, func(refObj []byte) ([]byte, error) {

@@ -5,7 +5,7 @@ cpu: 50m
 memory: 64Mi
 {{- end }}
 
-{{- if (.Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
+{{- if (.Values.global.enabledModules | has "vertical-pod-autoscaler") }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -71,6 +71,7 @@ spec:
         app: operator-helm-controller
       annotations:
         kubectl.kubernetes.io/default-container: operator-helm-controller
+        checksum/cert: {{ printf "%s%s" .Values.operatorHelm.internal.controller.cert.ca .Values.operatorHelm.internal.controller.cert.crt | sha256sum }}
     spec:
       containers:
         {{- include "kube_api_rewriter.sidecar_container" . | nindent 8 }}
@@ -80,7 +81,7 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - --leader-elect
-            - --metrics-bind-address=:8080
+            - --metrics-bind-address=127.0.0.1:8080
             - --health-probe-bind-address=:9440
           volumeMounts:
             - mountPath: /tmp/k8s-webhook-server/serving-certs
@@ -90,16 +91,13 @@ spec:
             - containerPort: 9443
               name: controller
               protocol: TCP
-            - containerPort: 8080
-              name: metrics
-              protocol: TCP
             - containerPort: 9440
               name: healthz
               protocol: TCP
           resources:
             requests:
               {{- include "helm_lib_module_ephemeral_storage_only_logs" . | nindent 14 }}
-              {{- if not ( .Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
+              {{- if not ( .Values.global.enabledModules | has "vertical-pod-autoscaler") }}
               {{- include "operator_helm_controller_resources" . | nindent 14 }}
               {{- end }}
           env:

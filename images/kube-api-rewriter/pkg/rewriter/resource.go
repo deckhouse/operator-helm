@@ -23,15 +23,20 @@ import (
 
 func RewriteCustomResourceOrList(rules *RewriteRules, obj []byte, action Action) ([]byte, error) {
 	kind := gjson.GetBytes(obj, "kind").String()
+	apiVersion := gjson.GetBytes(obj, "apiVersion").String()
 	if action == Restore {
+		if !rules.IsRenamedGroup(apiVersion) {
+			return obj, nil
+		}
 		kind = rules.RestoreKind(kind)
+		apiVersion = rules.RestoreApiVersion(apiVersion)
 	}
-	origGroupName, origResName, isList := rules.ResourceByKind(kind)
-	if origGroupName == "" && origResName == "" {
-		// Return as-is if kind is not in rules.
+	// Match by group and kind: another group may declare the same kind.
+	_, resourceRule := rules.KindRules(apiVersion, kind)
+	if resourceRule == nil {
 		return obj, nil
 	}
-	if isList {
+	if kind == resourceRule.ListKind {
 		if action == Restore {
 			return RestoreResourcesList(rules, obj)
 		}

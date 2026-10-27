@@ -40,7 +40,7 @@ type HelmClusterAddonChart struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Status HelmClusterAddonChartStatus `json:"status,omitempty"`
+	Status ChartCatalogStatus `json:"status,omitempty"`
 }
 
 func (r *HelmClusterAddonChart) GetConditions() *[]metav1.Condition {
@@ -55,31 +55,8 @@ func (r *HelmClusterAddonChart) GetObservedGeneration() int64 {
 	return r.Status.ObservedGeneration
 }
 
-func (r *HelmClusterAddonChart) GetStatus() any {
-	return r.Status
-}
-
 func (r *HelmClusterAddonChart) GetConditionTypesForUpdate() []string {
-	return []string{"Ready"}
-}
-
-type HelmClusterAddonChartStatus struct {
-	// IconURL is the URL to the Helm chart icon (applicable to Helm Chart repository charts only).
-	IconURL string `json:"iconURL,omitempty"`
-	// Conditions represent the latest available observations of the addon chart state.
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	// Generation represents resource generation that was last processed by the controller.
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-	// Available helm chart versions
-	// +optional
-	Versions []HelmClusterAddonChartVersion `json:"versions"`
-}
-
-type HelmClusterAddonChartVersion struct {
-	// Helm chart version
-	// +kubebuilder:validation:MinLength=1
-	Version string `json:"version"`
+	return []string{ConditionTypeReady}
 }
 
 // HelmClusterAddonChartList contains a list of HelmClusterAddonCharts.

@@ -1,0 +1,6 @@
+breaking: []
+features:
+  - "Added Helm repositories support where chart urls have OCI schemas"
+fixes: []
+security: []
+chore: []

@@ -142,6 +142,11 @@ func (tr *TargetRequest) RequestURI() string {
 
 // ShouldRewriteRequest returns true if incoming payload should
 // be rewritten.
+//
+// Every API request is rewritten, not only those to resources with rules:
+// any object may carry renamed labels, annotations, finalizers or owner
+// references in its metadata, and Helm applies charts with arbitrary kinds.
+// Only the root and unknown paths are passed as-is.
 func (tr *TargetRequest) ShouldRewriteRequest() bool {
 	// Consider known webhook should be rewritten. Unknown paths will be passed as-is.
 	if tr.webhookRule != nil {
@@ -149,20 +154,7 @@ func (tr *TargetRequest) ShouldRewriteRequest() bool {
 	}
 
 	if tr.originEndpoint != nil {
-		if tr.originEndpoint.IsRoot || tr.originEndpoint.IsUnknown {
-			return false
-		}
-
-		if tr.targetEndpoint == nil {
-			// Pass resources without rules as is, except some special types.
-
-			// Rewrite request body when creating CRD.
-			if tr.originEndpoint.ResourceType == "customresourcedefinitions" && tr.originEndpoint.Name == "" {
-				return true
-			}
-
-			return shouldRewriteResource(tr.originEndpoint.ResourceType)
-		}
+		return !tr.originEndpoint.IsRoot && !tr.originEndpoint.IsUnknown
 	}
 
 	// Payload should be inspected to decide if rewrite is required.
@@ -170,7 +162,8 @@ func (tr *TargetRequest) ShouldRewriteRequest() bool {
 }
 
 // ShouldRewriteResponse return true if response rewrite is needed.
-// Response may be passed as is if false.
+// Response may be passed as is if false. It mirrors ShouldRewriteRequest,
+// so a client reads back what it wrote.
 func (tr *TargetRequest) ShouldRewriteResponse() bool {
 	// If there is webhook rule, response should be rewritten.
 	if tr.webhookRule != nil {
@@ -181,33 +174,7 @@ func (tr *TargetRequest) ShouldRewriteResponse() bool {
 		return false
 	}
 
-	if tr.originEndpoint.IsRoot || tr.originEndpoint.IsUnknown {
-		return false
-	}
-
-	if tr.originEndpoint.IsCRD {
-		// Rewrite CRD List.
-		if tr.originEndpoint.Name == "" {
-			return true
-		}
-		// Rewrite CRD if group and resource was rewritten.
-		if tr.originEndpoint.Name != "" && tr.targetEndpoint != nil {
-			return true
-		}
-		return false
-	}
-
-	// Rewrite if path was rewritten for known resource.
-	if tr.targetEndpoint != nil {
-		return true
-	}
-
-	// Rewrite response from /apis discovery.
-	if tr.originEndpoint.Group == "" {
-		return true
-	}
-
-	return shouldRewriteResource(tr.originEndpoint.ResourceType)
+	return !tr.originEndpoint.IsRoot && !tr.originEndpoint.IsUnknown
 }
 
 func (tr *TargetRequest) ResourceForLog() string {
@@ -270,37 +237,4 @@ func (tr *TargetRequest) ResourceForLog() string {
 	}
 
 	return "UNKNOWN"
-}
-
-func shouldRewriteResource(resourceType string) bool {
-	switch resourceType {
-	case "nodes",
-		"pods",
-		"configmaps",
-		"secrets",
-		"services",
-		"serviceaccounts",
-		"mutatingwebhookconfigurations",
-		"validatingwebhookconfigurations",
-		"clusterroles",
-		"roles",
-		"rolebindings",
-		"clusterrolebindings",
-		"deployments",
-		"statefulsets",
-		"daemonsets",
-		"jobs",
-		"persistentvolumeclaims",
-		"prometheusrules",
-		"servicemonitors",
-		"poddisruptionbudgets",
-		"controllerrevisions",
-		"apiservices",
-		"validatingadmissionpolicybindings",
-		"validatingadmissionpolicies",
-		"events":
-		return true
-	}
-
-	return false
 }

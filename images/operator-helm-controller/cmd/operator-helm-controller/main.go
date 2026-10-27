@@ -20,24 +20,37 @@ import (
 	"flag"
 	"os"
 
-	helmv2 "github.com/werf/3p-helm-controller/api/v2"
-	sourcev1 "github.com/werf/nelm-source-controller/api/v1"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/controller/helmapplication"
+	"github.com/deckhouse/operator-helm/internal/controller/helmapplicationrepository"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddon"
 	"github.com/deckhouse/operator-helm/internal/controller/helmclusteraddonrepository"
-	"github.com/deckhouse/operator-helm/internal/utils"
+	"github.com/deckhouse/operator-helm/internal/controller/helmclusterapplicationrepository"
+	"github.com/deckhouse/operator-helm/internal/index"
+	helmapplicationwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmapplication"
 	helmclusteraddonwebhook "github.com/deckhouse/operator-helm/internal/webhook/helmclusteraddon"
 )
 
 var scheme = runtime.NewScheme()
+
+var managedByOperatorHelm = labels.SelectorFromSet(labels.Set{
+	helmv1alpha1.LabelManagedBy: helmv1alpha1.LabelManagedByValue,
+})
 
 func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
@@ -53,7 +66,8 @@ func main() {
 		enableLeaderElection bool
 	)
 
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
+	// Metrics stay on loopback: the kube-rbac-proxy sidecar is the only intended reader.
+	flag.StringVar(&metricsAddr, "metrics-bind-address", "127.0.0.1:8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":9440", "The address the health probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager.")
 	opts := zap.Options{Development: false}
@@ -71,14 +85,43 @@ func main() {
 		HealthProbeBindAddress: healthProbeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "operator-helm-controller.helm.deckhouse.io",
+		Client: client.Options{
+			// Reads go to the API server: the RoleBinding informer is label-scoped and nothing watches
+			// ServiceAccounts or Roles.
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{&corev1.ServiceAccount{}, &rbacv1.Role{}, &rbacv1.RoleBinding{}},
+			},
+		},
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				// Every Secret the controllers read or write lives in the module namespace.
+				&corev1.Secret{}: {
+					Namespaces: map[string]cache.Config{
+						helmv1alpha1.TargetNamespace: {},
+					},
+				},
+				// A release identity lives in whichever namespace the application does, so only the label scopes this.
+				&rbacv1.RoleBinding{}: {Label: managedByOperatorHelm},
+			},
+		},
 	})
 	if err != nil {
 		logger.Error(err, "unable to create manager")
 		os.Exit(1)
 	}
 
-	if err := utils.SetupAddonRepositoryIndex(mgr); err != nil {
-		logger.Error(err, "unable to setup addon repository index")
+	if err := index.SetupAddonRepository(mgr); err != nil {
+		logger.Error(err, "unable to setup indexes", "index", index.AddonRepository)
+		os.Exit(1)
+	}
+
+	if err := index.SetupApplicationRepository(mgr); err != nil {
+		logger.Error(err, "unable to setup indexes", "index", index.ApplicationRepository)
+		os.Exit(1)
+	}
+
+	if err := index.SetupApplicationChart(mgr); err != nil {
+		logger.Error(err, "unable to setup indexes", "index", index.ApplicationChart)
 		os.Exit(1)
 	}
 
@@ -87,18 +130,38 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := helmapplicationrepository.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmApplicationRepository controller")
+		os.Exit(1)
+	}
+
+	if err := helmclusterapplicationrepository.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmClusterApplicationRepository controller")
+		os.Exit(1)
+	}
+
+	if err := helmapplication.SetupWithManager(mgr); err != nil {
+		logger.Error(err, "unable to setup HelmApplication controller")
+		os.Exit(1)
+	}
+
 	if err := helmclusteraddon.SetupWithManager(mgr); err != nil {
 		logger.Error(err, "unable to setup HelmClusterAddon controller")
 		os.Exit(1)
 	}
 
-	if err = helmclusteraddonwebhook.SetupIndexes(mgr); err != nil {
-		logger.Error(err, "unable to setup indexes", "webhook", "HelmClusterAddon")
+	if err = index.SetupAddonChart(mgr); err != nil {
+		logger.Error(err, "unable to setup indexes", "index", index.AddonChart)
 		os.Exit(1)
 	}
 
 	if err = helmclusteraddonwebhook.SetupWebhookWithManager(mgr); err != nil {
 		logger.Error(err, "unable to create webhook", "webhook", "HelmClusterAddon")
+		os.Exit(1)
+	}
+
+	if err = helmapplicationwebhook.SetupWebhookWithManager(mgr); err != nil {
+		logger.Error(err, "unable to create webhook", "webhook", "HelmApplication")
 		os.Exit(1)
 	}
 

@@ -1,0 +1,6 @@
+breaking:
+  - "По умолчанию не включать модуль при использовании Deckhause Platform minimal bundle. Если вы используете minimal bundle, вам необходимо явно включить модуль operator-helm в конфигурации платформы"
+features: []
+fixes: []
+security: []
+chore: []

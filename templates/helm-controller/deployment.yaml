@@ -5,7 +5,7 @@ cpu: 100m
 memory: 64Mi
 {{- end }}
 
-{{- if (.Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
+{{- if (.Values.global.enabledModules | has "vertical-pod-autoscaler") }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -82,20 +82,20 @@ spec:
             - --watch-all-namespaces=false
             - --log-encoding=json
             - --enable-leader-election
+            # Metrics are reachable only through the kube-rbac-proxy sidecar, which
+            # scrapes them over the loopback interface of this pod.
+            - --metrics-addr=127.0.0.1:8080
           volumeMounts:
             - mountPath: /tmp
               name: temp
             {{- include "kube_api_rewriter.kubeconfig_volume_mount" . | nindent 12 }}
           ports:
-            - containerPort: 8080
-              name: metrics
-              protocol: TCP
             - containerPort: 9440
               name: healthz
           resources:
             requests:
               {{- include "helm_lib_module_ephemeral_storage_only_logs" . | nindent 14 }}
-              {{- if not ( .Values.global.enabledModules | has "vertical-pod-autoscaler-crd") }}
+              {{- if not ( .Values.global.enabledModules | has "vertical-pod-autoscaler") }}
               {{- include "helm_controller_resources" . | nindent 14 }}
               {{- end }}
           env:

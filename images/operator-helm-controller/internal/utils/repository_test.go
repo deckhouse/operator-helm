@@ -106,3 +106,90 @@ func TestBuildDockerConfigJSONDockerHub(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitOCIRef(t *testing.T) {
+	tests := []struct {
+		name     string
+		ref      string
+		fallback string
+		wantURL  string
+		wantTag  string
+		wantErr  bool
+	}{
+		{
+			name:     "explicit tag",
+			ref:      "oci://registry-1.docker.io/bitnamicharts/airflow:25.0.2",
+			fallback: "25.0.2",
+			wantURL:  "oci://registry-1.docker.io/bitnamicharts/airflow",
+			wantTag:  "25.0.2",
+		},
+		{
+			name:     "no tag falls back to the index entry version",
+			ref:      "oci://registry-1.docker.io/bitnamicharts/airflow",
+			fallback: "25.0.2",
+			wantURL:  "oci://registry-1.docker.io/bitnamicharts/airflow",
+			wantTag:  "25.0.2",
+		},
+		{
+			name:     "registry port is not mistaken for a tag",
+			ref:      "oci://registry.example.com:5000/charts/podinfo",
+			fallback: "6.7.1",
+			wantURL:  "oci://registry.example.com:5000/charts/podinfo",
+			wantTag:  "6.7.1",
+		},
+		{
+			name:     "port and tag together",
+			ref:      "oci://registry.example.com:5000/charts/podinfo:6.7.1",
+			fallback: "6.7.1",
+			wantURL:  "oci://registry.example.com:5000/charts/podinfo",
+			wantTag:  "6.7.1",
+		},
+		{
+			name:     "docker.io is not rewritten",
+			ref:      "oci://docker.io/bitnamicharts/airflow:25.0.2",
+			fallback: "25.0.2",
+			wantURL:  "oci://docker.io/bitnamicharts/airflow",
+			wantTag:  "25.0.2",
+		},
+		{
+			name:     "digest reference is rejected",
+			ref:      "oci://registry.example.com/charts/podinfo@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			fallback: "6.7.1",
+			wantErr:  true,
+		},
+		{
+			name:     "reference without a chart path is rejected",
+			ref:      "oci://registry.example.com:5000",
+			fallback: "6.7.1",
+			wantErr:  true,
+		},
+		{
+			name:     "garbage is rejected",
+			ref:      "oci://BAD_HOST//:::",
+			fallback: "6.7.1",
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotURL, gotTag, err := SplitOCIRef(tt.ref, tt.fallback)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %q %q", gotURL, gotTag)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotURL != tt.wantURL {
+				t.Fatalf("url = %q, want %q", gotURL, tt.wantURL)
+			}
+			if gotTag != tt.wantTag {
+				t.Fatalf("tag = %q, want %q", gotTag, tt.wantTag)
+			}
+		})
+	}
+}

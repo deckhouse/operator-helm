@@ -25,33 +25,41 @@ import (
 const (
 	resourcePrefix = "tmp"
 
-	// maxPartLen bounds each human-readable name part so the whole name stays
-	// within the 63-character DNS-1123 label limit:
-	// "tmp-" (4) + repo (<=20) + "-" + chart (<=20) + "-" + hash (16) = 62.
+	// maxPartLen bounds each readable part of a cluster-scoped name:
+	// "tmp-" (4) + repo (<=20) + "-" + chart (<=20) + "-" + hash (16) = 62, within the DNS-1123 label limit.
 	maxPartLen = 20
+
+	// maxNamespacedPartLen is the same bound for a namespaced name, which carries one part more:
+	// "tmp-" (4) + namespace (<=12) + "-" + repo (<=12) + "-" + chart (<=12) + "-" + hash (16) = 59.
+	maxNamespacedPartLen = 12
 )
 
-// AuxResourceName returns a deterministic DNS-1123 name (<=63 chars) for the
-// auxiliary source resource backing a (kind, repository, chart, version) tuple:
-// "tmp-<repo>-<chart>-<hash>". The same tuple always maps to the same name,
-// which makes polling requests idempotent and lets concurrent requests converge
-// on one resource. The repo/chart parts are only human-readable hints; the hash
-// over the full tuple (including kind) guarantees uniqueness even if those parts
-// collide across repository kinds.
-func AuxResourceName(kind, repository, chart, version string) string {
-	sum := sha256.Sum256([]byte(kind + "\x00" + repository + "/" + chart + "@" + version))
+// AuxResourceName returns a deterministic DNS-1123 name for the auxiliary source resource of a
+// (kind, namespace, repository, chart, version) tuple and a repository identity, hashed to be unique.
+func AuxResourceName(kind, namespace, repository, chart, version, identity string) string {
+	if namespace == "" {
+		sum := sha256.Sum256([]byte(kind + "\x00" + repository + "/" + chart + "@" + version + "\x00" + identity))
 
-	return fmt.Sprintf("%s-%s-%s-%x", resourcePrefix, sanitizePart(repository), sanitizePart(chart), sum[:8])
+		return fmt.Sprintf("%s-%s-%s-%x", resourcePrefix, sanitize(repository, maxPartLen), sanitize(chart, maxPartLen), sum[:8])
+	}
+
+	sum := sha256.Sum256([]byte(kind + "\x00" + namespace + "/" + repository + "/" + chart + "@" + version + "\x00" + identity))
+
+	return fmt.Sprintf("%s-%s-%s-%s-%x",
+		resourcePrefix,
+		sanitize(namespace, maxNamespacedPartLen),
+		sanitize(repository, maxNamespacedPartLen),
+		sanitize(chart, maxNamespacedPartLen),
+		sum[:8],
+	)
 }
 
-// sanitizePart lowercases s, replaces characters invalid in a DNS-1123 label
-// with '-', truncates to maxPartLen, and trims leading/trailing '-'.
-func sanitizePart(s string) string {
+func sanitize(s string, limit int) string {
 	s = strings.ToLower(s)
 
 	var b strings.Builder
 	for _, r := range s {
-		if b.Len() >= maxPartLen {
+		if b.Len() >= limit {
 			break
 		}
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {

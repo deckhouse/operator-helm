@@ -1,0 +1,66 @@
+/*
+Copyright 2026 Flant JSC.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package contract
+
+import (
+	"context"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	helmv1alpha1 "github.com/deckhouse/operator-helm/api/v1alpha1"
+	"github.com/deckhouse/operator-helm/internal/status"
+)
+
+// InternalNames are the names of the internal objects derived from one repository. They
+// are computed by the adapter, whose naming scheme differs between the families.
+type InternalNames struct {
+	HelmRepository string
+	AuthSecret     string
+	TLSSecret      string
+}
+
+// Repository is a repository resource of any kind as its collaborators see it. Object returns
+// the API object itself, the only thing ever handed to the client.
+type Repository interface {
+	Object() status.ObjectWithConditions
+	Name() string
+	Namespace() string
+	Generation() int64
+	// OwnerGVK is the GroupVersionKind stamped into the owner reference of the
+	// catalog objects this repository produces.
+	OwnerGVK() schema.GroupVersionKind
+
+	URL() string
+	Auth() *helmv1alpha1.RepositoryAuth
+	CACertificate() string
+	InsecureSkipVerify() bool
+
+	// Status points into the object, so a write through it lands on the object.
+	Status() *helmv1alpha1.RepositoryStatus
+	ForceReconcileRequired() bool
+
+	// SourceLabels are the labels every internal object derived from this
+	// repository carries, including managed-by; the watch mappers read them back.
+	SourceLabels() map[string]string
+	InternalNames() InternalNames
+}
+
+// Consumers pushes a force reconcile request onto the internal sources of the resources
+// that consume a repository.
+type Consumers interface {
+	ForceReconcileConsumers(ctx context.Context, repo Repository) error
+}

@@ -1,13 +1,13 @@
-{{- $helmControllerTag := "v0.1.5" }}
+{{- $helmControllerTag := "v1.6.4" }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
 fromImage: builder/distroless
 git:
-  - url: {{ .SOURCE_REPO }}/werf/3p-helm-controller.git
+  - url: {{ .SOURCE_REPO }}/fluxcd/helm-controller.git
     tag: {{ $helmControllerTag }}
     add: /
-    to: /src/3p-helm-controller
+    to: /src/helm-controller
 ---
 
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
@@ -20,12 +20,12 @@ import:
   before: install
 packages:
   - type: go-mod
-    workdir: /src/3p-helm-controller
+    workdir: /src/helm-controller
     env:
       GOPROXY: "{{ .GOPROXY }}"
 shell:
   install:
-    - cd /src/3p-helm-controller
+    - cd /src/helm-controller
     - |
       export GOOS=linux
       export GOARCH=amd64
@@ -36,7 +36,7 @@ image: {{ .ModuleNamePrefix }}{{ .ImageName }}
 fromImage: base/distroless
 import:
 - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
-  add: /src/3p-helm-controller/helm-controller
+  add: /src/helm-controller/helm-controller
   to: /usr/bin/helm-controller
   before: install
 imageSpec:

@@ -3,6 +3,35 @@ title: "Release Notes"
 description: "Release notes for Deckhouse operator-helm."
 ---
 
+## v0.4.0
+
+### Breaking Changes
+
+* Do not enable module by default when using Deckhouse Platform minimal bundle. If you are using the minimal bundle, you need to explicitly enable the operator-helm module in the platform configuration
+
+## v0.3.0
+
+### New Features
+
+* Added Helm repositories support where chart urls have OCI schemas
+
+## v0.2.0
+
+### New Features
+
+* reworked HelmClusterAddonRepository status semantics
+* support legacy OCI chart media type with incremental indexing
+* surface force reconcile progress and completion in status
+* report scheduled repository synchronization in status
+
+### Bug Fixes
+
+* propagate force reconcile to internal sources
+
+### Chore
+
+* added dev registry cleanup job
+
 ## v0.1.1
 
 ### Bug Fixes
@@ -82,4 +111,3 @@ description: "Release notes for Deckhouse operator-helm."
 ### New Features
 
 * initial release with basic capabilities
-

@@ -22,11 +22,13 @@ import (
 	"strings"
 )
 
+const hashLength = 12
+
 func GetHash(s string) string {
 	h := sha256.New()
 	h.Write([]byte(s))
 
-	return fmt.Sprintf("%x", h.Sum(nil))[:12]
+	return fmt.Sprintf("%x", h.Sum(nil))[:hashLength]
 }
 
 func GetInternalRepositoryAuthSecretName(internalRepoName string) string {
@@ -45,7 +47,7 @@ func GetInternalRepositoryAuthSecretName(internalRepoName string) string {
 		result += internalRepoName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func GetInternalRepositoryTLSSecretName(internalRepoName string) string {
@@ -64,29 +66,7 @@ func GetInternalRepositoryTLSSecretName(internalRepoName string) string {
 		result += internalRepoName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
-}
-
-func GetHelmClusterAddonChartName(repoName, chartName string) string {
-	hash := GetHash(fmt.Sprintf("%s-chart-%s", repoName, chartName))
-
-	var result, postfix string
-
-	if len(repoName) > 20 {
-		result += repoName[:20] + "-chart-"
-		postfix = "-" + hash
-	} else {
-		result += repoName + "-chart-"
-	}
-
-	if len(chartName) > 20 {
-		result += chartName[:20]
-		postfix = "-" + hash
-	} else {
-		result += chartName
-	}
-
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func GetInternalHelmReleaseName(addonName string) string {
@@ -103,7 +83,7 @@ func GetInternalHelmReleaseName(addonName string) string {
 		result += addonName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 func GetInternalHelmChartName(addonName string) string {
@@ -124,14 +104,11 @@ func GetInternalOCIRepositoryName(addonName string) string {
 		result += addonName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }
 
 // GetChartClaimLeaseName derives the name of the Lease that guards uniqueness of a
-// repository/chart pair across HelmClusterAddon objects. The name is a pure hash of
-// the pair: repository and chart names may contain characters that are invalid in an
-// object name (uppercase, dots for OCI references), and the hash is always a valid
-// DNS subdomain.
+// repository/chart pair across HelmClusterAddon objects. The name is a pure hash of the pair.
 func GetChartClaimLeaseName(repoName, chartName string) string {
 	prefix := "hca-claim"
 	hash := GetHash(fmt.Sprintf("%s-%s-%s", prefix, repoName, chartName))
@@ -153,5 +130,5 @@ func GetInternalHelmRepositoryName(addonRepositoryName string) string {
 		result += addonRepositoryName
 	}
 
-	return strings.TrimRight(result, "-") + postfix
+	return strings.TrimRight(result, "-.") + postfix
 }

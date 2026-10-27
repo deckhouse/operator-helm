@@ -53,12 +53,22 @@ func (f *genericInformer) Lister() cache.GenericLister {
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
 	// Group=helm.deckhouse.io, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithResource("helmapplications"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmApplications().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("helmapplicationcharts"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmApplicationCharts().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("helmapplicationrepositories"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmApplicationRepositories().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("helmclusteraddons"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmClusterAddons().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("helmclusteraddoncharts"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmClusterAddonCharts().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("helmclusteraddonrepositories"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmClusterAddonRepositories().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("helmclusterapplicationcharts"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmClusterApplicationCharts().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("helmclusterapplicationrepositories"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Helm().V1alpha1().HelmClusterApplicationRepositories().Informer()}, nil
 
 	}
 

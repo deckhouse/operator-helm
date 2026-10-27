@@ -1,0 +1,26 @@
+{{- if eq (include "operator-helm.enable_rbacv2" .) "true" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: d8:namespace-capability:{{ .Chart.Name }}:manage_repositories
+  annotations:
+    en.meta.deckhouse.io/title: "Module {{ .Chart.Name }}: manage repositories"
+    ru.meta.deckhouse.io/title: "Модуль {{ .Chart.Name }}: управление репозиториями"
+    en.meta.deckhouse.io/description: "Manage {{ .Chart.Name }} repositories in a namespace."
+    ru.meta.deckhouse.io/description: "Управление репозиториями модуля {{ .Chart.Name }} в пространстве имён."
+  {{- include "helm_lib_module_labels" (list . (dict "rbac.deckhouse.io/kind" "capability" "rbac.deckhouse.io/capability" (printf "namespace-capability.%s.manage_repositories" .Chart.Name) "rbac.deckhouse.io/scope" "namespace" "rbac.deckhouse.io/aggregate-to-namespace-as" "superadmin")) | nindent 2 }}
+rules:
+- apiGroups:
+  - helm.deckhouse.io
+  resources:
+  - helmapplicationrepositories
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+{{- end }}

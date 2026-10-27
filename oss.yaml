@@ -1,12 +1,12 @@
-- name: 3p-helm-controller
-  link: https://github.com/werf/3p-helm-controller
+- name: helm-controller
+  link: https://github.com/fluxcd/helm-controller
   description: The helm-controller is a Kubernetes operator, allowing one to declaratively manage Helm chart releases.
   license: Apache License 2.0
-  version: v0.1.5
-  id: 3p-helm-controller
-- name: nelm-source-controller
-  link: https://github.com/werf/nelm-source-controller
+  version: v1.6.4
+  id: helm-controller
+- name: source-controller
+  link: https://github.com/fluxcd/source-controller
   description: The source-controller is a Kubernetes operator, specialised in artifacts acquisition from external sources such as Git, OCI, Helm repositories and S3-compatible buckets.
   license: Apache License 2.0
-  version: v0.1.5
-  id: nelm-source-controller
+  version: v1.9.5
+  id: source-controller

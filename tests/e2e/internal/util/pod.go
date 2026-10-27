@@ -28,6 +28,25 @@ import (
 	"github.com/deckhouse/operator-helm/tests/e2e/internal/framework"
 )
 
+// notTerminating filters out pods that are being deleted.
+//
+// A terminating pod (DeletionTimestamp set) keeps appearing in List results
+// until the kubelet finishes tearing it down, so counting it alongside its
+// already-Running replacement makes a rollout or a deliberate delete look
+// like the workload has twice as many pods as it actually does. Every
+// assertion here that counts pods or makes a per-pod Running/Ready claim
+// should filter through this first, so it only ever sees the pods that are
+// actually meant to be there.
+func notTerminating(pods []corev1.Pod) []corev1.Pod {
+	filtered := make([]corev1.Pod, 0, len(pods))
+	for _, pod := range pods {
+		if pod.DeletionTimestamp == nil {
+			filtered = append(filtered, pod)
+		}
+	}
+	return filtered
+}
+
 // UntilControllerReady waits for all controller pods to be Running with all
 // containers Ready and zero restarts.
 func UntilControllerReady(namespace, labelSelector string, timeout time.Duration) {
@@ -37,10 +56,11 @@ func UntilControllerReady(namespace, labelSelector string, timeout time.Duration
 			Pods(namespace).
 			List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(pods.Items).NotTo(BeEmpty(),
+		activePods := notTerminating(pods.Items)
+		g.Expect(activePods).NotTo(BeEmpty(),
 			"no controller pods found with selector %s in namespace %s", labelSelector, namespace)
 
-		for _, pod := range pods.Items {
+		for _, pod := range activePods {
 			g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning),
 				"pod %s is %s, not Running", pod.Name, pod.Status.Phase)
 
@@ -62,9 +82,10 @@ func AssertPodsExist(namespace, labelSelector string, minCount int) {
 		Pods(namespace).
 		List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
 	Expect(err).NotTo(HaveOccurred())
-	Expect(len(pods.Items)).To(BeNumerically(">=", minCount),
+	activePods := notTerminating(pods.Items)
+	Expect(len(activePods)).To(BeNumerically(">=", minCount),
 		"expected >= %d pods in %s with selector %s, got %d",
-		minCount, namespace, labelSelector, len(pods.Items))
+		minCount, namespace, labelSelector, len(activePods))
 }
 
 // UntilPodsExist waits until at least minCount pods appear.
@@ -75,8 +96,9 @@ func UntilPodsExist(namespace, labelSelector string, minCount int, timeout time.
 			Pods(namespace).
 			List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(len(pods.Items)).To(BeNumerically(">=", minCount),
-			"waiting for >= %d pods, got %d", minCount, len(pods.Items))
+		activePods := notTerminating(pods.Items)
+		g.Expect(len(activePods)).To(BeNumerically(">=", minCount),
+			"waiting for >= %d pods, got %d", minCount, len(activePods))
 	}).WithTimeout(timeout).WithPolling(framework.PollingInterval).Should(Succeed())
 }
 
@@ -112,10 +134,11 @@ func UntilAllPodsReady(namespace, labelSelector string, expectedCount int, timeo
 			Pods(namespace).
 			List(context.Background(), metav1.ListOptions{LabelSelector: labelSelector})
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(len(pods.Items)).To(Equal(expectedCount),
-			"expected %d pods, got %d", expectedCount, len(pods.Items))
+		activePods := notTerminating(pods.Items)
+		g.Expect(len(activePods)).To(Equal(expectedCount),
+			"expected %d pods, got %d", expectedCount, len(activePods))
 
-		for _, pod := range pods.Items {
+		for _, pod := range activePods {
 			g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning),
 				"pod %s phase: %s", pod.Name, pod.Status.Phase)
 			for _, cs := range pod.Status.ContainerStatuses {
