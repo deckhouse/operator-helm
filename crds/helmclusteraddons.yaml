@@ -105,6 +105,16 @@ spec:
                 maxLength: 63
                 minLength: 1
                 type: string
+              timeout:
+                description: Timeout is the time to wait for a Helm action to complete.
+                  Defaults to 5m.
+                pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
+                type: string
+                x-kubernetes-validations:
+                - message: timeout must be greater than zero
+                  rule: duration(self) > duration('0s')
+                - message: timeout must not exceed 2h
+                  rule: duration(self) <= duration('2h')
               values:
                 description: Values holds the values for this HelmClusterAddon release.
                 x-kubernetes-preserve-unknown-fields: true

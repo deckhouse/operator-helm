@@ -220,6 +220,7 @@ func (s *Releases) SyncSpec(ctx context.Context, rel contract.Release, release *
 
 	release.Spec.TargetNamespace = rel.TargetNamespace()
 	release.Spec.Values = rel.Values()
+	release.Spec.Timeout = rel.Timeout()
 	release.Spec.Suspend = false
 
 	setReconcileRequestAnnotations(release)
@@ -244,6 +245,7 @@ func applyHelmReleaseSpec(rel contract.Release, existing *helmv2.HelmRelease, so
 	existing.Spec.ReleaseName = rel.ReleaseName()
 	existing.Spec.TargetNamespace = rel.TargetNamespace()
 	existing.Spec.Values = rel.Values()
+	existing.Spec.Timeout = rel.Timeout()
 	existing.Spec.CommonMetadata = &helmv2.CommonMetadata{Labels: rel.SourceLabels()}
 
 	existing.Spec.Suspend = rel.MaintenanceActivated()
