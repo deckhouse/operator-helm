@@ -421,3 +421,220 @@ func TestReduceInternalConditionsStallsOnAChartThatDoesNotRender(t *testing.T) {
 		t.Fatalf("message = %q, want the fault the internal object reported", state.Message)
 	}
 }
+
+const artifactCause = "Could not load chart: GET http://source-controller.d8-operator-helm.svc/ocirepository/" +
+	"d8-operator-helm/hap-delivery-podinfo/sha256:258d.tar.gz giving up after 10 attempt(s): " +
+	"dial tcp 10.222.50.77:80: connect: connection refused"
+
+func prerequisitesConditions(ready metav1.Condition, extra ...metav1.Condition) []metav1.Condition {
+	ready.Type = helmv1alpha1.ConditionTypeReady
+	ready.ObservedGeneration = 3
+
+	return append([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Progressing",
+			Message:            "Fulfilling prerequisites",
+			ObservedGeneration: 3,
+		},
+		ready,
+	}, extra...)
+}
+
+func TestReduceInternalConditionsReportsAFailedPrerequisite(t *testing.T) {
+	state := reduceInternalConditions(prerequisitesConditions(
+		metav1.Condition{Status: metav1.ConditionFalse, Reason: "ArtifactFailed", Message: artifactCause},
+		metav1.Condition{
+			Type:               "Released",
+			Status:             metav1.ConditionTrue,
+			Reason:             "UpgradeSucceeded",
+			Message:            "Helm upgrade succeeded",
+			ObservedGeneration: 3,
+		},
+	), 3, helmReleaseErrorRules)
+
+	if !state.Observed || state.Status != metav1.ConditionFalse || state.Reason != helmv1alpha1.ReasonChartFetchFailed {
+		t.Fatalf("state = %+v, want an observed False/%s rather than work in flight", state, helmv1alpha1.ReasonChartFetchFailed)
+	}
+	if state.Stalled {
+		t.Fatalf("state = %+v, want a failed prerequisite left retriable", state)
+	}
+	if state.Message != artifactCause {
+		t.Fatalf("message = %q, want the fault helm-controller reported", state.Message)
+	}
+}
+
+func TestReduceInternalConditionsPrefersAFailedPrerequisiteToAStaleRelease(t *testing.T) {
+	state := reduceInternalConditions(prerequisitesConditions(
+		metav1.Condition{Status: metav1.ConditionFalse, Reason: "ArtifactFailed", Message: artifactCause},
+		metav1.Condition{
+			Type:               "Released",
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 3,
+		},
+	), 3, helmReleaseErrorRules)
+
+	if state.Reason != helmv1alpha1.ReasonChartFetchFailed || state.Message != artifactCause {
+		t.Fatalf("state = %+v, want the prerequisite that failed in this pass", state)
+	}
+}
+
+func TestReduceInternalConditionsKeepsTheVerdictOfThePreviousActionWhilePrerequisitesRun(t *testing.T) {
+	state := reduceInternalConditions(prerequisitesConditions(
+		metav1.Condition{Status: metav1.ConditionFalse, Reason: "UpgradeFailed", Message: "Helm upgrade failed"},
+		metav1.Condition{
+			Type:               "Released",
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 3,
+		},
+	), 3, helmReleaseErrorRules)
+
+	if !state.Observed || state.Status != metav1.ConditionFalse || state.Reason != helmv1alpha1.ReasonReleaseFailed {
+		t.Fatalf("state = %+v, want the False/%s the failed action left", state, helmv1alpha1.ReasonReleaseFailed)
+	}
+}
+
+func TestReduceInternalConditionsKeepsPrerequisitesOfANewGenerationInFlight(t *testing.T) {
+	conditions := prerequisitesConditions(
+		metav1.Condition{Status: metav1.ConditionFalse, Reason: "ArtifactFailed", Message: artifactCause},
+	)
+	conditions[1].ObservedGeneration = 2
+
+	state := reduceInternalConditions(conditions, 3, helmReleaseErrorRules)
+
+	if state.Observed || state.Status != metav1.ConditionUnknown || state.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("state = %+v, want work in flight rather than the previous generation's failure", state)
+	}
+}
+
+func TestReduceInternalConditionsStallsOnATerminalMessageInAFailedPrerequisite(t *testing.T) {
+	state := reduceInternalConditions(prerequisitesConditions(
+		metav1.Condition{Status: metav1.ConditionFalse, Reason: "StateError", Message: forbiddenCause},
+	), 3, helmReleaseErrorRules)
+
+	if !state.Stalled || state.Reason != helmv1alpha1.ReasonAccessDenied {
+		t.Fatalf("state = %+v, want a stalled %s", state, helmv1alpha1.ReasonAccessDenied)
+	}
+}
+
+func TestReduceInternalConditionsKeepsARunningActionInFlight(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeReconciling,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Progressing",
+			Message:            "Running 'rollback' action with timeout of 5m0s",
+			ObservedGeneration: 3,
+		},
+		{
+			Type:               helmv1alpha1.ConditionTypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "UpgradeFailed",
+			Message:            "Helm upgrade failed",
+			ObservedGeneration: 3,
+		},
+	}, 3, helmReleaseErrorRules)
+
+	if state.Observed || state.Status != metav1.ConditionUnknown || state.Reason != helmv1alpha1.ReasonReconciling {
+		t.Fatalf("state = %+v, want work in flight", state)
+	}
+}
+
+func TestReduceInternalConditionsTranslatesUpstreamReasons(t *testing.T) {
+	tests := []struct {
+		name        string
+		ready       metav1.Condition
+		wantStatus  metav1.ConditionStatus
+		wantReason  string
+		wantMessage string
+	}{
+		{
+			name:        "a fetched artifact that failed",
+			ready:       metav1.Condition{Status: metav1.ConditionFalse, Reason: "ArtifactFailed", Message: "artifact not found"},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  helmv1alpha1.ReasonChartFetchFailed,
+			wantMessage: "artifact not found",
+		},
+		{
+			name:        "a source that is not ready",
+			ready:       metav1.Condition{Status: metav1.ConditionFalse, Reason: "SourceNotReady", Message: "HelmChart is not ready"},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  helmv1alpha1.ReasonChartSourceNotReady,
+			wantMessage: "HelmChart is not ready",
+		},
+		{
+			name:        "values that could not be composed",
+			ready:       metav1.Condition{Status: metav1.ConditionFalse, Reason: "ValuesError", Message: "no values"},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  helmv1alpha1.ReasonInvalidValues,
+			wantMessage: "no values",
+		},
+		{
+			name:        "a reason of its own",
+			ready:       metav1.Condition{Status: metav1.ConditionFalse, Reason: "DependencyNotReady", Message: "dependency 'a/b' is not ready"},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  helmv1alpha1.ReasonFailed,
+			wantMessage: "DependencyNotReady: dependency 'a/b' is not ready",
+		},
+		{
+			name:        "a reason of its own without a message",
+			ready:       metav1.Condition{Status: metav1.ConditionFalse, Reason: "FactoryError"},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  helmv1alpha1.ReasonFailed,
+			wantMessage: "FactoryError",
+		},
+		{
+			name:        "a release that succeeded",
+			ready:       metav1.Condition{Status: metav1.ConditionTrue, Reason: "UpgradeSucceeded", Message: "Helm upgrade succeeded"},
+			wantStatus:  metav1.ConditionTrue,
+			wantReason:  "UpgradeSucceeded",
+			wantMessage: "Helm upgrade succeeded",
+		},
+		{
+			name:        "a release in progress",
+			ready:       metav1.Condition{Status: metav1.ConditionUnknown, Reason: "Progressing", Message: "reconciliation in progress"},
+			wantStatus:  metav1.ConditionUnknown,
+			wantReason:  helmv1alpha1.ReasonReconciling,
+			wantMessage: "reconciliation in progress",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ready := test.ready
+			ready.Type = helmv1alpha1.ConditionTypeReady
+			ready.ObservedGeneration = 3
+
+			state := reduceInternalConditions([]metav1.Condition{ready}, 3, helmReleaseErrorRules)
+
+			if state.Status != test.wantStatus || state.Reason != test.wantReason || state.Message != test.wantMessage {
+				t.Fatalf("state = %s/%s %q, want %s/%s %q",
+					state.Status, state.Reason, state.Message, test.wantStatus, test.wantReason, test.wantMessage)
+			}
+		})
+	}
+}
+
+func TestReduceInternalConditionsFallsBackToAStallReasonOfItsOwn(t *testing.T) {
+	state := reduceInternalConditions([]metav1.Condition{
+		{
+			Type:               helmv1alpha1.ConditionTypeStalled,
+			Status:             metav1.ConditionTrue,
+			Reason:             "MissingRollbackTarget",
+			Message:            "Failed to perform remediation: no previous release",
+			ObservedGeneration: 7,
+		},
+	}, 7, helmReleaseErrorRules)
+
+	if !state.Stalled || state.Reason != helmv1alpha1.ReasonFailed {
+		t.Fatalf("state = %+v, want a stalled %s", state, helmv1alpha1.ReasonFailed)
+	}
+	if state.Message != "MissingRollbackTarget: Failed to perform remediation: no previous release" {
+		t.Fatalf("message = %q, want the upstream reason ahead of its message", state.Message)
+	}
+}

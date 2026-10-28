@@ -18,8 +18,12 @@ package release
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -611,8 +615,8 @@ func TestEvaluateNamesARemovedVersion(t *testing.T) {
 	in.Outcome = reached
 
 	cond = condition(t, Evaluate(in), helmv1alpha1.ConditionTypeReady)
-	if cond.Reason != "Succeeded" {
-		t.Fatalf("reason = %q, want the healthy child's own reason untouched", cond.Reason)
+	if cond.Reason != helmv1alpha1.ReasonSuccess {
+		t.Fatalf("reason = %q, want %q rather than a removed version", cond.Reason, helmv1alpha1.ReasonSuccess)
 	}
 }
 
@@ -1548,5 +1552,170 @@ func TestEvaluateLeavesTheInventoryAloneWhenItNeverReachedTheRelease(t *testing.
 				t.Fatalf("Inventory = %+v, want nil: the recorded list must stand", *decision.Inventory)
 			}
 		})
+	}
+}
+
+func TestEvaluateReportsAPrerequisiteTheInternalReleaseFailed(t *testing.T) {
+	const cause = "Could not load chart: dial tcp 10.222.50.77:80: connect: connection refused"
+
+	in := baseInputs()
+	in.ConditionTypes = []string{helmv1alpha1.ConditionTypeReady, helmv1alpha1.ConditionTypeUpdateInstalled}
+	in.Outcome = ChartReached{
+		Internal: ServedByOCIRepository{Result: internalobj.OCIRepoOutcome{Artifact: &meta.Artifact{Revision: "6.17.0"}, Internal: readyInternal()}},
+		Release: &internalobj.ReleaseOutcome{
+			Internal: internalobj.InternalObjectState{
+				Observed: true,
+				Status:   metav1.ConditionFalse,
+				Reason:   helmv1alpha1.ReasonChartFetchFailed,
+				Message:  cause,
+			},
+		},
+		ChartInfoOutdated: true,
+	}
+
+	decision := Evaluate(in)
+
+	for _, conditionType := range in.ConditionTypes {
+		cond := condition(t, decision, conditionType)
+		if cond.Status != metav1.ConditionFalse || cond.Reason != helmv1alpha1.ReasonChartFetchFailed || cond.Message != cause {
+			t.Fatalf("%s = %s/%s %q, want False/%s with the cause",
+				conditionType, cond.Status, cond.Reason, cond.Message, helmv1alpha1.ReasonChartFetchFailed)
+		}
+	}
+
+	progress := condition(t, decision, helmv1alpha1.ConditionTypeReconciling)
+	if progress.Status != metav1.ConditionTrue || progress.Reason != helmv1alpha1.ReasonProgressingWithRetry {
+		t.Fatalf("Reconciling = %s/%s, want True/%s",
+			progress.Status, progress.Reason, helmv1alpha1.ReasonProgressingWithRetry)
+	}
+	if apimeta.FindStatusCondition(decision.Conditions, helmv1alpha1.ConditionTypeStalled) != nil {
+		t.Fatal("a failed prerequisite helm-controller keeps retrying must not stall the release")
+	}
+	if decision.ObservedGeneration != nil {
+		t.Fatal("a release that is still retrying has not finished with the spec")
+	}
+}
+
+func TestEvaluateReportsSuccessOnReadyAlone(t *testing.T) {
+	in := baseInputs()
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}},
+		Release: &internalobj.ReleaseOutcome{
+			ChartDeployed: true,
+			Internal: internalobj.InternalObjectState{
+				Observed: true,
+				Status:   metav1.ConditionTrue,
+				Reason:   "InstallSucceeded",
+				Message:  "Helm install succeeded",
+			},
+		},
+	}
+
+	decision := Evaluate(in)
+
+	ready := condition(t, decision, helmv1alpha1.ConditionTypeReady)
+	if ready.Status != metav1.ConditionTrue || ready.Reason != helmv1alpha1.ReasonSuccess || ready.Message != "Helm install succeeded" {
+		t.Fatalf("Ready = %s/%s %q, want True/%s with the release's message",
+			ready.Status, ready.Reason, ready.Message, helmv1alpha1.ReasonSuccess)
+	}
+
+	installed := condition(t, decision, helmv1alpha1.ConditionTypeInstalled)
+	if installed.Reason != "InstallSucceeded" {
+		t.Fatalf("Installed reason = %q, want the stage left with the release's own", installed.Reason)
+	}
+}
+
+func declaredReasons(t *testing.T) map[string]bool {
+	t.Helper()
+
+	file, err := parser.ParseFile(token.NewFileSet(), "../../../../../api/v1alpha1/conditions.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing conditions.go: %v", err)
+	}
+
+	reasons := map[string]bool{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		spec, ok := node.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != 1 || len(spec.Values) != 1 || !strings.HasPrefix(spec.Names[0].Name, "Reason") {
+			return true
+		}
+
+		if lit, ok := spec.Values[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			value, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				t.Fatalf("unquoting %s: %v", spec.Names[0].Name, err)
+			}
+			reasons[value] = true
+		}
+
+		return true
+	})
+
+	return reasons
+}
+
+func TestEvaluateWritesOnlyDeclaredReasons(t *testing.T) {
+	reasons := declaredReasons(t)
+	failing := internalobj.InternalObjectState{
+		Observed: true,
+		Status:   metav1.ConditionFalse,
+		Reason:   helmv1alpha1.ReasonReleaseFailed,
+		Message:  "Helm upgrade failed",
+	}
+	stalled := failing
+	stalled.Stalled = true
+	inFlight := internalobj.InternalObjectState{Status: metav1.ConditionUnknown, Reason: helmv1alpha1.ReasonReconciling}
+	chartReady := ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}}
+
+	outcomes := map[string]Outcome{
+		"a step that will be retried": StepFailed{Failure{Reason: helmv1alpha1.ReasonFailed, Err: errors.New("boom")}},
+		"a step awaiting a watch":     StepFailed{Failure{Reason: helmv1alpha1.ReasonFailed, AwaitsWatch: true}},
+		"a step that gave up":         StepFailed{Failure{Reason: helmv1alpha1.ReasonFailed, Terminal: true}},
+		"maintenance switched on":     MaintenanceChanged{Result: internalobj.MaintenanceOutcome{Activated: true}},
+		"maintenance switch failed":   MaintenanceChanged{Result: internalobj.MaintenanceOutcome{Err: errors.New("conflict")}},
+		"maintenance held":            InMaintenance{},
+		"a chart that failed":         ChartReached{Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Err: errors.New("conflict")}}},
+		"a chart in flight":           ChartReached{Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Internal: inFlight}}},
+		"an unresolved source": ChartReached{Internal: SourceUnresolved{Failure{
+			Reason: helmv1alpha1.ReasonChartVersionNotFound, AwaitsWatch: true,
+		}}},
+		"a probe that gave up": ChartReached{Internal: ServedByOCIRepository{Result: internalobj.OCIRepoOutcome{
+			ProbeErr: errors.New("unauthorized"), ProbeReason: helmv1alpha1.ReasonAuthenticationFailed, ProbeTerminal: true,
+		}}},
+		"a removed version": ChartReached{Internal: ServedByOCIRepository{Result: internalobj.OCIRepoOutcome{
+			Internal: failing, VersionRemoved: true, Version: "6.7.1", RepositoryName: "stable",
+		}}},
+		"a release write that failed": ChartReached{Internal: chartReady, Release: &internalobj.ReleaseOutcome{Err: errors.New("conflict")}},
+		"a release not rolled out":    ChartReached{Internal: chartReady, Release: &internalobj.ReleaseOutcome{Internal: readyInternal()}},
+		"a release that failed":       ChartReached{Internal: chartReady, Release: &internalobj.ReleaseOutcome{Internal: failing}},
+		"a release that gave up":      ChartReached{Internal: chartReady, Release: &internalobj.ReleaseOutcome{Internal: stalled}},
+		"a forced settled release": ChartReached{
+			Forced:   true,
+			Internal: chartReady,
+			Release:  &internalobj.ReleaseOutcome{Internal: readyInternal(), ChartDeployed: true},
+		},
+	}
+
+	for name, outcome := range outcomes {
+		for _, lifted := range []bool{false, true} {
+			in := baseInputs()
+			in.ConditionTypes = []string{
+				helmv1alpha1.ConditionTypeReady,
+				helmv1alpha1.ConditionTypeUpdateInstalled,
+				helmv1alpha1.ConditionTypeConfigurationApplied,
+			}
+			in.Outcome = outcome
+			in.MaintenanceLifted = lifted
+
+			for _, cond := range Evaluate(in).Conditions {
+				if slices.Contains(in.ConditionTypes[1:], cond.Type) {
+					continue
+				}
+				if !reasons[cond.Reason] {
+					t.Errorf("%s (maintenance lifted: %v): %s carries %q, which conditions.go does not declare",
+						name, lifted, cond.Type, cond.Reason)
+				}
+			}
+		}
 	}
 }

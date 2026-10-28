@@ -146,6 +146,9 @@ const (
 	// ReasonRenderFailed marks a release whose chart did not render into applicable
 	// manifests, which only an edit to the chart or to its values changes.
 	ReasonRenderFailed = "RenderFailed"
+	// ReasonInvalidValues marks a release whose values helm-controller could not
+	// compose into the set the chart is rendered with.
+	ReasonInvalidValues = "InvalidValues"
 	// ReasonTestFailed marks a release that was deployed but whose Helm tests did
 	// not pass.
 	ReasonTestFailed = "TestFailed"
@@ -164,6 +167,9 @@ const (
 	// ReasonChartStorageFailed marks a chart that was pulled but could not be stored
 	// by source-controller, so no artifact is available.
 	ReasonChartStorageFailed = "ChartStorageFailed"
+	// ReasonChartSourceNotReady marks a release whose internal chart source has no
+	// artifact to deploy from yet.
+	ReasonChartSourceNotReady = "ChartSourceNotReady"
 
 	// OCIRepository error reasons.
 

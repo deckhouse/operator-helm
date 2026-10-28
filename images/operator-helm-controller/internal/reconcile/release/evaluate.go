@@ -283,7 +283,12 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 	verdict, found := decide(chart, release)
 	if found {
 		for _, conditionType := range in.ConditionTypes {
-			decision.set(in, conditionType, verdict)
+			state := verdict
+			if conditionType == helmv1alpha1.ConditionTypeReady && state.Status == metav1.ConditionTrue {
+				state.Reason = helmv1alpha1.ReasonSuccess
+			}
+
+			decision.set(in, conditionType, state)
 		}
 
 		decision.Reported = reported(verdict)

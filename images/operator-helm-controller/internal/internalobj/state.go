@@ -18,6 +18,7 @@ package internalobj
 
 import (
 	"regexp"
+	"slices"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,6 +74,15 @@ var terminalMessageRules = []TerminalMessageRule{
 	},
 }
 
+const prerequisitesMessage = "Fulfilling prerequisites"
+
+var upstreamFailureReasons = map[string]string{
+	"ArtifactFailed":  helmv1alpha1.ReasonChartFetchFailed,
+	"SourceNotReady":  helmv1alpha1.ReasonChartSourceNotReady,
+	"ValuesError":     helmv1alpha1.ReasonInvalidValues,
+	"RetriesExceeded": helmv1alpha1.ReasonRetriesExceeded,
+}
+
 func reduceInternalConditions(
 	conditions []metav1.Condition,
 	generation int64,
@@ -95,7 +105,18 @@ func reduceInternalConditions(
 	if !gaveUp {
 		cond := currentCondition(conditions, helmv1alpha1.ConditionTypeReconciling, generation)
 		if cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason != helmv1alpha1.ReasonProgressingWithRetry {
-			return reconciling
+			ready, observed := conditionObserved(conditions, helmv1alpha1.ConditionTypeReady, generation)
+			if !observed || ready.Status != metav1.ConditionFalse || cond.Message != prerequisitesMessage {
+				return reconciling
+			}
+
+			summarized := slices.ContainsFunc(errorRules, func(rule ErrorConditionRule) bool {
+				source := currentCondition(conditions, rule.Type, generation)
+				return source != nil && source.Reason == ready.Reason && source.Message == ready.Message
+			})
+			if !summarized {
+				return ownState(ready.Status, ready, false)
+			}
 		}
 	}
 
@@ -115,25 +136,39 @@ func reduceInternalConditions(
 	if !observed {
 		if gaveUp {
 			// No rule matched and no verdict was reached, so the object's own account is all there is.
-			return InternalObjectState{
-				Observed: true,
-				Stalled:  true,
-				Status:   metav1.ConditionFalse,
-				Reason:   stalled.Reason,
-				Message:  stalled.Message,
-			}
+			return ownState(metav1.ConditionFalse, stalled, true)
 		}
 
 		return reconciling
 	}
 
-	return InternalObjectState{
+	return ownState(ready.Status, ready, gaveUp)
+}
+
+func ownState(status metav1.ConditionStatus, cond *metav1.Condition, stalled bool) InternalObjectState {
+	state := InternalObjectState{
 		Observed: true,
-		Stalled:  gaveUp,
-		Status:   ready.Status,
-		Reason:   ready.Reason,
-		Message:  ready.Message,
+		Stalled:  stalled,
+		Status:   status,
+		Reason:   cond.Reason,
+		Message:  cond.Message,
 	}
+
+	switch reason, known := upstreamFailureReasons[cond.Reason]; {
+	case status == metav1.ConditionTrue:
+	case status == metav1.ConditionUnknown:
+		state.Reason = helmv1alpha1.ReasonReconciling
+	case known:
+		state.Reason = reason
+	default:
+		state.Reason = helmv1alpha1.ReasonFailed
+		state.Message = cond.Reason
+		if cond.Message != "" {
+			state.Message += ": " + cond.Message
+		}
+	}
+
+	return state
 }
 
 func matchTerminalMessage(conditions []metav1.Condition, generation int64) (InternalObjectState, bool) {
