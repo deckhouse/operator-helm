@@ -528,12 +528,76 @@ func TestEvaluateProjectsTheFirstFailingStep(t *testing.T) {
 
 	for _, conditionType := range in.ConditionTypes {
 		cond := condition(t, decision, conditionType)
-		if cond.Status != metav1.ConditionFalse || cond.Reason != helmv1alpha1.ReasonReleaseFailed {
-			t.Fatalf("%s = %s/%s, want the failing release's verdict", conditionType, cond.Status, cond.Reason)
+		if cond.Status != metav1.ConditionFalse || cond.Message != "install retries exhausted" {
+			t.Fatalf("%s = %s/%q, want the failing release's verdict", conditionType, cond.Status, cond.Message)
 		}
 		if cond.ObservedGeneration != in.Generation {
 			t.Fatalf("%s observedGeneration = %d, want %d", conditionType, cond.ObservedGeneration, in.Generation)
 		}
+	}
+}
+
+func TestEvaluateNamesTheLifecycleStageInItsReason(t *testing.T) {
+	succeeded := internalobj.ReleaseOutcome{Internal: readyInternal(), ChartDeployed: true}
+	progressing := internalobj.ReleaseOutcome{Internal: internalobj.InternalObjectState{
+		Observed: true,
+		Status:   metav1.ConditionUnknown,
+		Reason:   helmv1alpha1.ReasonReconciling,
+	}}
+	failed := internalobj.ReleaseOutcome{Internal: internalobj.InternalObjectState{
+		Observed: true,
+		Status:   metav1.ConditionFalse,
+		Reason:   helmv1alpha1.ReasonReleaseFailed,
+	}, ChartDeployed: true}
+	progressingElsewhere := internalobj.ReleaseOutcome{Internal: internalobj.InternalObjectState{
+		Observed: true,
+		Status:   metav1.ConditionUnknown,
+		Reason:   "Progressing",
+	}}
+	renderFailed := internalobj.ReleaseOutcome{Internal: internalobj.InternalObjectState{
+		Observed: true,
+		Status:   metav1.ConditionFalse,
+		Reason:   helmv1alpha1.ReasonRenderFailed,
+	}, ChartDeployed: true}
+	writeFailed := internalobj.ReleaseOutcome{Err: errors.New("conflict")}
+
+	for _, tc := range []struct {
+		name          string
+		release       internalobj.ReleaseOutcome
+		conditionType string
+		wantReason    string
+		wantReady     string
+	}{
+		{"installed", succeeded, helmv1alpha1.ConditionTypeInstalled, helmv1alpha1.ReasonInstallSucceeded, helmv1alpha1.ReasonSuccess},
+		{"upgraded", succeeded, helmv1alpha1.ConditionTypeUpdateInstalled, helmv1alpha1.ReasonUpgradeSucceeded, helmv1alpha1.ReasonSuccess},
+		{"values applied", succeeded, helmv1alpha1.ConditionTypeConfigurationApplied, helmv1alpha1.ReasonValuesApplied, helmv1alpha1.ReasonSuccess},
+		{"installing", progressing, helmv1alpha1.ConditionTypeInstalled, helmv1alpha1.ReasonInstalling, helmv1alpha1.ReasonReconciling},
+		{"upgrading", progressing, helmv1alpha1.ConditionTypeUpdateInstalled, helmv1alpha1.ReasonUpgrading, helmv1alpha1.ReasonReconciling},
+		{"upgrading whatever the step names", progressingElsewhere, helmv1alpha1.ConditionTypeUpdateInstalled, helmv1alpha1.ReasonUpgrading, "Progressing"},
+		{"applying values", progressing, helmv1alpha1.ConditionTypeConfigurationApplied, helmv1alpha1.ReasonApplyingValues, helmv1alpha1.ReasonReconciling},
+		{"install failed", failed, helmv1alpha1.ConditionTypeInstalled, helmv1alpha1.ReasonInstallFailed, helmv1alpha1.ReasonReleaseFailed},
+		{"upgrade failed", failed, helmv1alpha1.ConditionTypeUpdateInstalled, helmv1alpha1.ReasonUpgradeFailed, helmv1alpha1.ReasonReleaseFailed},
+		{"values apply failed", failed, helmv1alpha1.ConditionTypeConfigurationApplied, helmv1alpha1.ReasonValuesApplyFailed, helmv1alpha1.ReasonReleaseFailed},
+		{"other failure", renderFailed, helmv1alpha1.ConditionTypeUpdateInstalled, helmv1alpha1.ReasonRenderFailed, helmv1alpha1.ReasonRenderFailed},
+		{"release write failed", writeFailed, helmv1alpha1.ConditionTypeInstalled, helmv1alpha1.ReasonHelmReleaseFailed, helmv1alpha1.ReasonHelmReleaseFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := baseInputs()
+			in.ConditionTypes = []string{helmv1alpha1.ConditionTypeReady, tc.conditionType}
+			in.Outcome = ChartReached{
+				Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}},
+				Release:  &tc.release,
+			}
+
+			decision := Evaluate(in)
+
+			if cond := condition(t, decision, tc.conditionType); cond.Reason != tc.wantReason {
+				t.Fatalf("%s reason = %q, want %q", tc.conditionType, cond.Reason, tc.wantReason)
+			}
+			if ready := condition(t, decision, helmv1alpha1.ConditionTypeReady); ready.Reason != tc.wantReady {
+				t.Fatalf("Ready reason = %q, want %q", ready.Reason, tc.wantReady)
+			}
+		})
 	}
 }
 
@@ -1596,6 +1660,38 @@ func TestEvaluateReportsAPrerequisiteTheInternalReleaseFailed(t *testing.T) {
 	}
 }
 
+func TestEvaluateLeavesTheStagesAloneWhenAPrerequisiteFailsWithNothingPending(t *testing.T) {
+	in := baseInputs()
+	in.ConditionTypes = []string{helmv1alpha1.ConditionTypeReady}
+	in.Outcome = ChartReached{
+		Internal: ServedByHelmChart{Result: internalobj.ChartOutcome{Artifact: &meta.Artifact{Revision: "6.7.1"}, Internal: readyInternal()}},
+		Release: &internalobj.ReleaseOutcome{Internal: internalobj.InternalObjectState{
+			Observed: true,
+			Status:   metav1.ConditionFalse,
+			Reason:   helmv1alpha1.ReasonChartFetchFailed,
+		}},
+	}
+
+	decision := Evaluate(in)
+
+	if ready := condition(t, decision, helmv1alpha1.ConditionTypeReady); ready.Status != metav1.ConditionFalse ||
+		ready.Reason != helmv1alpha1.ReasonChartFetchFailed {
+		t.Fatalf("Ready = %s/%s, want False/%s", ready.Status, ready.Reason, helmv1alpha1.ReasonChartFetchFailed)
+	}
+	if progress := condition(t, decision, helmv1alpha1.ConditionTypeReconciling); progress.Reason != helmv1alpha1.ReasonProgressingWithRetry {
+		t.Fatalf("Reconciling reason = %q, want %q", progress.Reason, helmv1alpha1.ReasonProgressingWithRetry)
+	}
+	for _, conditionType := range []string{
+		helmv1alpha1.ConditionTypeInstalled,
+		helmv1alpha1.ConditionTypeUpdateInstalled,
+		helmv1alpha1.ConditionTypeConfigurationApplied,
+	} {
+		if apimeta.FindStatusCondition(decision.Conditions, conditionType) != nil {
+			t.Fatalf("%s was written, want the stages left alone", conditionType)
+		}
+	}
+}
+
 func TestEvaluateReportsSuccessOnReadyAlone(t *testing.T) {
 	in := baseInputs()
 	in.Outcome = ChartReached{
@@ -1620,8 +1716,8 @@ func TestEvaluateReportsSuccessOnReadyAlone(t *testing.T) {
 	}
 
 	installed := condition(t, decision, helmv1alpha1.ConditionTypeInstalled)
-	if installed.Reason != "InstallSucceeded" {
-		t.Fatalf("Installed reason = %q, want the stage left with the release's own", installed.Reason)
+	if installed.Reason != helmv1alpha1.ReasonInstallSucceeded {
+		t.Fatalf("Installed reason = %q, want %q", installed.Reason, helmv1alpha1.ReasonInstallSucceeded)
 	}
 }
 
@@ -1708,9 +1804,6 @@ func TestEvaluateWritesOnlyDeclaredReasons(t *testing.T) {
 			in.MaintenanceLifted = lifted
 
 			for _, cond := range Evaluate(in).Conditions {
-				if slices.Contains(in.ConditionTypes[1:], cond.Type) {
-					continue
-				}
 				if !reasons[cond.Reason] {
 					t.Errorf("%s (maintenance lifted: %v): %s carries %q, which conditions.go does not declare",
 						name, lifted, cond.Type, cond.Reason)

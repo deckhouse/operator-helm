@@ -127,7 +127,7 @@ func (r *HelmApplication) ConfigurationApplyInProgress() bool {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Reason == ReasonReconciling
+	return cond.Status == metav1.ConditionUnknown && (cond.Reason == ReasonApplyingValues || cond.Reason == ReasonReconciling)
 }
 
 func (r *HelmApplication) UpdateInstallInProgress() bool {
@@ -136,7 +136,7 @@ func (r *HelmApplication) UpdateInstallInProgress() bool {
 		return false
 	}
 
-	return cond.Status == metav1.ConditionUnknown && cond.Reason == ReasonReconciling
+	return cond.Status == metav1.ConditionUnknown && (cond.Reason == ReasonUpgrading || cond.Reason == ReasonReconciling)
 }
 
 // IsChartStatusInfoOutdated reports whether the whole chart reference, both repository

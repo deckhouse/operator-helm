@@ -292,7 +292,7 @@ func (r *Reconciler) resolveSource(
 	case errors.Is(err, errChartNotFound):
 		// The name itself is wrong; a version-level message would misreport that.
 		return src, chartVersion, &Failure{
-			Reason: helmv1alpha1.ReasonChartVersionNotFound,
+			Reason: helmv1alpha1.ReasonChartNotFound,
 			Message: fmt.Sprintf("Chart %s is not in the catalog of repository %s",
 				rel.ChartRef().Chart, repo.Name()),
 			Err:      err,
@@ -310,7 +310,7 @@ func (r *Reconciler) resolveSource(
 	case errors.Is(err, errVersionUnusable):
 		// Retrying resolves nothing: only a catalog change can, and its watches bring us back.
 		return src, chartVersion, &Failure{
-			Reason: helmv1alpha1.ReasonChartVersionNotFound,
+			Reason: helmv1alpha1.ReasonChartVersionUnusable,
 			Message: fmt.Sprintf("Version %s of chart %s cannot be deployed from repository %s",
 				rel.ChartRef().Version, rel.ChartRef().Chart, repo.Name()),
 			Err:      err,

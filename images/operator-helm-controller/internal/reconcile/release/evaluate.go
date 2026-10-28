@@ -283,7 +283,7 @@ func evaluateChartReached(in Inputs, decision Decision, outcome ChartReached) De
 	verdict, found := decide(chart, release)
 	if found {
 		for _, conditionType := range in.ConditionTypes {
-			state := verdict
+			state := lifecycleState(conditionType, verdict)
 			if conditionType == helmv1alpha1.ConditionTypeReady && state.Status == metav1.ConditionTrue {
 				state.Reason = helmv1alpha1.ReasonSuccess
 			}
@@ -451,7 +451,7 @@ func evaluateRelease(out *internalobj.ReleaseOutcome) conditionState {
 
 	if out.Err != nil {
 		return failureState(Failure{
-			Reason:  helmv1alpha1.ReasonReleaseFailed,
+			Reason:  helmv1alpha1.ReasonHelmReleaseFailed,
 			Message: "Failed to create helm release",
 			Err:     out.Err,
 		})
@@ -465,6 +465,40 @@ func evaluateRelease(out *internalobj.ReleaseOutcome) conditionState {
 			Status: metav1.ConditionUnknown,
 			Reason: helmv1alpha1.ReasonReconciling,
 		}}
+	}
+
+	return state
+}
+
+type lifecycleReasonSet struct {
+	succeeded, inFlight, failed string
+}
+
+var lifecycleReasons = map[string]lifecycleReasonSet{
+	helmv1alpha1.ConditionTypeInstalled: {
+		helmv1alpha1.ReasonInstallSucceeded, helmv1alpha1.ReasonInstalling, helmv1alpha1.ReasonInstallFailed,
+	},
+	helmv1alpha1.ConditionTypeUpdateInstalled: {
+		helmv1alpha1.ReasonUpgradeSucceeded, helmv1alpha1.ReasonUpgrading, helmv1alpha1.ReasonUpgradeFailed,
+	},
+	helmv1alpha1.ConditionTypeConfigurationApplied: {
+		helmv1alpha1.ReasonValuesApplied, helmv1alpha1.ReasonApplyingValues, helmv1alpha1.ReasonValuesApplyFailed,
+	},
+}
+
+func lifecycleState(conditionType string, state conditionState) conditionState {
+	reasons, ok := lifecycleReasons[conditionType]
+	if !ok {
+		return state
+	}
+
+	switch {
+	case state.Status == metav1.ConditionTrue:
+		state.Reason = reasons.succeeded
+	case state.Status == metav1.ConditionUnknown:
+		state.Reason = reasons.inFlight
+	case state.Status == metav1.ConditionFalse && state.Reason == helmv1alpha1.ReasonReleaseFailed:
+		state.Reason = reasons.failed
 	}
 
 	return state

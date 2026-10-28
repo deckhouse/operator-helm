@@ -320,7 +320,12 @@ func TestHelmApplicationConfigurationApplyInProgress(t *testing.T) {
 			want:       false,
 		},
 		{
-			name:       "the condition is unknown while reconciling",
+			name:       "the condition is unknown while the stage is in flight",
+			conditions: []metav1.Condition{{Type: ConditionTypeConfigurationApplied, Status: metav1.ConditionUnknown, Reason: ReasonApplyingValues}},
+			want:       true,
+		},
+		{
+			name:       "the condition was written in flight by an earlier controller",
 			conditions: []metav1.Condition{{Type: ConditionTypeConfigurationApplied, Status: metav1.ConditionUnknown, Reason: ReasonReconciling}},
 			want:       true,
 		},
@@ -354,7 +359,12 @@ func TestHelmApplicationUpdateInstallInProgress(t *testing.T) {
 			want:       false,
 		},
 		{
-			name:       "the condition is unknown while reconciling",
+			name:       "the condition is unknown while the stage is in flight",
+			conditions: []metav1.Condition{{Type: ConditionTypeUpdateInstalled, Status: metav1.ConditionUnknown, Reason: ReasonUpgrading}},
+			want:       true,
+		},
+		{
+			name:       "the condition was written in flight by an earlier controller",
 			conditions: []metav1.Condition{{Type: ConditionTypeUpdateInstalled, Status: metav1.ConditionUnknown, Reason: ReasonReconciling}},
 			want:       true,
 		},
