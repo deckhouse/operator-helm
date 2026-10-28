@@ -528,13 +528,13 @@ func retryErr(failures ...Failure) error {
 func artifactRevision(src InternalSource) (revision string, current, ok bool) {
 	switch source := src.(type) {
 	case ServedByHelmChart:
-		if source.Result.Artifact == nil || !source.Result.Internal.Observed {
+		if source.Result.Artifact == nil {
 			return "", false, false
 		}
 
 		return source.Result.Artifact.Revision, source.Result.Internal.Ready(), true
 	case ServedByOCIRepository:
-		if source.Result.Artifact == nil || !source.Result.Internal.Observed {
+		if source.Result.Artifact == nil {
 			return "", false, false
 		}
 

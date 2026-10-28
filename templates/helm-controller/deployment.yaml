@@ -82,6 +82,7 @@ spec:
             - --watch-all-namespaces=false
             - --log-encoding=json
             - --enable-leader-election
+            - --feature-gates=DirectSourceFetch=true
             # Metrics are reachable only through the kube-rbac-proxy sidecar, which
             # scrapes them over the loopback interface of this pod.
             - --metrics-addr=127.0.0.1:8080

@@ -31,6 +31,7 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -733,6 +734,66 @@ func TestReconcileReportsProgressUntilTheReleaseSettles(t *testing.T) {
 
 	if progress := progressOf(t); progress != nil {
 		t.Fatalf("Reconciling = %+v, want it gone once the release settled", progress)
+	}
+}
+
+func TestReconcileHandsNewValuesToTheReleaseBeforeTheNewChartIsPulled(t *testing.T) {
+	app := testApplication()
+	fixtures := applicationFixtures()
+	fixtures[1].(*helmv1alpha1.HelmApplicationChart).Status.Versions = []helmv1alpha1.ChartVersion{
+		{Version: "6.7.1"}, {Version: "6.7.2"},
+	}
+
+	r, c := newApplicationFullReconciler(t, nil, append(fixtures, app)...)
+
+	names := adapter.NewApplicationRelease(app).InternalNames()
+	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+
+	reconcileApplication(t, r, app)
+	markInternalChartReady(t, c, names.HelmChart)
+	reconcileApplication(t, r, app)
+	markInternalReleaseDeployed(t, c, names.HelmRelease, app.Spec.Chart.Version)
+	reconcileApplication(t, r, app)
+
+	edited := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(context.Background(), key, edited); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+	edited.Spec.Chart.Version = "6.7.2"
+	edited.Spec.Values = &apiextensionsv1.JSON{Raw: []byte(`{"replicaCount":2}`)}
+	edited.Generation++
+	if err := c.Update(context.Background(), edited); err != nil {
+		t.Fatalf("editing application: %v", err)
+	}
+
+	chart := &sourcev1.HelmChart{}
+	chartKey := client.ObjectKey{Name: names.HelmChart, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), chartKey, chart); err != nil {
+		t.Fatalf("getting internal helm chart: %v", err)
+	}
+	chart.Generation++
+	if err := c.Update(context.Background(), chart); err != nil {
+		t.Fatalf("updating internal helm chart: %v", err)
+	}
+
+	reconcileApplication(t, r, edited)
+
+	release := &helmv2.HelmRelease{}
+	releaseKey := client.ObjectKey{Name: names.HelmRelease, Namespace: helmv1alpha1.TargetNamespace}
+	if err := c.Get(context.Background(), releaseKey, release); err != nil {
+		t.Fatalf("getting internal helm release: %v", err)
+	}
+	if release.Spec.Values == nil || string(release.Spec.Values.Raw) != `{"replicaCount":2}` {
+		t.Fatalf("internal release values = %v, want the new values handed over with the version, "+
+			"or helm-controller deploys the new chart with the old values first", release.Spec.Values)
+	}
+
+	settled := &helmv1alpha1.HelmApplication{}
+	if err := c.Get(context.Background(), key, settled); err != nil {
+		t.Fatalf("getting application: %v", err)
+	}
+	if settled.Status.LastAppliedChart == nil || settled.Status.LastAppliedChart.Version != "6.7.1" {
+		t.Fatalf("last applied chart = %+v, want 6.7.1 kept until the new artifact is deployed", settled.Status.LastAppliedChart)
 	}
 }
 
