@@ -128,30 +128,64 @@ const (
 	// ReasonChartVersionRemoved marks an addon whose chart version is still recorded in
 	// the catalog but is no longer offered by the repository.
 	ReasonChartVersionRemoved = "ChartVersionRemoved"
-	// ReasonChartVersionNotFound marks a release the repository has answered in full
-	// and cannot serve; the message says why.
+	// ReasonChartNotFound marks a release whose chart is not in the catalog of the
+	// repository it names.
+	ReasonChartNotFound = "ChartNotFound"
+	// ReasonChartVersionNotFound marks a release whose chart is in the catalog of the
+	// repository but without the version it asks for.
 	ReasonChartVersionNotFound = "ChartVersionNotFound"
+	// ReasonChartVersionUnusable marks a release whose chart version is in the
+	// catalog but cannot be deployed from the repository.
+	ReasonChartVersionUnusable = "ChartVersionUnusable"
 	// ReasonPartialSync marks a repository whose catalog does not mirror everything
 	// the repository offers; the message says what was left out.
 	ReasonPartialSync = "PartialSync"
 
 	// HelmRelease error reasons.
 
-	// ReasonReleaseFailed marks a release that is not deployed: the internal HelmRelease
-	// reports a failed deployment, or it could not be created or updated at all.
+	// ReasonReleaseFailed marks a release whose internal HelmRelease reports a failed
+	// deployment.
 	ReasonReleaseFailed = "ReleaseFailed"
+	// ReasonHelmReleaseFailed marks a release that cannot be deployed because the
+	// internal HelmRelease could not be created or updated at all.
+	ReasonHelmReleaseFailed = "HelmReleaseFailed"
 	// ReasonAccessDenied marks a release whose ServiceAccount the API server refused:
 	// the chart asks for an object the identity has no rights on, which no retry changes.
 	ReasonAccessDenied = "AccessDenied"
 	// ReasonRenderFailed marks a release whose chart did not render into applicable
 	// manifests, which only an edit to the chart or to its values changes.
 	ReasonRenderFailed = "RenderFailed"
+	// ReasonInvalidValues marks a release whose values helm-controller could not
+	// compose into the set the chart is rendered with.
+	ReasonInvalidValues = "InvalidValues"
 	// ReasonTestFailed marks a release that was deployed but whose Helm tests did
 	// not pass.
 	ReasonTestFailed = "TestFailed"
 	// ReasonRemediated marks a release helm-controller rolled back or uninstalled
 	// after a failed deployment, so what runs is not what the spec asks for.
 	ReasonRemediated = "Remediated"
+
+	// Release lifecycle reasons, carried by Installed, UpdateInstalled and
+	// ConfigurationApplied in place of the reason of the step that decided them.
+
+	// ReasonInstallSucceeded marks the first deployment of a release as done.
+	ReasonInstallSucceeded = "InstallSucceeded"
+	// ReasonInstalling marks the first deployment of a release as in flight.
+	ReasonInstalling = "Installing"
+	// ReasonInstallFailed marks a first deployment Helm attempted and failed.
+	ReasonInstallFailed = "InstallFailed"
+	// ReasonUpgradeSucceeded marks a chart change as deployed.
+	ReasonUpgradeSucceeded = "UpgradeSucceeded"
+	// ReasonUpgrading marks the deployment of a chart change as in flight.
+	ReasonUpgrading = "Upgrading"
+	// ReasonUpgradeFailed marks a chart change Helm attempted to deploy and failed.
+	ReasonUpgradeFailed = "UpgradeFailed"
+	// ReasonValuesApplied marks a values change as deployed.
+	ReasonValuesApplied = "ValuesApplied"
+	// ReasonApplyingValues marks the deployment of a values change as in flight.
+	ReasonApplyingValues = "ApplyingValues"
+	// ReasonValuesApplyFailed marks a values change Helm attempted to deploy and failed.
+	ReasonValuesApplyFailed = "ValuesApplyFailed"
 
 	// HelmChart error reasons.
 
@@ -164,6 +198,9 @@ const (
 	// ReasonChartStorageFailed marks a chart that was pulled but could not be stored
 	// by source-controller, so no artifact is available.
 	ReasonChartStorageFailed = "ChartStorageFailed"
+	// ReasonChartSourceNotReady marks a release whose internal chart source has no
+	// artifact to deploy from yet.
+	ReasonChartSourceNotReady = "ChartSourceNotReady"
 
 	// OCIRepository error reasons.
 

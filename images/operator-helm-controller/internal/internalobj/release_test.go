@@ -484,3 +484,51 @@ func TestReleasesInventoryOfAnAbsentReleaseIsNothing(t *testing.T) {
 		t.Fatalf("Inventory() = %+v, want nil: an absent release must not wipe the recorded list", got)
 	}
 }
+
+func TestReleasesEnsureReportsAChartThatCouldNotBeLoaded(t *testing.T) {
+	rel := adapter.NewApplicationRelease(testApplication())
+
+	internal := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: rel.InternalNames().HelmRelease, Namespace: testNamespace, Generation: 3},
+		Status: helmv2.HelmReleaseStatus{Conditions: []metav1.Condition{
+			{
+				Type:               helmv1alpha1.ConditionTypeReconciling,
+				Status:             metav1.ConditionTrue,
+				Reason:             "Progressing",
+				Message:            "Fulfilling prerequisites",
+				ObservedGeneration: 3,
+			},
+			{
+				Type:               helmv1alpha1.ConditionTypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             "ArtifactFailed",
+				Message:            "Could not load chart: connection refused",
+				ObservedGeneration: 3,
+			},
+			{
+				Type:               "Released",
+				Status:             metav1.ConditionTrue,
+				Reason:             "UpgradeSucceeded",
+				Message:            "Helm upgrade succeeded",
+				ObservedGeneration: 3,
+			},
+		}},
+	}
+
+	service, _ := newReleases(t, internal)
+
+	res := service.Ensure(context.Background(), rel, chartsource.Helm, "", true)
+	if res.Err != nil {
+		t.Fatalf("Ensure returned %v", res.Err)
+	}
+
+	want := InternalObjectState{
+		Observed: true,
+		Status:   metav1.ConditionFalse,
+		Reason:   helmv1alpha1.ReasonChartFetchFailed,
+		Message:  "Could not load chart: connection refused",
+	}
+	if res.Internal != want {
+		t.Fatalf("Internal = %+v, want %+v", res.Internal, want)
+	}
+}
