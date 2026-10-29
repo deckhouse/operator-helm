@@ -8,8 +8,8 @@ weight: 10
 
 В зависимости от области видимости создаваемых ресурсов Helm-чарты разделяются на аддоны и приложения:
 
-- **Аддоны** ([HelmClusterAddon](cr.html#helmclusteraddon)) могут создавать кастомные и другие cluster-wide-ресурсы. Установкой аддонов и управлением ими занимается администратор DP.
-- **Приложения** ([HelmApplication](cr.html#helmapplication)) создают только namespaced-ресурсы. Администратор неймспейса может устанавливать приложения и управлять ими в пределах своего неймспейса.
+- **Аддоны** ([HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon)) могут создавать кастомные и другие cluster-wide-ресурсы. Установкой аддонов и управлением ими занимается администратор DP.
+- **Приложения** ([HelmApplication](/modules/operator-helm/cr.html#helmapplication)) создают только namespaced-ресурсы. Администратор неймспейса может устанавливать приложения и управлять ими в пределах своего неймспейса.
 
 Чтобы включить модуль, воспользуйтесь одним из способов, описанных [в разделе «Настройки»](configuration.html).
 
@@ -84,4 +84,6 @@ flowchart TB
 ## Ограничения
 
 - Для одного ресурса [HelmClusterAddonChart](/modules/operator-helm/cr.html#helmclusteraddonchart) может существовать только один ссылающийся на него ресурс [HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon). Helm-чарты, используемые в аддоне, могут содержать определения кастомных ресурсов (Custom Resource Definition, CRD) и другие cluster-wide-ресурсы, повторная установка которых может привести к перебоям в работе сервисов.
-- Для создания [HelmApplication](/modules/operator-helm/cr.html#helmapplication) требуются права уровня [роли `Admin`](/modules/user-authz/#текущая-ролевая-модель), поскольку приложение развёртывается с использованием ServiceAccount, обладающего аналогичными правами.
+- Для создания [HelmApplication](/modules/operator-helm/cr.html#helmapplication) требуются права не ниже уровня [роли `Admin`](/modules/user-authz/#текущая-ролевая-модель), поскольку приложение развёртывается с использованием ServiceAccount, обладающего аналогичными правами.
+- В [гранулярной ролевой модели](/modules/user-authz/#гранулярная-ролевая-модель) (Deckhouse Platform 1.78 и новее) для управления ресурсами [HelmApplication](/modules/operator-helm/cr.html#helmapplication) достаточно роли `d8:namespace:admin`, а для просмотра ресурсов [HelmApplicationRepository](/modules/operator-helm/cr.html#helmapplicationrepository) и управления ими требуется роль `d8:namespace:superadmin`.
+- Ресурс [HelmApplication](/modules/operator-helm/cr.html#helmapplication) нельзя создать в системном неймспейсе, а ресурс [HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon) нельзя развернуть в системный неймспейс. Системными считаются неймспейсы `default`, `kube-system`, `kube-node-lease`, `kube-public` и неймспейсы, имена которых начинаются с `d8-`.
