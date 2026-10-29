@@ -127,9 +127,9 @@ spec:
                         Such a version is installed using an internal OCIRepository.
                       type: string
                     reexaminationRequired:
-                      description: |-
-                        ReexaminationRequired says the verdict recorded for this version is stale and
-                        must be established again against the repository.
+                      description: Indicates that the recorded availability of the
+                        Helm chart version is outdated and must be rechecked against
+                        the repository.
                       type: boolean
                     unavailableMessage:
                       description: Detailed description of the reason specified in

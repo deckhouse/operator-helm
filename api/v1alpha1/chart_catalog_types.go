@@ -73,8 +73,7 @@ type ChartVersion struct {
 	// Detailed description of the reason specified in `unavailableReason`.
 	// +optional
 	UnavailableMessage string `json:"unavailableMessage,omitempty"`
-	// ReexaminationRequired says the verdict recorded for this version is stale and
-	// must be established again against the repository.
+	// Indicates that the recorded availability of the Helm chart version is outdated and must be rechecked against the repository.
 	// +optional
 	ReexaminationRequired bool `json:"reexaminationRequired,omitempty"`
 }

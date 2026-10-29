@@ -186,8 +186,9 @@ spec:
                 type: string
               lastSyncedGeneration:
                 description: |-
-                  LastSyncedGeneration is the generation of the spec whose catalog is the one published now.
-                  It is written by every pass that published a catalog and keeps its value through later failures.
+                  Resource generation that the currently published chart catalog corresponds to.
+
+                  Updated every time the catalog is published and retained if subsequent synchronizations fail.
                 format: int64
                 type: integer
               nextSyncTime:
@@ -201,8 +202,9 @@ spec:
                 type: integer
               unexaminedVersions:
                 description: |-
-                  UnexaminedVersions is how many chart versions the repository offers that the catalog published now
-                  says nothing about. Zero means the catalog lists every version the repository offers.
+                  Number of Helm chart versions available in the repository but missing from the currently published chart catalog.
+
+                  A value of `0` means the catalog contains every version available in the repository.
                 format: int32
                 type: integer
             type: object

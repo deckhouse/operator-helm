@@ -160,7 +160,9 @@ type HelmClusterAddonSpec struct {
 	// +kubebuilder:validation:Enum="";NoResourceReconciliation
 	// +optional
 	Maintenance string `json:"maintenance,omitempty"`
-	// Timeout is the time to wait for a Helm action to complete. Defaults to 5m.
+	// Time to wait for a Helm operation to complete.
+	//
+	// Default: `5m`. The value must be greater than zero and must not exceed `2h`.
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Pattern="^([0-9]+(\\.[0-9]+)?(ms|s|m|h))+$"
 	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="timeout must be greater than zero"
@@ -208,7 +210,7 @@ type HelmClusterAddonStatus struct {
 	// Reconciliation results are reflected in the `Ready` condition.
 	// +optional
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
-	// Inventory lists the objects the chart of the addon deployed.
+	// List of objects deployed by the addon's Helm chart.
 	// +optional
 	Inventory []InventoryEntry `json:"inventory,omitempty"`
 }

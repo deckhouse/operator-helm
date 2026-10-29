@@ -41,23 +41,28 @@ spec:
                 namespace:
                   description: Неймспейс для развёртывания релиза аддона.
                 timeout:
-                  description: |
-                    Время ожидания завершения действия Helm. По умолчанию — `5m`.
+                  description: |-
+                    Время ожидания завершения операции Helm.
+
+                    Значение по умолчанию — `5m`. Значение должно быть больше нуля и не превышать `2h`.
                 values:
                   description: Пользовательские значения Helm-чарта.
             status:
               properties:
                 inventory:
-                  description: Список объектов, развёрнутых чартом аддона.
+                  description: Список объектов, развёрнутых Helm-чартом аддона.
                   items:
-                    description: Запись описывает один объект, развёрнутый чартом релиза.
+                    description: Объект, развёрнутый Helm-чартом релиза.
                     properties:
                       apiVersion:
-                        description: Группа и версия API объекта; `v1` для объекта основной группы.
+                        description: Группа и версия API объекта (`v1` для объектов основной группы).
                       kind:
-                        description: Вид объекта.
+                        description: Тип объекта.
                       namespace:
-                        description: Пространство имён объекта; пусто для объекта уровня кластера.
+                        description: |-
+                          Неймспейс объекта.
+
+                          Не заполняется для объектов уровня кластера.
                       name:
                         description: Имя объекта.
                 conditions:

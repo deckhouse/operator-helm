@@ -112,8 +112,10 @@ spec:
                 minLength: 1
                 type: string
               timeout:
-                description: Timeout is the time to wait for a Helm action to complete.
-                  Defaults to 5m.
+                description: |-
+                  Time to wait for a Helm operation to complete.
+
+                  Default: `5m`. The value must be greater than zero and must not exceed `2h`.
                 pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
                 type: string
                 x-kubernetes-validations:
@@ -178,24 +180,26 @@ spec:
                   type: object
                 type: array
               inventory:
-                description: Inventory lists the objects the chart of the addon deployed.
+                description: List of objects deployed by the addon's Helm chart.
                 items:
-                  description: InventoryEntry identifies one object the chart of a
-                    release deployed.
+                  description: InventoryEntry describes an object deployed by the
+                    release's Helm chart.
                   properties:
                     apiVersion:
-                      description: APIVersion is the group and version of the object,
-                        "v1" for a core one.
+                      description: API group and version of the object (`v1` for objects
+                        of the core group).
                       type: string
                     kind:
-                      description: Kind is the kind of the object.
+                      description: Object kind.
                       type: string
                     name:
-                      description: Name is the name of the object.
+                      description: Object name.
                       type: string
                     namespace:
-                      description: Namespace is the namespace of the object, empty
-                        for a cluster-scoped one.
+                      description: |-
+                        Object namespace.
+
+                        Not set for cluster-scoped objects.
                       type: string
                   required:
                   - apiVersion
