@@ -48,7 +48,7 @@ func newIdentity(t *testing.T, objects ...client.Object) (*Identity, client.Clie
 
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objects...).Build()
 
-	return NewIdentity(c, testNamespace), c
+	return NewIdentity(c, testNamespace, true), c
 }
 
 func TestIdentityEnsureCreatesTheIdentity(t *testing.T) {
@@ -77,14 +77,14 @@ func TestIdentityEnsureCreatesTheIdentity(t *testing.T) {
 		t.Fatalf("listing roles: %v", err)
 	}
 	if len(roles.Items) != 0 {
-		t.Fatalf("roles = %+v, want none: the rights come from the module's ClusterRole", roles.Items)
+		t.Fatalf("roles = %+v, want none: the rights come from the namespace admin ClusterRole", roles.Items)
 	}
 
 	binding := &rbacv1.RoleBinding{}
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: names.ServiceAccount}, binding); err != nil {
 		t.Fatalf("role binding was not created in the application namespace: %v", err)
 	}
-	if binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: ApplicationClusterRoleName}) {
+	if binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "d8:namespace:admin"}) {
 		t.Fatalf("roleRef = %+v", binding.RoleRef)
 	}
 	wantSubjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: names.ServiceAccount, Namespace: testNamespace}}
@@ -100,6 +100,37 @@ func TestIdentityEnsureCreatesTheIdentity(t *testing.T) {
 		if binding.Labels[key] != want {
 			t.Fatalf("role binding label %q = %q, want %q", key, binding.Labels[key], want)
 		}
+	}
+}
+
+func TestIdentityEnsureBindsTheNamespaceAdminRoleOfTheRoleModel(t *testing.T) {
+	tests := []struct {
+		name   string
+		rbacV2 bool
+		want   string
+	}{
+		{name: "current role model", rbacV2: true, want: "d8:namespace:admin"},
+		{name: "previous role model", rbacV2: false, want: "d8:use:role:admin"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rel := adapter.NewApplicationRelease(testApplication())
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
+
+			if out := NewIdentity(c, testNamespace, tt.rbacV2).Ensure(context.Background(), rel); out.Err != nil {
+				t.Fatalf("Ensure returned %v", out.Err)
+			}
+
+			binding := &rbacv1.RoleBinding{}
+			key := client.ObjectKey{Namespace: "team-a", Name: rel.InternalNames().ServiceAccount}
+			if err := c.Get(context.Background(), key, binding); err != nil {
+				t.Fatalf("getting role binding: %v", err)
+			}
+			if want := (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: tt.want}); binding.RoleRef != want {
+				t.Fatalf("roleRef = %+v, want %+v", binding.RoleRef, want)
+			}
+		})
 	}
 }
 
@@ -163,8 +194,8 @@ func TestIdentityEnsureReplacesOurBindingThatNamesAnotherRole(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(misbound), stored); err != nil {
 		t.Fatalf("getting role binding: %v", err)
 	}
-	if stored.RoleRef != applicationRoleRef() {
-		t.Fatalf("roleRef = %+v, want %+v", stored.RoleRef, applicationRoleRef())
+	if stored.RoleRef != applicationRoleRef(true) {
+		t.Fatalf("roleRef = %+v, want %+v", stored.RoleRef, applicationRoleRef(true))
 	}
 	wantSubjects := []rbacv1.Subject{{
 		Kind: rbacv1.ServiceAccountKind, Name: names.ServiceAccount, Namespace: testNamespace,
@@ -208,13 +239,13 @@ func TestIdentityEnsureRefusesToPatchARoleBindingSwappedAfterTheOwnershipTest(t 
 	name := rel.InternalNames().ServiceAccount
 	ours := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", UID: "ours", Labels: applicationRBACLabels()},
-		RoleRef:    applicationRoleRef(),
+		RoleRef:    applicationRoleRef(true),
 		Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "drifted"}},
 	}
 	theirSubjects := []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "someone-else"}}
 	theirs := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", UID: "theirs"},
-		RoleRef:    applicationRoleRef(),
+		RoleRef:    applicationRoleRef(true),
 		Subjects:   theirSubjects,
 	}
 
@@ -233,7 +264,7 @@ func TestIdentityEnsureRefusesToPatchARoleBindingSwappedAfterTheOwnershipTest(t 
 		}).
 		Build()
 
-	out := NewIdentity(c, testNamespace).Ensure(context.Background(), rel)
+	out := NewIdentity(c, testNamespace, true).Ensure(context.Background(), rel)
 	if !*swapped {
 		t.Fatal("the test did not exercise a patch of the role binding")
 	}
@@ -261,7 +292,7 @@ func TestIdentityCleanupRefusesToDeleteARoleBindingSwappedAfterTheOwnershipTest(
 	name := rel.InternalNames().ServiceAccount
 	ours := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a", UID: "ours", Labels: applicationRBACLabels()},
-		RoleRef:    applicationRoleRef(),
+		RoleRef:    applicationRoleRef(true),
 	}
 	theirRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: "someone-elses-role"}
 	theirs := &rbacv1.RoleBinding{
@@ -284,7 +315,7 @@ func TestIdentityCleanupRefusesToDeleteARoleBindingSwappedAfterTheOwnershipTest(
 		}).
 		Build()
 
-	_, err := NewIdentity(c, testNamespace).Cleanup(context.Background(), rel)
+	_, err := NewIdentity(c, testNamespace, true).Cleanup(context.Background(), rel)
 	if !*swapped {
 		t.Fatal("the test did not exercise a delete of the role binding")
 	}
@@ -434,7 +465,7 @@ func TestIdentityCleanupWaitsForAnObjectHeldByAForeignFinalizer(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name, Namespace: "team-a", Labels: applicationRBACLabels(), Finalizers: finalizers,
 			},
-			RoleRef: applicationRoleRef(),
+			RoleRef: applicationRoleRef(true),
 		}
 	}
 	tests := []struct {

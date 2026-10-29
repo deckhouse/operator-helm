@@ -102,6 +102,8 @@ spec:
               {{- end }}
           env:
             {{- include "kube_api_rewriter.kubeconfig_env" . | nindent 12 }}
+            - name: ENABLE_NEXT_GEN_RBACV2
+              value: {{ include "operator-helm.enable_rbacv2" . | quote }}
           livenessProbe:
             httpGet:
               path: /healthz

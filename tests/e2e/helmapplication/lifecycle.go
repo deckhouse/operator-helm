@@ -38,9 +38,9 @@ const (
 	chartName = "podinfo"
 	chartVer  = "6.10.2"
 	moduleNS  = "d8-operator-helm"
-	// The ClusterRole the module chart ships for every application; the chart is the source of truth.
-	appClusterRoleName = "d8:operator-helm:application"
 )
+
+var appClusterRoleNames = []string{"d8:namespace:admin", "d8:use:role:admin"}
 
 func DefineLifecycleTests(repoType, repoURL string) {
 	Describe(fmt.Sprintf("Using namespaced %s repository", repoType), Ordered, func() {

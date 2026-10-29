@@ -486,6 +486,14 @@ metadata:
   name: admission-policy-engine
 spec:
   enabled: true
+---
+apiVersion: deckhouse.io/v1alpha1
+kind: ModuleConfig
+metadata:
+  name: user-authz
+spec:
+  enabled: true
+  version: 1
 EOF
 
   if [[ -n "$D8_LICENSE_KEY" ]]; then
@@ -635,12 +643,44 @@ wait_until_pods_ready() {
   done
 }
 
+wait_until_module_ready() {
+  local module="${1}"
+  local timeout="${2:-900}"
+  local interval=5
+  local elapsed=0
+
+  echo "Waiting for module '$module' to be ready..."
+
+  while true; do
+    local phase
+    phase=$(${KUBECTL_PATH} get module "$module" -o jsonpath='{.status.phase}' 2>/dev/null)
+
+    if [[ "$phase" == "Ready" ]]; then
+      echo "Success: Module '$module' is Ready!"
+      return 0
+    fi
+
+    echo "Pending: module '$module' phase is '${phase:-unknown}'..."
+
+    if [[ "$elapsed" -ge "$timeout" ]]; then
+      echo "Error: Timed out waiting for module $module after ${timeout}s"
+      ${KUBECTL_PATH} get module "$module"
+      return 1
+    fi
+
+    sleep "$interval"
+    ((elapsed += interval))
+  done
+}
+
 wait_until_deckhouse_ready() {
   echo "Waiting until deckhouse ready..."
   wait_until_pods_ready "d8-system" 2
   echo "Waiting until deckhouse admission-policy-engine module ready..."
   wait_until_pods_ready "d8-admission-policy-engine" 1 "app=gatekeeper,control-plane=audit-controller"
   wait_until_pods_ready "d8-admission-policy-engine" 1 "app=gatekeeper,control-plane=controller-manager"
+  echo "Waiting until deckhouse user-authz module ready..."
+  wait_until_module_ready "user-authz"
 }
 
 main() {
