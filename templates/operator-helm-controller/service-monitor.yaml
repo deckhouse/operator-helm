@@ -1,3 +1,4 @@
+{{- if (.Values.global.enabledModules | has "operator-prometheus") }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -21,4 +22,4 @@ spec:
   selector:
     matchLabels:
       app: "operator-helm-controller"
-
+{{- end }}
