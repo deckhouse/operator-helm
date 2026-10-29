@@ -4,9 +4,13 @@ description: "Installing Helm charts in your own namespace with the operator-hel
 weight: 50
 ---
 
-This guide describes how to work with the namespaced resources of the module, including chart repositories, their catalogs and applications. Working with these custom resources requires permissions of no lower than [`Admin`](/modules/user-authz/#current-role-based-model) role in a designated namespace.
+This guide describes how to work with the namespaced resources of the module, including chart repositories, their catalogs and applications.
+
+{{< alert level="warning" >}}
+Working with the custom resources of the module requires permissions of no lower than [`Admin`](/modules/user-authz/#current-role-based-model) role in a designated namespace.
 
 In the [granular role-based model](/modules/user-authz/#granular-role-based-model) (Deckhouse Platform 1.78 and later), the `d8:namespace:admin` role is enough to manage [HelmApplication](/modules/operator-helm/cr.html#helmapplication) resources, while viewing and managing [HelmApplicationRepository](/modules/operator-helm/cr.html#helmapplicationrepository) resources requires the `d8:namespace:superadmin` role.
+{{< /alert >}}
 
 ## Adding an application repository
 

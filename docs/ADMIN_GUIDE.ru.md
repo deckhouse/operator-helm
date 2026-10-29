@@ -4,9 +4,13 @@ description: "Управление cluster-wide-ресурсами модуля 
 weight: 40
 ---
 
-Руководство описывает порядок работы с модулем `operator-helm` через cluster-wide-ресурсы. Для работы с данными кастомными ресурсами необходимы права не ниже уровня [роли `SuperAdmin`](/modules/user-authz/#текущая-ролевая-модель).
+Руководство описывает порядок работы с модулем `operator-helm` через cluster-wide-ресурсы.
+
+{{< alert level="warning" >}}
+Для работы с данными кастомными ресурсами необходимы права не ниже уровня [роли `SuperAdmin`](/modules/user-authz/#текущая-ролевая-модель).
 
 В [гранулярной ролевой модели](/modules/user-authz/#гранулярная-ролевая-модель) (Deckhouse Platform 1.78 и новее) для управления ресурсами [HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon), [HelmClusterAddonRepository](/modules/operator-helm/cr.html#helmclusteraddonrepository) и [HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository) требуется роль `d8:subsystem:delivery:superadmin`. Роль `d8:subsystem:delivery:viewer` даёт доступ на чтение ресурсов HelmClusterAddon, HelmClusterAddonChart и HelmClusterApplicationChart.
+{{< /alert >}}
 
 ## Добавление репозитория аддонов
 

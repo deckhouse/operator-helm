@@ -4,9 +4,13 @@ description: "Managing the cluster-wide resources of the operator-helm module: r
 weight: 40
 ---
 
-This guide describes how to work with the `operator-helm` module using cluster-wide resources. Working with these custom resources requires permissions no lower than the [`SuperAdmin`](/modules/user-authz/#current-role-based-model) role.
+This guide describes how to work with the `operator-helm` module using cluster-wide resources.
+
+{{< alert level="warning" >}}
+Working with these custom resources requires permissions no lower than the [`SuperAdmin`](/modules/user-authz/#current-role-based-model) role.
 
 In the [granular role-based model](/modules/user-authz/#granular-role-based-model) (Deckhouse Platform 1.78 and later), managing [HelmClusterAddon](/modules/operator-helm/cr.html#helmclusteraddon), [HelmClusterAddonRepository](/modules/operator-helm/cr.html#helmclusteraddonrepository) and [HelmClusterApplicationRepository](/modules/operator-helm/cr.html#helmclusterapplicationrepository) resources requires the `d8:subsystem:delivery:superadmin` role. The `d8:subsystem:delivery:viewer` role grants read access to HelmClusterAddon, HelmClusterAddonChart and HelmClusterApplicationChart resources.
+{{< /alert >}}
 
 ## Adding an addon repository
 
