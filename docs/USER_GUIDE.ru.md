@@ -269,25 +269,29 @@ podinfo-chart-podinfo-dfbe83e63b0b   11d   chart=podinfo,heritage=deckhouse,repo
 {{< /tabs >}}
 
 {{< alert level="warning" >}}
-Развёртывание [HelmApplication](/modules/operator-helm/cr.html#helmapplication) выполняется с полными привилегиями в рамках неймспейса.
+Развёртывание [HelmApplication](/modules/operator-helm/cr.html#helmapplication) выполняется с правами роли администратора неймспейса. Для этого модуль создаёт в неймспейсе приложения ресурс RoleBinding, который связывает ServiceAccount приложения с ClusterRole `d8:namespace:admin` (в Deckhouse Platform до версии 1.78 — с `d8:use:role:admin`).
 
-{{< details summary="Правила роли, используемой при развёртывании приложения" >}}
+Если для развёртывания Helm-чарта этих прав недостаточно, расширьте права роли администратора неймспейса. Подробнее — в [документации модуля `user-authz`](/modules/user-authz/faq.html#как-расширить-роль-или-создать-новую).
+
+{{< details summary="Ресурс RoleBinding, используемый при развёртывании приложения" >}}
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: RoleBinding
 metadata:
   labels:
+    heritage: deckhouse
     helm.deckhouse.io/managed-by: operator-helm
-  name: operator-helm-application
+  name: hap-test-my-app-<hash>
   namespace: test
-rules:
-- apiGroups:
-  - '*'
-  resources:
-  - '*'
-  verbs:
-  - '*'
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: d8:namespace:admin
+subjects:
+- kind: ServiceAccount
+  name: hap-test-my-app-<hash>
+  namespace: d8-operator-helm
 ```
 
 {{< /details >}}
@@ -372,8 +376,8 @@ status:
 | `Ready` | `False` | `ChartFetchFailed`, `ChartStorageFailed` | Чарт не удалось загрузить из репозитория или сохранить в кластере |
 | `Ready` | `False` | `OCIFetchFailed`, `OCIIncludeUnavailable`, `OCIStorageFailed`, `OCIVerificationFailed` | Не удалось получить или проверить чарт из OCI-хранилища |
 | `Ready` | `False` | `ChartVersionRemoved` | Указанная версия чарта больше не публикуется репозиторием. Выберите другую версию |
-| `Ready` | `False` | `RBACSetupFailed` | Не удалось подготовить ресурс ServiceAccount, Role или RoleBinding, от имени которых устанавливается чарт. Будет предпринята повторная попытка |
-| `Ready` | `False` | `ForeignRBACObject` | Имя ресурса Role или RoleBinding, которые модуль создаёт для приложения, уже занято. Role всегда называется `operator-helm-application`, а имя RoleBinding совпадает с именем ServiceAccount приложения и приведено в поле `message`. Объект с таким именем создан не модулем, поэтому модуль его не меняет. Удалите чужой объект и запросите принудительную реконсиляцию |
+| `Ready` | `False` | `RBACSetupFailed` | Не удалось подготовить ресурс ServiceAccount или RoleBinding, от имени которых устанавливается чарт. Будет предпринята повторная попытка |
+| `Ready` | `False` | `ForeignRBACObject` | Имя ресурса RoleBinding, который модуль создаёт для приложения, уже занято. Имя RoleBinding совпадает с именем ServiceAccount приложения и приведено в поле `message`. Объект с таким именем создан не модулем, поэтому модуль его не меняет. Удалите чужой объект и запросите принудительную реконсиляцию |
 | `Ready` | `False` | `UnsupportedRepositoryType` | У репозитория, на который ссылается приложение, нечитаемый URL-адрес. Обратитесь к владельцу репозитория |
 | `Ready` | `False` | `Failed` | Прочие ошибки. Причина приведена в поле `message` |
 | `Installed` | Как у `Ready` | Та же, что у `Ready` | Результат первой установки релиза |

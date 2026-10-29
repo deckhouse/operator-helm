@@ -55,9 +55,9 @@ spec:
 
           The release is deployed in the same namespace as the HelmApplication resource.
 
-          The chart is deployed using a ServiceAccount with permissions to perform any operation on all resources in the namespace. Therefore, namespace administrator permissions are required to create a HelmApplication.
+          The chart is deployed using a ServiceAccount with the permissions of the namespace administrator role. Therefore, namespace administrator permissions are required to create a HelmApplication.
 
-          The Role and RoleBinding associated with the ServiceAccount are managed by the module and automatically reconciled to their desired state. Any manual changes to these resources are overwritten.
+          The RoleBinding associated with the ServiceAccount is managed by the module and automatically reconciled to its desired state. Any manual changes to this resource are overwritten.
         properties:
           apiVersion:
             description: |-

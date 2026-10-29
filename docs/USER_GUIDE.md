@@ -269,25 +269,29 @@ You can adjust the Helm chart parameters if needed. To see the parameters used b
 {{< /tabs >}}
 
 {{< alert level="warning" >}}
-A [HelmApplication](/modules/operator-helm/cr.html#helmapplication) is deployed with full privileges within the namespace.
+A [HelmApplication](/modules/operator-helm/cr.html#helmapplication) is deployed with the permissions of the namespace administrator role. To do this, the module creates a RoleBinding resource in the application namespace that binds the application's ServiceAccount to the `d8:namespace:admin` ClusterRole (`d8:use:role:admin` in Deckhouse Platform versions earlier than 1.78).
 
-{{< details summary="The rules of the role used when deploying an application" >}}
+If these permissions are not sufficient to deploy the Helm chart, extend the permissions of the namespace administrator role. For details, refer to the [`user-authz` module documentation](/modules/user-authz/faq.html#how-do-i-extend-a-role-or-create-a-new-one).
+
+{{< details summary="The RoleBinding resource used when deploying an application" >}}
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: RoleBinding
 metadata:
   labels:
+    heritage: deckhouse
     helm.deckhouse.io/managed-by: operator-helm
-  name: operator-helm-application
+  name: hap-test-my-app-<hash>
   namespace: test
-rules:
-- apiGroups:
-  - '*'
-  resources:
-  - '*'
-  verbs:
-  - '*'
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: d8:namespace:admin
+subjects:
+- kind: ServiceAccount
+  name: hap-test-my-app-<hash>
+  namespace: d8-operator-helm
 ```
 
 {{< /details >}}
@@ -372,8 +376,8 @@ status:
 | `Ready` | `False` | `ChartFetchFailed`, `ChartStorageFailed` | The chart could not be downloaded from the repository or stored in the cluster |
 | `Ready` | `False` | `OCIFetchFailed`, `OCIIncludeUnavailable`, `OCIStorageFailed`, `OCIVerificationFailed` | The chart could not be retrieved from the OCI registry or verified |
 | `Ready` | `False` | `ChartVersionRemoved` | The specified chart version is no longer published by the repository. Select another version |
-| `Ready` | `False` | `RBACSetupFailed` | The ServiceAccount, Role or RoleBinding resource used to install the chart could not be prepared. The attempt will be repeated automatically |
-| `Ready` | `False` | `ForeignRBACObject` | The name of the Role or the RoleBinding resource that the module creates for the application is already taken. The Role is always named `operator-helm-application`, and the name of the RoleBinding matches the name of the application's ServiceAccount and is given in the `message` field. An object with such a name was not created by the module, so the module does not modify it. Delete the foreign object and request a forced reconciliation |
+| `Ready` | `False` | `RBACSetupFailed` | The ServiceAccount or RoleBinding resource used to install the chart could not be prepared. The attempt will be repeated automatically |
+| `Ready` | `False` | `ForeignRBACObject` | The name of the RoleBinding resource that the module creates for the application is already taken. The name of the RoleBinding matches the name of the application's ServiceAccount and is given in the `message` field. An object with such a name was not created by the module, so the module does not modify it. Delete the foreign object and request a forced reconciliation |
 | `Ready` | `False` | `UnsupportedRepositoryType` | The repository the application refers to has an unreadable URL. Contact the repository owner |
 | `Ready` | `False` | `Failed` | Other errors. The cause is given in the `message` field |
 | `Installed` | Same as `Ready` | Same as for `Ready` | The outcome of the first installation of the release |
