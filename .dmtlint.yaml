@@ -30,5 +30,3 @@ linters-settings:
       wildcards:
         - kind: ClusterRole
           name: d8:operator-helm:helm-controller
-        - kind: ClusterRole
-          name: d8:operator-helm:application

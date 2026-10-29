@@ -152,13 +152,13 @@ var _ = Describe("HelmApplication over a foreign role binding", Ordered, func() 
 		util.UntilConditionAbsent(apiv1alpha1.ConditionTypeStalled, framework.LongTimeout, createdApp)
 		util.UntilConditionTrue(apiv1alpha1.ConditionTypeReady, framework.LongTimeout, createdApp)
 
-		By("The adopted binding must be reconciled to the application ClusterRole and account")
+		By("The adopted binding must be reconciled to the namespace admin ClusterRole and account")
 		Eventually(func(g Gomega) {
 			stored, err := f.KubeClient().RbacV1().RoleBindings(f.NamespaceName()).
 				Get(context.Background(), bindingName, metav1.GetOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(stored.RoleRef.Kind).To(Equal("ClusterRole"))
-			g.Expect(stored.RoleRef.Name).To(Equal(appClusterRoleName))
+			g.Expect(stored.RoleRef.Name).To(BeElementOf(appClusterRoleNames))
 			g.Expect(stored.Subjects).To(HaveLen(1))
 			g.Expect(stored.Subjects[0].Kind).To(Equal(rbacv1.ServiceAccountKind))
 			g.Expect(stored.Subjects[0].Name).To(Equal(bindingName))

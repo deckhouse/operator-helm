@@ -587,7 +587,7 @@ func newApplicationFullReconciler(
 		Build()
 
 	if identity == nil {
-		identity = rbac.NewIdentity(c, helmv1alpha1.TargetNamespace)
+		identity = rbac.NewIdentity(c, helmv1alpha1.TargetNamespace, true)
 	}
 
 	return New(c, Deps{
@@ -938,7 +938,7 @@ func TestReconcileApplicationCreatesNothingElseInTheApplicationNamespace(t *test
 		t.Fatalf("listing roles: %v", err)
 	}
 	if len(roles.Items) != 0 {
-		t.Fatalf("roles = %+v, want none: the rights come from the module's ClusterRole", roles.Items)
+		t.Fatalf("roles = %+v, want none: the rights come from the namespace admin ClusterRole", roles.Items)
 	}
 
 	var bindings rbacv1.RoleBindingList
@@ -1026,7 +1026,7 @@ func TestReconcileApplicationRecoversAfterTransientRBACSetupFailure(t *testing.T
 
 	flaky := &intermittentIdentity{}
 	r, c := newApplicationFullReconciler(t, flaky, append(applicationFixtures(), app)...)
-	flaky.real = rbac.NewIdentity(c, helmv1alpha1.TargetNamespace)
+	flaky.real = rbac.NewIdentity(c, helmv1alpha1.TargetNamespace, true)
 
 	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
 
@@ -2354,7 +2354,7 @@ func deletingApplicationFixtures(namespaceTerminating bool) (*helmv1alpha1.HelmA
 }
 
 func applicationClusterRoleRef() rbacv1.RoleRef {
-	return rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: rbac.ApplicationClusterRoleName}
+	return rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "d8:namespace:admin"}
 }
 
 func objectExists(t *testing.T, c client.Client, key client.ObjectKey, obj client.Object) bool {
@@ -2552,7 +2552,7 @@ func TestReconcileDeleteRepairsARoleBindingRemovedWhileTheUninstallIsInFlight(t 
 		t.Fatal("the role binding must be back: without it the uninstall is refused and the teardown never ends")
 	}
 	if repaired.RoleRef != applicationClusterRoleRef() {
-		t.Fatalf("roleRef = %+v, want the application ClusterRole", repaired.RoleRef)
+		t.Fatalf("roleRef = %+v, want the namespace admin ClusterRole", repaired.RoleRef)
 	}
 	wantSubjects := []rbacv1.Subject{{
 		Kind: rbacv1.ServiceAccountKind, Name: names.ServiceAccount, Namespace: helmv1alpha1.TargetNamespace,
@@ -2610,7 +2610,7 @@ func TestReconcileDeleteOfAnAddonRepairsNoIdentity(t *testing.T) {
 		}},
 	)
 
-	identity := &ensureCountingIdentity{Identity: rbac.NewIdentity(c, helmv1alpha1.TargetNamespace)}
+	identity := &ensureCountingIdentity{Identity: rbac.NewIdentity(c, helmv1alpha1.TargetNamespace, true)}
 	r.deps.Identity = identity
 
 	ctx := context.Background()

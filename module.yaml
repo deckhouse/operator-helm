@@ -2,6 +2,8 @@ name: operator-helm
 stage: Experimental
 requirements:
   deckhouse: ">= 1.74"
+  modules:
+    user-authz: ">= 0.0.0"
 subsystems:
   - delivery
 namespace: d8-operator-helm

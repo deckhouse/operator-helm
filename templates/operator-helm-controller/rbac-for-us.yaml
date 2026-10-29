@@ -92,7 +92,7 @@ rules:
   resources:
   - clusterroles
   resourceNames:
-  - d8:{{ .Chart.Name }}:application
+  - {{ ternary "d8:namespace:admin" "d8:use:role:admin" (eq (include "operator-helm.enable_rbacv2" .) "true") }}
   verbs:
   - bind
 - apiGroups:
@@ -241,23 +241,3 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: operator-helm-controller
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
-  name: d8:{{ .Chart.Name }}:application
-rules:
-- apiGroups:
-  - "*"
-  resources:
-  - "*"
-  verbs:
-  - create
-  - delete
-  - deletecollection
-  - get
-  - list
-  - patch
-  - update
-  - watch

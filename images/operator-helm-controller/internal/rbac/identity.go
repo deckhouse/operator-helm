@@ -38,21 +38,23 @@ import (
 	"github.com/deckhouse/operator-helm/internal/utils"
 )
 
-// ApplicationClusterRoleName is the ClusterRole, shipped by the module chart, that every
-// application release is bound to inside its own namespace.
-const ApplicationClusterRoleName = "d8:operator-helm:application"
+const (
+	namespaceAdminClusterRoleName       = "d8:namespace:admin"
+	legacyNamespaceAdminClusterRoleName = "d8:use:role:admin"
+)
 
 // Identity provides the identity a release is applied with: a ServiceAccount in the operator
-// namespace and a RoleBinding in the target namespace to the application ClusterRole.
+// namespace and a RoleBinding in the target namespace to the platform's namespace admin ClusterRole.
 type Identity struct {
 	// Reads bypass the manager's cache, which holds no accounts and only labelled bindings,
 	// so an unlabelled foreign object is seen rather than read as absent.
 	client          client.Client
 	targetNamespace string
+	roleRef         rbacv1.RoleRef
 }
 
-func NewIdentity(c client.Client, targetNamespace string) *Identity {
-	return &Identity{client: c, targetNamespace: targetNamespace}
+func NewIdentity(c client.Client, targetNamespace string, rbacV2 bool) *Identity {
+	return &Identity{client: c, targetNamespace: targetNamespace, roleRef: applicationRoleRef(rbacV2)}
 }
 
 // Ensure reconciles the account and the binding. A release without a service account name
@@ -224,18 +226,23 @@ func applicationRBACLabels() map[string]string {
 	}
 }
 
-func applicationRoleRef() rbacv1.RoleRef {
+func applicationRoleRef(rbacV2 bool) rbacv1.RoleRef {
+	name := legacyNamespaceAdminClusterRoleName
+	if rbacV2 {
+		name = namespaceAdminClusterRoleName
+	}
+
 	return rbacv1.RoleRef{
 		APIGroup: rbacv1.GroupName,
 		Kind:     "ClusterRole",
-		Name:     ApplicationClusterRoleName,
+		Name:     name,
 	}
 }
 
-// ensureRoleBinding binds the account to the application ClusterRole, reconciling a binding
+// ensureRoleBinding binds the account to the namespace admin ClusterRole, reconciling a binding
 // of ours on every pass and leaving one that is not ours exactly as it is.
 func (s *Identity) ensureRoleBinding(ctx context.Context, rel contract.Release, namespace, name string) error {
-	desiredRef := applicationRoleRef()
+	desiredRef := s.roleRef
 
 	existing := &rbacv1.RoleBinding{}
 	switch err := s.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); {

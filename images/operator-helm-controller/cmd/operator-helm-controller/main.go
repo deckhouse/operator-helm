@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"os"
+	"strconv"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
@@ -76,6 +77,12 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 	logger := ctrl.Log.WithName("setup")
+
+	rbacV2, err := strconv.ParseBool(os.Getenv("ENABLE_NEXT_GEN_RBACV2"))
+	if err != nil {
+		logger.Error(err, "unable to parse ENABLE_NEXT_GEN_RBACV2")
+		os.Exit(1)
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
@@ -140,7 +147,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := helmapplication.SetupWithManager(mgr); err != nil {
+	if err := helmapplication.SetupWithManager(mgr, rbacV2); err != nil {
 		logger.Error(err, "unable to setup HelmApplication controller")
 		os.Exit(1)
 	}

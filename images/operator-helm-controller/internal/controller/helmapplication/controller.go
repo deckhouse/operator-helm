@@ -42,7 +42,7 @@ const (
 	ControllerName = "helmapplication-controller"
 )
 
-func SetupWithManager(mgr ctrl.Manager) error {
+func SetupWithManager(mgr ctrl.Manager, rbacV2 bool) error {
 	client := mgr.GetClient()
 
 	r := reconcile.New(client, reconcile.Deps{
@@ -54,7 +54,7 @@ func SetupWithManager(mgr ctrl.Manager) error {
 		Maintenance:     internalobj.NewMaintenance(client, helmv1alpha1.TargetNamespace),
 		Claims:          reconcile.NoClaims{},
 		Namespaces:      namespace.NewExistingTarget(mgr.GetAPIReader()),
-		Identity:        rbac.NewIdentity(client, helmv1alpha1.TargetNamespace),
+		Identity:        rbac.NewIdentity(client, helmv1alpha1.TargetNamespace, rbacV2),
 		Status:          status.NewManager(client),
 	})
 
