@@ -25,7 +25,7 @@ import (
 type RepositorySpec struct {
 	// URL of the Helm or OCI repository.
 	//
-	// Supported schemes: `http(s)://` and `oci://`.
+	// Supported schemes: `http(s)://` and `oci://`. An `oci://` URL points to the repository of a single Helm chart, for example `oci://registry.example.com/charts/podinfo`.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self.matches('^(https?|oci)://.+$')",message="URL must have a valid protocol (http, https, oci) and a non-empty path"
 	URL string `json:"url"`
@@ -72,12 +72,12 @@ type RepositoryStatus struct {
 	LastSuccessfulSyncTime *metav1.Time `json:"lastSuccessfulSyncTime,omitempty"`
 	// Resource generation that the currently published chart catalog corresponds to.
 	//
-	// Updated every time the catalog is published and retained if subsequent synchronizations fail.
+	// Updated when a synchronization publishes the catalog without running out of its time budget. Retained if later synchronizations fail or run out of time.
 	// +optional
 	LastSyncedGeneration int64 `json:"lastSyncedGeneration,omitempty"`
-	// Number of Helm chart versions available in the repository but missing from the currently published chart catalog.
+	// Number of Helm chart versions offered by the repository that the last synchronization publishing the catalog did not examine because it ran out of time. Retained if later synchronizations fail.
 	//
-	// A value of `0` means the catalog contains every version available in the repository.
+	// Such versions are examined during the next synchronizations. A value of `0` means that every version offered by the repository has been examined.
 	// +optional
 	UnexaminedVersions int32 `json:"unexaminedVersions,omitempty"`
 	// Scheduled time of the next repository synchronization attempt.
@@ -89,14 +89,14 @@ type RepositoryStatus struct {
 	// Reconciliation results are reflected in the `Ready` and `Synced` conditions.
 	// +optional
 	LastForceReconcileTime *metav1.Time `json:"lastForceReconcileTime,omitempty"`
-	// Number of consecutive failed attempts to access the repository.
+	// Counter of consecutive failed attempts to access the repository, used to determine the delay before the next attempt.
 	//
-	// Used to determine the delay before the next attempt and reset after a successful attempt.
+	// Does not exceed `5`: an error that retries cannot fix sets it to `5` at once. Reset after a successful attempt and when the repository specification changes.
 	// +optional
 	ConsecutiveFetchFailures int32 `json:"consecutiveFetchFailures,omitempty"`
-	// Number of charts discovered during the last successful repository synchronization, excluding the charts whose name cannot be recorded on a catalog object.
+	// Number of charts found during the last successful read of the repository, excluding the charts whose name cannot be recorded on a catalog object.
 	//
-	// The field is not populated until the first successful synchronization, which distinguishes a repository that has not yet been synchronized from a repository that contains no charts.
+	// The field is not populated until the first successful read, which distinguishes a repository that has not been read yet from a repository that contains no charts.
 	// +optional
 	ChartCount *int32 `json:"chartCount,omitempty"`
 }

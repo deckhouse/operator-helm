@@ -54,6 +54,7 @@ spec:
           HelmApplication describes a Helm release within a single namespace.
 
           The release is deployed in the same namespace as the HelmApplication resource.
+          A HelmApplication cannot be created in a system namespace: `default`, `kube-system`, `kube-node-lease`, `kube-public`, or a namespace whose name starts with `d8-`.
 
           The chart is deployed using a ServiceAccount with the permissions of the namespace administrator role. Therefore, namespace administrator permissions are required to create a HelmApplication.
 

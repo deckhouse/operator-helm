@@ -77,11 +77,11 @@ const (
 	// ReasonChartClaimConflict marks a release that cannot take the repository/chart
 	// pair it asks for because another release of the same kind already holds it.
 	ReasonChartClaimConflict = "ChartClaimConflict"
-	// ReasonRBACSetupFailed marks a release whose identity — the ServiceAccount,
-	// Role and RoleBinding the chart is applied with — could not be reconciled.
+	// ReasonRBACSetupFailed marks a release whose identity — the ServiceAccount and
+	// RoleBinding the chart is applied with — could not be reconciled.
 	ReasonRBACSetupFailed = "RBACSetupFailed"
 	// ReasonForeignRBACObject marks a release whose identity cannot be built because
-	// a Role or RoleBinding occupies the name it needs without the managed-by label.
+	// a RoleBinding occupies the name it needs without the managed-by label.
 	ReasonForeignRBACObject = "ForeignRBACObject"
 	// ReasonForceReconcile marks the Reconciling condition raised for a pass that
 	// was requested through the force reconcile annotation.
@@ -125,7 +125,7 @@ const (
 	// ReasonInvalidCACertificate marks a spec.caCertificate that carries no PEM
 	// encoded certificate.
 	ReasonInvalidCACertificate = "InvalidCACertificate"
-	// ReasonChartVersionRemoved marks an addon whose chart version is still recorded in
+	// ReasonChartVersionRemoved marks a release whose chart version is still recorded in
 	// the catalog but is no longer offered by the repository.
 	ReasonChartVersionRemoved = "ChartVersionRemoved"
 	// ReasonChartNotFound marks a release whose chart is not in the catalog of the

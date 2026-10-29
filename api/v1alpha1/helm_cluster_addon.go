@@ -150,6 +150,9 @@ type HelmClusterAddonSpec struct {
 	// +optional
 	Values *apiextensionsv1.JSON `json:"values,omitempty"`
 	// Namespace to deploy a cluster addon release into.
+	//
+	// If the namespace does not exist, it is created.
+	// A system namespace cannot be used: `default`, `kube-system`, `kube-node-lease`, `kube-public`, or a namespace whose name starts with `d8-`.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`

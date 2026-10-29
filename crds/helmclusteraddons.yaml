@@ -107,7 +107,11 @@ spec:
                 - NoResourceReconciliation
                 type: string
               namespace:
-                description: Namespace to deploy a cluster addon release into.
+                description: |-
+                  Namespace to deploy a cluster addon release into.
+
+                  If the namespace does not exist, it is created.
+                  A system namespace cannot be used: `default`, `kube-system`, `kube-node-lease`, `kube-public`, or a namespace whose name starts with `d8-`.
                 maxLength: 63
                 minLength: 1
                 type: string

@@ -43,7 +43,7 @@ type ChartCatalogStatus struct {
 	// List of discovered Helm chart versions.
 	//
 	// A version is available for installation if `unavailableReason` is not set.
-	// For versions from an OCI repository, a supported layer media type must also be specified.
+	// A version that the repository no longer offers stays in the list with `unavailableReason: RemovedFromRepository` only while a release uses it, and that release keeps working.
 	// +optional
 	Versions []ChartVersion `json:"versions,omitempty"`
 }
@@ -61,12 +61,11 @@ type ChartVersion struct {
 	// OCI media type of the layer containing the Helm chart version.
 	//
 	// Populated only for versions from an OCI repository (`oci://`) with a supported layer type.
-	// If the field is not set, the version is unavailable for installation.
 	// +optional
 	MediaType string `json:"mediaType,omitempty"`
 	// Reason why the Helm chart version is unavailable for installation.
 	//
-	// If the field is not set, the version is available.
+	// If the field is not set, the version is available. A release that already uses a version with `RemovedFromRepository`, or with `ResolvePending` while the version keeps its recorded `mediaType`, keeps working.
 	// +optional
 	// +kubebuilder:validation:Enum=RemovedFromRepository;UnsupportedMediaType;ResolvePending;InvalidChartReference
 	UnavailableReason string `json:"unavailableReason,omitempty"`
