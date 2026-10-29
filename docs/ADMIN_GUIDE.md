@@ -330,7 +330,7 @@ status:
 
 1. Go to the "System" tab.
 1. Go to "Operator Helm" → "Addons".
-1. Select the addon you need and hover over its status. The pop-up window shows information about its state.
+1. Click the name of the addon you need. The addon page opens on the "Overview" tab. The "Lifecycle" block describes the current state of the release.
 
 {{% /tab %}}
 {{< /tabs >}}
@@ -615,8 +615,8 @@ To manage the maintenance mode of an addon:
 
 1. Go to the "System" tab.
 1. Go to "Operator Helm" → "Addons".
-1. Select the addon you need and click its name.
-1. The "Maintenance" option is available in the form that opens.
+1. Click the name of the addon you need.
+1. The "Maintenance" option is available on the "Configuration" tab.
 
 An addon that is in maintenance mode gets the "Maintenance" status.
 

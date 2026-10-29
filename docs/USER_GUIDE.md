@@ -379,7 +379,7 @@ status:
 
 1. Go to the "Projects" tab and select the project you need.
 1. Go to "Operator Helm" → "Applications".
-1. Select the application you need and hover over its status. The pop-up window shows information about its state.
+1. Click the name of the application you need. The application page opens on the "Overview" tab. The "Lifecycle" block describes the current state of the release.
 
 {{% /tab %}}
 {{< /tabs >}}
@@ -554,8 +554,8 @@ To manage the maintenance mode of an application:
 
 1. Go to the "Projects" tab and select the project you need.
 1. Go to "Operator Helm" → "Applications".
-1. Select the application you need and click its name.
-1. The "Maintenance" option is available in the form that opens.
+1. Click the name of the application you need.
+1. The "Maintenance" option is available on the "Configuration" tab.
 
 An application that is in maintenance mode gets the "Maintenance" status.
 
