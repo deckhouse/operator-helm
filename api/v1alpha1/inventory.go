@@ -16,15 +16,17 @@ limitations under the License.
 
 package v1alpha1
 
-// InventoryEntry identifies one object the chart of a release deployed.
+// InventoryEntry describes an object deployed by the release's Helm chart.
 type InventoryEntry struct {
-	// APIVersion is the group and version of the object, "v1" for a core one.
+	// API group and version of the object (`v1` for objects of the core group).
 	APIVersion string `json:"apiVersion"`
-	// Kind is the kind of the object.
+	// Object kind.
 	Kind string `json:"kind"`
-	// Namespace is the namespace of the object, empty for a cluster-scoped one.
+	// Object namespace.
+	//
+	// Not set for cluster-scoped objects.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
-	// Name is the name of the object.
+	// Object name.
 	Name string `json:"name"`
 }
