@@ -85,20 +85,30 @@ Example output:
 
 ```text
 apiVersion: v1
-kind: List
 items:
 - apiVersion: helm.deckhouse.io/v1alpha1
   kind: HelmClusterAddonChart
   metadata:
+    creationTimestamp: "2026-10-30T07:13:31Z"
+    generation: 1
     labels:
       chart: podinfo
       heritage: deckhouse
       repository: podinfo
     name: podinfo-chart-podinfo-dfbe83e63b0b
+    ownerReferences:
+    - apiVersion: helm.deckhouse.io/v1alpha1
+      blockOwnerDeletion: true
+      controller: true
+      kind: HelmClusterAddonRepository
+      name: podinfo
+      uid: e782d1df-cee1-4a35-bcb5-09c307bd06b4
+    resourceVersion: "95969705"
+    uid: 20111084-bc34-4f12-acbc-1f72cf328bc7
   status:
     versions:
-    - version: 6.11.0
-    - version: 6.10.2
+    - version: 6.17.0
+    - version: 6.16.0
 ```
 
 {{% /tab %}}
@@ -276,52 +286,50 @@ Example output:
 apiVersion: helm.deckhouse.io/v1alpha1
 kind: HelmClusterAddon
 metadata:
-  creationTimestamp: "2026-09-22T09:50:34Z"
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"helm.deckhouse.io/v1alpha1","kind":"HelmClusterAddon","metadata":{"annotations":{},"name":"podinfo"},"spec":{"chart":{"helmClusterAddonChart":"podinfo","helmClusterAddonRepository":"podinfo","version":"6.10.2"},"namespace":"test"}}
+  creationTimestamp: "2026-10-30T07:18:01Z"
   finalizers:
   - helm.deckhouse.io/cleanup
-  generation: 5
+  generation: 1
   name: podinfo
-  resourceVersion: "48927375"
-  uid: 5365281f-0f8c-4d3d-b174-5096d6bf255d
+  resourceVersion: "95974870"
+  uid: ecf21939-1068-42de-a3a2-c812600f1303
 spec:
   chart:
     helmClusterAddonChart: podinfo
     helmClusterAddonRepository: podinfo
-    version: 6.11.0
-  maintenance: ""
+    version: 6.10.2
   namespace: test
 status:
   conditions:
-  - lastTransitionTime: "2026-09-22T15:29:56Z"
-    message: Helm upgrade succeeded for release test/podinfo.v2 with chart podinfo@6.11.0
-    observedGeneration: 5
+  - lastTransitionTime: "2026-10-30T07:18:19Z"
+    message: Helm install succeeded for release test/podinfo.v1 with chart podinfo@6.10.2
+    observedGeneration: 1
     reason: Success
     status: "True"
     type: Ready
-  - lastTransitionTime: "2026-09-22T09:50:41Z"
+  - lastTransitionTime: "2026-10-30T07:18:19Z"
     message: Helm install succeeded for release test/podinfo.v1 with chart podinfo@6.10.2
     observedGeneration: 1
     reason: InstallSucceeded
     status: "True"
     type: Installed
-  - lastTransitionTime: "2026-09-22T15:29:56Z"
-    message: Helm upgrade succeeded for release test/podinfo.v2 with chart podinfo@6.11.0
-    observedGeneration: 5
-    reason: UpgradeSucceeded
-    status: "True"
-    type: UpdateInstalled
-  - lastTransitionTime: "2026-09-22T10:30:50Z"
-    message: Maintenance mode disabled
-    observedGeneration: 5
-    reason: MaintenanceModeInactive
-    status: "True"
-    type: Managed
+  inventory:
+  - apiVersion: apps/v1
+    kind: Deployment
+    name: podinfo
+    namespace: test
+  - apiVersion: v1
+    kind: Service
+    name: podinfo
+    namespace: test
   lastAppliedChart:
     helmClusterAddonChart: podinfo
     helmClusterAddonRepository: podinfo
-    version: 6.11.0
-  lastForceReconcileTime: "2026-09-22T10:53:51Z"
-  observedGeneration: 5
+    version: 6.10.2
+  observedGeneration: 1
 ```
 
 {{% /tab %}}

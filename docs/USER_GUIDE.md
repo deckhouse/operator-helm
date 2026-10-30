@@ -87,21 +87,31 @@ Example output:
 
 ```text
 apiVersion: v1
-kind: List
 items:
 - apiVersion: helm.deckhouse.io/v1alpha1
   kind: HelmApplicationChart
   metadata:
+    creationTimestamp: "2026-10-30T07:21:58Z"
+    generation: 1
     labels:
       chart: podinfo
       heritage: deckhouse
       repository: podinfo
     name: podinfo-chart-podinfo-dfbe83e63b0b
     namespace: test
+    ownerReferences:
+    - apiVersion: helm.deckhouse.io/v1alpha1
+      blockOwnerDeletion: true
+      controller: true
+      kind: HelmApplicationRepository
+      name: podinfo
+      uid: 8e454e87-d937-4e22-85c2-6ed7ac7770ad
+    resourceVersion: "95980641"
+    uid: 9e88bbd3-2165-4d8b-b3d6-e05735800ff8
   status:
     versions:
-    - version: 6.11.0
-    - version: 6.10.2
+    - version: 6.17.0
+    - version: 6.16.0
 ```
 
 {{% /tab %}}
@@ -133,34 +143,37 @@ Example output:
 apiVersion: helm.deckhouse.io/v1alpha1
 kind: HelmApplicationRepository
 metadata:
-  creationTimestamp: "2026-09-22T13:41:25Z"
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"helm.deckhouse.io/v1alpha1","kind":"HelmApplicationRepository","metadata":{"annotations":{},"name":"podinfo","namespace":"test"},"spec":{"url":"https://stefanprodan.github.io/podinfo"}}
+  creationTimestamp: "2026-10-30T07:21:58Z"
   finalizers:
   - helm.deckhouse.io/cleanup
   generation: 1
   name: podinfo
   namespace: test
-  resourceVersion: "48844673"
-  uid: f081a6d7-610a-4996-a10c-3d663928f027
+  resourceVersion: "95980699"
+  uid: 8e454e87-d937-4e22-85c2-6ed7ac7770ad
 spec:
   url: https://stefanprodan.github.io/podinfo
 status:
   chartCount: 1
   conditions:
-  - lastTransitionTime: "2026-09-22T13:41:26Z"
+  - lastTransitionTime: "2026-10-30T07:21:59Z"
     message: ""
     observedGeneration: 1
     reason: Success
     status: "True"
     type: Ready
-  - lastTransitionTime: "2026-09-22T13:41:25Z"
+  - lastTransitionTime: "2026-10-30T07:21:58Z"
     message: ""
     observedGeneration: 1
     reason: Success
     status: "True"
     type: Synced
-  lastSuccessfulSyncTime: "2026-09-22T13:41:25Z"
+  lastSuccessfulSyncTime: "2026-10-30T07:21:58Z"
   lastSyncedGeneration: 1
-  nextSyncTime: "2026-09-22T13:46:10Z"
+  nextSyncTime: "2026-10-30T07:26:34Z"
   observedGeneration: 1
 ```
 
@@ -337,38 +350,50 @@ Example output:
 apiVersion: helm.deckhouse.io/v1alpha1
 kind: HelmApplication
 metadata:
-  creationTimestamp: "2026-09-18T08:19:55Z"
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"helm.deckhouse.io/v1alpha1","kind":"HelmApplication","metadata":{"annotations":{},"name":"podinfo","namespace":"test"},"spec":{"chart":{"name":"podinfo","repository":"podinfo","version":"6.10.2"}}}
+  creationTimestamp: "2026-10-30T07:23:43Z"
   finalizers:
   - helm.deckhouse.io/cleanup
   generation: 1
   name: podinfo
   namespace: test
-  resourceVersion: "48926122"
-  uid: f4059036-a6c9-401a-be8d-67d8f2410c6f
+  resourceVersion: "95984747"
+  uid: a52cad1f-0f40-46f7-8791-6d39ecf9c2ee
 spec:
   chart:
-    repository: podinfo
     name: podinfo
+    repository: podinfo
     version: 6.10.2
 status:
   conditions:
-  - lastTransitionTime: "2026-09-18T08:20:03Z"
-    message: Helm install succeeded for release test/hap-podinfo-3fb7b289386f.v1
-      with chart podinfo@6.10.2
+  - lastTransitionTime: "2026-10-30T07:23:51Z"
+    message: Helm install succeeded for release test/hap-podinfo-3fb7b289386f.v1 with
+      chart podinfo@6.10.2
     observedGeneration: 1
     reason: Success
     status: "True"
     type: Ready
-  - lastTransitionTime: "2026-09-18T08:20:03Z"
-    message: Helm install succeeded for release test/hap-podinfo-3fb7b289386f.v1
-      with chart podinfo@6.10.2
+  - lastTransitionTime: "2026-10-30T07:23:51Z"
+    message: Helm install succeeded for release test/hap-podinfo-3fb7b289386f.v1 with
+      chart podinfo@6.10.2
     observedGeneration: 1
     reason: InstallSucceeded
     status: "True"
     type: Installed
+  inventory:
+  - apiVersion: apps/v1
+    kind: Deployment
+    name: hap-podinfo-3fb7b289386f
+    namespace: test
+  - apiVersion: v1
+    kind: Service
+    name: hap-podinfo-3fb7b289386f
+    namespace: test
   lastAppliedChart:
-    repository: podinfo
     name: podinfo
+    repository: podinfo
     version: 6.10.2
   observedGeneration: 1
 ```
