@@ -1,15 +1,10 @@
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 final: false
-fromImage: builder/src
+fromImage: builder/distroless
 git:
   - add: {{ .ModuleDir }}/images/{{ .ImageName }}
     to: /src/kube-api-rewriter
-    stageDependencies:
-      install:
-        - go.mod
-        - go.sum
-        - "**/*.go"
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-builder
 final: false
@@ -19,22 +14,23 @@ import:
     add: /src
     to: /src
     before: install
-secrets:
-- id: GOPROXY
-  value: {{ .GOPROXY }}
 mount:
   - fromPath: ~/go-pkg-cache
     to: /go/pkg
+packages:
+  - type: go-mod
+    workdir: /src/kube-api-rewriter
+    env:
+      GOPROXY: "{{ .GOPROXY }}"
 shell:
   install:
     - cd /src/kube-api-rewriter
-    - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
     - export GOOS=linux
     - export CGO_ENABLED=0
     - export GOARCH=amd64
     - |
     {{- $_ := set $ "ProjectName" (list $.ImageName "kube-api-rewriter" | join "/") }}
-    {{- include "image-build.build" (set $ "BuildCommand" `go build -v -a -o kube-api-rewriter ./cmd/kube-api-rewriter`) | nindent 6 }}
+    {{- include "image-build.build" (set $ "BuildCommand" `go build -mod=readonly -v -a -o kube-api-rewriter ./cmd/kube-api-rewriter`) | nindent 6 }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
 fromImage: base/distroless
