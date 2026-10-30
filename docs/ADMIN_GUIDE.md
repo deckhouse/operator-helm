@@ -210,12 +210,6 @@ status:
 | `Stalled` | `True` | `RetriesExceeded` | Several reads in a row have failed. Attempts continue at growing intervals, up to once an hour, and the condition is removed after the first successful read. To check the repository sooner after fixing the cause, request a forced reconciliation |
 | `Stalled` | `True` | The reason of the internal source | Only for an `http(s)://` repository. The internal object the module downloads charts through has stopped retrying. The details are given in the `message` field |
 
-{{< alert level="info" >}}
-
-The `Reconciling` and `Stalled` conditions are present only while they apply. The `Reconciling` condition is present until the work is finished, the `Stalled` condition is present until the cause of the failure is fixed.
-
-{{< /alert >}}
-
 {{< /details >}}
 
 ## Deploying an addon
@@ -378,18 +372,6 @@ status:
 | `Reconciling` | `True` | `ChartVersionRemoved` | Only for a chart stored in an OCI registry. The specified chart version is no longer published by the repository, and the module is waiting for the outcome of the attempt to get it |
 | `Reconciling` | `True` | `ForceReconcile` | A manually requested reconciliation is in progress |
 | `Stalled` | `True` | The failure cause | Fix the addon specification, wait for the repository to change, or remove the object standing in the way, then request a forced reconciliation if needed. Attempts are stopped until the cause is resolved |
-
-{{< alert level="info" >}}
-
-The `Reconciling` and `Stalled` conditions are present only while they apply: `Reconciling` is present until the work is finished, `Stalled` is present until the cause of the failure is fixed.
-
-The `Installed`, `UpdateInstalled` and `ConfigurationApplied` conditions appear as the addon passes the corresponding stages. The module updates the conditions of the current operation together with `Ready` and with the same status: their reasons denote success, an operation in progress or a Helm failure, and for other failures they carry the same reason as `Ready`. The conditions of other operations keep their last outcome. A failure that occurs before the chart is looked up in the repository catalog (for example, `ChartClaimConflict` or `UnsupportedRepositoryType`) changes only `Ready`.
-
-The `ChartNotFound`, `ChartVersionNotFound` and `ChartVersionUnusable` reasons denote an error in the specification: neither `Reconciling` nor `Stalled` is set, and the module does not retry until the addon specification or the repository catalog changes.
-
-The `Managed` condition appears after maintenance mode is turned on for the first time. The `UninstallFailed` condition appears only while the addon is being deleted.
-
-{{< /alert >}}
 
 {{< /details >}}
 
