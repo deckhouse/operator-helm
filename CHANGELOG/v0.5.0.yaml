@@ -1,0 +1,16 @@
+
+breaking: []
+features:
+  - "add the namespace-scoped application family"
+  - "publish the objects a release deployed in its status"
+  - "label the objects a release deploys with their source"
+  - "let a release set the helm action timeout"
+  - "name release condition reasons after the failed step and the stage"
+  - "apply application releases with the namespace admin role"
+  - "remove application role bindings on module deletion"
+fixes:
+  - "hand new values to the release with the new chart version"
+security: []
+chore:
+  - "rework the module documentation"
+
