@@ -1,0 +1,11 @@
+breaking:
+  - "Пространство имён `default` теперь считается системным: `HelmClusterAddon` больше не может разворачиваться в него, а `HelmApplication` нельзя создать в нём. Существующий `HelmClusterAddon`, развёрнутый в `default`, перестаёт реконсилироваться, а его изменения отклоняются; уже развёрнутые им объекты остаются в кластере"
+features:
+  - "Добавлены Helm-приложения уровня пространства имён: новые ресурсы `HelmApplication`, `HelmApplicationRepository` и `HelmClusterApplicationRepository` позволяют пользователям проектов разворачивать Helm-чарты в своих пространствах имён, а `HelmApplicationChart` и `HelmClusterApplicationChart` показывают чарты, доступные в подключённых репозиториях"
+  - "`HelmClusterAddon` и `HelmApplication` теперь публикуют список развёрнутых объектов (inventory) в `status.inventory` — по нему видно, какие объекты Kubernetes создал релиз"
+  - "Добавлено поле `spec.timeout` в `HelmClusterAddon` и `HelmApplication`, задающее время ожидания операции Helm при развёртывании аддона или приложения (по умолчанию `5m`, максимум `2h`)"
+fixes: []
+security: []
+chore:
+  - "Обновлены компоненты FluxCD: helm-controller до v1.6.4 и source-controller до v1.9.5"
+  - "Переработана документация модуля: страница с примерами заменена руководствами администратора и пользователя, переписаны обзор модуля и описания полей ресурсов"

@@ -1,16 +1,11 @@
-
-breaking: []
+breaking:
+  - "The `default` namespace is now treated as a system namespace: a `HelmClusterAddon` can no longer deploy into it, and a `HelmApplication` can no longer be created in it. An existing `HelmClusterAddon` that targets `default` stops being reconciled and its changes are rejected; the objects it has already deployed stay in the cluster"
 features:
-  - "add the namespace-scoped application family"
-  - "publish the objects a release deployed in its status"
-  - "label the objects a release deploys with their source"
-  - "let a release set the helm action timeout"
-  - "name release condition reasons after the failed step and the stage"
-  - "apply application releases with the namespace admin role"
-  - "remove application role bindings on module deletion"
-fixes:
-  - "hand new values to the release with the new chart version"
+  - "Add namespace-scoped Helm applications: the new `HelmApplication`, `HelmApplicationRepository` and `HelmClusterApplicationRepository` resources let project users deploy Helm charts into their own namespaces, while `HelmApplicationChart` and `HelmClusterApplicationChart` list the charts available in the connected repositories"
+  - "Add the inventory of deployed objects to `status.inventory` of `HelmClusterAddon` and `HelmApplication`, so you can see which Kubernetes objects a release has created"
+  - "Add the `spec.timeout` field to `HelmClusterAddon` and `HelmApplication` to set how long a Helm operation may take when deploying an addon or application (default is `5m`, maximum is `2h`)"
+fixes: []
 security: []
 chore:
-  - "rework the module documentation"
-
+  - "Update FluxCD components: helm-controller to v1.6.4 and source-controller to v1.9.5"
+  - "Rework the module documentation: the examples page is replaced by an administrator guide and a user guide, the overview and the resource field descriptions are rewritten"
